@@ -8,6 +8,7 @@ on:
     branches: [develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch: # allow manual runs (also re-publishes the develop image)
 
 # Newer pushes to the same branch/PR cancel in-flight runs.
 concurrency:
@@ -24,9 +25,11 @@ jobs:
   develop-image:
     name: Publish develop image
     needs: verify
-    # Only on a real push to develop, never on PRs (no image from untrusted forks,
-    # and PRs only need the green checks above).
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    # On a real push to develop, or a manual dispatch, never on PRs (no image from
+    # untrusted forks, and PRs only need the green checks above).
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
