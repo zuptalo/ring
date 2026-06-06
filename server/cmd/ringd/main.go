@@ -301,6 +301,7 @@ func run() error {
 			TurnURLs:      turnURLs,
 			EmojiCacheDir: filepath.Join(cfg.DataDir, "emoji-cache"),
 			StaticDir:     cfg.StaticDir,
+			DevMode:       cfg.IsDev(),
 		}, cfg.AllowedOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

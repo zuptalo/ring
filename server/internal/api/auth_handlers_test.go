@@ -290,6 +290,9 @@ func (f *fakeStore) CancelInvitation(_ context.Context, _, code string) error {
 	}
 	return nil
 }
+func (f *fakeStore) MintInvite(context.Context) (string, error) {
+	return "MINTED01", nil
+}
 
 func newTestServer() http.Handler {
 	as := newFakeStore()

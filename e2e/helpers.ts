@@ -17,11 +17,21 @@ export async function waitHook(page: Page): Promise<void> {
 }
 
 /** Open a fresh context page, register with an invite code, and create the
- *  identity passwordless (device-key auto-unlock - the default posture). */
+ *  identity passwordless (device-key auto-unlock - the default posture).
+ *
+ *  Single-use codes are a retry hazard: on a Playwright retry the seeded code is
+ *  already consumed (invite-invalid) and the username `u_<code>` already claimed
+ *  (username-taken), so the re-run would be doomed. Unless `mintOnConsumed` is
+ *  false, we transparently mint a fresh dev code (which also yields a fresh
+ *  derived username) and register with that. Pass `{ mintOnConsumed: false }`
+ *  when the specific code matters (e.g. the invite-redemption test), so a real
+ *  redemption failure is not masked. */
 export async function createAccount(
   context: BrowserContext,
   code: string,
+  opts: { mintOnConsumed?: boolean } = {},
 ): Promise<RingClient> {
+  const mintOnConsumed = opts.mintOnConsumed ?? true;
   const page = await context.newPage();
   // Surface client-side logs/errors to the test output for debugging.
   page.on('console', (m) => {
@@ -31,7 +41,18 @@ export async function createAccount(
   page.on('pageerror', (e) => console.log(`[${code}] pageerror: ${e.message}`));
   await page.goto('/');
   await waitHook(page);
-  await page.evaluate((c) => (window as any).__ringTest.register(c), code);
+  try {
+    await page.evaluate((c) => (window as any).__ringTest.register(c), code);
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? e);
+    // A consumed code / claimed handle on a retry; mint a fresh one and continue.
+    if (!mintOnConsumed || !/invit|username|taken|rejected/i.test(msg)) throw e;
+    console.log(`[${code}] code unavailable (retry), minting a fresh one: ${msg}`);
+    await page.evaluate(async () => {
+      const fresh = await (window as any).__ringTest.freshCode();
+      await (window as any).__ringTest.register(fresh);
+    });
+  }
   // createAuto is tolerant of the KeyGuard auto-create race (both call ensureIdentity).
   await page.evaluate(() => (window as any).__ringTest.createAuto());
   await page.waitForFunction(() => (window as any).__ringTest.isUnlocked() === true, null, {

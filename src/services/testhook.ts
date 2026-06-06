@@ -91,6 +91,14 @@ export function installTestHook(): void {
      *  valid, unique handle is derived from the (single-use) invite code. */
     register: (code: string, username?: string) =>
       register(code, username ?? `u_${code}`.toLowerCase().replace(/[^a-z0-9_.]/g, '').slice(0, 28)),
+    /** Mint a fresh single-use invite code from the dev-only server endpoint, so a
+     *  test (or a Playwright retry) can register with a code that is always fresh
+     *  rather than re-consuming a fixed seed code. Dev/test only. */
+    freshCode: async (): Promise<string> => {
+      const res = await fetch('/v1/dev/invite', { method: 'POST' });
+      if (!res.ok) throw new Error(`dev invite mint failed: ${res.status}`);
+      return ((await res.json()) as { code: string }).code;
+    },
     /** Create the keystore identity under a PIN (mirrors the create-PIN screen). */
     createPin: (pin: string) => ensureIdentity(pin),
     /** Passwordless identity create (device-key auto-unlock). Tolerant of an

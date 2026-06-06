@@ -213,6 +213,35 @@ func (s *Store) SeedDevInvites(ctx context.Context, codes []string) error {
 	return nil
 }
 
+// MintInvite generates a fresh, single-use invitation code and stores it,
+// returning the code. It backs the dev-only mint endpoint so the e2e harness can
+// register accounts with a code that is fresh on every attempt, instead of a
+// fixed pool that a Playwright retry would re-consume (and whose derived username
+// would collide). Dev/test only.
+func (s *Store) MintInvite(ctx context.Context) (string, error) {
+	code, err := generateInviteCode()
+	if err != nil {
+		return "", err
+	}
+	if err := s.CreateInvite(ctx, code); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+// generateInviteCode returns a random 8-char code from the unambiguous alphabet
+// (matches the [A-Z0-9]{8} the register UI requires).
+func generateInviteCode() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = inviteAlphabet[int(b[i])%len(inviteAlphabet)]
+	}
+	return string(b), nil
+}
+
 // IsInviteClaimable reports whether a code exists and is unused + unexpired.
 func (s *Store) IsInviteClaimable(ctx context.Context, code string) (bool, error) {
 	var ok bool

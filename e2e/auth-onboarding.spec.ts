@@ -36,13 +36,18 @@ test('post-sign-in push onboarding enters Chats after Allow', async ({ page, con
   await page.goto('/');
   await page.waitForFunction(() => !!(window as any).__ringTest, null, { timeout: 30_000 });
 
+  // Mint a fresh invite code for this attempt. A hardcoded single-use code would
+  // be consumed on a Playwright retry, leaving registration to fail and the
+  // wizard to never appear (a 90s hang). The hook is already available above.
+  const inviteCode = (await page.evaluate(() => (window as any).__ringTest.freshCode())) as string;
+
   // Real UI registration (NOT the test hook) so the onboarding wizard runs.
   await page.getByRole('button', { name: 'Have Invitation Code' }).click();
   const code = page.locator('ion-modal ion-input input').first();
   await code.waitFor({ state: 'visible', timeout: 30_000 });
   await code.click();
   // Real keystrokes so Ionic's ionInput fires (fill() bypasses ion-input's event).
-  await code.pressSequentially('TESTCODE', { delay: 20 });
+  await code.pressSequentially(inviteCode, { delay: 20 });
   // The completed 8-char code AUTO-advances to the dedicated username step (no
   // Continue tap) - pick an immutable username on its own screen, then submit.
   const username = page.locator('ion-modal ion-input input').first();

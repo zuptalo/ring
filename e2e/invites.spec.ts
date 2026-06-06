@@ -22,7 +22,10 @@ test('an invite code auto-connects inviter and invitee', async ({ browser }) => 
   // B registers using A's invite code (not a dev code) and sets up a profile
   // (required before the invitee auto-connects - otherwise they'd appear as
   // "You" with no image).
-  const b = await createAccount(ctxB, code as string);
+  // This test IS the invite-redemption path, so the specific code must be used:
+  // never fall back to a minted code (that would mask a real redemption failure).
+  // The code is freshly minted by A each attempt, so it is already retry-safe.
+  const b = await createAccount(ctxB, code as string, { mintOnConsumed: false });
   await b.page.evaluate((av) => (window as any).__ringTest.setProfile('Bob', av), AVATAR);
 
   // Prod polls on a timer; force the sweep on both sides for the test.

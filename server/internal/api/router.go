@@ -85,6 +85,9 @@ type InviteStore interface {
 	ListInvitations(ctx context.Context, creatorID string) ([]store.Invitation, error)
 	ExtendInvitation(ctx context.Context, creatorID, code string) (time.Time, error)
 	CancelInvitation(ctx context.Context, creatorID, code string) error
+	// MintInvite creates a fresh, single-use code with no creator. Used only by
+	// the dev-only mint endpoint (see Handlers.DevMode).
+	MintInvite(ctx context.Context) (string, error)
 }
 
 // Handlers carries the dependencies the HTTP handlers need.
@@ -120,6 +123,9 @@ type Handlers struct {
 	// same origin. Empty in dev/tests (Vite serves the client), so the catch-all
 	// route is not mounted and the API 404s unknown paths as before.
 	StaticDir string
+	// DevMode mounts dev/test-only routes (currently POST /v1/dev/invite, which
+	// mints fresh invite codes for the e2e harness). Off in production.
+	DevMode bool
 }
 
 // NewRouter builds the fully wired HTTP handler (routes + middleware chain).
@@ -210,6 +216,13 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 		return h.Store.UserIDForToken(ctx, auth.HashToken(token))
 	}
 	mux.Handle("GET /v1/ws", ws.Handler(h.Hub, h.Relay, h.Notifier, authFn, allowedOrigins))
+
+	// Dev/test only: mint fresh invite codes so the e2e harness registers with a
+	// code that is fresh on every attempt (no fixed pool to re-consume on a retry).
+	// Never mounted in production.
+	if h.DevMode {
+		mux.HandleFunc("POST /v1/dev/invite", h.devMintInvite)
+	}
 
 	// Single-container mode: serve the built PWA at / (with SPA fallback) so one
 	// image serves both the app and the API. The bare "/" pattern is the lowest
