@@ -1,0 +1,34 @@
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+dist-ssr
+dev-dist
+
+# Local env + OS noise
+*.local
+.env
+.DS_Store
+
+# e2e test harness artifacts
+.tmp
+test-results
+playwright-report
+/playwright/.cache
+
+# Scratch / tooling state (local only)
+.audit_tmp
+.tmp-review
+.tmp_verify
+.cc-tmp-search
+.rtmp
+.claude
+.m
+.grep_out2.txt
+
+# Server runtime state + secrets are also covered by server/.gitignore
+server/data
+server/tmp
+server/ringd
+server/.env
