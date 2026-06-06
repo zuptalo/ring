@@ -1,0 +1,219 @@
+# Enabling voice & video calling in production
+
+Ring's calling is **fully self-hosted**: the `ringd` process embeds a TURN relay
+and a group-call SFU - no external STUN/TURN/SFU services. This doc covers what
+the deployment needs so calls work for real users over the public URL.
+
+It applies to a deployment fronted by a **layer-4 (SNI-routable) proxy/tunnel**
+on a single public `:443` (the `ring-dev.zuptalo.com` setup).
+
+---
+
+## How calling reaches the server (the one thing to get right)
+
+WebRTC media can't go through a normal HTTPS reverse proxy (that proxy terminates
+TLS and speaks HTTP; it can't carry the raw TLS/UDP streams media needs). Ring
+solves this by sending **all** call media over **TURN-over-TLS (TURNS) on 443**:
+
+```
+            ┌─────────── :443 (public) ───────────┐
+            │   L4 SNI router (TLS passthrough)    │
+            └───────┬──────────────────────┬───────┘
+   SNI = app host   │                      │  SNI = turn.<host>
+        (HTTPS)     ▼                      ▼  (raw TLS, passthrough)
+              web reverse proxy        ringd TURNS listener  (terminates TLS)
+              (app + /v1 API)          internal :3478
+```
+
+- **1:1 calls** are peer-to-peer (DTLS-SRTP, natively E2EE); media is relayed
+  through the TURN only when a direct path is blocked.
+- **Group calls** go through the embedded SFU, reached *through* the same TURN.
+  Media stays E2EE from the SFU via insertable streams.
+
+Because TURNS is TLS, it carries an **SNI** the L4 router can switch on. The
+router must do **SNI-based TLS passthrough**: forward `turn.<host>:443` to
+ringd's internal TURNS listener (ringd terminates the TLS with its cert), and
+send every other SNI to the existing web proxy.
+
+> **Why `RELAY_IP` is loopback (not the public IP):** every participant tunnels
+> into the *same* embedded TURN over 443, and the relay-to-relay hop happens
+> inside the `ringd` process - it never leaves the host. So the relay address
+> only needs to be locally deliverable. `RELAY_IP` defaults to `127.0.0.1`;
+> leave it unset. (This is exactly what the e2e tests exercise.)
+
+---
+
+## Requirements checklist
+
+1. **DNS** - `turn.ring-dev.zuptalo.com` → the deployment's `:443`.
+2. **TLS cert** for `turn.ring-dev.zuptalo.com` (or a cert whose SAN covers it),
+   readable by `ringd`.
+3. **L4 SNI passthrough** rule: `turn.<host>:443` → `ringd:3478` (raw TCP).
+4. **ringd env** (below) with `ENABLE_CALLS=true` and the cert paths.
+5. `ALLOWED_ORIGINS` includes the app origin (`https://ring-dev.zuptalo.com`) - it
+   already does in the current `server/.env`.
+
+---
+
+## 1. TLS certificate for the TURN host
+
+ringd terminates the TLS for `turn.<host>`, so it needs the cert + key. Because
+`:443` is SNI-passthrough'd to ringd, HTTP-01 validation to that host won't hit
+an HTTP server - use **DNS-01**, e.g.:
+
+```bash
+certbot certonly --dns-<provider> -d turn.ring-dev.zuptalo.com
+# → /etc/letsencrypt/live/turn.ring-dev.zuptalo.com/{fullchain,privkey}.pem
+```
+
+Or, if your app cert already covers `turn.<host>` (wildcard `*.ring-dev.zuptalo.com`
+or an explicit SAN), point ringd at that PEM pair.
+
+ringd loads the cert **at startup**; on renewal, restart ringd.
+
+---
+
+## 2. ringd environment
+
+Set these wherever `ringd`'s environment is defined (e.g. `server/.env`, sourced
+by the Makefile, or the service unit):
+
+```bash
+ENABLE_CALLS=true
+TURN_HOST=turn.ring-dev.zuptalo.com     # default: turn.<PUBLIC_URL host>
+TURN_LISTEN=:3478                        # internal port the L4 router forwards to
+TURN_TLS_CERT=/etc/letsencrypt/live/turn.ring-dev.zuptalo.com/fullchain.pem
+TURN_TLS_KEY=/etc/letsencrypt/live/turn.ring-dev.zuptalo.com/privkey.pem
+# RELAY_IP - leave unset (defaults to 127.0.0.1; see note above)
+# TURN_REALM - leave unset (defaults to the PUBLIC_URL host)
+```
+
+With `TURN_TLS_CERT`/`KEY` set, ringd starts the TURN listener in **TLS mode** and
+the `GET /v1/turn-credentials` endpoint advertises `turns:turn.<host>:443?transport=tcp`.
+On boot you'll see:
+
+```
+INFO TURN relay ready   listen=:3478 ... url="turns:turn.ring-dev.zuptalo.com:443?transport=tcp" tls=true
+INFO group-call SFU ready relayVia="turn:127.0.0.1:<port>?transport=udp"
+```
+
+---
+
+## 3. L4 SNI passthrough rule
+
+Route `turn.<host>:443` to `127.0.0.1:3478` (ringd), passing the TLS through
+untouched. Pick the one matching your proxy:
+
+### nginx (`stream` + `ssl_preread`)
+
+```nginx
+stream {
+  map $ssl_preread_server_name $upstream {
+    turn.ring-dev.zuptalo.com  ringd_turn;
+    default                    web_tls;     # your existing HTTPS backend
+  }
+  upstream ringd_turn { server 127.0.0.1:3478; }
+  upstream web_tls    { server 127.0.0.1:8443; }   # the web reverse proxy's TLS port
+  server {
+    listen 443;
+    ssl_preread on;
+    proxy_pass $upstream;
+  }
+}
+```
+
+### Traefik (TCP router, TLS passthrough)
+
+```yaml
+tcp:
+  routers:
+    ring-turn:
+      entryPoints: [websecure]            # :443
+      rule: "HostSNI(`turn.ring-dev.zuptalo.com`)"
+      tls: { passthrough: true }
+      service: ring-turn
+  services:
+    ring-turn:
+      loadBalancer:
+        servers: [{ address: "127.0.0.1:3478" }]
+```
+
+(The app's normal HTTP routers on the same `websecure` entrypoint keep handling
+every other SNI.) On Pangolin/Newt-tunneled setups, expose `turn.<host>` as a
+**raw TCP / TLS-passthrough** resource pointing at `ringd:3478` - not an HTTP one.
+
+### HAProxy
+
+```haproxy
+frontend https
+  bind :443
+  mode tcp
+  tcp-request inspect-delay 5s
+  tcp-request content accept if { req_ssl_hello_type 1 }
+  use_backend turn if { req_ssl_sni -i turn.ring-dev.zuptalo.com }
+  default_backend web
+backend turn
+  mode tcp
+  server ringd 127.0.0.1:3478
+backend web
+  mode tcp
+  server web 127.0.0.1:8443
+```
+
+### Caddy (`caddy-l4` plugin)
+
+```caddyfile
+{
+  layer4 {
+    :443 {
+      @turn tls sni turn.ring-dev.zuptalo.com
+      route @turn { proxy 127.0.0.1:3478 }
+      route       { proxy 127.0.0.1:8443 }   # hand the rest to your HTTPS backend
+    }
+  }
+}
+```
+
+> Cloudflare's standard HTTP proxy can't pass arbitrary TLS streams. To front
+> TURNS through Cloudflare you'd need Spectrum (TCP) or a direct/Tunnel TCP
+> route; otherwise terminate TURNS on a host the L4 rule can reach directly.
+
+---
+
+## 4. Verify
+
+1. **TLS reaches ringd** (SNI passthrough + cert):
+   ```bash
+   openssl s_client -connect ring-dev.zuptalo.com:443 -servername turn.ring-dev.zuptalo.com
+   # → presents the turn.<host> certificate (served by ringd), handshake OK
+   ```
+2. **Credentials endpoint** (with a bearer token from a registered account):
+   ```bash
+   curl -s https://ring-dev.zuptalo.com/v1/turn-credentials -H "Authorization: Bearer <token>" | jq
+   # → { "iceServers":[{ "urls":["turns:turn.ring-dev.zuptalo.com:443?transport=tcp"], ... }], ... }
+   ```
+   and `GET /v1/config` shows `"callsEnabled": true`.
+3. **Relay candidate gathers** - paste the iceServers entry into
+   <https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/>;
+   you should get a `relay` candidate and "Done".
+4. **A real call** between two devices/accounts: place a 1:1 call (connects,
+   audio/video both ways, clean hang-up), then a group call from a group chat
+   (each participant sees the others). Chromium/Edge required for group (E2EE
+   insertable streams); 1:1 works in every browser.
+
+---
+
+## Notes & limits
+
+- **Group E2EE browser support:** group calls need `createEncodedStreams`
+  (Chromium/Edge). Other browsers are blocked from group calls with a message;
+  1:1 works everywhere.
+- **Group key distribution** is peer-to-peer over each pair's 1:1 ratchet, so all
+  group members must be mutual contacts (have exchanged friend requests).
+- **Background ringing** is best-effort on the web: the server briefly buffers an
+  offer and the Web Push tickle wakes a backgrounded-but-alive client to
+  reconnect and ring. A fully-closed app shows the OS notification; tapping it
+  opens the app (the offer may have expired if that takes too long).
+- **Local development** needs none of this: `ringd` runs the TURN in plaintext on
+  `:3478` and advertises `turn:127.0.0.1:3478`, reachable by a localhost browser
+  (this is what `npm run test:e2e` uses).

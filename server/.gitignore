@@ -1,0 +1,8 @@
+# Auto-generated runtime state: server secrets + first-run invite code.
+/data/
+# Local env overrides.
+.env
+# Built binaries.
+/ringd
+# air hot-reload build dir.
+/tmp/

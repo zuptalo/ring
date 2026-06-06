@@ -1,0 +1,196 @@
+<template>
+  <!-- Full-screen install gate. Like KeyGuard, this overlays the (always-mounted)
+       router outlet as an opaque ion-page, so a plain browser tab can't be used
+       until Ring is installed to the Home Screen. -->
+  <ion-page v-if="mustInstall">
+    <ion-header :translucent="true">
+      <ion-toolbar>
+        <ion-title>Install Ring</ion-title>
+      </ion-toolbar>
+    </ion-header>
+
+    <ion-content :fullscreen="true">
+      <!-- Constrain to a centered column so it isn't stretched edge-to-edge on
+           desktop / wide viewports. -->
+      <div class="install-wrap">
+      <!-- Brand block, matching the Auth page exactly. -->
+      <div class="ion-text-center ion-padding">
+        <div
+          style="
+            width: 76px;
+            height: 76px;
+            margin: 0 auto 20px;
+            border-radius: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--ion-color-primary);
+            box-shadow: 0 12px 32px rgba(16, 185, 129, 0.45);
+          "
+        >
+          <svg viewBox="0 0 100 100" width="58" height="58" aria-hidden="true">
+            <path
+              style="fill: #fff;"
+              d="M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z"
+            />
+            <circle
+              cx="50"
+              cy="49"
+              r="18"
+              style="fill: none; stroke: var(--ion-color-primary); stroke-width: 7;"
+            />
+          </svg>
+        </div>
+        <ion-text>
+          <h1>Ring</h1>
+        </ion-text>
+        <ion-text color="medium">
+          <p>For reliable notifications and your security, add Ring to your Home Screen to continue.</p>
+        </ion-text>
+      </div>
+
+      <!-- Native install button (Chromium / Android, when available). -->
+      <div v-if="canPrompt" class="ion-padding">
+        <ion-button expand="block" shape="round" @click="install">
+          <ion-icon slot="start" :icon="downloadOutline" />
+          Install Ring
+        </ion-button>
+      </div>
+
+      <!-- Platform-specific manual steps. -->
+      <ion-list :inset="true">
+        <ion-list-header>
+          <ion-label>How to install</ion-label>
+        </ion-list-header>
+        <ion-item v-for="(step, i) in steps" :key="i" lines="none">
+          <!-- Identical 24px marker wrapper for every row so Ionic spaces the
+               start slot consistently and the labels line up. The icon/badge/SVG
+               live inside it. -->
+          <div slot="start" class="step-marker">
+            <!-- Ring's app icon, what the user taps on the Home Screen. -->
+            <svg v-if="step.glyph === 'ring'" class="step-glyph" viewBox="0 0 100 100" aria-hidden="true">
+              <rect x="0" y="0" width="100" height="100" rx="22" style="fill: var(--ion-color-primary);" />
+              <g transform="translate(8.98,8.16) scale(0.82)">
+                <path style="fill: #fff;" d="M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z" />
+                <circle cx="50" cy="49" r="18" style="fill: none; stroke: var(--ion-color-primary); stroke-width: 7;" />
+              </g>
+            </svg>
+            <!-- "Add to Home Screen": a plus inside a rounded rectangle. -->
+            <svg v-else-if="step.glyph === 'addhome'" class="step-glyph" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3.5" y="3.5" width="17" height="17" rx="4.5" style="fill: none; stroke: var(--ion-color-primary); stroke-width: 1.7;" />
+              <path d="M12 8.5 V15.5 M8.5 12 H15.5" style="stroke: var(--ion-color-primary); stroke-width: 1.7; stroke-linecap: round;" />
+            </svg>
+            <ion-icon v-else-if="step.icon" class="step-glyph" :icon="step.icon" color="primary" />
+            <ion-note v-else class="step-num">{{ i + 1 }}</ion-note>
+          </div>
+          <ion-label class="ion-text-wrap">{{ step.text }}</ion-label>
+        </ion-item>
+      </ion-list>
+
+      <div class="ion-padding ion-text-center">
+        <ion-text color="medium">
+          <p>Already added it? Open Ring from your Home Screen.</p>
+        </ion-text>
+      </div>
+      </div>
+    </ion-content>
+  </ion-page>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue';
+import {
+  IonPage, IonHeader, IonToolbar, IonTitle, IonContent,
+  IonText, IonButton, IonIcon, IonList, IonListHeader, IonItem, IonLabel, IonNote,
+} from '@ionic/vue';
+import { downloadOutline, shareOutline } from 'ionicons/icons';
+import { useInstallGuard, promptInstall } from '@/composables/useInstallGuard';
+
+const { mustInstall, platform, canPrompt } = useInstallGuard();
+
+const install = (): void => void promptInstall();
+
+interface Step {
+  text: string;
+  icon?: string; // an ionicon, shown instead of the step number
+  glyph?: 'addhome' | 'ring'; // an inline SVG glyph (no ionicon for these)
+}
+
+const steps = computed<Step[]>(() => {
+  switch (platform.value) {
+    case 'ios':
+      return [
+        { text: 'Tap the Share button in the toolbar.', icon: shareOutline },
+        { text: "Scroll and choose 'Add to Home Screen'.", glyph: 'addhome' },
+        { text: 'Open Ring from your Home Screen.', glyph: 'ring' },
+      ];
+    case 'android':
+      return [
+        { text: 'Open the browser menu (⋮).' },
+        { text: "Choose 'Install app' (or 'Add to Home screen').", glyph: 'addhome' },
+        { text: 'Open Ring from your Home Screen.', glyph: 'ring' },
+      ];
+    default:
+      return [
+        { text: 'Click the install icon in the address bar, or open the browser menu.', icon: downloadOutline },
+        { text: "Choose 'Install Ring'." },
+        { text: 'Launch Ring from the installed app.', glyph: 'ring' },
+      ];
+  }
+});
+</script>
+
+<style scoped>
+/* Overlay the always-mounted router outlet AND the key gate (z-index 20), so an
+   un-installed browser tab is fully blocked. The content is opaque (theme
+   background), so nothing behind it bleeds through. */
+ion-page {
+  z-index: 30;
+}
+/* Center the guide in a column wide enough that the subtitle and the longest
+   "How to install" line each sit on one line on desktop, instead of stretching
+   edge-to-edge. Full width on phones (where it wraps naturally). */
+.install-wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding-top: max(env(safe-area-inset-top, 0px), 8px);
+}
+/* One identical 24×24 start-slot wrapper per step. Putting a uniform element in
+   the slot (instead of an icon vs note vs svg) is what makes every row's label
+   line up, and we set the gap to the label ourselves with !important to
+   override Ionic's per-element-type slotted margins (icons get a big gap, notes
+   get none). */
+.step-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  margin-inline-end: 20px !important;
+}
+/* The icon / svg glyph fills the 24×24 marker. */
+.step-glyph {
+  width: 24px;
+  height: 24px;
+}
+/* Numbered step badge, same 24×24 footprint as the icons. Reset ion-note's
+   default padding/margin/font so the digit sits centered in the circle. */
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  margin: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ion-color-primary) 16%, transparent);
+  color: var(--ion-color-primary);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1;
+}
+</style>

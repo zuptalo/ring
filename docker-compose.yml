@@ -1,0 +1,52 @@
+# Single-host deployment of Ring: the all-in-one image (PWA + API) plus its
+# PostgreSQL. This is for running a real instance.
+#
+# For local development use `make start` instead (Vite + air hot-reload against
+# the database in server/docker-compose.yml).
+#
+# Quick start:
+#   export PUBLIC_URL=https://ring.example.com
+#   export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+#   docker compose up -d          # pulls ghcr.io/zuptalo/ring:latest
+#   # or: docker compose up -d --build   to build the image from this checkout
+#
+# Put a TLS-terminating reverse proxy (Caddy, nginx, Traefik) in front and point
+# it at port 8080. Calls (WebRTC) stay off unless you also provide a public relay
+# IP and a TURNS certificate; see server/.env.example for the ENABLE_CALLS knobs.
+
+services:
+  ring:
+    image: ghcr.io/zuptalo/ring:latest
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ENV: production
+      DATABASE_URL: postgres://ring:${POSTGRES_PASSWORD:-ring}@db:5432/ring?sslmode=disable
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL to the public https URL of this instance}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ring_data:/data
+
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ring
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ring}
+      POSTGRES_DB: ring
+    volumes:
+      - ring_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ring -d ring"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ring_data:
+  ring_pgdata:

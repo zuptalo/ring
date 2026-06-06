@@ -1,0 +1,40 @@
+# Keep the build context small and never bake local/runtime state into an image.
+
+# VCS + editor noise
+.git
+.gitignore
+.gitattributes
+.DS_Store
+.vscode
+.idea
+
+# Dependencies + build outputs (all rebuilt inside the image)
+node_modules
+dist
+dist-ssr
+dev-dist
+
+# Go runtime state and local secrets (MUST NOT enter an image)
+server/data
+server/tmp
+server/ringd
+server/.env
+**/*.local
+.env
+.env.*
+
+# Test + tooling artifacts
+test-results
+playwright-report
+playwright/.cache
+.tmp
+.tmp-review
+.tmp_verify
+.audit_tmp
+.cc-tmp-search
+.rtmp
+
+# Local agent/editor state and CI definitions (not needed to build the image)
+.claude
+.github
+README.md

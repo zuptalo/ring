@@ -1,0 +1,240 @@
+// Package push sends Web Push notifications via VAPID. To preserve the
+// zero-knowledge model it only ever sends a content-free "tickle" - the client
+// shows a generic notification (or, with auto-unlock, fetches + decrypts the
+// real E2EE message over the relay for a rich preview). Message content never
+// reaches the push service; only the frame *type* ("msg" | "call") does, so the
+// service worker can render an incoming-call alert without a relay round-trip.
+package push
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	webpush "github.com/SherClockHolmes/webpush-go"
+
+	"ring/server/internal/store"
+)
+
+// Content-free tickles (no message data). The SW branches on `t`.
+var (
+	tickleMsg  = []byte(`{"t":"msg"}`)
+	tickleCall = []byte(`{"t":"call"}`)
+)
+
+const (
+	// msgTTL: a queued chat message is worth alerting on for a long time, so the
+	// push service must HOLD the tickle until the device next comes online. With a
+	// tiny TTL a phone merely asleep / out of signal for a few seconds would never
+	// learn a message is waiting (the bytes stay safely queued on the relay, but no
+	// notification fires until the app is reopened). 28 days is the practical max
+	// most push services honor; a single content-free tickle is cheap to hold.
+	msgTTL = 28 * 24 * 60 * 60 // 2419200s
+	// callTTL: a ring is real-time. A tickle that can't wake the device within a
+	// dial timeout is a missed call, so it must NOT linger and resurrect a stale
+	// ring minutes later.
+	callTTL = 45
+	// msgTopic collapses a burst of undelivered MESSAGE tickles to the same
+	// subscription into a single wake-up - the SW drains the whole relay queue on
+	// any wake, so collapsing loses nothing. Per RFC 8030 collapsing is scoped to
+	// the push subscription (one device), so a constant topic is correct. Call
+	// tickles deliberately use NO topic, so a flood of messages can never collapse
+	// an incoming-call ring away. Must be <=32 url-safe-base64 chars.
+	msgTopic = "ring-msg"
+
+	// sendBudget bounds one subscription's whole delivery attempt (incl. retries),
+	// so one slow/hung endpoint can't starve a user's other devices.
+	sendBudget = 10 * time.Second
+	maxRetries = 2 // transient failures only (network / 429 / 5xx)
+)
+
+// pushParams are the per-call Web Push transport knobs. They never touch the
+// (content-free) payload, so the zero-knowledge model is unaffected.
+type pushParams struct {
+	payload []byte
+	ttl     int
+	urgency webpush.Urgency
+	topic   string
+}
+
+var (
+	msgParams = func() pushParams {
+		return pushParams{payload: tickleMsg, ttl: msgTTL, urgency: webpush.UrgencyHigh, topic: msgTopic}
+	}
+	callParams = func() pushParams {
+		return pushParams{payload: tickleCall, ttl: callTTL, urgency: webpush.UrgencyHigh, topic: ""}
+	}
+)
+
+// SubStore is the subscription persistence the notifier needs.
+type SubStore interface {
+	SubscriptionsFor(ctx context.Context, userID string) ([]store.PushSubscription, error)
+	DeleteSubscriptionByEndpoint(ctx context.Context, endpoint string) error
+}
+
+// Sender signs + delivers a single Web Push request.
+type Sender struct {
+	vapidPublic  string
+	vapidPrivate string
+	subject      string // VAPID "sub": an https URL or mailto identifying the app
+}
+
+func NewSender(vapidPublic, vapidPrivate, subject string) *Sender {
+	return &Sender{vapidPublic: vapidPublic, vapidPrivate: vapidPrivate, subject: subject}
+}
+
+// attempt makes a single delivery and reports the HTTP status, any Retry-After
+// hint, and a transport error (status 0).
+func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p pushParams) (status int, retryAfter time.Duration, err error) {
+	// webpush-go prepends "mailto:" to any non-https subscriber, so pass the bare
+	// address (a leading "mailto:" would yield "mailto:mailto:…", which Apple
+	// rejects as BadJwtToken). An https URL is left untouched.
+	subscriber := strings.TrimPrefix(s.subject, "mailto:")
+	resp, err := webpush.SendNotificationWithContext(ctx, p.payload, &webpush.Subscription{
+		Endpoint: sub.Endpoint,
+		Keys:     webpush.Keys{P256dh: sub.P256dh, Auth: sub.Auth},
+	}, &webpush.Options{
+		Subscriber:      subscriber,
+		VAPIDPublicKey:  s.vapidPublic,
+		VAPIDPrivateKey: s.vapidPrivate,
+		TTL:             p.ttl,
+		Urgency:         p.urgency,
+		Topic:           p.topic,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		retryAfter = parseRetryAfter(ra)
+	}
+	return resp.StatusCode, retryAfter, nil
+}
+
+// Notifier sends a tickle to all of a user's subscriptions, pruning dead ones.
+type Notifier struct {
+	sender *Sender
+	store  SubStore
+}
+
+func NewNotifier(sender *Sender, st SubStore) *Notifier {
+	return &Notifier{sender: sender, store: st}
+}
+
+// Notify pushes a content-free MESSAGE tickle to every subscription of userID
+// (long-lived + collapsible, so an offline device still learns about it on wake).
+// Safe to call in a goroutine; failures are logged, 404/410 endpoints are pruned,
+// transient failures are retried.
+func (n *Notifier) Notify(ctx context.Context, userID string) { n.notify(ctx, userID, msgParams()) }
+
+// NotifyCall pushes a content-free CALL tickle: short-lived (a stale ring is
+// useless), high-urgency, and never collapsed, so it always wakes the device
+// promptly for the live ring that follows over the WebSocket.
+func (n *Notifier) NotifyCall(ctx context.Context, userID string) {
+	n.notify(ctx, userID, callParams())
+}
+
+func (n *Notifier) notify(ctx context.Context, userID string, p pushParams) {
+	subs, err := n.store.SubscriptionsFor(ctx, userID)
+	if err != nil {
+		slog.Error("push: load subscriptions", "err", err)
+		return
+	}
+	// Fan out per subscription: a user's devices are delivered concurrently, each
+	// under its own budget, so one slow endpoint never delays the others.
+	var wg sync.WaitGroup
+	for _, sub := range subs {
+		wg.Add(1)
+		go func(sub store.PushSubscription) {
+			defer wg.Done()
+			sctx, cancel := context.WithTimeout(ctx, sendBudget)
+			defer cancel()
+			n.deliver(sctx, sub, p)
+		}(sub)
+	}
+	wg.Wait()
+}
+
+// deliver sends to one subscription with bounded retry on transient failures and
+// prunes a subscription the push service reports as gone (404/410).
+func (n *Notifier) deliver(ctx context.Context, sub store.PushSubscription, p pushParams) {
+	backoff := 500 * time.Millisecond
+	for attempt := 0; ; attempt++ {
+		status, retryAfter, err := n.sender.attempt(ctx, sub, p)
+		switch {
+		case err == nil && status < 300:
+			slog.Info("push: delivered", "endpoint", endpointHost(sub.Endpoint))
+			return
+		case status == http.StatusNotFound || status == http.StatusGone:
+			// Subscription is dead - stop trying to use it.
+			_ = n.store.DeleteSubscriptionByEndpoint(ctx, sub.Endpoint)
+			return
+		case attempt < maxRetries && retryable(status, err):
+			wait := backoff
+			if retryAfter > 0 {
+				wait = retryAfter
+			}
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return
+			}
+			backoff *= 2
+			continue
+		default:
+			if err != nil {
+				slog.Warn("push: send failed", "err", err, "endpoint", endpointHost(sub.Endpoint))
+			} else {
+				// e.g. Apple 403 BadJwtToken if the VAPID subject isn't a mailto:.
+				slog.Warn("push: non-success status", "status", status, "endpoint", endpointHost(sub.Endpoint))
+			}
+			return
+		}
+	}
+}
+
+// retryable reports whether a failed attempt is worth retrying: any transport
+// error, or a transient server-side status. 404/410 (handled separately) and
+// other 4xx are permanent and not retried.
+func retryable(status int, err error) bool {
+	if err != nil {
+		return true
+	}
+	switch status {
+	case http.StatusTooManyRequests, // 429
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		http.StatusGatewayTimeout:      // 504
+		return true
+	}
+	return false
+}
+
+// parseRetryAfter reads a delta-seconds Retry-After header, capped so a
+// misbehaving service can't pin a goroutine for the whole budget. HTTP-date form
+// is uncommon for push services and treated as "no hint" (fall back to backoff).
+func parseRetryAfter(v string) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || secs < 0 {
+		return 0
+	}
+	if secs > 8 {
+		secs = 8
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// endpointHost returns just the host of a push endpoint (avoids logging the
+// full secret token in the path).
+func endpointHost(endpoint string) string {
+	if u, err := url.Parse(endpoint); err == nil {
+		return u.Host
+	}
+	return "?"
+}

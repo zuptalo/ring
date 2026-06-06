@@ -1,0 +1,31 @@
+import { onMounted, onUnmounted } from 'vue';
+import { getSetting } from '@/db/queries';
+
+/**
+ * Keeps the app-icon badge in sync: the service worker grows it (to the number
+ * of pending push notifications) while the app is closed; here we dismiss any
+ * lingering notifications whenever the app is foregrounded, and (when the badge
+ * mode is "When opened", notifications.badge) clear the icon badge too. In the
+ * "When viewed" mode the badge is left to track the unread total (useBadges).
+ */
+export function useAppBadge(): void {
+  const clearWhenVisible = (): void => {
+    if (document.visibilityState !== 'visible') return;
+    if ('serviceWorker' in navigator) {
+      void navigator.serviceWorker.getRegistration().then((reg) => {
+        void reg?.getNotifications().then((list) => list.forEach((n) => n.close()));
+      });
+    }
+    void getSetting<string>('notifications.badge', 'open').then((mode) => {
+      if (mode !== 'open') return; // "When viewed" → leave the unread-count badge
+      const nav = navigator as Navigator & { clearAppBadge?: () => Promise<void> };
+      void nav.clearAppBadge?.();
+    });
+  };
+
+  onMounted(() => {
+    clearWhenVisible();
+    document.addEventListener('visibilitychange', clearWhenVisible);
+  });
+  onUnmounted(() => document.removeEventListener('visibilitychange', clearWhenVisible));
+}

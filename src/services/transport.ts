@@ -1,0 +1,414 @@
+/**
+ * Transport abstraction: the single network seam.
+ *
+ * Everything that needs the "server" (sync push/pull, message delivery,
+ * receipts, key distribution later) depends ONLY on this interface. Today the
+ * concrete implementation is `MockTransport`, an in-memory loopback that
+ * acknowledges sends and fakes delivery receipts, reproducing the old
+ * `simulateDelivery` progression while exercising the real outbox → send →
+ * receipt → merge path. `WebSocketTransport` (backend, later) implements the
+ * same interface with token auth, heartbeat and reconnect; nothing else changes.
+ *
+ * Frames are plain JSON (Go-interoperable). Message ciphertext is sealed by the
+ * ratchet (see services/messaging.ts) before it reaches the transport, which
+ * treats it as opaque.
+ */
+import { wsUrl } from './config';
+
+export type TransportState = 'offline' | 'connecting' | 'online';
+
+export interface MsgFrame {
+  t: 'msg';
+  id: string; // message id (correlation)
+  to?: string; // recipient user id (set when sending)
+  from?: string; // sender user id (set by the server on delivery)
+  ciphertext?: unknown; // sealed wire packet, opaque to the transport
+}
+export interface ReceiptFrame {
+  t: 'receipt';
+  messageId: string;
+  status: 'sent' | 'delivered' | 'read';
+  at: number;
+  to?: string; // recipient (for client-originated read receipts; routed by the server)
+  from?: string; // server 'sent'/'delivered' receipts: WHICH recipient confirmed it
+  // (scopes the sender's outbox removal: a group message has one copy per member,
+  // all sharing the message id, so a receipt must only clear the confirmed copy).
+}
+export interface RecordsFrame {
+  t: 'records';
+  store: string;
+  rows: unknown[];
+  cursor: string | null;
+}
+export interface TombstoneFrame {
+  t: 'tombstone';
+  store: string;
+  recordId: string;
+  deletedAt: number;
+}
+export interface PullFrame {
+  t: 'pull';
+  cursor: string | null;
+}
+export interface AckFrame {
+  t: 'ack';
+  refId: string;
+}
+
+/* ---- presence (server-assisted) ---- */
+
+/** Upload our presence visibility tiers (derived from the privacy settings); the
+ *  server enforces them against the contact graph. */
+export interface PresencePrefsFrame {
+  t: 'presence-prefs';
+  onlineTier: string; // 'everyone' | 'contacts' | 'nobody'
+  lastSeenTier: string;
+}
+/** Subscribe to (watch) the presence of these user ids (our contacts). */
+export interface PresenceSubFrame {
+  t: 'presence-sub';
+  ids: string[];
+}
+/** Report our own foreground/background state (drives accurate online status). */
+export interface PresenceSelfFrame {
+  t: 'presence-self';
+  active: boolean;
+}
+/** Server → client presence update for a watched user. `online` is omitted
+ *  (→ false) when not shared; `lastSeen` is omitted (→ undefined/null) when not
+ *  shared or never set. */
+export interface PresenceFrame {
+  t: 'presence';
+  user: string;
+  online?: boolean;
+  lastSeen?: number;
+}
+
+/* ---- WebRTC call signalling (live-only; never durably queued) ---- */
+
+/** Kinds of call. */
+export type CallKind = 'audio' | 'video';
+
+/**
+ * 1:1 signalling frames. SDP/ICE ride encrypted in `ciphertext` (a sealed wire
+ * packet, opaque to the server) exactly like a chat message. `call-ringing`,
+ * `-accept`, `-reject`, `-cancel`, `-busy`, `-end` carry no payload; they're
+ * liveness/control only. The server stamps `from` on delivery.
+ */
+export interface CallOfferFrame {
+  t: 'call-offer';
+  to?: string;
+  from?: string;
+  callId: string;
+  kind?: CallKind;
+  ciphertext?: unknown; // sealed SDP offer
+}
+export interface CallAnswerFrame {
+  t: 'call-answer';
+  to?: string;
+  from?: string;
+  callId: string;
+  ciphertext?: unknown; // sealed SDP answer
+}
+export interface CallIceFrame {
+  t: 'call-ice';
+  to?: string;
+  from?: string;
+  callId: string;
+  ciphertext?: unknown; // sealed ICE candidate
+}
+export interface CallControlFrame {
+  t: 'call-ringing' | 'call-accept' | 'call-reject' | 'call-cancel' | 'call-busy' | 'call-end';
+  to?: string;
+  from?: string;
+  callId: string;
+  reason?: string; // declined|busy|timeout|hangup|unavailable|answered-elsewhere
+  duration?: number; // seconds (informational, on call-end)
+}
+
+/* ---- group calls (SFU) ---- */
+
+/** Join/leave a group call room (roomId == group chat id). */
+export interface CallJoinFrame {
+  t: 'call-join';
+  roomId: string;
+  kind?: CallKind;
+  // Initiator-only: the group members to ring. The server (which has no group
+  // object) fans out a call-group-invite to each. Omitted by later joiners and by
+  // ICE-recovery re-joins, so only the first join rings the group.
+  members?: string[];
+}
+/** Server → a group member not yet in the room: an incoming group call to join. */
+export interface CallGroupInviteFrame {
+  t: 'call-group-invite';
+  roomId: string;
+  from?: string; // the initiator
+  kind?: CallKind;
+  members?: string[]; // everyone being rung (for a participant count in the UI)
+}
+/** A member → the key master: please (re)send the current group media key. Live
+ *  recovery path for a dropped call-key (which is never durably queued). */
+export interface CallKeyRequestFrame {
+  t: 'call-key-request';
+  to?: string; // the key master (smallest roster id)
+  from?: string;
+  roomId: string;
+}
+export interface CallLeaveFrame {
+  t: 'call-leave';
+  roomId: string;
+}
+/** Server → members: current roster + key epoch. */
+export interface CallRosterFrame {
+  t: 'call-roster';
+  roomId: string;
+  members: string[];
+  from?: string;
+}
+/** Peer-to-peer delivery of the group media key (sealed; never seen by server). */
+export interface CallKeyFrame {
+  t: 'call-key';
+  to?: string;
+  from?: string;
+  roomId: string;
+  ciphertext?: unknown; // sealed { epoch, key }
+}
+/** Client↔SFU negotiation (plain, the SFU is the endpoint, carries no keys). */
+export interface SfuOfferFrame {
+  t: 'sfu-offer';
+  to?: string;
+  from?: string;
+  roomId: string;
+  sdp?: unknown;
+}
+export interface SfuAnswerFrame {
+  t: 'sfu-answer';
+  to?: string;
+  from?: string;
+  roomId: string;
+  sdp?: unknown;
+}
+export interface SfuIceFrame {
+  t: 'sfu-ice';
+  to?: string;
+  from?: string;
+  roomId: string;
+  ciphertext?: unknown; // ICE candidate JSON (reuses the ciphertext slot as opaque carrier)
+}
+
+export type CallFrame =
+  | CallOfferFrame
+  | CallAnswerFrame
+  | CallIceFrame
+  | CallControlFrame
+  | CallJoinFrame
+  | CallLeaveFrame
+  | CallRosterFrame
+  | CallKeyFrame
+  | CallGroupInviteFrame
+  | CallKeyRequestFrame
+  | SfuOfferFrame
+  | SfuAnswerFrame
+  | SfuIceFrame;
+
+export type Frame =
+  | MsgFrame
+  | ReceiptFrame
+  | RecordsFrame
+  | TombstoneFrame
+  | PullFrame
+  | AckFrame
+  | PresencePrefsFrame
+  | PresenceSubFrame
+  | PresenceSelfFrame
+  | PresenceFrame
+  | CallFrame;
+
+export interface Transport {
+  connect(token: string): Promise<void>;
+  disconnect(): void;
+  send(frame: Frame): Promise<void>;
+  /** Subscribe to inbound frames; returns an unsubscribe fn. */
+  onMessage(cb: (frame: Frame) => void): () => void;
+  /** Subscribe to connection-state changes; returns an unsubscribe fn. */
+  onStateChange(cb: (s: TransportState) => void): () => void;
+  readonly state: TransportState;
+}
+
+/* ---- mock loopback ---- */
+
+const SENT_MS = 500;
+const DELIVERED_MS = 1600;
+const READ_MS = 3200;
+
+export class MockTransport implements Transport {
+  state: TransportState = 'offline';
+  private msgCbs = new Set<(f: Frame) => void>();
+  private stateCbs = new Set<(s: TransportState) => void>();
+  private timers = new Set<ReturnType<typeof setTimeout>>();
+
+  async connect(_token: string): Promise<void> {
+    this.setState('connecting');
+    // Next tick → online, mimicking a real handshake.
+    await Promise.resolve();
+    this.setState('online');
+  }
+
+  disconnect(): void {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers.clear();
+    this.setState('offline');
+  }
+
+  async send(frame: Frame): Promise<void> {
+    if (this.state !== 'online') throw new Error('transport offline');
+    // Acknowledge anything with a correlation id.
+    if (frame.t === 'msg') {
+      this.emit({ t: 'ack', refId: frame.id });
+      // Fake the recipient/server receipts that a real backend would deliver. Stamp
+      // `from` with the recipient so the at-least-once outbox's recipient-scoped
+      // removal works if this loopback is ever swapped back in for the real transport.
+      this.schedule(SENT_MS, () => this.emit({ t: 'receipt', messageId: frame.id, status: 'sent', at: Date.now(), from: frame.to }));
+      this.schedule(DELIVERED_MS, () => this.emit({ t: 'receipt', messageId: frame.id, status: 'delivered', at: Date.now(), from: frame.to }));
+      this.schedule(READ_MS, () => this.emit({ t: 'receipt', messageId: frame.id, status: 'read', at: Date.now(), from: frame.to }));
+    } else if (frame.t === 'tombstone') {
+      this.emit({ t: 'ack', refId: `${frame.store}:${frame.recordId}` });
+    } else if (frame.t === 'pull') {
+      // No server data in the mock; a real transport would stream `records`.
+      this.emit({ t: 'records', store: '', rows: [], cursor: frame.cursor });
+    }
+  }
+
+  onMessage(cb: (f: Frame) => void): () => void {
+    this.msgCbs.add(cb);
+    return () => this.msgCbs.delete(cb);
+  }
+
+  onStateChange(cb: (s: TransportState) => void): () => void {
+    this.stateCbs.add(cb);
+    cb(this.state); // emit current immediately
+    return () => this.stateCbs.delete(cb);
+  }
+
+  private setState(s: TransportState): void {
+    this.state = s;
+    this.stateCbs.forEach((cb) => cb(s));
+  }
+
+  private emit(frame: Frame): void {
+    this.msgCbs.forEach((cb) => cb(frame));
+  }
+
+  private schedule(ms: number, fn: () => void): void {
+    const t = setTimeout(() => {
+      this.timers.delete(t);
+      fn();
+    }, ms);
+    this.timers.add(t);
+  }
+}
+
+/* ---- real WebSocket transport ---- */
+
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 15000;
+
+/**
+ * Talks to the Go relay over a WebSocket. Frames are JSON, one per message.
+ * Reconnects with exponential backoff while a token is present (i.e. until
+ * disconnect() is called on sign-out). The sync engine drains the outbox on
+ * each transition to 'online', so anything queued offline flushes on reconnect.
+ */
+export class WebSocketTransport implements Transport {
+  state: TransportState = 'offline';
+  private ws: WebSocket | null = null;
+  private token: string | null = null;
+  private msgCbs = new Set<(f: Frame) => void>();
+  private stateCbs = new Set<(s: TransportState) => void>();
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectDelay = RECONNECT_BASE_MS;
+  private closedByUs = false;
+
+  async connect(token: string): Promise<void> {
+    this.token = token;
+    this.closedByUs = false;
+    this.open();
+  }
+
+  private open(): void {
+    if (this.ws || !this.token) return;
+    this.setState('connecting');
+    const ws = new WebSocket(wsUrl(this.token));
+    this.ws = ws;
+
+    ws.onopen = () => {
+      this.reconnectDelay = RECONNECT_BASE_MS;
+      this.setState('online');
+    };
+    ws.onmessage = (ev) => {
+      let frame: Frame;
+      try {
+        frame = JSON.parse(typeof ev.data === 'string' ? ev.data : '') as Frame;
+      } catch {
+        return;
+      }
+      this.msgCbs.forEach((cb) => cb(frame));
+    };
+    ws.onclose = () => {
+      this.ws = null;
+      this.setState('offline');
+      if (!this.closedByUs) this.scheduleReconnect();
+    };
+    ws.onerror = () => {
+      // onclose will follow and drive reconnect; nothing extra needed here.
+    };
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer || this.closedByUs || !this.token) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.open();
+    }, this.reconnectDelay);
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, RECONNECT_MAX_MS);
+  }
+
+  disconnect(): void {
+    this.closedByUs = true;
+    this.token = null;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.onclose = null; // don't trigger reconnect
+      this.ws.close();
+      this.ws = null;
+    }
+    this.setState('offline');
+  }
+
+  async send(frame: Frame): Promise<void> {
+    if (this.state !== 'online' || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('transport offline');
+    }
+    this.ws.send(JSON.stringify(frame));
+  }
+
+  onMessage(cb: (f: Frame) => void): () => void {
+    this.msgCbs.add(cb);
+    return () => this.msgCbs.delete(cb);
+  }
+
+  onStateChange(cb: (s: TransportState) => void): () => void {
+    this.stateCbs.add(cb);
+    cb(this.state);
+    return () => this.stateCbs.delete(cb);
+  }
+
+  private setState(s: TransportState): void {
+    if (this.state === s) return;
+    this.state = s;
+    this.stateCbs.forEach((cb) => cb(s));
+  }
+}

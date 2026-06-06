@@ -1,0 +1,62 @@
+# CI: runs the full build + test suite on every develop push and on every PR
+# (including PRs into main, so the merge that cuts a release is already proven
+# green). On a develop push it also publishes the rolling develop image.
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [main, develop]
+
+# Newer pushes to the same branch/PR cancel in-flight runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/build-test.yml
+
+  develop-image:
+    name: Publish develop image
+    needs: verify
+    # Only on a real push to develop, never on PRs (no image from untrusted forks,
+    # and PRs only need the green checks above).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/zuptalo/ring
+          tags: |
+            type=raw,value=develop
+            type=sha,format=short,prefix=develop-
+            type=raw,value=${{ steps.ver.outputs.version }}-dev.${{ github.run_number }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}-dev.${{ github.run_number }}+${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

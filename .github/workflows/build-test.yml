@@ -1,0 +1,76 @@
+# Reusable build + test pipeline, called by ci.yml (develop pushes, PRs) and
+# release.yml (main). Keeping it in one place means the exact same gates run
+# before a develop image and before a production release.
+name: build-test
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  client:
+    name: Client (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # `npm run build` is `vue-tsc --noEmit && vite build`: typecheck then bundle.
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist
+          retention-days: 7
+
+  server:
+    name: Server (build + vet + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: server/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  e2e:
+    name: End-to-end (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: server/go.sum
+      - run: npm ci
+      # global-setup.ts resets the ring_e2e DB inside this container and builds +
+      # launches an isolated test ringd; bring the database up and wait for health.
+      - name: Start PostgreSQL
+        run: docker compose -f server/docker-compose.yml up -d --wait
+      - name: Install Playwright (chromium + system deps)
+        run: npx playwright install --with-deps chromium
+      - name: Run e2e
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7

@@ -1,0 +1,202 @@
+package push
+
+import (
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	webpush "github.com/SherClockHolmes/webpush-go"
+
+	"ring/server/internal/store"
+)
+
+// memSubStore is an in-memory SubStore for the notifier tests.
+type memSubStore struct {
+	mu      sync.Mutex
+	subs    map[string][]store.PushSubscription
+	deleted []string
+}
+
+func (m *memSubStore) SubscriptionsFor(_ context.Context, userID string) ([]store.PushSubscription, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]store.PushSubscription(nil), m.subs[userID]...), nil
+}
+
+func (m *memSubStore) DeleteSubscriptionByEndpoint(_ context.Context, endpoint string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleted = append(m.deleted, endpoint)
+	return nil
+}
+
+func (m *memSubStore) wasDeleted(endpoint string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.deleted {
+		if e == endpoint {
+			return true
+		}
+	}
+	return false
+}
+
+// newSubKeys returns a valid (p256dh, auth) pair so webpush-go can encrypt to it.
+func newSubKeys(t *testing.T) (string, string) {
+	t.Helper()
+	priv, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen ecdh key: %v", err)
+	}
+	authBytes := make([]byte, 16)
+	if _, err := rand.Read(authBytes); err != nil {
+		t.Fatalf("rand auth: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
+		base64.RawURLEncoding.EncodeToString(authBytes)
+}
+
+func newNotifier(t *testing.T, st SubStore) *Notifier {
+	t.Helper()
+	vpriv, vpub, err := webpush.GenerateVAPIDKeys()
+	if err != nil {
+		t.Fatalf("gen vapid: %v", err)
+	}
+	return NewNotifier(NewSender(vpub, vpriv, "mailto:test@ring.test"), st)
+}
+
+// capturedReq records the transport headers of the last push the fake service got.
+type capturedReq struct {
+	mu      sync.Mutex
+	ttl     string
+	urgency string
+	topic   string
+	hits    int32
+}
+
+func (c *capturedReq) record(r *http.Request) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ttl = r.Header.Get("TTL")
+	c.urgency = r.Header.Get("Urgency")
+	c.topic = r.Header.Get("Topic")
+	atomic.AddInt32(&c.hits, 1)
+}
+
+// TestNotifyHeaders verifies the MESSAGE path is long-lived, high-urgency, and
+// collapsible while the CALL path is short-lived, high-urgency, and uncollapsed.
+func TestNotifyHeaders(t *testing.T) {
+	cap := &capturedReq{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.record(r)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p256dh, auth := newSubKeys(t)
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}},
+	}}
+	n := newNotifier(t, st)
+
+	n.Notify(context.Background(), "u1")
+	if cap.ttl != "2419200" {
+		t.Errorf("message TTL = %q, want 2419200", cap.ttl)
+	}
+	if cap.urgency != "high" {
+		t.Errorf("message Urgency = %q, want high", cap.urgency)
+	}
+	if cap.topic != "ring-msg" {
+		t.Errorf("message Topic = %q, want ring-msg", cap.topic)
+	}
+
+	n.NotifyCall(context.Background(), "u1")
+	if cap.ttl != "45" {
+		t.Errorf("call TTL = %q, want 45", cap.ttl)
+	}
+	if cap.urgency != "high" {
+		t.Errorf("call Urgency = %q, want high", cap.urgency)
+	}
+	if cap.topic != "" {
+		t.Errorf("call Topic = %q, want empty (uncollapsed)", cap.topic)
+	}
+}
+
+// TestPrunesGoneSubscription verifies a 410 endpoint is removed.
+func TestPrunesGoneSubscription(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusGone)
+	}))
+	defer srv.Close()
+
+	p256dh, auth := newSubKeys(t)
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}},
+	}}
+	newNotifier(t, st).Notify(context.Background(), "u1")
+
+	if !st.wasDeleted(srv.URL) {
+		t.Errorf("expected gone subscription %q to be pruned", srv.URL)
+	}
+}
+
+// TestRetriesTransientThenDelivers verifies a 503 is retried and not pruned.
+func TestRetriesTransientThenDelivers(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&hits, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable) // transient first
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p256dh, auth := newSubKeys(t)
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}},
+	}}
+	newNotifier(t, st).Notify(context.Background(), "u1")
+
+	if got := atomic.LoadInt32(&hits); got < 2 {
+		t.Errorf("hits = %d, want >= 2 (a retry after 503)", got)
+	}
+	if st.wasDeleted(srv.URL) {
+		t.Errorf("a transiently-failing subscription must not be pruned")
+	}
+}
+
+// TestConcurrentSendsDontSerialize verifies a user's devices are delivered in
+// parallel: two slow endpoints finish in ~one delay, not the sum.
+func TestConcurrentSendsDontSerialize(t *testing.T) {
+	const delay = 300 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(delay)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p1, a1 := newSubKeys(t)
+	p2, a2 := newSubKeys(t)
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {
+			{Endpoint: srv.URL, P256dh: p1, Auth: a1},
+			{Endpoint: srv.URL, P256dh: p2, Auth: a2},
+		},
+	}}
+	n := newNotifier(t, st)
+
+	start := time.Now()
+	n.Notify(context.Background(), "u1")
+	elapsed := time.Since(start)
+	if elapsed > 2*delay-50*time.Millisecond {
+		t.Errorf("two sends took %v; expected concurrent (~%v), not serialized (~%v)", elapsed, delay, 2*delay)
+	}
+}
