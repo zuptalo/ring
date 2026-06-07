@@ -65,7 +65,11 @@ import {
   listMessages,
   listChats,
 } from '@/db/queries';
-import { createInvitation, deleteAccount, fetchPeerBundle } from '@/services/api';
+import {
+  createInvitation, deleteAccount, fetchPeerBundle,
+  connectRequest as apiConnectRequest, connectAccept as apiConnectAccept,
+  connectReject as apiConnectReject, listConnections as apiListConnections,
+} from '@/services/api';
 import { runInviteSync } from '@/services/invites';
 import { syncContactEdges } from '@/services/directory';
 import { subscribePresence } from '@/composables/useSync';
@@ -347,6 +351,10 @@ export function installTestHook(): void {
     deleteMediaByKind: (kinds: Media['kind'][], chatId?: string) => dbDeleteMediaByKind(kinds, chatId),
     deleteMediaLargerThan: (bytes: number, chatId?: string) => dbDeleteMediaLargerThan(bytes, chatId),
     /** Server-side directory search → [{id, username, displayName}]. */
+    connectRequest: (target: string) => apiConnectRequest(target),
+    connectAccept: (requester: string) => apiConnectAccept(requester),
+    connectReject: (requester: string, block: boolean) => apiConnectReject(requester, block),
+    connections: () => apiListConnections(),
     searchDirectory: async (q: string) =>
       (await searchDirectory(q)).map((u) => ({ id: u.id, username: u.username, displayName: u.displayName })),
 

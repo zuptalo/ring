@@ -304,6 +304,54 @@ export async function fetchServerConfig(): Promise<{
   return (await res.json()) as { publicUrl: string; vapidPublicKey: string; maxBlobBytes?: number; version?: string };
 }
 
+/* ---- connect-request lifecycle (directory-initiated 1:1 connections) ---- */
+
+export interface ConnReq {
+  requester: string;
+  target: string;
+  state: string;
+  updatedAt: number;
+}
+
+/** Send a connect request to a directory user; returns the resulting state. */
+export async function connectRequest(target: string): Promise<string> {
+  const res = await fetch(`${apiBaseUrl()}/v1/connections/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ target }),
+  });
+  if (!res.ok) throw new Error(`connect request failed: ${res.status}`);
+  return ((await res.json()) as { state: string }).state;
+}
+
+/** Accept an incoming connect request from `requester`. */
+export async function connectAccept(requester: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/connections/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ requester }),
+  });
+  if (!res.ok) throw new Error(`connect accept failed: ${res.status}`);
+}
+
+/** Reject an incoming connect request from `requester`; `block` also hides you from
+ *  them in the directory + presence. */
+export async function connectReject(requester: string, block: boolean): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/connections/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ requester, block }),
+  });
+  if (!res.ok) throw new Error(`connect reject failed: ${res.status}`);
+}
+
+/** The caller's incoming (awaiting accept) + outgoing (pending/rejected) requests. */
+export async function listConnections(): Promise<{ incoming: ConnReq[]; outgoing: ConnReq[] }> {
+  const res = await fetch(`${apiBaseUrl()}/v1/connections`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`list connections failed: ${res.status}`);
+  return (await res.json()) as { incoming: ConnReq[]; outgoing: ConnReq[] };
+}
+
 /** Register a browser push subscription with the backend. */
 export async function subscribePush(sub: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/v1/push/subscribe`, {

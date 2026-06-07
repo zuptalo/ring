@@ -47,6 +47,11 @@ type Config struct {
 	// object storage. Advertised at GET /v1/config so clients pre-validate.
 	MaxBlobBytes int
 
+	// RequireConnection enables the server-enforced connect-request gate (a peer's
+	// prekey bundle is only fetchable with an accepted connection). Off by default
+	// (open network); enable once clients use the connect-request flow.
+	RequireConnection bool
+
 	// --- Calling (WebRTC) ---
 	// EnableCalls turns on the embedded TURN relay + SFU. Off unless explicitly
 	// enabled in prod (calls need a public relay IP and a TLS cert); on by
@@ -119,6 +124,7 @@ func Load() (Config, error) {
 		StaticDir:           os.Getenv("STATIC_DIR"),
 		WarmEmoji:           envBool("WARM_EMOJI", false),
 		EnableCalls:         envBool("ENABLE_CALLS", dev),
+		RequireConnection:   envBool("REQUIRE_CONNECTION", false),
 		TurnRealm:           os.Getenv("TURN_REALM"),
 		TurnHost:            os.Getenv("TURN_HOST"),
 		TurnListen:          env("TURN_LISTEN", ":3478"),

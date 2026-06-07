@@ -306,8 +306,8 @@ func run() error {
 	}
 
 	handler := api.NewRouter(&api.Handlers{
-		Store: st, Directory: st, Contacts: st, Blocks: st, Keys: st, Relay: st, Hub: hub, Blobs: st, Sync: st, Push: st,
-		Invites: st, Notifier: notifier,
+		Store: st, Directory: st, Contacts: st, Connections: st, Blocks: st, Keys: st, Relay: st, Hub: hub, Blobs: st, Sync: st, Push: st,
+		Invites: st, Notifier: notifier, RequireConnection: cfg.RequireConnection,
 		PublicURL: cfg.PublicURL, VapidPublicKey: secs.VapidPublicKey, MaxBlobBytes: cfg.MaxBlobBytes,
 		Version:      version,
 		CallsEnabled: cfg.EnableCalls, TurnSharedSecret: secs.TurnSharedSecret,

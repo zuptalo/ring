@@ -40,6 +40,18 @@ type ContactStore interface {
 	SetContacts(ctx context.Context, owner string, contactIDs []string) error
 }
 
+// ConnectionStore is the connect-request relationship persistence (the gate state).
+// *store.Store satisfies it.
+type ConnectionStore interface {
+	Connected(ctx context.Context, a, b string) (bool, error)
+	ConnectionState(ctx context.Context, requester, target string) (string, error)
+	RequestConnection(ctx context.Context, requester, target string) (string, error)
+	AcceptConnection(ctx context.Context, target, requester string) error
+	RejectConnection(ctx context.Context, target, requester string, block bool) error
+	IncomingRequests(ctx context.Context, user string) ([]store.ConnectionReq, error)
+	OutgoingRequests(ctx context.Context, user string) ([]store.ConnectionReq, error)
+}
+
 // BlockStore is the per-user block-list persistence. *store.Store satisfies it.
 type BlockStore interface {
 	Block(ctx context.Context, blocker, blocked string) error
@@ -98,10 +110,11 @@ type InviteStore interface {
 
 // Handlers carries the dependencies the HTTP handlers need.
 type Handlers struct {
-	Store     AuthStore
-	Directory DirectoryStore
-	Contacts  ContactStore
-	Blocks    BlockStore
+	Store       AuthStore
+	Directory   DirectoryStore
+	Contacts    ContactStore
+	Connections ConnectionStore
+	Blocks      BlockStore
 	Keys      KeysStore
 	Relay     ws.RelayStore
 	Hub       *ws.Hub
@@ -127,6 +140,11 @@ type Handlers struct {
 	TurnURLs         []string
 	// Postgres-backed cache for the self-hosted Noto emoji proxy (GET /v1/emoji/...).
 	Emoji EmojiStore
+	// RequireConnection enables the server-enforced connect-request gate: fetching a
+	// peer's prekey bundle (GET /v1/keys/{id}) requires an accepted connection, so an
+	// unsolicited user cannot start a session. Off by default (open network); flip it
+	// on (REQUIRE_CONNECTION=true) once clients use the connect-request flow.
+	RequireConnection bool
 	// StaticDir, when non-empty, is a directory of built PWA assets served at /
 	// with SPA fallback so a single container serves the app and the API on the
 	// same origin. Empty in dev/tests (Vite serves the client), so the catch-all
@@ -171,6 +189,11 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 
 	// Contact edges (presence audience for the 'contacts' visibility tier).
 	mux.Handle("PUT /v1/contacts", authMW(http.HandlerFunc(h.setContacts)))
+	// Connect-request lifecycle (the directory-initiated handshake).
+	mux.Handle("GET /v1/connections", authMW(http.HandlerFunc(h.listConnections)))
+	mux.Handle("POST /v1/connections/request", authMW(http.HandlerFunc(h.requestConnection)))
+	mux.Handle("POST /v1/connections/accept", authMW(http.HandlerFunc(h.acceptConnection)))
+	mux.Handle("POST /v1/connections/reject", authMW(http.HandlerFunc(h.rejectConnection)))
 
 	// Public in-network directory: discover any member, fetch one profile, update
 	// your own profile, and (legacy) claim a username. The literal /me/* patterns

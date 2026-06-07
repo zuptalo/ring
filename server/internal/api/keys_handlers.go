@@ -156,6 +156,16 @@ func (h *Handlers) fetchKeys(w http.ResponseWriter, r *http.Request) {
 			httpx.Error(w, http.StatusNotFound, "no key bundle for user")
 			return
 		}
+		// Connect-request gate (opt-in via REQUIRE_CONNECTION): without an accepted
+		// connection the requester can't fetch the bundle, so they can't start a
+		// session with an unsolicited peer. Established sessions need no fetch, so
+		// existing chats + connected group members are unaffected.
+		if h.RequireConnection {
+			if connected, err := h.Connections.Connected(r.Context(), requester, target); err == nil && !connected {
+				httpx.Error(w, http.StatusNotFound, "no key bundle for user")
+				return
+			}
+		}
 	}
 	pb, err := h.Keys.FetchBundle(r.Context(), target)
 	if errors.Is(err, store.ErrNoBundle) {
