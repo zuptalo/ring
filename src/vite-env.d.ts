@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/vue" />
 
 interface ImportMetaEnv {
   /** Base URL of the Ring backend (ringd). Defaults to http://localhost:8080. */

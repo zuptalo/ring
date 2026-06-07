@@ -4,12 +4,17 @@ import { VitePWA } from 'vite-plugin-pwa';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 
-// App version, read from package.json and exposed to the client as the compile-
-// time constant __APP_VERSION__ (shown on the auth screen). Read via fs rather
-// than process.env.npm_package_version so it works under `npx vite` too.
+// App version, exposed to the client as the compile-time constant __APP_VERSION__
+// (shown in the UI and compared against the server's /v1/config version to detect a
+// new deploy). Prefer RING_VERSION when the build sets it (the Docker image stamps
+// the SAME value into both this and the Go binary's main.version, so the UI shows
+// the true DEPLOYED version), falling back to package.json for local/dev builds.
+// Read package.json via fs rather than process.env.npm_package_version so it works
+// under `npx vite` too.
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')) as {
   version: string;
 };
+const appVersion = process.env.RING_VERSION || pkg.version;
 
 // Backend the dev server proxies /v1 + /healthz to. Defaults to local ringd on
 // :8080; the e2e harness overrides it to its isolated test backend.
@@ -17,7 +22,7 @@ const proxyTarget = process.env.RING_PROXY_TARGET || 'http://localhost:8080';
 
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   server: {
     host: true, // listen on 0.0.0.0 so 10.0.1.50:5173 is reachable on the LAN
@@ -55,7 +60,10 @@ export default defineConfig({
   plugins: [
     vue(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' (not autoUpdate): a new deploy must not silently reload the page
+      // out from under the user. The app surfaces a toast naming the new version and
+      // applies it only when the user accepts (see useAppUpdate + sw.ts SKIP_WAITING).
+      registerType: 'prompt',
       // Custom service worker (src/sw.ts) so we can handle Web Push in addition
       // to app-shell precaching. esbuild-compiled by the plugin.
       strategies: 'injectManifest',

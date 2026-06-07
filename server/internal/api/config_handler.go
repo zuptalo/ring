@@ -15,5 +15,6 @@ func (h *Handlers) serverConfig(w http.ResponseWriter, r *http.Request) {
 		"vapidPublicKey": h.VapidPublicKey,
 		"callsEnabled":   h.CallsEnabled,
 		"maxBlobBytes":   h.maxBlob(),
+		"version":        h.Version,
 	})
 }

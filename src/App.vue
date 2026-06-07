@@ -29,6 +29,7 @@ import KeyGuard from '@/components/KeyGuard.vue';
 import InstallGuard from '@/components/InstallGuard.vue';
 import IncomingCallOverlay from '@/components/IncomingCallOverlay.vue';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
+import { useAppUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed } from '@/db/queries';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import type { Message } from '@/db/types';
@@ -36,6 +37,10 @@ import type { Message } from '@/db/types';
 // Owns the transport and sync engine: connects when registered, drains the
 // outbox, and applies inbound frames (delivery receipts, records, tombstones).
 useSync();
+
+// Registers the service worker and prompts (with the version) when a new deploy is
+// ready, instead of silently reloading. See useAppUpdate + vite.config 'prompt'.
+useAppUpdate();
 
 const router = useRouter();
 
@@ -53,6 +58,9 @@ watch(isAuthenticated, (authed) => {
 // them as "You" with no image. Send them to profile setup.
 watch(inviteNeedsProfile, async (needs) => {
   if (!needs || router.currentRoute.value.path === '/settings/profile') return;
+  // While still in the sign-in/onboarding flow (/auth), the mandatory profile step
+  // there already collects name + photo; don't race it with a second prompt.
+  if (router.currentRoute.value.path === '/auth') return;
   const t = await toastController.create({
     message: 'Add your name and photo so people know it’s you.',
     duration: 2800,

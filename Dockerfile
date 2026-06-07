@@ -27,7 +27,10 @@ COPY package.json package-lock.json ./
 RUN npm ci
 # Then the source. `npm run build` runs vue-tsc (typecheck) then vite build.
 COPY . .
-RUN npm run build
+# Stamp the SAME version into the PWA as the Go binary below, so the UI reports the
+# true deployed version and can detect a newer one. Defaults to dev for plain builds.
+ARG VERSION=dev
+RUN RING_VERSION="$VERSION" npm run build
 
 # --- Stage 2: build the server ----------------------------------------------
 # Also pinned to $BUILDPLATFORM and cross-compiled to the target arch via

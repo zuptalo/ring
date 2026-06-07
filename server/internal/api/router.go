@@ -113,6 +113,9 @@ type Handlers struct {
 	// Public, non-secret config advertised at GET /v1/config.
 	PublicURL      string
 	VapidPublicKey string
+	// Version is the running server build (main.version, stamped via -ldflags),
+	// advertised at GET /v1/config so a possibly-stale PWA can detect a new deploy.
+	Version string
 	// MaxBlobBytes caps a single encrypted media upload (bytes); advertised at
 	// GET /v1/config so clients can pre-validate before encrypting + uploading.
 	MaxBlobBytes int
