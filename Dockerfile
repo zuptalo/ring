@@ -7,7 +7,8 @@
 #   3. runtime- alpine with the binary + dist/, ringd serving the app at / via
 #               STATIC_DIR and the API at /v1, /healthz, /v1/ws.
 #
-# Build:  docker build -t ghcr.io/zuptalo/ring:develop --build-arg VERSION=develop .
+# Build (multi-arch): docker buildx build --platform linux/amd64,linux/arm64 \
+#           -t ghcr.io/zuptalo/ring:develop --build-arg VERSION=develop --push .
 # Run:    docker run -p 8080:8080 -e ENV=production \
 #           -e DATABASE_URL=postgres://... -e PUBLIC_URL=https://ring.example.com \
 #           -v ring_data:/data ghcr.io/zuptalo/ring:develop
@@ -19,7 +20,9 @@
 # non-root process cannot write and the container exits at boot.
 
 # --- Stage 1: build the PWA -------------------------------------------------
-FROM node:22-bookworm-slim AS web
+# Pinned to the build host's native arch ($BUILDPLATFORM): the Vite output is
+# arch-independent, so we build it once instead of emulating it per target.
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
 WORKDIR /web
 # Install deps from the lockfile first so this layer caches across source edits.
 COPY package.json package-lock.json ./
@@ -29,23 +32,34 @@ COPY . .
 RUN npm run build
 
 # --- Stage 2: build the server ----------------------------------------------
-FROM golang:1.26-bookworm AS server
+# Also pinned to $BUILDPLATFORM and cross-compiled to the target arch via
+# GOOS/GOARCH (CGO disabled), so the Go toolchain runs natively rather than under
+# emulation. TARGETOS/TARGETARCH are provided automatically by buildx per target.
+FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS server
 WORKDIR /src
 COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
 # Static, stripped binary. -trimpath keeps paths reproducible; the version is
 # stamped into main.version for `ringd starting version=...` and ops visibility.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION}" \
     -o /out/ringd ./cmd/ringd
 
 # --- Stage 3: runtime -------------------------------------------------------
+# No --platform: this stage is the TARGET arch (linux/amd64 or linux/arm64). Only
+# the small apk/adduser layer runs under emulation; the heavy builds above don't.
 FROM alpine:3.20
-# Links the GHCR package to its repository (and lets the package inherit the
-# repo's access, so the repo's Actions can publish with the default token).
-LABEL org.opencontainers.image.source="https://github.com/zuptalo/ring"
+# OCI labels. image.source links the GHCR package to its repo (and lets the
+# package inherit the repo's access so Actions can publish with the default token).
+LABEL org.opencontainers.image.source="https://github.com/zuptalo/ring" \
+      org.opencontainers.image.url="https://github.com/zuptalo/ring" \
+      org.opencontainers.image.title="Ring" \
+      org.opencontainers.image.description="Private, end-to-end encrypted messenger and calling PWA with a Go backend, served as a single all-in-one image." \
+      org.opencontainers.image.vendor="Zuptalo"
 # ca-certificates: outbound TLS (Web Push, the emoji proxy). wget: healthcheck.
 # Deterministic UID/GID (10001) so a bind-mounted /data can be pre-chowned to a
 # known owner (named volumes inherit it automatically).
