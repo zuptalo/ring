@@ -77,6 +77,10 @@ export interface Chat {
   // chat until this epoch-ms time. A far-future value means "muted always". Local
   // only (the message still arrives + counts toward the badge); never synced.
   mutedUntil?: number;
+  // Disappearing messages: when set, messages SENT in this chat are stamped to
+  // self-destruct after this many ms (carried inside the sealed payload, so they
+  // disappear for everyone). Kept in sync with the peer via a `ttl` control signal.
+  defaultTtlMs?: number;
 }
 
 export type MessageKind =
@@ -208,6 +212,7 @@ export interface Message {
   // "Photo/Video/... removed to free space" placeholder (distinct from `deleted`,
   // the sender deleting the message, and `pendingMedia`, not-yet-downloaded)
   deleted?: boolean; // soft-deleted → shows a "deleted" placeholder
+  expiresAt?: number; // disappearing messages: epoch ms when this self-destructs
   location?: GeoLocation; // kind === 'location'
   poll?: Poll; // kind === 'poll'
   contact?: SharedContact; // kind === 'contact'

@@ -144,6 +144,13 @@ export interface MessagePayload {
   // in a fresh X3DH prekey packet so the peer re-establishes the session, and on
   // receipt triggers a resend of our still-undelivered messages. Never shown.
   rekey?: boolean;
+  // Disappearing messages: epoch ms when this message self-destructs on both sides
+  // (a swept message is removed). Set by the sender from the chat's default TTL.
+  expiresAt?: number;
+  // Disappearing-messages CONTROL (like `card`): the chat's new default TTL in ms
+  // (0/null = off). Applied as a side effect so the peer adopts the same setting;
+  // never shown as a message.
+  ttl?: number | null;
 }
 
 export interface WireMessage {

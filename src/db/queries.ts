@@ -108,6 +108,19 @@ export async function sendMessage(chatId: string, body: string, replyTo?: ReplyR
   else await sealAndEnqueue(chat, message.id, payload);
 }
 
+/** If the chat has disappearing messages on, stamp the (real, stored) message and
+ *  its outgoing payload with an expiry, so both sides sweep it. No-op for control
+ *  signals (cards/rekey/ttl), which have no stored message row. */
+async function stampExpiry(chat: Chat, messageId: string, payload: MessagePayload): Promise<void> {
+  if (!chat.defaultTtlMs) return;
+  const m = await getMessage(messageId);
+  if (!m || m.expiresAt) return;
+  const exp = (payload.timestamp || m.timestamp || now()) + chat.defaultTtlMs;
+  payload.expiresAt = exp;
+  m.expiresAt = exp;
+  await put('messages', m);
+}
+
 /** Seal a payload for the chat's peer and enqueue it for relay, if possible. */
 async function sealAndEnqueue(
   chat: Chat | undefined,
@@ -116,6 +129,7 @@ async function sealAndEnqueue(
 ): Promise<void> {
   const peerUserId = chat?.participantIds[0];
   if (!chat || !peerUserId) return;
+  await stampExpiry(chat, messageId, payload);
   try {
     const sealed = await sealForChat(chat.id, peerUserId, chat.isGroup, payload);
     if (sealed) await enqueue({ t: 'msg', id: messageId, to: sealed.to, ciphertext: sealed.packet });
@@ -186,6 +200,7 @@ async function sealAndEnqueueGroup(
   messageId: string,
   payload: MessagePayload,
 ): Promise<void> {
+  await stampExpiry(chat, messageId, payload); // disappearing messages: one stamp, fanned out
   for (const member of chat.participantIds) {
     try {
       // Don't seal to a member who has left the network (ghosted) or whom we've
@@ -1671,6 +1686,58 @@ async function resendRecentOutgoing(chatId: string): Promise<void> {
   }
 }
 
+/** Set (or clear) disappearing messages for a chat: messages sent from now on
+ *  self-destruct after `ttlMs` (null/0 = off). The setting is shared with the
+ *  peer(s) via a `ttl` control so it disappears for everyone. */
+export async function setChatTtl(chatId: string, ttlMs: number | null): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  const ttl = ttlMs && ttlMs > 0 ? ttlMs : null;
+  if (ttl) chat.defaultTtlMs = ttl;
+  else delete chat.defaultTtlMs;
+  chat.updatedAt = now();
+  await put('chats', chat);
+  if (chat.isGroup) {
+    for (const member of chat.participantIds) {
+      try {
+        const memberChat = await memberSessionChat(member);
+        if (!memberChat) continue;
+        const sealed = await sealForChat(memberChat, member, false, {
+          body: '', kind: TTL_KIND, timestamp: now(), ttl, groupId: chat.id,
+        });
+        if (sealed) await enqueue({ t: 'msg', id: uid(), to: sealed.to, ciphertext: sealed.packet });
+      } catch (e) {
+        console.warn('[ttl] notify member failed', member, e);
+      }
+    }
+  } else {
+    await sealAndEnqueue(chat, uid(), { body: '', kind: TTL_KIND, timestamp: now(), ttl });
+  }
+}
+
+const TTL_KIND = 'ttl';
+
+/** Apply an inbound TTL control: adopt the peer's disappearing-message setting on the
+ *  target chat (the group chat for a group control, else this 1:1 chat). */
+async function applyTtlControl(chatId: string, ttl: number | null): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  if (ttl && ttl > 0) chat.defaultTtlMs = ttl;
+  else delete chat.defaultTtlMs;
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
+/** Remove messages whose disappearing-message timer has elapsed (both the sender's
+ *  and the recipient's copy carry the same expiresAt). Returns how many were removed.
+ *  Run on a timer + on connect from useSync. */
+export async function sweepExpiredMessages(): Promise<number> {
+  const t = now();
+  const due = (await getAll<Message>('messages')).filter((m) => m.expiresAt && m.expiresAt <= t);
+  for (const m of due) await deleteMessage(m.id);
+  return due.length;
+}
+
 /** Mute (or unmute) a chat's alerting until `until` epoch-ms (a far-future value =
  *  always; null/0 = unmute). The message still arrives and counts toward the badge;
  *  only the OS notification / in-app banner / sound are suppressed. Local only. */
@@ -2481,6 +2548,13 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     if (remoteId) await markInboundSeen(remoteId);
     return;
   }
+  // Disappearing-messages control: adopt the peer's TTL (side effect, never shown).
+  if (payload.ttl !== undefined) {
+    if (payload.groupId) await ensureGroupChat(payload.groupId, from);
+    await applyTtlControl(payload.groupId ?? chatId, payload.ttl);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
   // NOTE: each success path below records the id via markInboundSeen AFTER its durable
   // effect (the stored message / applied side effect), not here. Marking after the
   // ratchet advanced but BEFORE the row is stored would, on a crash in that window,
@@ -2579,6 +2653,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     poll: payload.poll,
     contact: payload.contact,
     audio: payload.audio,
+    expiresAt: payload.expiresAt, // disappearing messages: same expiry as the sender's copy
     mediaWidth: payload.mediaRef?.width,
     mediaHeight: payload.mediaRef?.height,
     mediaSize: payload.mediaRef?.size,

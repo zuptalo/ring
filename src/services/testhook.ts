@@ -46,6 +46,9 @@ import {
   sendContact as dbSendContact,
   votePoll as dbVotePoll,
   sendMediaMessage as dbSendMediaMessage,
+  setChatTtl as dbSetChatTtl,
+  sweepExpiredMessages as dbSweepExpired,
+  getChat as dbGetChat,
   deleteChat as dbDeleteChat,
   getContact as dbGetContact,
   startDirectChat as dbStartDirectChat,
@@ -171,6 +174,9 @@ export function installTestHook(): void {
     setGroupAvatar: (chatId: string, dataUrl: string) => dbSetGroupAvatar(chatId, dataUrl),
     leaveGroup: (chatId: string) => dbLeaveGroup(chatId),
     sendChatMessage: (chatId: string, body: string) => dbSendMessage(chatId, body),
+    setChatTtl: (chatId: string, ms: number | null) => dbSetChatTtl(chatId, ms),
+    sweepExpired: () => dbSweepExpired(),
+    chatTtl: async (chatId: string) => (await dbGetChat(chatId))?.defaultTtlMs ?? null,
     /** Delete a chat (removes messages + the ratchet session). */
     deleteChat: (chatId: string) => dbDeleteChat(chatId),
     /** Delete a contact (keeps the conversation for a ghosted peer). */

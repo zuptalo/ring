@@ -61,10 +61,15 @@
             <ion-icon slot="start" :icon="starOutline" />
             <ion-label>Starred messages</ion-label>
           </ion-item>
-          <ion-item button :detail="false" lines="none" @click="openMute">
+          <ion-item button :detail="false" @click="openMute">
             <ion-icon slot="start" :icon="muted ? notificationsOffOutline : notificationsOutline" />
             <ion-label>Notifications</ion-label>
             <ion-note slot="end">{{ muteLabel }}</ion-note>
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="openTtl">
+            <ion-icon slot="start" :icon="timerOutline" />
+            <ion-label>Disappearing messages</ion-label>
+            <ion-note slot="end">{{ ttlLabel }}</ion-note>
           </ion-item>
         </ion-list>
 
@@ -92,11 +97,11 @@ import {
 } from '@ionic/vue';
 import {
   chatbubbleOutline, searchOutline, banOutline, imagesOutline,
-  notificationsOutline, notificationsOffOutline, starOutline,
+  notificationsOutline, notificationsOffOutline, starOutline, timerOutline,
 } from 'ionicons/icons';
 import { computed } from 'vue';
 import {
-  getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute,
+  getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl,
 } from '@/db/queries';
 import { ensureProfile } from '@/composables/useProfileGate';
 import type { Contact, Chat } from '@/db/types';
@@ -159,6 +164,32 @@ async function openMute(): Promise<void> {
         { text: 'Cancel', role: 'cancel' as const },
       ];
   const sheet = await actionSheetController.create({ header: 'Notifications', buttons });
+  await sheet.present();
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+const ttlLabel = computed(() => {
+  const ms = chat.value?.defaultTtlMs ?? 0;
+  if (!ms) return 'Off';
+  if (ms === DAY) return '24 hours';
+  if (ms === 7 * DAY) return '7 days';
+  if (ms === 90 * DAY) return '90 days';
+  return `${Math.round(ms / DAY)} days`;
+});
+async function openTtl(): Promise<void> {
+  const id = chat.value?.id;
+  if (!id) return;
+  const sheet = await actionSheetController.create({
+    header: 'Disappearing messages',
+    subHeader: 'New messages disappear for everyone after:',
+    buttons: [
+      { text: '24 hours', handler: () => void setChatTtl(id, DAY) },
+      { text: '7 days', handler: () => void setChatTtl(id, 7 * DAY) },
+      { text: '90 days', handler: () => void setChatTtl(id, 90 * DAY) },
+      { text: 'Off', handler: () => void setChatTtl(id, null) },
+      { text: 'Cancel', role: 'cancel' as const },
+    ],
+  });
   await sheet.present();
 }
 

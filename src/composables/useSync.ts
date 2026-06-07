@@ -13,7 +13,7 @@ import { subscribe } from '@/db/idb';
 import { isAuthenticated, getToken, verifySessionOrReset, getPendingInviter } from '@/services/auth';
 import { WebSocketTransport, type Frame, type Transport, type TransportState } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks } from '@/db/queries';
+import { getChat, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages } from '@/db/queries';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
 import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
@@ -218,6 +218,10 @@ function start(): void {
   // subscription silently died (server-pruned endpoint, browser rotation the SW
   // missed) re-registers without waiting for a reconnect. Throttled internally.
   setInterval(() => void revalidatePushSubscription(), 6 * 60 * 60_000);
+  // Sweep expired disappearing messages on a short interval (and once now), so they
+  // vanish on both sides shortly after their timer elapses even mid-session.
+  void sweepExpiredMessages();
+  setInterval(() => void sweepExpiredMessages(), 30_000);
   // A profile edit (settings change) by a freshly-invited user → try to connect
   // to their inviter now that their name/photo may be complete.
   subscribe(['settings'], () => {
@@ -269,6 +273,7 @@ function start(): void {
         // whose subscription silently lapsed while closed heals on foreground.
         // Throttled internally, so this is cheap to run every time.
         void revalidatePushSubscription();
+        void sweepExpiredMessages(); // drop anything that expired while backgrounded
       }
       void sendPresenceSelf(selfActive()); // online only when visible AND unlocked
     });
