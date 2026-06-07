@@ -74,16 +74,35 @@ function sessionKeyForPeer(chats: Chat[], from: string): string {
 }
 
 // The SW doesn't ack, so an unprocessed frame reappears on the next push until the
-// page drains it. Track shown message ids (bounded) so we don't re-notify. The cap
-// stays comfortably above the per-fetch preview cap so a displayed id can't be
-// evicted before the page acks it (which would re-notify it).
+// page drains it. Track shown message ids so we don't re-notify, expiring entries by
+// AGE rather than a fixed count: a high-volume conversation could otherwise evict a
+// recently-shown id (the old 1000-count cap) before the page acks it, re-notifying
+// it. 48h comfortably outlives the gap between a push and the next app open. A large
+// safety cap still bounds storage in a pathological burst.
 const SHOWN_KEY = 'swNotifiedIds';
-const SHOWN_CAP = 1000;
-async function loadShown(): Promise<string[]> {
-  return setting<string[]>(SHOWN_KEY, []);
+const SHOWN_TTL_MS = 48 * 60 * 60 * 1000;
+const SHOWN_MAX = 2000;
+
+// Upper bound on the /relay/pending fetch when the SW wakes for a push, so a slow or
+// unresponsive server can't hang the handler (the caller falls back to a generic
+// placeholder, then upgrades if the fetch lands within the outer settle window).
+const PENDING_FETCH_TIMEOUT_MS = 8000;
+type ShownEntry = { id: string; ts: number };
+
+async function loadShownEntries(): Promise<ShownEntry[]> {
+  const raw = await setting<Array<ShownEntry | string>>(SHOWN_KEY, []);
+  const cutoff = Date.now() - SHOWN_TTL_MS;
+  const out: ShownEntry[] = [];
+  for (const e of raw) {
+    // Tolerate the legacy string[] shape from before time-based expiry: keep them,
+    // stamped now, so an upgrade doesn't immediately re-notify recent messages.
+    if (typeof e === 'string') out.push({ id: e, ts: Date.now() });
+    else if (e && e.ts >= cutoff) out.push(e);
+  }
+  return out;
 }
-async function saveShown(ids: string[]): Promise<void> {
-  await put<Setting<string[]>>('settings', { key: SHOWN_KEY, value: ids.slice(-SHOWN_CAP) });
+async function loadShown(): Promise<string[]> {
+  return (await loadShownEntries()).map((e) => e.id);
 }
 
 /** Build the raw (un-aggregated) note for one decrypted frame, or null when the
@@ -199,7 +218,7 @@ export async function previewPending(): Promise<PreviewResult> {
   let frames: MsgFrame[] = [];
   try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
     let res: Response;
     try {
       res = await fetch(`${API}/relay/pending`, {
@@ -278,8 +297,11 @@ export async function previewPending(): Promise<PreviewResult> {
  *  drains). Merges into the bounded `swNotifiedIds` ledger. */
 export async function markShown(ids: string[]): Promise<void> {
   if (!ids.length) return;
-  const shown = await loadShown();
-  await saveShown([...shown, ...ids]);
+  const now = Date.now();
+  const entries = await loadShownEntries(); // already pruned of expired
+  const known = new Set(entries.map((e) => e.id));
+  for (const id of ids) if (!known.has(id)) entries.push({ id, ts: now });
+  await put<Setting<ShownEntry[]>>('settings', { key: SHOWN_KEY, value: entries.slice(-SHOWN_MAX) });
 }
 
 /** Best-effort unread total from the on-device chats. The SW can't persist the new

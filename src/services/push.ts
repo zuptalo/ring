@@ -139,6 +139,29 @@ async function pushDesired(): Promise<boolean> {
 
 let lastApplied: boolean | null = null;
 
+// Bounded backoff so a TRANSIENT subscribe failure (offline, server blip) heals on
+// its own instead of waiting for the next reconnect/foreground - the gap that left
+// a single device silently unsubscribed. After the last delay we stop and wait for
+// the next external trigger (reconnect / settings / permission / revalidate).
+const RETRY_DELAYS_MS = [5_000, 15_000, 60_000];
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearRetry(): void {
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+function scheduleRetry(attempt: number): void {
+  clearRetry();
+  if (attempt >= RETRY_DELAYS_MS.length) return;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    void applyPushPreference(true, attempt + 1);
+  }, RETRY_DELAYS_MS[attempt]);
+}
+
 /**
  * Reconcile the push subscription with the user's notification preference:
  * subscribe when notifications are wanted (and permission is granted), or fully
@@ -149,7 +172,7 @@ let lastApplied: boolean | null = null;
  * `force` re-applies even when the desired state is unchanged, used on (re)connect
  * to re-register a subscription the server may have lost (e.g. after a wipe).
  */
-export async function applyPushPreference(force = false): Promise<void> {
+export async function applyPushPreference(force = false, attempt = 0): Promise<void> {
   // Effective intent = the user wants push AND the OS still allows it. If they
   // revoked notification permission at the OS level, drop the now-dead subscription
   // (browser + server) so the server stops pushing to an endpoint that can never
@@ -164,10 +187,30 @@ export async function applyPushPreference(force = false): Promise<void> {
     // believing the device is subscribed when the server has no endpoint.
     const ok = await ensurePushSubscription();
     lastApplied = ok ? true : null;
+    if (ok) clearRetry();
+    else scheduleRetry(attempt); // self-heal a transient failure with backoff
   } else {
+    clearRetry();
     await disablePush();
     lastApplied = false;
   }
+}
+
+let lastRevalidate = 0;
+const REVALIDATE_THROTTLE_MS = 5 * 60_000;
+
+/**
+ * Re-assert the push subscription, throttled so it is cheap to call on every app
+ * foreground and on a periodic timer. It re-registers a subscription the server
+ * may have dropped (a 410-pruned endpoint, a wiped server) or the browser silently
+ * rotated, which is how a device that quietly stopped receiving pushes heals
+ * without the user touching settings. No-op while push is disabled/ungranted.
+ */
+export async function revalidatePushSubscription(): Promise<void> {
+  const now = Date.now();
+  if (now - lastRevalidate < REVALIDATE_THROTTLE_MS) return;
+  lastRevalidate = now;
+  await applyPushPreference(true);
 }
 
 /** Remove this device's push subscription (on sign-out). */

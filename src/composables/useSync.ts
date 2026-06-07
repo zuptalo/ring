@@ -18,7 +18,7 @@ import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
 import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
 import { publishOwnProfile, syncContactEdges, refreshContactProfiles } from '@/services/directory';
-import { applyPushPreference, disablePush } from '@/services/push';
+import { applyPushPreference, disablePush, revalidatePushSubscription } from '@/services/push';
 import { runInviteSync } from '@/services/invites';
 import { clearPresence } from '@/composables/usePresence';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
@@ -214,6 +214,10 @@ function start(): void {
   // While we have outstanding invitations (or just registered via one), poll for
   // redemptions so inviter↔invitee auto-connect without manual action.
   setInterval(() => void maybePollInvites(), 15_000);
+  // Periodically re-assert the push subscription so a long-lived connection whose
+  // subscription silently died (server-pruned endpoint, browser rotation the SW
+  // missed) re-registers without waiting for a reconnect. Throttled internally.
+  setInterval(() => void revalidatePushSubscription(), 6 * 60 * 60_000);
   // A profile edit (settings change) by a freshly-invited user → try to connect
   // to their inviter now that their name/photo may be complete.
   subscribe(['settings'], () => {
@@ -261,6 +265,10 @@ function start(): void {
         // connected flips to "Ghosted" on return (reconnect alone won't fire if
         // the socket stayed up). Cheap batch call; errors are swallowed.
         if (isUnlocked.value) void refreshContactStatuses();
+        // Re-assert push on a warm reopen (no reconnect event fires), so a device
+        // whose subscription silently lapsed while closed heals on foreground.
+        // Throttled internally, so this is cheap to run every time.
+        void revalidatePushSubscription();
       }
       void sendPresenceSelf(selfActive()); // online only when visible AND unlocked
     });

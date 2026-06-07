@@ -309,6 +309,7 @@ func run() error {
 		Store: st, Directory: st, Contacts: st, Blocks: st, Keys: st, Relay: st, Hub: hub, Blobs: st, Sync: st, Push: st,
 		Invites: st, Notifier: notifier,
 		PublicURL: cfg.PublicURL, VapidPublicKey: secs.VapidPublicKey, MaxBlobBytes: cfg.MaxBlobBytes,
+		Version:      version,
 		CallsEnabled: cfg.EnableCalls, TurnSharedSecret: secs.TurnSharedSecret,
 		TurnURLs:      turnURLs,
 		Emoji:     st,
@@ -358,11 +359,13 @@ func run() error {
 
 	// Periodically sweep aged-out relay frames. The service worker's read-only
 	// preview never acks, so a recipient who never reopens the app would otherwise
-	// accumulate undelivered frames forever. Retention stays >= the message push
-	// TTL (~28 days) so a long-held tickle always still has a frame to fetch.
+	// accumulate undelivered frames forever. Retention stays comfortably ABOVE the
+	// message push TTL (28 days, see push.msgTTL) so a tickle held near its TTL by
+	// the push service still finds its frame to fetch; the extra week absorbs clock
+	// skew and push-service hold-time slop.
 	const (
 		relaySweepInterval = time.Hour
-		relayRetention     = 30 * 24 * time.Hour
+		relayRetention     = 35 * 24 * time.Hour
 	)
 	go func() {
 		ticker := time.NewTicker(relaySweepInterval)

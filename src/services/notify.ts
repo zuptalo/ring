@@ -19,9 +19,55 @@
 import { toastController, alertController } from '@ionic/vue';
 import router from '@/router';
 import { getSetting } from '@/db/queries';
+import { subscribe } from '@/db/idb';
 import { notifyLocal } from '@/services/push';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { playTone } from '@/services/sound';
+
+/* ---- cached notification preferences ---- */
+
+// notifyIncoming runs on every inbound item; re-reading these keys from IndexedDB
+// each time adds latency and races a concurrent toggle. Hydrate once into memory,
+// then refresh on any settings write (the change bus already fires for 'settings').
+interface NotifyPrefs {
+  showMessages: boolean;
+  showPreview: boolean;
+  inappSounds: boolean;
+  messageSound: string;
+  inappVibrate: boolean;
+  inappStyle: string;
+}
+const PREF_DEFAULTS: NotifyPrefs = {
+  showMessages: true,
+  showPreview: true,
+  inappSounds: false,
+  messageSound: 'note',
+  inappVibrate: true,
+  inappStyle: 'banners',
+};
+let prefs: NotifyPrefs = { ...PREF_DEFAULTS };
+let prefsHydrated = false;
+
+async function loadPrefs(): Promise<void> {
+  const [showMessages, showPreview, inappSounds, messageSound, inappVibrate, inappStyle] = await Promise.all([
+    getSetting<boolean>('notifications.message.show', PREF_DEFAULTS.showMessages),
+    getSetting<boolean>('notifications.showPreview', PREF_DEFAULTS.showPreview),
+    getSetting<boolean>('notifications.inapp.sounds', PREF_DEFAULTS.inappSounds),
+    getSetting<string>('notifications.message.sound', PREF_DEFAULTS.messageSound),
+    getSetting<boolean>('notifications.inapp.vibrate', PREF_DEFAULTS.inappVibrate),
+    getSetting<string>('notifications.inapp.style', PREF_DEFAULTS.inappStyle),
+  ]);
+  prefs = { showMessages, showPreview, inappSounds, messageSound, inappVibrate, inappStyle };
+}
+
+async function ensurePrefs(): Promise<NotifyPrefs> {
+  if (!prefsHydrated) {
+    prefsHydrated = true;
+    await loadPrefs();
+    subscribe(['settings'], () => void loadPrefs()); // keep the cache live
+  }
+  return prefs;
+}
 
 export type IncomingKind = 'message' | 'request';
 
@@ -65,10 +111,11 @@ function targetUrl(n: IncomingNotice): string {
 }
 
 async function inAppSoundAndHaptics(): Promise<void> {
-  if (await getSetting<boolean>('notifications.inapp.sounds', false)) {
-    playTone(await getSetting<string>('notifications.message.sound', 'note'));
+  const p = await ensurePrefs();
+  if (p.inappSounds) {
+    playTone(p.messageSound);
   }
-  if (await getSetting<boolean>('notifications.inapp.vibrate', true)) {
+  if (p.inappVibrate) {
     try {
       navigator.vibrate?.(40);
     } catch {
@@ -83,15 +130,14 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
   // passcode gate), nor during the brief settle window right after landing in
   // the app (avoids a banner burst as the gate dismisses / messages drain).
   if (!isUnlockedNow() || Date.now() < settledUntil) return;
+  const p = await ensurePrefs();
   // Backgrounded: hand off to an OS notification (covers the connected-but-hidden
   // gap; truly-offline is covered by the server push). Requests always notify;
   // message notifications respect "Show notifications".
   if (!appVisible()) {
-    const showMessages = await getSetting<boolean>('notifications.message.show', true);
-    if (n.kind === 'message' && !showMessages) return;
-    const showPreview = await getSetting<boolean>('notifications.showPreview', true);
+    if (n.kind === 'message' && !p.showMessages) return;
     const title = n.kind === 'request' ? 'Friend request' : n.name;
-    const body = showPreview ? `${n.kind === 'request' ? n.name + ' ' : ''}${n.body}` : 'New message';
+    const body = p.showPreview ? `${n.kind === 'request' ? n.name + ' ' : ''}${n.body}` : 'New message';
     // Pass chatId so the page- and SW-shown notifications for one conversation
     // share a tag and collapse instead of duplicating.
     void notifyLocal(title, body, targetUrl(n), n.chatId);
@@ -104,7 +150,7 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
     return;
   }
 
-  const style = await getSetting<string>('notifications.inapp.style', 'banners');
+  const style = p.inappStyle;
   await inAppSoundAndHaptics();
   if (style === 'none') return;
 

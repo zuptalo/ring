@@ -15,6 +15,22 @@ import { readSessionToken } from './session';
 
 const API = `${import.meta.env.VITE_API_URL ?? ''}/v1`;
 
+// All fetches here run inside a `pushsubscriptionchange` waitUntil; a hung request
+// would let the browser kill the event before re-registration completes, leaving
+// the device silently unsubscribed. Bound every one so it can only ever fail, not
+// hang. Generous (8s) so a slow-but-alive network still self-heals.
+const FETCH_TIMEOUT_MS = 8000;
+
+async function fetchWithTimeout(input: string, init: RequestInit = {}): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function urlBase64ToUint8Array(base64: string): Uint8Array {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4);
   const normalized = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -26,7 +42,7 @@ function urlBase64ToUint8Array(base64: string): Uint8Array {
 
 async function fetchVapidKey(): Promise<string | null> {
   try {
-    const res = await fetch(`${API}/config`); // public, no auth
+    const res = await fetchWithTimeout(`${API}/config`); // public, no auth
     if (!res.ok) return null;
     const { vapidPublicKey } = (await res.json()) as { vapidPublicKey?: string };
     return vapidPublicKey || null;
@@ -43,7 +59,7 @@ async function registerSub(sub: PushSubscription): Promise<boolean> {
   const auth = json.keys?.auth;
   if (!json.endpoint || !p256dh || !auth) return false;
   try {
-    const res = await fetch(`${API}/push/subscribe`, {
+    const res = await fetchWithTimeout(`${API}/push/subscribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ endpoint: json.endpoint, keys: { p256dh, auth } }),
@@ -58,7 +74,7 @@ async function unregisterEndpoint(endpoint: string): Promise<void> {
   const token = await readSessionToken();
   if (!token) return;
   try {
-    await fetch(`${API}/push/unsubscribe`, {
+    await fetchWithTimeout(`${API}/push/unsubscribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ endpoint }),

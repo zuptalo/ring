@@ -27,16 +27,33 @@ declare const self: ServiceWorkerGlobalScope & {
 // App-shell precache (manifest injected at build time).
 precacheAndRoute(self.__WB_MANIFEST);
 
-// Take control promptly (pairs with registerType: 'autoUpdate').
-self.addEventListener('install', () => {
-  void self.skipWaiting();
-});
+// Update model (pairs with registerType: 'prompt'): a freshly-installed worker
+// WAITS instead of taking over, so the page keeps running the version the user is
+// on until they accept the update toast (useAppUpdate). Accepting posts SKIP_WAITING
+// (below), which activates the new worker and reloads. In dev we skip-wait
+// immediately so HMR/reloads aren't left waiting behind a stale worker.
+if (import.meta.env.DEV) {
+  self.addEventListener('install', () => void self.skipWaiting());
+}
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
 const ICON = '/pwa-192x192.png';
 const GENERIC_TAG = 'ring-incoming';
+
+// Slow-cold-start fallback timings (see showMessageNotification). GENERIC_AFTER_MS:
+// how long to wait for a decrypted preview before posting the generic placeholder
+// (a fresh worker must init libsodium WASM, and the /relay/pending fetch is bounded
+// at PENDING_FETCH_TIMEOUT_MS in sw-inbox). SETTLE_MAX_MS: the outer bound we keep
+// awaiting so a late preview can UPGRADE the generic and the fetch still lands
+// ("delivered"). A *per-type* placeholder (Photo/Voice/Video...) is impossible here:
+// the type lives inside the E2EE payload and the push tickle is content-free, so
+// before decryption we cannot know it without the server knowing it (which would
+// break E2EE). "New message" is the privacy-correct placeholder; the per-type
+// preview (notify-preview.ts) appears only once decryption succeeds and upgrades it.
+const GENERIC_AFTER_MS = 6000;
+const SETTLE_MAX_MS = 9000;
 
 async function showGeneric(): Promise<void> {
   await self.registration.showNotification('Ring', {
@@ -135,7 +152,7 @@ async function showMessageNotification(): Promise<void> {
   try {
     result = await Promise.race([
       preview,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('preview-timeout')), 6000)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('preview-timeout')), GENERIC_AFTER_MS)),
     ]);
   } catch {
     console.warn('[sw] preview slow/failed → generic fallback');
@@ -160,7 +177,7 @@ async function showMessageNotification(): Promise<void> {
   try {
     const full = await Promise.race([
       preview,
-      new Promise<typeof result>((resolve) => setTimeout(() => resolve(result), 9000)),
+      new Promise<typeof result>((resolve) => setTimeout(() => resolve(result), SETTLE_MAX_MS)),
     ]);
     pending = full.pending || pending;
     if (shownGeneric && full.notes.length) {
@@ -172,10 +189,11 @@ async function showMessageNotification(): Promise<void> {
     /* ignore */
   }
 
-  // Badge = on-device unread + the undelivered backlog (updateAppBadge adds the
-  // unread part). Falls back to 1 only when we showed something but never learned
-  // the backlog; a suppressed (notifications-off) push adds nothing.
-  await updateAppBadge(pending || result.notes.length || (result.suppressed ? 0 : 1));
+  // Badge = on-device unread (added inside updateAppBadge) + the undelivered backlog
+  // we actually learned from the fetch. When the fetch failed/timed out, pending is
+  // 0 and we badge from the stored unread alone rather than inventing a "+1" that
+  // teaches a wrong count. A suppressed (notifications-off) push adds nothing.
+  await updateAppBadge(result.suppressed ? 0 : pending);
 }
 
 // ---- page-ack duplicate suppression ----
@@ -194,6 +212,12 @@ const pendingAcks = new Map<string, () => void>();
 
 self.addEventListener('message', (event) => {
   const data = (event.data ?? {}) as { type?: string; reqId?: string };
+  // The update toast (useAppUpdate -> updateServiceWorker) posts this when the user
+  // accepts a new version: activate now so the controllerchange reload loads it.
+  if (data.type === 'SKIP_WAITING') {
+    void self.skipWaiting();
+    return;
+  }
   if (data.type === 'ring:handled' && data.reqId) {
     const resolve = pendingAcks.get(data.reqId);
     if (resolve) {

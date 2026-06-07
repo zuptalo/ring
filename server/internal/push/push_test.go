@@ -200,3 +200,32 @@ func TestConcurrentSendsDontSerialize(t *testing.T) {
 		t.Errorf("two sends took %v; expected concurrent (~%v), not serialized (~%v)", elapsed, delay, 2*delay)
 	}
 }
+
+// panicSubStore panics in SubscriptionsFor, to exercise the recover in notify()'s
+// own body (the path before any fan-out goroutine is spawned).
+type panicSubStore struct{}
+
+func (panicSubStore) SubscriptionsFor(context.Context, string) ([]store.PushSubscription, error) {
+	panic("boom: SubscriptionsFor")
+}
+func (panicSubStore) DeleteSubscriptionByEndpoint(context.Context, string) error { return nil }
+
+// A panic in push delivery must never escape Notify - it runs in a bare goroutine
+// off the WS handler, so an unrecovered panic would crash the whole process and
+// drop every connection. These tests assert Notify returns normally instead (a
+// missing recover would abort the entire test binary, failing the package).
+func TestNotifyRecoversPanicInBody(t *testing.T) {
+	n := NewNotifier(nil, panicSubStore{})
+	n.Notify(context.Background(), "u1") // SubscriptionsFor panics; recover must contain it
+}
+
+func TestNotifyRecoversPanicInFanout(t *testing.T) {
+	// One subscription but a nil Sender: the per-subscription goroutine panics on a
+	// nil-pointer deref inside attempt() (s.subject). The per-goroutine recover, not
+	// the body recover, must contain it.
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {{Endpoint: "https://example.com/x", P256dh: "x", Auth: "y"}},
+	}}
+	n := NewNotifier(nil, st)
+	n.Notify(context.Background(), "u1") // returns only if the fan-out recover holds
+}

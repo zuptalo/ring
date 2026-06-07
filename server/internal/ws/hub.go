@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
@@ -339,6 +340,31 @@ func (h *Hub) isActiveFresh(userID string) bool {
 	return false
 }
 
+// notifyAsync fires a content-free push tickle (message, or a call when call is
+// true) to userID from a panic-safe, time-bounded goroutine. A panic in a bare
+// `go func` would otherwise take down the whole process and drop EVERY WebSocket,
+// so it is always recovered here; one device's push problem can never become an
+// outage. No-op when this connection has no notifier (push disabled).
+func (c *Client) notifyAsync(userID string, call bool) {
+	if c.notifier == nil {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("push: notify goroutine panicked", "recover", r, "stack", string(debug.Stack()))
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if call {
+			c.notifier.NotifyCall(ctx, userID)
+		} else {
+			c.notifier.Notify(ctx, userID)
+		}
+	}()
+}
+
 // markPong records that a client's socket is alive (a pong arrived).
 func (h *Hub) markPong(c *Client) {
 	h.mu.Lock()
@@ -656,13 +682,8 @@ func (c *Client) ringGroup(f frame) {
 			continue
 		}
 		delivered := c.hub.Send(to, payload)
-		if (!c.hub.isActiveFresh(to) || !delivered) && c.notifier != nil {
-			target := to
-			go func() {
-				nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				c.notifier.NotifyCall(nctx, target)
-			}()
+		if !c.hub.isActiveFresh(to) || !delivered {
+			c.notifyAsync(to, true)
 		}
 		if !delivered {
 			c.hub.bufferCall(to, payload)
@@ -734,13 +755,8 @@ func (c *Client) handleFrame(data []byte) {
 		// every live socket's buffer was full (delivered to zero). A foregrounded,
 		// responsive recipient gets it in-app and needs no push.
 		sent := c.hub.Send(f.To, payload)
-		if (!c.hub.isActiveFresh(f.To) || !sent) && c.notifier != nil {
-			to := f.To
-			go func() {
-				nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				c.notifier.Notify(nctx, to)
-			}()
+		if !c.hub.isActiveFresh(f.To) || !sent {
+			c.notifyAsync(f.To, false)
 		}
 		// Tell the sender the server accepted it.
 		c.send1(frame{T: "receipt", MessageID: f.ID, Status: "sent", At: time.Now().UnixMilli(), From: f.To})
@@ -849,13 +865,8 @@ func (c *Client) handleFrame(data []byte) {
 		// is live but the in-app ringtone is autoplay-blocked. NotifyCall sends the
 		// short-lived, high-urgency call tickle (distinct from a message tickle) so
 		// the service worker shows an "Incoming call" alert immediately.
-		if (!c.hub.isActiveFresh(f.To) || !delivered) && c.notifier != nil {
-			to := f.To
-			go func() {
-				nctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				c.notifier.NotifyCall(nctx, to)
-			}()
+		if !c.hub.isActiveFresh(f.To) || !delivered {
+			c.notifyAsync(f.To, true)
 		}
 		// No live socket at all → hold the offer briefly so a push-woken device
 		// that reconnects still rings. The caller keeps ringing; its own dial

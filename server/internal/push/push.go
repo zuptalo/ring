@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,6 +141,9 @@ func (n *Notifier) NotifyCall(ctx context.Context, userID string) {
 }
 
 func (n *Notifier) notify(ctx context.Context, userID string, p pushParams) {
+	// Notify/NotifyCall are documented as "safe to call in a goroutine"; honor that
+	// literally - a panic in push delivery must never escape and crash the process.
+	defer recoverLog("push: notify")
 	subs, err := n.store.SubscriptionsFor(ctx, userID)
 	if err != nil {
 		slog.Error("push: load subscriptions", "err", err)
@@ -152,12 +156,24 @@ func (n *Notifier) notify(ctx context.Context, userID string, p pushParams) {
 		wg.Add(1)
 		go func(sub store.PushSubscription) {
 			defer wg.Done()
+			// Each fan-out goroutine is separate, so the recover above can't catch a
+			// panic here - guard every one so a single bad subscription can't crash
+			// the server (and never aborts the other devices' sends).
+			defer recoverLog("push: deliver")
 			sctx, cancel := context.WithTimeout(ctx, sendBudget)
 			defer cancel()
 			n.deliver(sctx, sub, p)
 		}(sub)
 	}
 	wg.Wait()
+}
+
+// recoverLog recovers a panicking goroutine and logs it with a stack trace, so a
+// bug in push delivery degrades to a missed notification instead of an outage.
+func recoverLog(where string) {
+	if r := recover(); r != nil {
+		slog.Error(where+": panic recovered", "recover", r, "stack", string(debug.Stack()))
+	}
 }
 
 // deliver sends to one subscription with bounded retry on transient failures and
@@ -171,8 +187,11 @@ func (n *Notifier) deliver(ctx context.Context, sub store.PushSubscription, p pu
 			slog.Info("push: delivered", "endpoint", endpointHost(sub.Endpoint))
 			return
 		case status == http.StatusNotFound || status == http.StatusGone:
-			// Subscription is dead - stop trying to use it.
-			_ = n.store.DeleteSubscriptionByEndpoint(ctx, sub.Endpoint)
+			// Subscription is dead - stop trying to use it. Log a failed prune so a
+			// dead endpoint that keeps failing every send is at least visible.
+			if err := n.store.DeleteSubscriptionByEndpoint(ctx, sub.Endpoint); err != nil {
+				slog.Warn("push: prune dead subscription failed", "err", err, "endpoint", endpointHost(sub.Endpoint))
+			}
 			return
 		case attempt < maxRetries && retryable(status, err):
 			wait := backoff

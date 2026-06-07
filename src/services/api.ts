@@ -288,10 +288,20 @@ export async function fetchServerConfig(): Promise<{
   publicUrl: string;
   vapidPublicKey: string;
   maxBlobBytes?: number;
+  version?: string;
 }> {
-  const res = await fetch(`${apiBaseUrl()}/v1/config`);
+  // Bounded so a hung /v1/config can't stall callers that gate on it (push
+  // (re)subscription, version checks). A slow-but-alive network still succeeds.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  let res: Response;
+  try {
+    res = await fetch(`${apiBaseUrl()}/v1/config`, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) throw new Error(`server config failed: ${res.status}`);
-  return (await res.json()) as { publicUrl: string; vapidPublicKey: string; maxBlobBytes?: number };
+  return (await res.json()) as { publicUrl: string; vapidPublicKey: string; maxBlobBytes?: number; version?: string };
 }
 
 /** Register a browser push subscription with the backend. */
