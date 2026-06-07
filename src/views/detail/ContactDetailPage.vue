@@ -52,6 +52,18 @@
           </ion-item>
         </ion-list>
 
+        <ion-list v-if="!contact.ghosted && chat" :inset="true">
+          <ion-item button :detail="true" @click="openMedia">
+            <ion-icon slot="start" :icon="imagesOutline" />
+            <ion-label>Media, links & docs</ion-label>
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="openMute">
+            <ion-icon slot="start" :icon="muted ? notificationsOffOutline : notificationsOutline" />
+            <ion-label>Notifications</ion-label>
+            <ion-note slot="end">{{ muteLabel }}</ion-note>
+          </ion-item>
+        </ion-list>
+
         <ion-list v-if="!contact.ghosted" :inset="true">
           <ion-item v-if="contact.blocked" button :detail="false" @click="unblock">
             <ion-icon slot="start" :icon="banOutline" />
@@ -71,14 +83,19 @@
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
-  IonContent, IonAvatar, IonButton, IonIcon, IonList, IonItem, IonLabel,
-  toastController, alertController,
+  IonContent, IonAvatar, IonButton, IonIcon, IonList, IonItem, IonLabel, IonNote,
+  toastController, alertController, actionSheetController,
 } from '@ionic/vue';
-import { chatbubbleOutline, searchOutline, banOutline } from 'ionicons/icons';
+import {
+  chatbubbleOutline, searchOutline, banOutline, imagesOutline,
+  notificationsOutline, notificationsOffOutline,
+} from 'ionicons/icons';
 import { computed } from 'vue';
-import { getContact, startDirectChat, blockContact, unblockContact } from '@/db/queries';
+import {
+  getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute,
+} from '@/db/queries';
 import { ensureProfile } from '@/composables/useProfileGate';
-import type { Contact } from '@/db/types';
+import type { Contact, Chat } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
 
@@ -92,8 +109,50 @@ const contact = useLiveQuery<Contact | undefined>(
   undefined,
 );
 
+// The existing 1:1 chat with this contact (if any) - drives the media + mute entries.
+const chat = useLiveQuery<Chat | undefined>(
+  async () =>
+    (await listChats()).find(
+      (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === contactId,
+    ),
+  ['chats'],
+  undefined,
+);
+
+const muted = computed(() => !!chat.value?.mutedUntil && chat.value.mutedUntil > Date.now());
+const muteLabel = computed(() => {
+  const until = chat.value?.mutedUntil ?? 0;
+  if (until <= Date.now()) return 'On';
+  // A year+ out reads as "always"; otherwise show the date it lifts.
+  if (until - Date.now() > 360 * 24 * 60 * 60 * 1000) return 'Muted';
+  return `Muted until ${new Date(until).toLocaleDateString()}`;
+});
+
 // Online / last-seen line under the name ('' when unknown / hidden).
 const statusLine = computed(() => presenceLabel(peerPresence(contactId)));
+
+function openMedia(): void {
+  if (chat.value) router.push(`/chat/${chat.value.id}/media`);
+}
+
+async function openMute(): Promise<void> {
+  const id = chat.value?.id;
+  if (!id) return;
+  const HOUR = 60 * 60 * 1000;
+  const buttons = muted.value
+    ? [
+        { text: 'Unmute', handler: () => void setChatMute(id, null) },
+        { text: 'Cancel', role: 'cancel' as const },
+      ]
+    : [
+        { text: 'Mute for 8 hours', handler: () => void setChatMute(id, Date.now() + 8 * HOUR) },
+        { text: 'Mute for 1 week', handler: () => void setChatMute(id, Date.now() + 7 * 24 * HOUR) },
+        { text: 'Mute always', handler: () => void setChatMute(id, Date.now() + 100 * 365 * 24 * HOUR) },
+        { text: 'Cancel', role: 'cancel' as const },
+      ];
+  const sheet = await actionSheetController.create({ header: 'Notifications', buttons });
+  await sheet.present();
+}
 
 // Open (or create) the 1:1 chat with this contact.
 async function message() {

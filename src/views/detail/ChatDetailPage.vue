@@ -34,9 +34,6 @@
           <ion-button v-if="!peerGhosted && !peerBlocked" aria-label="Voice call" @click="startCall('Voice')">
             <ion-icon slot="icon-only" :icon="callOutline" />
           </ion-button>
-          <ion-button v-if="peerId && !peerGhosted" aria-label="More" @click="openHeaderMenu">
-            <ion-icon slot="icon-only" :icon="ellipsisVertical" />
-          </ion-button>
         </ion-buttons>
       </ion-toolbar>
       <ion-toolbar v-if="showSearch">
@@ -645,7 +642,7 @@ import {
   timeOutline, checkmark, checkmarkDone, addOutline, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
-  ellipsisVertical, imageOutline, musicalNotesOutline,
+  imageOutline, musicalNotesOutline,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, listMessages, markChatRead, sendMediaMessage, sendMessage,
@@ -653,7 +650,7 @@ import {
   quickReactEmojis,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
-  blockContact, unblockContact, detectTerminated,
+  unblockContact, detectTerminated,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
@@ -738,48 +735,9 @@ async function startCall(kind: 'Voice' | 'Video') {
   if (peer) await startDirectCall(peer, k);
 }
 
-// Header overflow menu: Block / Unblock the 1:1 peer (hidden for groups / ghosts).
-async function openHeaderMenu() {
-  const pid = peerId.value;
-  if (!pid) return;
-  const sheet = await actionSheetController.create({
-    buttons: [
-      peerBlocked.value
-        ? { text: 'Unblock', handler: () => void onUnblock() }
-        : { text: 'Block', role: 'destructive', handler: () => void onBlock() },
-      { text: 'Cancel', role: 'cancel' },
-    ],
-  });
-  await sheet.present();
-}
-
-async function onBlock() {
-  const pid = peerId.value;
-  if (!pid) return;
-  const alert = await alertController.create({
-    header: 'Block contact?',
-    message: 'They will no longer be able to message you or add you. You can unblock them later.',
-    buttons: [
-      { text: 'Cancel', role: 'cancel' },
-      {
-        text: 'Block',
-        role: 'destructive',
-        handler: () => {
-          void (async () => {
-            try {
-              await blockContact(pid);
-            } catch {
-              const t = await toastController.create({ message: 'Could not block. Try again.', duration: 1500, color: 'danger' });
-              await t.present();
-            }
-          })();
-        },
-      },
-    ],
-  });
-  await alert.present();
-}
-
+// Blocking now lives in the Chat Info hub (Contact info), reached by tapping the
+// name/avatar - the header overflow menu was removed. Unblock stays as a shortcut on
+// the blocked-state notice toolbar below, where the user is already looking at it.
 async function onUnblock() {
   const pid = peerId.value;
   if (!pid) return;

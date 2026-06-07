@@ -32,6 +32,22 @@
           </ion-item>
         </ion-list>
 
+        <ion-list :inset="true">
+          <ion-item button :detail="true" @click="openMedia">
+            <ion-icon slot="start" :icon="imagesOutline" />
+            <ion-label>Media, links & docs</ion-label>
+          </ion-item>
+          <ion-item button :detail="false" @click="searchInChat">
+            <ion-icon slot="start" :icon="searchOutline" />
+            <ion-label>Search in chat</ion-label>
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="openMute">
+            <ion-icon slot="start" :icon="muted ? notificationsOffOutline : notificationsOutline" />
+            <ion-label>Notifications</ion-label>
+            <ion-note slot="end">{{ muteLabel }}</ion-note>
+          </ion-item>
+        </ion-list>
+
         <ion-list v-if="invited.length" :inset="true">
           <ion-list-header><ion-label>Invited</ion-label></ion-list-header>
           <ion-item
@@ -94,15 +110,16 @@ import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
-  IonContent, IonAvatar, IonList, IonListHeader, IonItem, IonLabel, IonIcon,
+  IonContent, IonAvatar, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote,
   actionSheetController, alertController,
 } from '@ionic/vue';
 import {
   personAddOutline, exitOutline, createOutline, cameraOutline, ellipsisHorizontal,
+  imagesOutline, searchOutline, notificationsOutline, notificationsOffOutline,
 } from 'ionicons/icons';
 import {
   getChat, listContacts, inviteToGroup, removeMember, leaveGroup,
-  renameGroup, setGroupAvatar, clearGroupAvatar,
+  renameGroup, setGroupAvatar, clearGroupAvatar, setChatMute,
 } from '@/db/queries';
 import { getSecret } from '@/db/secrets';
 import type { Chat, Contact } from '@/db/types';
@@ -115,6 +132,37 @@ const chatId = route.params.id as string;
 
 const chat = useLiveQuery<Chat | undefined>(() => getChat(chatId), ['chats'], undefined);
 const allContacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+
+const muted = computed(() => !!chat.value?.mutedUntil && chat.value.mutedUntil > Date.now());
+const muteLabel = computed(() => {
+  const until = chat.value?.mutedUntil ?? 0;
+  if (until <= Date.now()) return 'On';
+  if (until - Date.now() > 360 * 24 * 60 * 60 * 1000) return 'Muted';
+  return `Muted until ${new Date(until).toLocaleDateString()}`;
+});
+
+function openMedia(): void {
+  router.push(`/chat/${chatId}/media`);
+}
+function searchInChat(): void {
+  router.push(`/chat/${chatId}?search=1`);
+}
+async function openMute(): Promise<void> {
+  const HOUR = 60 * 60 * 1000;
+  const buttons = muted.value
+    ? [
+        { text: 'Unmute', handler: () => void setChatMute(chatId, null) },
+        { text: 'Cancel', role: 'cancel' as const },
+      ]
+    : [
+        { text: 'Mute for 8 hours', handler: () => void setChatMute(chatId, Date.now() + 8 * HOUR) },
+        { text: 'Mute for 1 week', handler: () => void setChatMute(chatId, Date.now() + 7 * 24 * HOUR) },
+        { text: 'Mute always', handler: () => void setChatMute(chatId, Date.now() + 100 * 365 * 24 * HOUR) },
+        { text: 'Cancel', role: 'cancel' as const },
+      ];
+  const sheet = await actionSheetController.create({ header: 'Notifications', buttons });
+  await sheet.present();
+}
 
 const selfAvatar = ref(initialsAvatar('You'));
 watch(
