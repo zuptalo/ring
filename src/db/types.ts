@@ -200,6 +200,9 @@ export interface Message {
   // Set on a received media message that hasn't been downloaded yet (auto-download
   // off / deferred): the encrypted reference used to fetch it on demand.
   pendingMedia?: import('@/services/crypto/message').MediaRef;
+  mediaCleared?: boolean; // media blob removed locally to free space → shows a
+  // "Photo/Video/... removed to free space" placeholder (distinct from `deleted`,
+  // the sender deleting the message, and `pendingMedia`, not-yet-downloaded)
   deleted?: boolean; // soft-deleted → shows a "deleted" placeholder
   location?: GeoLocation; // kind === 'location'
   poll?: Poll; // kind === 'poll'

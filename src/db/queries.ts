@@ -2606,6 +2606,7 @@ export async function clearAllMedia(): Promise<void> {
   for (const m of messages) {
     if (m.mediaId) {
       m.mediaId = undefined;
+      m.mediaCleared = true; // leave a "removed to free space" placeholder
       m.updatedAt = now();
       await put('messages', m);
     }
@@ -2646,6 +2647,7 @@ async function deleteSelectedMedia(selected: Media[]): Promise<number> {
   for (const msg of messages) {
     if (msg.mediaId && ids.has(msg.mediaId)) {
       msg.mediaId = undefined;
+      msg.mediaCleared = true; // leave a "removed to free space" placeholder
       msg.updatedAt = now();
       await put('messages', msg);
     }

@@ -221,6 +221,14 @@
                 <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
               </div>
 
+              <!-- Media removed from THIS device to free space: a placeholder so the
+                   chat still shows something was here (distinct from a sender-deleted
+                   message, and from a not-yet-downloaded one). -->
+              <div v-if="mediaCleared(m)" class="media-cleared" @click.stop>
+                <ion-icon :icon="clearedIcon(m.kind)" />
+                <span>{{ clearedLabel(m) }} removed to free space</span>
+              </div>
+
               <!-- Location / poll / shared-contact cards. -->
               <location-bubble v-if="m.kind === 'location' && m.location" :loc="m.location" />
               <poll-bubble
@@ -637,7 +645,7 @@ import {
   timeOutline, checkmark, checkmarkDone, addOutline, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
-  ellipsisVertical,
+  ellipsisVertical, imageOutline, musicalNotesOutline,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, listMessages, markChatRead, sendMediaMessage, sendMessage,
@@ -1043,6 +1051,41 @@ function linkParts(body: string): Array<{ text: string; url?: string }> {
 // (narrow padding) hugging the media, rather than the normal text padding.
 const mediaBubble = (m: Message) =>
   !m.deleted && !!m.mediaId && (m.kind === 'image' || (m.kind === 'video' && !m.videoNote));
+
+// A media message whose blob was cleaned up locally to free space (not the same as
+// a sender-deleted message, nor a not-yet-downloaded one) → show a placeholder.
+const mediaCleared = (m: Message): boolean =>
+  !!m.mediaCleared && !m.mediaId && !m.pendingMedia && !m.deleted;
+function clearedLabel(m: Message): string {
+  switch (m.kind) {
+    case 'image':
+      return 'Photo';
+    case 'video':
+      return m.videoNote ? 'Video note' : 'Video';
+    case 'voice':
+      return 'Voice message';
+    case 'audio':
+      return 'Audio';
+    case 'file':
+      return 'Document';
+    default:
+      return 'Media';
+  }
+}
+function clearedIcon(kind: string): string {
+  switch (kind) {
+    case 'image':
+      return imageOutline;
+    case 'video':
+      return videocamOutline;
+    case 'voice':
+      return micOutline;
+    case 'audio':
+      return musicalNotesOutline;
+    default:
+      return documentOutline;
+  }
+}
 // Incoming media / file / link → show a quick floating forward button beside it.
 // (Media must be downloaded; a deferred video has no blob to forward yet.)
 const forwardable = (m: Message) =>
@@ -2698,6 +2741,21 @@ function cancelRecording() {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+.media-cleared {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(120, 120, 128, 0.12);
+  color: var(--app-text-muted);
+  font-style: italic;
+  font-size: 14px;
+}
+.media-cleared ion-icon {
+  font-size: 20px;
+  flex-shrink: 0;
 }
 .time {
   align-self: flex-end;
