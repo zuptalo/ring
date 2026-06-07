@@ -4,7 +4,7 @@
  * across every field we care about. Swap for an indexed FTS later if needed.
  */
 import { bulkPut, clearStore, get, getAll, getByIndex, put, remove } from './idb';
-import { enqueue } from './outbox';
+import { enqueue, removeOutboxByFrameId } from './outbox';
 import { recordTombstone } from './tombstones';
 import { uid } from '@/utils/uid';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
@@ -1578,6 +1578,84 @@ async function sendCard(chat: Chat | undefined, card: ContactCard): Promise<void
   await sealAndEnqueue(chat, uid(), { body: '', kind: CARD_KIND, timestamp: now(), card });
 }
 
+/* ---- session re-key recovery (robust delivery after a one-sided chat delete) ---- */
+
+const REKEY_KIND = 'rekey';
+const REKEY_DEBOUNCE_MS = 10_000;
+const rekeyRequestedAt = new Map<string, number>();
+
+/**
+ * The peer sent us a message we could not decrypt (typically because we deleted
+ * this chat and lost the ratchet, while they kept theirs and sent a NORMAL packet,
+ * so there is no prekey to re-establish from). Tear down any stale session + its
+ * meta so the next seal re-runs X3DH, then send a fresh prekey carrying a `rekey`
+ * control: the peer adopts the new session (via openPacket's recovery path) and
+ * resends its undelivered messages, and we resend ours. Debounced per chat.
+ */
+async function requestRekey(chatId: string, peerUserId: string): Promise<void> {
+  if (!peerUserId) return;
+  const last = rekeyRequestedAt.get(chatId) ?? 0;
+  if (now() - last < REKEY_DEBOUNCE_MS) return;
+  rekeyRequestedAt.set(chatId, now());
+  await remove('sessions', chatId);
+  await remove('settings', `smeta:${chatId}`);
+  const chat = await getChat(chatId);
+  if (!chat || chat.isGroup) return;
+  // Fresh prekey packet the peer can adopt; its body is empty (never shown).
+  await sealAndEnqueue(chat, uid(), { body: '', kind: REKEY_KIND, timestamp: now(), rekey: true });
+  // Our own recent messages need re-sealing under the new session too.
+  await resendRecentOutgoing(chatId);
+}
+
+/** Rebuild a sendable payload from a stored OUTGOING message, for re-sealing under a
+ *  re-keyed session. Returns null for media (the transport file key isn't retained,
+ *  so media can't be cheaply re-sent) - those stay recoverable via a manual resend. */
+function payloadFromMessage(m: Message): MessagePayload | null {
+  if (m.mediaId || m.pendingMedia) return null;
+  if (m.kind === 'image' || m.kind === 'video' || m.kind === 'file' || m.kind === 'voice' || m.kind === 'audio') {
+    return null;
+  }
+  return {
+    body: m.body,
+    kind: m.kind,
+    timestamp: m.timestamp,
+    reply: m.replyTo,
+    location: m.location,
+    poll: m.poll,
+    contact: m.contact,
+    albumId: m.albumId,
+    albumName: m.albumName,
+  };
+}
+
+const REKEY_RESEND_LIMIT = 50;
+
+/**
+ * Re-seal + re-enqueue our RECENT outgoing messages in this 1:1 chat under the
+ * (freshly re-keyed) session, so messages the peer dropped while we were desynced
+ * are recovered. Keyed on RECENCY, not status: the peer acks an undecryptable frame
+ * to clear the relay (so this same-id resend isn't deduped), which also yields a
+ * false 'delivered' - so status is unreliable here. The peer dedups by message id
+ * (wasInboundSeen), so resending an already-seen message is a harmless no-op. Any
+ * stale (old-session) outbox copy is dropped first so the at-least-once retry can't
+ * re-send now-undecryptable ciphertext. Media is skipped (see payloadFromMessage).
+ */
+async function resendRecentOutgoing(chatId: string): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat || chat.isGroup) return;
+  const peerId = chat.participantIds[0];
+  const recent = (await getByIndex<Message>('messages', 'chatId', chatId))
+    .filter((m) => m.outgoing && m.status !== 'read')
+    .sort((x, y) => x.timestamp - y.timestamp)
+    .slice(-REKEY_RESEND_LIMIT);
+  for (const m of recent) {
+    const payload = payloadFromMessage(m);
+    if (!payload) continue;
+    if (peerId) await removeOutboxByFrameId(m.id, peerId);
+    await sealAndEnqueue(chat, m.id, payload);
+  }
+}
+
 async function setChatPending(chatId: string, pending: boolean): Promise<void> {
   const chat = await getChat(chatId);
   if (!chat) return;
@@ -2352,7 +2430,23 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     payload = await openPacket(chatId, ciphertext);
   } catch (e) {
     console.warn('[messaging] failed to open incoming message', e);
-    return; // not marked seen → a re-send can retry (the ratchet wasn't advanced on a throw)
+    // Undecryptable most often means we deleted the chat (losing our ratchet) while
+    // the peer kept theirs and sent a NORMAL packet, so we have no session and no
+    // prekey to establish one. Don't silently lose it: ask the peer to re-key (and
+    // resend), which re-establishes the session and recovers their undelivered
+    // messages. Debounced, so a burst can't storm. We still leave this frame
+    // unmarked; the peer's resend (with a fresh session) is what actually delivers it.
+    void requestRekey(chatId, from);
+    return;
+  }
+  // Session-reset control: the peer couldn't decrypt something of ours and asked us
+  // to re-key. Their packet already re-established the session (a fresh prekey); now
+  // resend our still-undelivered messages so they arrive under the new session. Never
+  // stored or shown.
+  if (payload.rekey) {
+    await resendRecentOutgoing(chatId);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
   }
   // NOTE: each success path below records the id via markInboundSeen AFTER its durable
   // effect (the stored message / applied side effect), not here. Marking after the

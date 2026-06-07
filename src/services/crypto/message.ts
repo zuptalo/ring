@@ -139,6 +139,11 @@ export interface MessagePayload {
   pollVote?: PollVoteSignal; // a vote on an existing poll message (side effect)
   contact?: SharedContact; // kind === 'contact' (a shared Ring contact)
   audio?: AudioMeta; // kind === 'audio' (shared music file: title/artist)
+  // Session-reset control (like `card`): sent when the peer received a message it
+  // could not decrypt (e.g. we deleted the chat, tearing down our ratchet). It rides
+  // in a fresh X3DH prekey packet so the peer re-establishes the session, and on
+  // receipt triggers a resend of our still-undelivered messages. Never shown.
+  rekey?: boolean;
 }
 
 export interface WireMessage {
