@@ -19,6 +19,7 @@ import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messagi
 import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
 import { publishOwnProfile, syncContactEdges, refreshContactProfiles } from '@/services/directory';
 import { applyPushPreference, disablePush, revalidatePushSubscription } from '@/services/push';
+import { checkForUpdate } from '@/composables/useAppUpdate';
 import { runInviteSync } from '@/services/invites';
 import { clearPresence } from '@/composables/usePresence';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
@@ -167,6 +168,11 @@ function start(): void {
     } else if (s === 'offline') {
       clearPresence(); // don't show stale online status while disconnected
       scheduleSessionCheck(); // a rejected token would keep us stuck here
+      // A foreground drop can mean the server restarted for a new deploy, so check
+      // for a new version here too (throttled). Covers it alongside open + foreground.
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        checkForUpdate();
+      }
     }
   });
   // Serialize DB-mutating inbound frames through a promise chain so they're

@@ -8,8 +8,10 @@
  * the user pull it immediately (skipWaiting + reload) or defer. Deferring keeps the
  * current version running; the prompt reappears on the next launch until accepted.
  *
- * We also poll for an update on a timer and on foreground, so a long-lived session
- * still discovers a deploy without the user manually reloading.
+ * Update checks are EVENT-DRIVEN (no polling): on app open (registerSW's own initial
+ * check), on foreground, and on a transport disconnect (useSync calls checkForUpdate,
+ * a drop can mean the server restarted for a deploy). checkForUpdate is throttled so
+ * a flapping connection can't hammer it.
  */
 import { watch } from 'vue';
 import { useRegisterSW } from 'virtual:pwa-register/vue';
@@ -17,8 +19,22 @@ import { toastController } from '@ionic/vue';
 import { fetchServerConfig } from '@/services/api';
 
 let started = false;
+let swReg: ServiceWorkerRegistration | null = null;
+let lastCheck = 0;
+const CHECK_THROTTLE_MS = 10_000;
 
-const UPDATE_POLL_MS = 60 * 60_000; // hourly background check for a new SW
+/**
+ * Ask the service worker to check for a newer deployed build. Safe to call on app
+ * open, foreground, and whenever the server connection drops (a deploy restarts the
+ * server). Throttled; a found update surfaces the version toast via needRefresh.
+ */
+export function checkForUpdate(): void {
+  if (!swReg) return;
+  const now = Date.now();
+  if (now - lastCheck < CHECK_THROTTLE_MS) return;
+  lastCheck = now;
+  void swReg.update().catch(() => {});
+}
 
 export function useAppUpdate(): void {
   if (started) return; // singleton: one registration + prompt driver per app
@@ -27,11 +43,10 @@ export function useAppUpdate(): void {
   const { needRefresh, updateServiceWorker } = useRegisterSW({
     onRegisteredSW(_swUrl, reg) {
       if (!reg) return;
-      const check = (): void => void reg.update().catch(() => {});
-      setInterval(check, UPDATE_POLL_MS);
+      swReg = reg; // registerSW already does the initial (app-open) check
       if (typeof document !== 'undefined') {
         document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') check();
+          if (document.visibilityState === 'visible') checkForUpdate();
         });
       }
     },
