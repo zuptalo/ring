@@ -65,6 +65,10 @@ type RelayStore interface {
 	// ContactEdgesWith returns which of `targets` share a contact edge with
 	// `viewer` (used to gate a presence-sub reply for many targets at once).
 	ContactEdgesWith(ctx context.Context, viewer string, targets []string) (map[string]bool, error)
+	// Per-contact presence overrides (allow/deny), layered on top of the tier.
+	SetPresenceOverrides(ctx context.Context, owner string, overrides map[string]string) error
+	PresenceOverrides(ctx context.Context, owner string) (map[string]string, error)
+	PresenceOverridesFor(ctx context.Context, watcher string, owners []string) (map[string]string, error)
 	// IsBlocked reports whether `blocker` has blocked `blocked` - the relay drops
 	// messages/call-offers from a blocked sender to the blocker.
 	IsBlocked(ctx context.Context, blocker, blocked string) (bool, error)
@@ -103,10 +107,12 @@ type frame struct {
 	LastSeen      int64  `json:"lastSeen,omitempty"`
 	ShareOnline   bool   `json:"shareOnline,omitempty"`
 	ShareLastSeen bool   `json:"shareLastSeen,omitempty"`
-	// Inbound presence-prefs visibility tiers ('everyone'|'contacts'|'nobody').
-	OnlineTier   string   `json:"onlineTier,omitempty"`
-	LastSeenTier string   `json:"lastSeenTier,omitempty"`
-	Active       bool     `json:"active,omitempty"`
+	// Inbound presence-prefs visibility tiers ('everyone'|'contacts'|'nobody') and
+	// the per-contact allow/deny overrides (target id -> 'allow'|'deny').
+	OnlineTier   string            `json:"onlineTier,omitempty"`
+	LastSeenTier string            `json:"lastSeenTier,omitempty"`
+	Overrides    map[string]string `json:"overrides,omitempty"`
+	Active       bool              `json:"active,omitempty"`
 	IDs          []string `json:"ids,omitempty"`
 	// Call signalling (live-only; never durably queued). For 1:1, SDP/ICE travel
 	// E2EE'd in Ciphertext (the server can't read them). RoomID/Members/SDP are
@@ -411,37 +417,40 @@ func (h *Hub) removeWatches(c *Client) {
 	}
 }
 
-// tierVisible reports whether a field with the given tier is visible to a watcher
-// who is (inAudience) or isn't a contact: 'everyone' always, 'contacts' only when
-// inAudience, 'nobody' never.
-func tierVisible(tier string, inAudience bool) bool {
-	switch tier {
-	case "everyone":
+// visibleTo decides whether a presence field governed by `tier` is shown to a
+// watcher, given an optional per-contact override and whether the watcher is a
+// contact (inAudience). Overrides win; otherwise ONLY contacts see presence
+// ('everyone' no longer means the whole network - a non-contact never sees it
+// unless explicitly allowed), and 'nobody' hides from all.
+func visibleTo(tier, override string, inAudience bool) bool {
+	switch override {
+	case "allow":
 		return true
-	case "contacts":
-		return inAudience
-	default: // "nobody" (and any unexpected value, fail closed for presence)
+	case "deny":
 		return false
 	}
+	if tier == "nobody" {
+		return false
+	}
+	return inAudience
 }
 
-// presenceFrame builds a t:"presence" frame for userID gated for ONE watcher:
-// online/lastSeen are included only if the owner's tier permits this watcher
-// (inAudience = the watcher has a contact edge with the owner). A frame with both
-// omitted clears the watcher's view (shows "unknown").
-func presenceFrame(userID string, online bool, pi store.PresenceInfo, inAudience bool) frame {
+// presenceFrame builds a t:"presence" frame for userID gated for ONE watcher: a
+// field is included only if visibleTo permits (tier + per-contact override +
+// contact-edge audience). A frame with both omitted shows "unknown".
+func presenceFrame(userID string, online bool, pi store.PresenceInfo, inAudience bool, override string) frame {
 	f := frame{T: "presence", User: userID}
-	if tierVisible(pi.OnlineTier, inAudience) {
+	if visibleTo(pi.OnlineTier, override, inAudience) {
 		f.Online = online
 	}
-	if tierVisible(pi.LastSeenTier, inAudience) {
+	if visibleTo(pi.LastSeenTier, override, inAudience) {
 		f.LastSeen = pi.LastSeenMs
 	}
 	return f
 }
 
 // broadcastPresence sends userID's current presence to each watcher, gated per
-// watcher by userID's visibility tier + contact-edge audience.
+// watcher by userID's tier + per-contact override + contact-edge audience.
 func (h *Hub) broadcastPresence(ctx context.Context, st RelayStore, userID string) {
 	online := h.isOnline(userID)
 	info, err := st.GetPresence(ctx, []string{userID})
@@ -450,13 +459,16 @@ func (h *Hub) broadcastPresence(ctx context.Context, st RelayStore, userID strin
 		return
 	}
 	pi := info[userID]
-	// Only fetch the audience when a 'contacts' tier actually needs it.
-	var audience map[string]bool
-	if pi.OnlineTier == "contacts" || pi.LastSeenTier == "contacts" {
-		if audience, err = st.PresenceAudience(ctx, userID); err != nil {
-			slog.Error("presence audience", "user", userID, "err", err)
-			audience = map[string]bool{}
-		}
+	// Presence is now contacts-only by default, so the audience is always needed
+	// (unless both tiers are 'nobody', when nothing is shown without an allow).
+	audience, err := st.PresenceAudience(ctx, userID)
+	if err != nil {
+		slog.Error("presence audience", "user", userID, "err", err)
+		audience = map[string]bool{}
+	}
+	overrides, err := st.PresenceOverrides(ctx, userID)
+	if err != nil {
+		overrides = map[string]string{}
 	}
 	// Snapshot watcher ids under the lock, then marshal per-watcher outside it.
 	h.mu.RLock()
@@ -466,7 +478,7 @@ func (h *Hub) broadcastPresence(ctx context.Context, st RelayStore, userID strin
 	}
 	h.mu.RUnlock()
 	for _, c := range watchers {
-		payload, err := json.Marshal(presenceFrame(userID, online, pi, audience[c.userID]))
+		payload, err := json.Marshal(presenceFrame(userID, online, pi, audience[c.userID], overrides[c.userID]))
 		if err != nil {
 			continue
 		}
@@ -796,10 +808,14 @@ func (c *Client) handleFrame(data []byte) {
 		}
 
 	case "presence-prefs":
-		// Client uploaded its visibility tiers (derived from privacy settings).
+		// Client uploaded its visibility tiers (derived from privacy settings) and
+		// its per-contact allow/deny overrides.
 		if err := c.store.SetPresencePrefs(ctx, c.userID, f.OnlineTier, f.LastSeenTier); err != nil {
 			slog.Error("set presence prefs", "err", err)
 			return
+		}
+		if err := c.store.SetPresenceOverrides(ctx, c.userID, f.Overrides); err != nil {
+			slog.Error("set presence overrides", "err", err)
 		}
 		c.hub.broadcastPresence(ctx, c.store, c.userID)
 
@@ -821,11 +837,16 @@ func (c *Client) handleFrame(data []byte) {
 			slog.Error("contact edges", "err", err)
 			edges = map[string]bool{}
 		}
+		// The override each subscribed owner set for THIS watcher (allow/deny).
+		ov, err := c.store.PresenceOverridesFor(ctx, c.userID, f.IDs)
+		if err != nil {
+			ov = map[string]string{}
+		}
 		for _, id := range f.IDs {
 			if id == "" {
 				continue
 			}
-			c.send1(presenceFrame(id, c.hub.isOnline(id), info[id], edges[id]))
+			c.send1(presenceFrame(id, c.hub.isOnline(id), info[id], edges[id], ov[id]))
 		}
 
 	case "presence-self":

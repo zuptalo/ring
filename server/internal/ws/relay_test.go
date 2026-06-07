@@ -108,6 +108,15 @@ func (m *memRelay) PresenceAudience(_ context.Context, _ string) (map[string]boo
 func (m *memRelay) ContactEdgesWith(_ context.Context, _ string, _ []string) (map[string]bool, error) {
 	return map[string]bool{}, nil
 }
+func (m *memRelay) SetPresenceOverrides(_ context.Context, _ string, _ map[string]string) error {
+	return nil
+}
+func (m *memRelay) PresenceOverrides(_ context.Context, _ string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+func (m *memRelay) PresenceOverridesFor(_ context.Context, _ string, _ []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
 
 func testAuth(_ context.Context, token string) (string, bool, error) {
 	switch token {

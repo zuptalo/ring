@@ -251,6 +251,13 @@ func (f *fakeStore) PresenceAudience(context.Context, string) (map[string]bool, 
 func (f *fakeStore) ContactEdgesWith(context.Context, string, []string) (map[string]bool, error) {
 	return map[string]bool{}, nil
 }
+func (f *fakeStore) SetPresenceOverrides(context.Context, string, map[string]string) error { return nil }
+func (f *fakeStore) PresenceOverrides(context.Context, string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+func (f *fakeStore) PresenceOverridesFor(context.Context, string, []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
 
 // --- ContactStore ---
 

@@ -66,10 +66,15 @@
             <ion-label>Notifications</ion-label>
             <ion-note slot="end">{{ muteLabel }}</ion-note>
           </ion-item>
-          <ion-item button :detail="false" lines="none" @click="openTtl">
+          <ion-item button :detail="false" @click="openTtl">
             <ion-icon slot="start" :icon="timerOutline" />
             <ion-label>Disappearing messages</ion-label>
             <ion-note slot="end">{{ ttlLabel }}</ion-note>
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="openPresenceOverride">
+            <ion-icon slot="start" :icon="eyeOutline" />
+            <ion-label class="ion-text-wrap">Online & last seen to this contact</ion-label>
+            <ion-note slot="end">{{ presenceOverrideLabel }}</ion-note>
           </ion-item>
         </ion-list>
 
@@ -97,11 +102,12 @@ import {
 } from '@ionic/vue';
 import {
   chatbubbleOutline, searchOutline, banOutline, imagesOutline,
-  notificationsOutline, notificationsOffOutline, starOutline, timerOutline,
+  notificationsOutline, notificationsOffOutline, starOutline, timerOutline, eyeOutline,
 } from 'ionicons/icons';
 import { computed } from 'vue';
 import {
   getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl,
+  getPresenceOverrides, setPresenceOverride,
 } from '@/db/queries';
 import { ensureProfile } from '@/composables/useProfileGate';
 import type { Contact, Chat } from '@/db/types';
@@ -187,6 +193,29 @@ async function openTtl(): Promise<void> {
       { text: '7 days', handler: () => void setChatTtl(id, 7 * DAY) },
       { text: '90 days', handler: () => void setChatTtl(id, 90 * DAY) },
       { text: 'Off', handler: () => void setChatTtl(id, null) },
+      { text: 'Cancel', role: 'cancel' as const },
+    ],
+  });
+  await sheet.present();
+}
+
+// Per-contact presence override (on top of the global online/last-seen setting).
+const presenceOverride = useLiveQuery<'allow' | 'deny' | undefined>(
+  async () => (await getPresenceOverrides())[contactId],
+  ['settings'],
+  undefined,
+);
+const presenceOverrideLabel = computed(() =>
+  presenceOverride.value === 'allow' ? 'Always shown' : presenceOverride.value === 'deny' ? 'Hidden' : 'Default',
+);
+async function openPresenceOverride(): Promise<void> {
+  const sheet = await actionSheetController.create({
+    header: 'Online & last seen',
+    subHeader: 'Override your global setting for this contact:',
+    buttons: [
+      { text: 'Use my default setting', handler: () => void setPresenceOverride(contactId, null) },
+      { text: 'Always show to this contact', handler: () => void setPresenceOverride(contactId, 'allow') },
+      { text: 'Always hide from this contact', handler: () => void setPresenceOverride(contactId, 'deny') },
       { text: 'Cancel', role: 'cancel' as const },
     ],
   });

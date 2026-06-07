@@ -1756,6 +1756,21 @@ export async function isChatMuted(chatId: string): Promise<boolean> {
   return !!chat?.mutedUntil && chat.mutedUntil > now();
 }
 
+/** Per-contact presence overrides (userId -> 'allow'|'deny'), layered on top of the
+ *  global online/last-seen tier. Sent to the server with presence-prefs. */
+export async function getPresenceOverrides(): Promise<Record<string, 'allow' | 'deny'>> {
+  return getSetting<Record<string, 'allow' | 'deny'>>('presence.overrides', {});
+}
+
+/** Always show ('allow') / always hide ('deny') / default (null) my presence to one
+ *  contact. Writing the setting triggers a presence-prefs resend (settings bus). */
+export async function setPresenceOverride(userId: string, ov: 'allow' | 'deny' | null): Promise<void> {
+  const m = await getPresenceOverrides();
+  if (ov) m[userId] = ov;
+  else delete m[userId];
+  await setSetting('presence.overrides', m);
+}
+
 async function setChatPending(chatId: string, pending: boolean): Promise<void> {
   const chat = await getChat(chatId);
   if (!chat) return;

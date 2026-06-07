@@ -13,7 +13,7 @@ import { subscribe } from '@/db/idb';
 import { isAuthenticated, getToken, verifySessionOrReset, getPendingInviter } from '@/services/auth';
 import { WebSocketTransport, type Frame, type Transport, type TransportState } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages } from '@/db/queries';
+import { getChat, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides } from '@/db/queries';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
 import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
@@ -43,8 +43,9 @@ async function presencePrefs(): Promise<{ onlineTier: string; lastSeenTier: stri
 async function sendPresencePrefs(): Promise<void> {
   if (!transport || transport.state !== 'online') return;
   const { onlineTier, lastSeenTier } = await presencePrefs();
+  const overrides = await getPresenceOverrides(); // per-contact allow/deny
   try {
-    await transport.send({ t: 'presence-prefs', onlineTier, lastSeenTier });
+    await transport.send({ t: 'presence-prefs', onlineTier, lastSeenTier, overrides });
   } catch {
     /* retried on next online */
   }

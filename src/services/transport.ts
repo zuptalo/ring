@@ -63,6 +63,7 @@ export interface PresencePrefsFrame {
   t: 'presence-prefs';
   onlineTier: string; // 'everyone' | 'contacts' | 'nobody'
   lastSeenTier: string;
+  overrides?: Record<string, 'allow' | 'deny'>; // per-contact presence overrides
 }
 /** Subscribe to (watch) the presence of these user ids (our contacts). */
 export interface PresenceSubFrame {
