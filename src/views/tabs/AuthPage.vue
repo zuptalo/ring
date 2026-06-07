@@ -353,7 +353,8 @@ import {
   isUnlocked,
 } from '@/services/crypto/identity';
 import { migrateSecrets } from '@/db/secrets';
-import { seedProfileName } from '@/db/queries';
+import { seedProfileName, profileComplete } from '@/db/queries';
+import { ensureProfile } from '@/composables/useProfileGate';
 import {
   markPushHandled,
   pushPermission,
@@ -491,9 +492,17 @@ function buildOnboardingSteps(): OnboardingStep[] {
   return steps;
 }
 
-// Called after a successful sign-in/register. Shows the permission wizard if any
-// steps are pending; otherwise goes straight into the app.
-function enterApp() {
+// Called after a successful sign-in/register. First REQUIRES a profile (name +
+// photo) so a new user never appears to peers as a nameless id, then shows the
+// permission wizard (push) if any steps are pending; otherwise goes straight into
+// the app. The profile gate is mandatory here (no close button) and must come
+// BEFORE the push prompt.
+async function enterApp() {
+  // Loop so a hardware-back dismissal can't skip the requirement; ensureProfile
+  // returns once name + photo are set (the modal's "Start messaging" is gated on it).
+  while (!(await profileComplete())) {
+    await ensureProfile({ mandatory: true });
+  }
   pendingSteps.value = buildOnboardingSteps();
   if (pendingSteps.value.length === 0) {
     enterChats();
@@ -516,11 +525,17 @@ async function allowStep() {
   if (!s) return advance();
   loading.value = true;
   try {
-    await s.request();
+    // Defensively bound the request: on some WebKit builds the permission-prompt
+    // promise can hang. Without this the await never settles, `loading` stays true,
+    // and BOTH buttons (disabled while loading) stop responding, the "stuck on the
+    // notifications step, taps do nothing" bug. We advance no matter what.
+    await Promise.race([s.request(), new Promise((resolve) => setTimeout(resolve, 12_000))]);
+  } catch {
+    /* a failed/blocked prompt must not trap the user on this step */
   } finally {
     loading.value = false;
+    advance();
   }
-  advance();
 }
 
 function skipStep() {
@@ -633,7 +648,7 @@ async function submitPrompt() {
       const staged = await beginRestore(entry.value);
       await finishRestore(staged); // passwordless device-key posture (passcode opt-in later)
       entryMode.value = null;
-      enterApp();
+      void enterApp();
     }
   } catch (err) {
     entryError.value = (err as Error).message;
@@ -701,7 +716,7 @@ async function finishRegistration() {
     /* non-fatal: the name prefill is cosmetic */
   }
   loading.value = false;
-  enterApp();
+  void enterApp();
 }
 
 async function copyRecovery() {

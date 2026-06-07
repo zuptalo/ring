@@ -66,6 +66,15 @@ test('post-sign-in push onboarding enters Chats after Allow', async ({ page, con
   // The recovery code is shown BEFORE the server account exists: the invite code and
   // username are only consumed once we confirm here. Save it to finalize.
   await expect(page.getByText(/Save your recovery code/i)).toBeVisible({ timeout: 30_000 });
+
+  // Onboarding now REQUIRES a name + photo before the push step (so a new user is
+  // never a nameless id). Satisfy it via the test hook so this spec stays focused on
+  // the push step; the keystore exists by now (the recovery code is shown), so the
+  // profile secrets are writable. profileComplete() then skips the mandatory modal.
+  await page.evaluate(
+    ([n, a]) => (window as any).__ringTest.setProfile(n, a),
+    ['Ada Lovelace', 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'],
+  );
   await page.getByRole('button', { name: /I.?ve saved it/i }).dispatchEvent('click');
 
   // Now the "Stay in the loop" push step is revealed; tap Allow. (dispatchEvent

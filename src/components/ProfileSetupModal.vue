@@ -2,7 +2,7 @@
   <ion-page>
     <ion-header :translucent="true">
       <ion-toolbar>
-        <ion-buttons slot="end">
+        <ion-buttons v-if="!mandatory" slot="end">
           <ion-button color="medium" @click="cancel">
             <ion-icon slot="icon-only" :icon="closeOutline" />
           </ion-button>
@@ -79,6 +79,11 @@ import { getSecret, setSecret } from '@/db/secrets';
 import { getSelfUsername } from '@/services/auth';
 import { initialsAvatar } from '@/db/avatars';
 import { publishOwnProfile } from '@/services/directory';
+
+// `mandatory` (onboarding): hide the close button so the only way out is finishing,
+// the profile is required before the new user reaches the rest of onboarding.
+const props = defineProps<{ mandatory?: boolean }>();
+const mandatory = computed(() => !!props.mandatory);
 
 const DEFAULT_ABOUT = 'Hey there! I am using Ring.';
 
