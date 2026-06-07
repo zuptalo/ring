@@ -54,6 +54,15 @@ const GENERIC_TAG = 'ring-incoming';
 // preview (notify-preview.ts) appears only once decryption succeeds and upgrades it.
 const GENERIC_AFTER_MS = 6000;
 const SETTLE_MAX_MS = 9000;
+// Straggler catch-up after the first preview. In the background the page is
+// suspended, so a queued message only earns its 'delivered' receipt when the SW
+// fetches the pending queue (the server emits 'delivered' for every queued frame on
+// each fetch). A rapid burst queues more frames AFTER our first fetch, and the
+// collapsible push may not wake the SW again, so without this the burst's tail stays
+// 'sent' until the app is reopened. Keep re-fetching for a bounded window so the
+// whole burst earns receipts (and late messages get previewed) within one wake.
+const STRAGGLER_WINDOW_MS = 9000;
+const STRAGGLER_INTERVAL_MS = 4500;
 
 async function showGeneric(): Promise<void> {
   await self.registration.showNotification('Ring', {
@@ -194,6 +203,28 @@ async function showMessageNotification(): Promise<void> {
   // 0 and we badge from the stored unread alone rather than inventing a "+1" that
   // teaches a wrong count. A suppressed (notifications-off) push adds nothing.
   await updateAppBadge(result.suppressed ? 0 : pending);
+
+  // Catch stragglers from a rapid burst (see STRAGGLER_WINDOW_MS): re-fetch the
+  // pending queue a few times within this wake so messages that arrived after the
+  // first fetch still earn their 'delivered' receipt (and get previewed) without the
+  // recipient having to reopen the app. Each fetch re-emits 'delivered' for all
+  // still-queued frames (idempotent); newly-decryptable notes are shown once.
+  const deadline = Date.now() + STRAGGLER_WINDOW_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, STRAGGLER_INTERVAL_MS));
+    let more: Awaited<ReturnType<typeof previewPending>>;
+    try {
+      more = await previewPending();
+    } catch {
+      break;
+    }
+    if (more.notes.length) {
+      await closeByTag(GENERIC_TAG);
+      await showNotes(more.notes);
+      await markShown(allIds(more.notes));
+      await updateAppBadge(more.suppressed ? 0 : more.pending);
+    }
+  }
 }
 
 // ---- page-ack duplicate suppression ----
