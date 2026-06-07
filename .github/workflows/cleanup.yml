@@ -1,0 +1,50 @@
+name: GHCR cleanup
+
+# Weekly retention for ghcr.io/zuptalo/ring (GitHub has no built-in retention
+# setting for container packages, so this enforces it):
+#   - releases (latest + semver tags) are NEVER deleted,
+#   - of the develop builds, keep the newest 3,
+#   - remove orphaned untagged manifests (manifest-aware: children of kept
+#     images are preserved).
+#
+# Auth is the default GITHUB_TOKEN, which can delete because the package grants
+# the zuptalo/ring repo the Admin role (set in the package's "Manage Actions
+# access"). A manual run defaults to a dry-run so the plan can be previewed
+# before anything is removed; the weekly schedule prunes for real.
+
+on:
+  schedule:
+    - cron: '0 4 * * 1' # Mondays 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Preview only, do not delete'
+        type: boolean
+        default: true
+
+permissions:
+  packages: write
+  contents: read
+
+concurrency:
+  group: ghcr-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune old ghcr.io/zuptalo/ring versions
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          package: ring
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Never delete a release: latest, vX.Y.Z, X.Y.Z, X.Y, or X. The develop
+          # builds (develop, develop-<sha>, X.Y.Z-dev.N) do NOT match this, so they
+          # remain subject to keep-n-tagged below.
+          exclude-tags: '/^(latest|v?[0-9]+\.[0-9]+\.[0-9]+|[0-9]+\.[0-9]+|[0-9]+)$/'
+          # Keep the newest 3 of the remaining tagged images (the develop builds).
+          keep-n-tagged: 3
+          # Remove orphaned untagged manifests.
+          delete-untagged: true
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
