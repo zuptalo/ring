@@ -94,6 +94,15 @@ one). Behind a proxy that terminates TLS (Synology DSM, nginx-proxy-manager),
 leave ACME off and use `:8080` + the proxy's own cert, per the manual sections
 below. autocert renews automatically; nothing to restart.
 
+> **Staging → production cutover (no manual cleanup):** test against LE staging
+> first (`ACME_DIRECTORY_URL` above) to avoid rate limits, then **delete that line
+> and restart**. ringd namespaces cached certs by ACME environment (the
+> `acme_cache` keys are prefixed `le-staging/` vs `le-prod/`), so switching is a
+> clean re-issue: the production manager sees a cache miss and mints a real cert
+> on the next handshake, and a startup sweep drops the leftover staging cert +
+> account key. You can confirm the environment of what's cached with
+> `SELECT key FROM acme_cache;`.
+
 ---
 
 ## 1. TLS certificate for the TURN host (manual / static cert alternative)

@@ -35,3 +35,16 @@ func (s *Store) DeleteACME(ctx context.Context, key string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM acme_cache WHERE key = $1`, key)
 	return err
 }
+
+// DeleteACMEExcept removes every cached ACME blob whose key does NOT begin with
+// keepPrefix, returning how many rows were removed. It is used to sweep account
+// keys + certs left over from a different ACME environment (e.g. staging) once
+// the server is pointed at another directory (e.g. production).
+func (s *Store) DeleteACMEExcept(ctx context.Context, keepPrefix string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM acme_cache WHERE left(key, char_length($1)) <> $1`, keepPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

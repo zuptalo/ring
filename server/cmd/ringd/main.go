@@ -170,11 +170,12 @@ func run() error {
 	// in Postgres. Otherwise certs come from files (TURN_TLS_*) or dev plaintext.
 	var certMgr *autocert.Manager
 	if cfg.Acme {
-		certMgr, err = newCertManager(st, cfg)
+		certMgr, err = newCertManager(ctx, st, cfg)
 		if err != nil {
 			return err
 		}
 		slog.Info("acme ready", "hosts", acmeHosts(cfg),
+			"environment", acmepkg.Environment(cfg.AcmeDirectoryURL),
 			"directory", firstNonEmpty(cfg.AcmeDirectoryURL, "letsencrypt-production"))
 	}
 
@@ -409,7 +410,7 @@ func acmeHosts(cfg config.Config) []string {
 
 // newCertManager builds an autocert.Manager whose state is cached encrypted in
 // Postgres (stateless), restricted to acmeHosts(cfg).
-func newCertManager(st *store.Store, cfg config.Config) (*autocert.Manager, error) {
+func newCertManager(ctx context.Context, st *store.Store, cfg config.Config) (*autocert.Manager, error) {
 	aead, err := secrets.NewAEAD(cfg.SecretsKey)
 	if err != nil {
 		return nil, err
@@ -418,8 +419,18 @@ func newCertManager(st *store.Store, cfg config.Config) (*autocert.Manager, erro
 	if len(hosts) == 0 {
 		return nil, fmt.Errorf("ACME=true but no hostnames to certify (set PUBLIC_URL, and TURN_HOST for calls)")
 	}
+	cache := acmepkg.NewCache(st, aead, cfg.AcmeDirectoryURL)
+	// Drop any account key/certs cached for a different ACME environment so that,
+	// e.g., removing ACME_DIRECTORY_URL (staging -> production) re-provisions a
+	// real cert at the next handshake instead of serving the stale staging one.
+	if n, err := cache.Sweep(ctx); err != nil {
+		slog.Warn("acme cache sweep failed", "err", err)
+	} else if n > 0 {
+		slog.Info("acme cache: removed stale certs from another environment",
+			"removed", n, "keeping", cache.Namespace())
+	}
 	m := &autocert.Manager{
-		Cache:      acmepkg.NewCache(st, aead),
+		Cache:      cache,
 		Prompt:     autocert.AcceptTOS,
 		Email:      cfg.AcmeEmail,
 		HostPolicy: autocert.HostWhitelist(hosts...),
