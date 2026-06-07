@@ -490,6 +490,21 @@ export async function toggleFavorite(messageId: string): Promise<boolean> {
   return !!m.favorite;
 }
 
+/** The starred (favorited) messages in a chat, newest first. */
+export async function listStarred(chatId: string): Promise<Message[]> {
+  const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
+  return msgs.filter((m) => m.favorite && !m.deleted).sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/** The id of the first message in a chat at or after `sinceMs` (epoch ms), for
+ *  jump-to-date. Null when the chat has no message that recent. */
+export async function firstMessageOnOrAfter(chatId: string, sinceMs: number): Promise<string | null> {
+  const msgs = (await getByIndex<Message>('messages', 'chatId', chatId)).sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
+  return msgs.find((m) => m.timestamp >= sinceMs)?.id ?? null;
+}
+
 /** Forward a message (text or media) to one or more chats. Creates fresh
  *  messages in each target (the media blob is re-sent). */
 export async function forwardMessage(messageId: string, chatIds: string[]): Promise<void> {

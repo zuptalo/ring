@@ -57,6 +57,10 @@
             <ion-icon slot="start" :icon="imagesOutline" />
             <ion-label>Media, links & docs</ion-label>
           </ion-item>
+          <ion-item button :detail="true" @click="openStarred">
+            <ion-icon slot="start" :icon="starOutline" />
+            <ion-label>Starred messages</ion-label>
+          </ion-item>
           <ion-item button :detail="false" lines="none" @click="openMute">
             <ion-icon slot="start" :icon="muted ? notificationsOffOutline : notificationsOutline" />
             <ion-label>Notifications</ion-label>
@@ -88,7 +92,7 @@ import {
 } from '@ionic/vue';
 import {
   chatbubbleOutline, searchOutline, banOutline, imagesOutline,
-  notificationsOutline, notificationsOffOutline,
+  notificationsOutline, notificationsOffOutline, starOutline,
 } from 'ionicons/icons';
 import { computed } from 'vue';
 import {
@@ -133,6 +137,10 @@ const statusLine = computed(() => presenceLabel(peerPresence(contactId)));
 
 function openMedia(): void {
   if (chat.value) router.push(`/chat/${chat.value.id}/media`);
+}
+
+function openStarred(): void {
+  if (chat.value) router.push(`/chat/${chat.value.id}/starred`);
 }
 
 async function openMute(): Promise<void> {

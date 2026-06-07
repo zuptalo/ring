@@ -44,7 +44,22 @@
           @ion-input="search = $event.detail.value ?? ''"
           @ion-cancel="closeSearch"
         />
+        <ion-buttons slot="end">
+          <ion-button aria-label="Jump to date" @click="datePickerOpen = true">
+            <ion-icon slot="icon-only" :icon="calendarOutline" />
+          </ion-button>
+        </ion-buttons>
       </ion-toolbar>
+      <!-- Jump to date: pick a day and scroll to the first message on/after it. -->
+      <ion-modal :is-open="datePickerOpen" @did-dismiss="datePickerOpen = false">
+        <ion-content class="ion-padding">
+          <ion-datetime
+            presentation="date"
+            :prefer-wheel="true"
+            @ion-change="onPickDate"
+          />
+        </ion-content>
+      </ion-modal>
     </ion-header>
 
     <!-- Natural top→bottom order (oldest at top, newest at bottom). We pin to the
@@ -632,7 +647,7 @@ import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonButtons, IonButton,
   IonBackButton, IonIcon, IonSearchbar, IonContent, IonFooter, IonTextarea,
-  IonAvatar, IonNote, IonModal, IonSpinner, actionSheetController, alertController, popoverController, toastController,
+  IonAvatar, IonNote, IonModal, IonSpinner, IonDatetime, actionSheetController, alertController, popoverController, toastController,
   IonInfiniteScroll, IonInfiniteScrollContent,
   onIonViewWillEnter, onIonViewDidEnter, onIonViewWillLeave,
 } from '@ionic/vue';
@@ -642,7 +657,7 @@ import {
   timeOutline, checkmark, checkmarkDone, addOutline, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
-  imageOutline, musicalNotesOutline,
+  imageOutline, musicalNotesOutline, calendarOutline,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, listMessages, markChatRead, sendMediaMessage, sendMessage,
@@ -650,7 +665,7 @@ import {
   quickReactEmojis,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
-  unblockContact, detectTerminated,
+  unblockContact, detectTerminated, firstMessageOnOrAfter,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
@@ -747,6 +762,31 @@ async function onUnblock() {
     const t = await toastController.create({ message: 'Could not unblock. Try again.', duration: 1500, color: 'danger' });
     await t.present();
   }
+}
+
+// Jump-to-date: pick a day → scroll to the first message on/after it, then close search.
+const datePickerOpen = ref(false);
+async function onPickDate(ev: CustomEvent): Promise<void> {
+  const val = (ev.detail as { value?: string | string[] | null }).value;
+  datePickerOpen.value = false;
+  const iso = Array.isArray(val) ? val[0] : val;
+  if (!iso) return;
+  const day = new Date(iso);
+  day.setHours(0, 0, 0, 0);
+  const id = await firstMessageOnOrAfter(chatId, day.getTime());
+  if (!id) {
+    const t = await toastController.create({ message: 'No messages on or after that date', duration: 1500 });
+    await t.present();
+    return;
+  }
+  showSearch.value = false;
+  search.value = '';
+  let tries = 0;
+  const tryJump = (): void => {
+    if (document.querySelector(`[data-mid="${id}"]`)) scrollToMessage(id);
+    else if (tries++ < 20) setTimeout(tryJump, 150);
+  };
+  void nextTick(tryJump);
 }
 
 function closeSearch() {
@@ -1466,6 +1506,20 @@ onIonViewDidEnter(() => {
   scheduleShareHint();
   // Entered with ?search=1 (from the contact-info "Search" action) → open search.
   if (route.query.search) showSearch.value = true;
+  // Entered with ?jump=<id> (e.g. from the Starred list) → scroll to that message,
+  // retrying briefly until it has rendered.
+  if (route.query.jump) {
+    const id = String(route.query.jump);
+    let tries = 0;
+    const tryJump = (): void => {
+      if (document.querySelector(`[data-mid="${id}"]`)) {
+        scrollToMessage(id);
+      } else if (tries++ < 20) {
+        setTimeout(tryJump, 150);
+      }
+    };
+    void nextTick(tryJump);
+  }
 });
 
 // Re-schedule once the keystore unlocks (e.g. opened straight into this chat

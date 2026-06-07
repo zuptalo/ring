@@ -53,6 +53,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/detail/AllMediaPage.vue'),
   },
   {
+    path: '/chat/:id/starred',
+    component: () => import('@/views/detail/StarredPage.vue'),
+  },
+  {
     path: '/contact/:id',
     component: () => import('@/views/detail/ContactDetailPage.vue'),
   },

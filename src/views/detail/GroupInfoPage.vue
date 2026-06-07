@@ -37,6 +37,10 @@
             <ion-icon slot="start" :icon="imagesOutline" />
             <ion-label>Media, links & docs</ion-label>
           </ion-item>
+          <ion-item button :detail="true" @click="openStarred">
+            <ion-icon slot="start" :icon="starOutline" />
+            <ion-label>Starred messages</ion-label>
+          </ion-item>
           <ion-item button :detail="false" @click="searchInChat">
             <ion-icon slot="start" :icon="searchOutline" />
             <ion-label>Search in chat</ion-label>
@@ -115,7 +119,7 @@ import {
 } from '@ionic/vue';
 import {
   personAddOutline, exitOutline, createOutline, cameraOutline, ellipsisHorizontal,
-  imagesOutline, searchOutline, notificationsOutline, notificationsOffOutline,
+  imagesOutline, searchOutline, notificationsOutline, notificationsOffOutline, starOutline,
 } from 'ionicons/icons';
 import {
   getChat, listContacts, inviteToGroup, removeMember, leaveGroup,
@@ -143,6 +147,9 @@ const muteLabel = computed(() => {
 
 function openMedia(): void {
   router.push(`/chat/${chatId}/media`);
+}
+function openStarred(): void {
+  router.push(`/chat/${chatId}/starred`);
 }
 function searchInChat(): void {
   router.push(`/chat/${chatId}?search=1`);
