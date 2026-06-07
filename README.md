@@ -66,6 +66,40 @@ notable knobs:
 Calls (WebRTC) stay off outside dev until you provide a public relay IP and a
 TURNS certificate. See `server/.env.example` for the full list.
 
+### Behind a reverse proxy
+
+ringd serves plain HTTP on `:8080` (PWA, API, and the `/v1/ws` WebSocket), so put
+a TLS-terminating reverse proxy (Caddy, nginx, Traefik, nginx-proxy-manager) in
+front of it. The proxy must:
+
+- forward to the app on port `8080`,
+- **proxy WebSocket upgrades** for `/v1/ws` (in nginx-proxy-manager, enable
+  "Websockets Support"; Caddy and Traefik handle this automatically), and
+- **allow large uploads** so media is not capped at nginx's 1 MB default, e.g.
+  `client_max_body_size 300m` (match or exceed `MAX_BLOB_MB`).
+
+To run behind a proxy that is already on a shared Docker network, drop the
+`ports:` from the compose, add `expose: ["8080"]`, and attach both services to
+that external network; the proxy then reaches the app by container name.
+
+### Image tags
+
+`:latest` (and `:X.Y.Z`) is published when you cut a release (merge `develop` ->
+`main`). Before your first release, or to deploy a specific build, pin a tag:
+`:1.2.3` for a release, or `:develop` / `:develop-<sha>` for the rolling dev
+build. Leaving `:latest` floating means a redeploy picks up whatever is newest;
+pin if you want redeploys to be deliberate.
+
+### Backups
+
+The app container is stateless, so a backup is just **PostgreSQL** (the `db`
+volume, or `docker compose exec db pg_dump -U ring ring > ring.sql`) plus your
+**`SECRETS_KEY`**. Keep `SECRETS_KEY` stable and stored somewhere safe: it
+decrypts the server's secret material in the database, so changing or losing it
+makes those secrets unrecoverable (they get regenerated, invalidating every
+device token + push subscription). A database dump on its own, without the key,
+cannot use the secrets.
+
 ## Develop locally
 
 Requires Go 1.26, Node 22, and Docker (for the dev PostgreSQL).

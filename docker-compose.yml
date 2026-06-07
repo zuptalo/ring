@@ -1,5 +1,8 @@
-# Single-host deployment of Ring: the all-in-one image (PWA + API) plus its
-# PostgreSQL. This is for running a real instance.
+# Production deployment of Ring: the all-in-one image (PWA + API) plus its
+# PostgreSQL. The app container is STATELESS - all state, including its secret
+# material (encrypted at rest with SECRETS_KEY), lives in Postgres, so only the
+# database has a volume. Backup = the db volume (or a pg_dump) plus your
+# SECRETS_KEY; there is no app data volume to manage.
 #
 # For local development use `make start` instead (Vite + air hot-reload against
 # the database in server/docker-compose.yml).
@@ -7,15 +10,28 @@
 # Quick start:
 #   export PUBLIC_URL=https://ring.example.com
 #   export POSTGRES_PASSWORD=$(openssl rand -hex 16)
-#   export SECRETS_KEY=$(openssl rand -hex 32)   # keep this stable + backed up
-#   docker compose up -d          # pulls ghcr.io/zuptalo/ring:latest
+#   export SECRETS_KEY=$(openssl rand -hex 32)   # keep this STABLE + backed up
+#   docker compose up -d
 #   # or: docker compose up -d --build   to build the image from this checkout
 #
-# The app container is stateless: all state (incl. its secrets, encrypted at rest
-# with SECRETS_KEY) lives in Postgres, so only the db has a volume. Put a TLS-
-# terminating reverse proxy (Caddy, nginx, Traefik) in front and point it at port
-# 8080. Calls (WebRTC) stay off unless you also provide a public relay IP and a
-# TURNS certificate; see server/.env.example for the ENABLE_CALLS knobs.
+# Image tag: :latest is published when you cut a release (merge develop -> main).
+# Before your first release, or to deploy a specific build, pin a tag instead -
+# e.g. a release `:1.2.3`, or `:develop` for the rolling dev build. Leaving
+# `:latest` floating means a redeploy picks up whatever is newest; pin if you
+# want redeploys to be deliberate.
+#
+# TLS / reverse proxy: ringd serves plain HTTP on :8080 (PWA + API + the /v1/ws
+# WebSocket). Put a TLS-terminating reverse proxy (Caddy, nginx, Traefik,
+# nginx-proxy-manager) in front of port 8080 and make sure it:
+#   - proxies WebSocket upgrades for /v1/ws (e.g. NPM's "Websockets Support"), and
+#   - allows large uploads (media up to MAX_BLOB_MB, default 256 MiB - e.g. nginx
+#     `client_max_body_size 300m`).
+# To sit behind a proxy that already runs on a shared Docker network, drop the
+# `ports:` below, add `expose: ["8080"]`, and attach both services to that
+# external network (the proxy then reaches the app by container name).
+#
+# Calls (WebRTC) stay off unless you also provide a public relay IP and a TURNS
+# certificate; see server/.env.example for the ENABLE_CALLS knobs.
 
 services:
   ring:
@@ -48,6 +64,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 30s
 
 volumes:
   ring_pgdata:
