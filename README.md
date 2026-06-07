@@ -22,8 +22,10 @@ development Vite serves the client and proxies the API to a local `ringd`.
 
 ## Run an instance
 
-You need Docker and a public HTTPS URL (terminate TLS with your own reverse proxy
-in front of port 8080).
+You need Docker and a domain. How TLS is handled depends on your setup - the
+bundled `docker-compose.yml` ships commented blocks for three scenarios (see
+[Deployment scenarios](#deployment-scenarios)); the default expects a
+TLS-terminating reverse proxy in front of port 8080.
 
 ```sh
 export PUBLIC_URL=https://ring.example.com
@@ -61,7 +63,8 @@ notable knobs:
 | `SECRETS_KEY`     | (required)     | Encrypts server secrets at rest in PG; keep stable.|
 | `STATIC_DIR`      | `/app/web`     | Built PWA served by ringd (set in the image).     |
 | `MAX_BLOB_MB`     | `256`          | Per-upload media cap.                             |
-| `ENABLE_CALLS`    | `false` (prod) | Embedded TURN + SFU. Needs a relay IP + TURNS cert.|
+| `ENABLE_CALLS`    | `false` (prod) | Embedded TURN + SFU. Needs TLS (a cert, or `ACME`). |
+| `ACME`            | `false`        | ringd auto-provisions/renews its own TLS (autocert). See scenarios B/C. |
 
 Calls (WebRTC) stay off (`ENABLE_CALLS` unset) until you set them up: media rides
 TURN-over-TLS on 443, which needs an **L4 / SNI-passthrough** proxy (a plain HTTP
@@ -72,21 +75,41 @@ pure passthrough and deploy is just "point DNS at the box." See
 **`server/docs/CALLING.md`** for the full recipe (auto-TLS, plus fronting an
 HTTP-only proxy like Synology DSM or nginx-proxy-manager with a dedicated edge proxy).
 
-### Behind a reverse proxy
+### Deployment scenarios
 
-ringd serves plain HTTP on `:8080` (PWA, API, and the `/v1/ws` WebSocket), so put
-a TLS-terminating reverse proxy (Caddy, nginx, Traefik, nginx-proxy-manager) in
-front of it. The proxy must:
+`ringd` serves plain HTTP on `:8080` (PWA + API + the `/v1/ws` WebSocket), an
+HTTPS app listener on `:8443` and a TURNS listener on `:3478` (both when `ACME`
+is on). Pick the scenario that matches how TLS reaches the box; `docker-compose.yml`
+ships a commented block for each.
 
-- forward to the app on port `8080`,
-- **proxy WebSocket upgrades** for `/v1/ws` (in nginx-proxy-manager, enable
-  "Websockets Support"; Caddy and Traefik handle this automatically), and
-- **allow large uploads** so media is not capped at nginx's 1 MB default, e.g.
-  `client_max_body_size 300m` (match or exceed `MAX_BLOB_MB`).
+**A. Behind a TLS-terminating reverse proxy (default) - messaging.** Your proxy
+(Caddy, nginx, Traefik HTTP, nginx-proxy-manager, Synology DSM) terminates TLS for
+your domain and forwards HTTP to ringd on `:8080`. It must **proxy WebSocket
+upgrades** for `/v1/ws` (in nginx-proxy-manager, enable "Websockets Support";
+Caddy and Traefik do it automatically) and **allow large uploads** (e.g. nginx
+`client_max_body_size 300m`, at least `MAX_BLOB_MB`). Calls do **not** work through
+a TLS-terminating HTTP proxy (TURN media is not HTTP) - leave `ENABLE_CALLS` off.
+To run on a shared Docker network instead of publishing `:8080`, swap `ports:` for
+`expose: ["8080"]` and join the proxy's external network.
 
-To run behind a proxy that is already on a shared Docker network, drop the
-`ports:` from the compose, add `expose: ["8080"]`, and attach both services to
-that external network; the proxy then reaches the app by container name.
+**B. Direct to the internet, ringd serves its own TLS (`ACME=true`) - messaging.**
+No separate proxy: ringd auto-provisions a Let's Encrypt cert (autocert,
+TLS-ALPN-01) for your domain and serves HTTPS itself - publish `"443:8443"` and
+point DNS at the box. Certs are cached **encrypted in Postgres** (still stateless,
+no files). Calls need scenario C (two hostnames can't share `:443` without an SNI
+router).
+
+**C. Self-sufficient with calls, behind a pure L4 SNI-passthrough proxy.** ringd
+auto-certs **both** the app (HTTPS `:8443`) and the TURNS relay (`:3478`); a
+passthrough proxy (Traefik TCP, HAProxy, nginx `stream`) on `:443` routes by SNI:
+your app host -> `ring:8443`, your TURN host (`TURN_HOST`) -> `ring:3478`. This is
+the only setup where **voice/video survives restrictive/censored networks** (media
+rides TURN-over-TLS on 443, indistinguishable from HTTPS). Full recipe + an example
+Traefik config: **[`server/docs/CALLING.md`](server/docs/CALLING.md)**.
+
+> ACME (scenarios B/C) uses **TLS-ALPN-01**, so the domain's public `:443` must
+> reach ringd **un-terminated** (direct, or an SNI-passthrough proxy - not a
+> TLS-terminating one). Behind a terminating proxy (scenario A), leave ACME off.
 
 ### Image tags
 
