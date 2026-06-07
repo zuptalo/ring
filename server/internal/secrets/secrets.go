@@ -53,7 +53,7 @@ type Secrets struct {
 // hard error (never silently regenerated, which would invalidate every device
 // token + push subscription).
 func LoadOrCreate(ctx context.Context, st SecretsStore, key string) (Secrets, error) {
-	aead, err := newAEAD(key)
+	aead, err := NewAEAD(key)
 	if err != nil {
 		return Secrets{}, err
 	}
@@ -64,7 +64,7 @@ func LoadOrCreate(ctx context.Context, st SecretsStore, key string) (Secrets, er
 		return Secrets{}, fmt.Errorf("read server secrets: %w", err)
 	}
 	if found {
-		plain, err := decrypt(aead, blob)
+		plain, err := Decrypt(aead, blob)
 		if err != nil {
 			return Secrets{}, fmt.Errorf("decrypt server secrets (wrong or rotated SECRETS_KEY?): %w", err)
 		}
@@ -89,7 +89,7 @@ func LoadOrCreate(ctx context.Context, st SecretsStore, key string) (Secrets, er
 // secrets.json read off disk during a one-time migration), only when the store
 // has none yet. Returns the resulting secrets. A no-op if the store already has a row.
 func Import(ctx context.Context, st SecretsStore, key string, legacy Secrets) (Secrets, error) {
-	aead, err := newAEAD(key)
+	aead, err := NewAEAD(key)
 	if err != nil {
 		return Secrets{}, err
 	}
@@ -142,7 +142,7 @@ func persist(ctx context.Context, st SecretsStore, aead cipher.AEAD, s Secrets) 
 	if err != nil {
 		return err
 	}
-	blob, err := encrypt(aead, plain)
+	blob, err := Encrypt(aead, plain)
 	if err != nil {
 		return err
 	}
@@ -152,9 +152,9 @@ func persist(ctx context.Context, st SecretsStore, aead cipher.AEAD, s Secrets) 
 	return nil
 }
 
-// newAEAD derives a 32-byte AES-256 key from the operator-supplied SECRETS_KEY
+// NewAEAD derives a 32-byte AES-256 key from the operator-supplied SECRETS_KEY
 // (any passphrase; recommend `openssl rand -hex 32`) and returns a GCM cipher.
-func newAEAD(key string) (cipher.AEAD, error) {
+func NewAEAD(key string) (cipher.AEAD, error) {
 	if key == "" {
 		return nil, errors.New("SECRETS_KEY is empty")
 	}
@@ -166,8 +166,8 @@ func newAEAD(key string) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// encrypt returns nonce || GCM-ciphertext.
-func encrypt(aead cipher.AEAD, plain []byte) ([]byte, error) {
+// Encrypt returns nonce || GCM-ciphertext (the cipher comes from NewAEAD).
+func Encrypt(aead cipher.AEAD, plain []byte) ([]byte, error) {
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, err
@@ -175,8 +175,8 @@ func encrypt(aead cipher.AEAD, plain []byte) ([]byte, error) {
 	return aead.Seal(nonce, nonce, plain, nil), nil
 }
 
-// decrypt parses nonce || GCM-ciphertext.
-func decrypt(aead cipher.AEAD, blob []byte) ([]byte, error) {
+// Decrypt parses nonce || GCM-ciphertext produced by Encrypt.
+func Decrypt(aead cipher.AEAD, blob []byte) ([]byte, error) {
 	ns := aead.NonceSize()
 	if len(blob) < ns {
 		return nil, errors.New("ciphertext too short")

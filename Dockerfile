@@ -72,7 +72,8 @@ ENV ENV=production \
     PORT=8080 \
     STATIC_DIR=/app/web
 USER ring
-EXPOSE 8080
+# 8080 HTTP (always). 8443 HTTPS + 3478 TURNS are used when ACME / calls are on.
+EXPOSE 8080 8443 3478
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
 ENTRYPOINT ["/app/ringd"]

@@ -77,10 +77,10 @@ func TestLoadOrCreateFillsMissingField(t *testing.T) {
 	st := &fakeStore{}
 
 	// Persist a Secrets with only VAPID set (simulating an older schema).
-	aead, _ := newAEAD(testKey)
+	aead, _ := NewAEAD(testKey)
 	partial := Secrets{VapidPublicKey: "pub", VapidPrivateKey: "priv"}
 	plain, _ := json.Marshal(partial)
-	blob, _ := encrypt(aead, plain)
+	blob, _ := Encrypt(aead, plain)
 	st.blob = blob
 
 	got, err := LoadOrCreate(ctx, st, testKey)

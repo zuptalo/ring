@@ -65,9 +65,12 @@ notable knobs:
 
 Calls (WebRTC) stay off (`ENABLE_CALLS` unset) until you set them up: media rides
 TURN-over-TLS on 443, which needs an **L4 / SNI-passthrough** proxy (a plain HTTP
-reverse proxy can't carry it). See **`server/docs/CALLING.md`** for the full recipe
-(including fronting an HTTP-only proxy like Synology DSM or nginx-proxy-manager with
-a dedicated edge proxy).
+reverse proxy can't carry it). With `ACME=true`, ringd **provisions and renews its
+own TLS certs** (autocert, TLS-ALPN-01) for both the HTTPS app listener and the
+TURNS listener - cached encrypted in Postgres, no cert files - so the proxy is a
+pure passthrough and deploy is just "point DNS at the box." See
+**`server/docs/CALLING.md`** for the full recipe (auto-TLS, plus fronting an
+HTTP-only proxy like Synology DSM or nginx-proxy-manager with a dedicated edge proxy).
 
 ### Behind a reverse proxy
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,7 +18,10 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
 
+	acmepkg "ring/server/internal/acme"
 	"ring/server/internal/api"
 	"ring/server/internal/config"
 	"ring/server/internal/db"
@@ -161,6 +165,19 @@ func run() error {
 	}
 	slog.Info("secrets ready", "vapidPublicKey", secs.VapidPublicKey)
 
+	// Built-in ACME: when enabled, ringd provisions + renews its own TLS certs
+	// (autocert, TLS-ALPN-01) for the app HTTPS + TURNS listeners, cached encrypted
+	// in Postgres. Otherwise certs come from files (TURN_TLS_*) or dev plaintext.
+	var certMgr *autocert.Manager
+	if cfg.Acme {
+		certMgr, err = newCertManager(st, cfg)
+		if err != nil {
+			return err
+		}
+		slog.Info("acme ready", "hosts", acmeHosts(cfg),
+			"directory", firstNonEmpty(cfg.AcmeDirectoryURL, "letsencrypt-production"))
+	}
+
 	if cfg.IsDev() {
 		// 8-char codes - the register UI requires exactly 8 chars ([A-Z0-9]{8}).
 		// These spare codes let you register additional test accounts.
@@ -217,12 +234,23 @@ func run() error {
 			ListenAddr:   cfg.TurnListen,
 			SharedSecret: secs.TurnSharedSecret,
 		}
+		// TURNS over TLS: static cert files win if set; else autocert (the listener
+		// also answers TLS-ALPN-01 challenges); else nil leaves it plaintext (dev).
 		if cfg.TurnTLSCert != "" && cfg.TurnTLSKey != "" {
 			cert, err := tls.LoadX509KeyPair(cfg.TurnTLSCert, cfg.TurnTLSKey)
 			if err != nil {
 				return fmt.Errorf("load TURN TLS cert: %w", err)
 			}
-			turnCfg.TLSCert = &cert
+			turnCfg.TLSConfig = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			}
+		} else if certMgr != nil {
+			turnCfg.TLSConfig = &tls.Config{
+				GetCertificate: certMgr.GetCertificate,
+				NextProtos:     []string{acme.ALPNProto}, // enables TLS-ALPN-01
+				MinVersion:     tls.VersionTLS12,
+			}
 		}
 		turnSrv, sfuTurnAddr, err := turnpkg.Start(turnCfg)
 		if err != nil {
@@ -237,7 +265,7 @@ func run() error {
 		//   - TLS:                 turns:<host>:443      (L4 SNI passthrough)
 		//   - plaintext + dediated public port:  turn:<public-host>:<public-port>
 		//   - local/dev (no public host):        turn:127.0.0.1:<listen-port>
-		if turnCfg.TLSCert != nil {
+		if turnCfg.TLSConfig != nil {
 			host := firstNonEmpty(cfg.TurnPublicHost, cfg.TurnHost)
 			port := firstNonEmpty(cfg.TurnPublicPort, "443")
 			turnURLs = []string{fmt.Sprintf("turns:%s:%s?transport=tcp", host, port)}
@@ -251,7 +279,7 @@ func run() error {
 			}
 		}
 		slog.Info("TURN relay ready", "listen", cfg.TurnListen, "realm", cfg.TurnRealm,
-			"urls", turnURLs, "tls", turnCfg.TLSCert != nil)
+			"urls", turnURLs, "tls", turnCfg.TLSConfig != nil)
 
 		// Group-call SFU. It forwards RTP it cannot decrypt (clients E2EE the
 		// payload via insertable streams). The send callback delivers the SFU's
@@ -276,21 +304,24 @@ func run() error {
 		slog.Info("group-call SFU ready", "relayVia", sfuTurnURL)
 	}
 
+	handler := api.NewRouter(&api.Handlers{
+		Store: st, Directory: st, Contacts: st, Blocks: st, Keys: st, Relay: st, Hub: hub, Blobs: st, Sync: st, Push: st,
+		Invites: st, Notifier: notifier,
+		PublicURL: cfg.PublicURL, VapidPublicKey: secs.VapidPublicKey, MaxBlobBytes: cfg.MaxBlobBytes,
+		CallsEnabled: cfg.EnableCalls, TurnSharedSecret: secs.TurnSharedSecret,
+		TurnURLs:      turnURLs,
+		Emoji:     st,
+		StaticDir: cfg.StaticDir,
+		DevMode:   cfg.IsDev(),
+	}, cfg.AllowedOrigins)
+
+	// Plain HTTP listener: always on. Behind a TLS-terminating proxy this is the
+	// app port; it is also the healthcheck target.
 	srv := &http.Server{
-		Addr: ":" + cfg.Port,
-		Handler: api.NewRouter(&api.Handlers{
-			Store: st, Directory: st, Contacts: st, Blocks: st, Keys: st, Relay: st, Hub: hub, Blobs: st, Sync: st, Push: st,
-			Invites: st, Notifier: notifier,
-			PublicURL: cfg.PublicURL, VapidPublicKey: secs.VapidPublicKey, MaxBlobBytes: cfg.MaxBlobBytes,
-			CallsEnabled: cfg.EnableCalls, TurnSharedSecret: secs.TurnSharedSecret,
-			TurnURLs:      turnURLs,
-			Emoji:     st,
-			StaticDir: cfg.StaticDir,
-			DevMode:   cfg.IsDev(),
-		}, cfg.AllowedOrigins),
+		Addr:              ":" + cfg.Port,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
 	go func() {
 		slog.Info("listening", "addr", srv.Addr, "env", cfg.Env)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -298,6 +329,25 @@ func run() error {
 			stop()
 		}
 	}()
+
+	// HTTPS app listener with autocert (when ACME is on): a passthrough proxy routes
+	// the app host's :443 here, and this listener also answers TLS-ALPN-01 challenges.
+	var tlsSrv *http.Server
+	if certMgr != nil {
+		tlsSrv = &http.Server{
+			Addr:              ":" + cfg.TLSPort,
+			Handler:           handler,
+			TLSConfig:         certMgr.TLSConfig(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			slog.Info("listening (https/acme)", "addr", tlsSrv.Addr)
+			if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("https server error", "err", err)
+				stop()
+			}
+		}()
+	}
 
 	// Pre-populate the self-hosted emoji cache with a curated common set so those
 	// emoji never hit Google. Runs in the background (one-time per fresh deploy).
@@ -338,5 +388,44 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if tlsSrv != nil {
+		_ = tlsSrv.Shutdown(shutdownCtx)
+	}
 	return srv.Shutdown(shutdownCtx)
+}
+
+// acmeHosts returns the hostnames ringd will obtain certs for: the public app host,
+// plus the TURN host when calls are enabled.
+func acmeHosts(cfg config.Config) []string {
+	var hosts []string
+	if u, err := url.Parse(cfg.PublicURL); err == nil && u.Hostname() != "" {
+		hosts = append(hosts, u.Hostname())
+	}
+	if cfg.EnableCalls && cfg.TurnHost != "" {
+		hosts = append(hosts, cfg.TurnHost)
+	}
+	return hosts
+}
+
+// newCertManager builds an autocert.Manager whose state is cached encrypted in
+// Postgres (stateless), restricted to acmeHosts(cfg).
+func newCertManager(st *store.Store, cfg config.Config) (*autocert.Manager, error) {
+	aead, err := secrets.NewAEAD(cfg.SecretsKey)
+	if err != nil {
+		return nil, err
+	}
+	hosts := acmeHosts(cfg)
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("ACME=true but no hostnames to certify (set PUBLIC_URL, and TURN_HOST for calls)")
+	}
+	m := &autocert.Manager{
+		Cache:      acmepkg.NewCache(st, aead),
+		Prompt:     autocert.AcceptTOS,
+		Email:      cfg.AcmeEmail,
+		HostPolicy: autocert.HostWhitelist(hosts...),
+	}
+	if cfg.AcmeDirectoryURL != "" {
+		m.Client = &acme.Client{DirectoryURL: cfg.AcmeDirectoryURL}
+	}
+	return m, nil
 }

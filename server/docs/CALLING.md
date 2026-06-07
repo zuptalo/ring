@@ -59,15 +59,44 @@ regardless of port and routinely drop UDP / non-443 ports). Set this name as
 
 1. **DNS** - `turn.ring-dev.zuptalo.com` → the deployment's `:443`.
 2. **TLS cert** for `turn.ring-dev.zuptalo.com` (or a cert whose SAN covers it),
-   readable by `ringd`.
+   readable by `ringd` - **or** `ACME=true` to let ringd issue it automatically
+   (see "Auto-TLS" below).
 3. **L4 SNI passthrough** rule: `turn.<host>:443` → `ringd:3478` (raw TCP).
-4. **ringd env** (below) with `ENABLE_CALLS=true` and the cert paths.
+4. **ringd env** (below) with `ENABLE_CALLS=true` and the cert source.
 5. `ALLOWED_ORIGINS` includes the app origin (`https://ring-dev.zuptalo.com`) - it
    already does in the current `server/.env`.
 
 ---
 
-## 1. TLS certificate for the TURN host
+## Auto-TLS (ACME) - recommended
+
+Set **`ACME=true`** and ringd provisions and renews its own Let's Encrypt certs
+(Go autocert, **TLS-ALPN-01**) for **both** the HTTPS app listener (`TLS_PORT`,
+default `:8443`) and the TURNS listener - no cert files, no renewal chores. The
+account key + certs are cached **encrypted in Postgres** (`acme_cache`, with
+`SECRETS_KEY`), so the container stays stateless. Deploy becomes "point DNS at
+the box":
+
+```bash
+ENABLE_CALLS=true
+ACME=true
+ACME_EMAIL=you@example.com            # optional account contact
+TURN_HOST=m.ring-dev.zuptalo.com      # neutral SNI for the TURNS host
+# TLS_PORT=8443                         # the HTTPS app port the proxy passes through to
+# ACME_DIRECTORY_URL=...staging...      # use LE staging first to avoid rate limits
+```
+
+With ACME on, the L4 SNI proxy is a **pure passthrough** for both hosts (no certs
+in the proxy): app host `:443` → `ringd:8443`, TURN host `:443` → `ringd:3478`.
+Because validation is **TLS-ALPN-01 on `:443`**, those hosts' public `:443` must
+reach ringd **un-terminated** (an SNI-passthrough proxy, not a TLS-terminating
+one). Behind a proxy that terminates TLS (Synology DSM, nginx-proxy-manager),
+leave ACME off and use `:8080` + the proxy's own cert, per the manual sections
+below. autocert renews automatically; nothing to restart.
+
+---
+
+## 1. TLS certificate for the TURN host (manual / static cert alternative)
 
 ringd terminates the TLS for `turn.<host>`, so it needs the cert + key. Because
 `:443` is SNI-passthrough'd to ringd, HTTP-01 validation to that host won't hit

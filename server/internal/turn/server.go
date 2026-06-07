@@ -30,10 +30,12 @@ type Config struct {
 	// SharedSecret is the HMAC key (base64url string) for ephemeral credentials.
 	// Used verbatim as a string on both sides - do NOT decode it.
 	SharedSecret string
-	// TLSCert, when non-nil, enables a TURNS (TURN-over-TLS) listener - required
-	// for the 443-only public path. When nil (dev), a plaintext UDP + TCP relay
-	// is started instead so local browsers can reach it.
-	TLSCert *tls.Certificate
+	// TLSConfig, when non-nil, enables a TURNS (TURN-over-TLS) listener - required
+	// for the 443-only public path. It is either a static cert config or an
+	// autocert config (GetCertificate + acme-tls/1 ALPN, so the same listener also
+	// answers ACME TLS-ALPN-01 challenges). When nil (dev), a plaintext UDP + TCP
+	// relay is started instead so local browsers can reach it.
+	TLSConfig *tls.Config
 }
 
 // Server wraps the pion TURN server plus the listeners it owns.
@@ -85,13 +87,10 @@ func Start(cfg Config) (srv *Server, sfuUDPAddr string, err error) {
 	})
 	sfuUDPAddr = sfuConn.LocalAddr().String()
 
-	if cfg.TLSCert != nil {
+	if cfg.TLSConfig != nil {
 		// Production: TURNS over TLS. The L4 proxy hands us the SNI-matched 443
-		// TLS stream here; we terminate it.
-		ln, lerr := tls.Listen("tcp", cfg.ListenAddr, &tls.Config{
-			Certificates: []tls.Certificate{*cfg.TLSCert},
-			MinVersion:   tls.VersionTLS12,
-		})
+		// TLS stream here; we terminate it (with a static cert or via autocert).
+		ln, lerr := tls.Listen("tcp", cfg.ListenAddr, cfg.TLSConfig)
 		if lerr != nil {
 			s.closeListeners()
 			return nil, "", fmt.Errorf("turn: tls listen %s: %w", cfg.ListenAddr, lerr)

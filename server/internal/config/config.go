@@ -78,9 +78,26 @@ type Config struct {
 	// are enabled outside dev).
 	RelayIP string
 	// TurnTLSCert / TurnTLSKey are PEM paths for the TURNS listener's certificate
-	// (SAN must cover TurnHost). Required when calls are enabled outside dev.
+	// (SAN must cover TurnHost). Required when calls are enabled outside dev,
+	// unless Acme is on (autocert provisions the cert instead).
 	TurnTLSCert string
 	TurnTLSKey  string
+
+	// --- Built-in TLS (ACME / Let's Encrypt) ---
+	// Acme (ACME=true) makes ringd provision + renew its own TLS certs via autocert
+	// (TLS-ALPN-01) for the HTTPS app listener and the TURNS listener, instead of
+	// static cert files. State is cached encrypted in Postgres (stateless). The
+	// hosts' public :443 must pass through to ringd un-terminated (an SNI-passthrough
+	// proxy, not a TLS-terminating one) for the challenge to succeed.
+	Acme bool
+	// AcmeEmail (ACME_EMAIL) is the optional contact for the Let's Encrypt account.
+	AcmeEmail string
+	// AcmeDirectoryURL (ACME_DIRECTORY_URL) overrides the ACME server, e.g. the
+	// Let's Encrypt staging URL while testing (avoids prod rate limits). Empty = LE prod.
+	AcmeDirectoryURL string
+	// TLSPort (TLS_PORT, default 8443) is the port ringd serves the HTTPS app on
+	// when Acme is enabled (a passthrough proxy routes the app host's :443 here).
+	TLSPort string
 }
 
 // Load reads configuration from the environment. The two inputs that can't be
@@ -111,6 +128,10 @@ func Load() (Config, error) {
 		TurnPublicTransport: env("TURN_PUBLIC_TRANSPORT", "udp"),
 		TurnTLSCert:         os.Getenv("TURN_TLS_CERT"),
 		TurnTLSKey:          os.Getenv("TURN_TLS_KEY"),
+		Acme:                envBool("ACME", false),
+		AcmeEmail:           os.Getenv("ACME_EMAIL"),
+		AcmeDirectoryURL:    os.Getenv("ACME_DIRECTORY_URL"),
+		TLSPort:             env("TLS_PORT", "8443"),
 		MaxBlobBytes:        maxInt(envInt("MAX_BLOB_MB", 256), 1) << 20, // floor 1 MiB
 	}
 
@@ -165,10 +186,11 @@ func Load() (Config, error) {
 
 	// Calls outside dev need a TLS cert for the TURNS listener; fail fast
 	// (consistent with the DATABASE_URL/PUBLIC_URL checks).
-	if c.EnableCalls && !dev && (c.TurnTLSCert == "" || c.TurnTLSKey == "") {
+	if c.EnableCalls && !dev && !c.Acme && (c.TurnTLSCert == "" || c.TurnTLSKey == "") {
 		return Config{}, fmt.Errorf(
-			"calls enabled (ENABLE_CALLS=true) but missing TURN_TLS_CERT+TURN_TLS_KEY " +
-				"(a cert/key whose SAN covers TURN_HOST) - set these or ENABLE_CALLS=false")
+			"calls enabled (ENABLE_CALLS=true) but no TURNS certificate: set " +
+				"TURN_TLS_CERT+TURN_TLS_KEY (SAN covers TURN_HOST), or ACME=true for " +
+				"automatic certs, or ENABLE_CALLS=false")
 	}
 
 	c.VapidSubject = env("VAPID_SUBJECT", defaultVapidSubject(c.PublicURL))

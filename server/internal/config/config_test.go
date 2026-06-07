@@ -59,3 +59,33 @@ func TestProdRequiresSecretsKey(t *testing.T) {
 		t.Fatalf("prod Load should require SECRETS_KEY, got: %v", err)
 	}
 }
+
+func TestProdCallsWithoutCertOrAcmeFails(t *testing.T) {
+	t.Setenv("ENV", "prod")
+	t.Setenv("DATABASE_URL", "postgres://u:p@db:5432/ring")
+	t.Setenv("PUBLIC_URL", "https://ring.example")
+	t.Setenv("SECRETS_KEY", "k")
+	t.Setenv("ENABLE_CALLS", "true")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "TURNS certificate") {
+		t.Fatalf("calls without a cert or ACME should fail, got: %v", err)
+	}
+}
+
+func TestProdCallsWithAcmeOK(t *testing.T) {
+	t.Setenv("ENV", "prod")
+	t.Setenv("DATABASE_URL", "postgres://u:p@db:5432/ring")
+	t.Setenv("PUBLIC_URL", "https://ring.example")
+	t.Setenv("SECRETS_KEY", "k")
+	t.Setenv("ENABLE_CALLS", "true")
+	t.Setenv("ACME", "true")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("ACME should satisfy the calls cert requirement: %v", err)
+	}
+	if !c.Acme || c.TLSPort == "" {
+		t.Fatalf("acme config not populated: %+v", c)
+	}
+}
