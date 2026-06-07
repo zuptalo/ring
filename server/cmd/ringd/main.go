@@ -5,13 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -62,38 +62,28 @@ func splitCSV(s string) []string {
 }
 
 // ensureBootstrapInvite guarantees an empty system can onboard its first user.
-// If there are no accounts and no claimable invitation codes, it mints one;
-// either way it surfaces the first-run code in the logs and writes it to
-// <DataDir>/first-run-invite.txt. Once anyone has registered it removes that
-// file and does nothing else.
+// When there are no accounts, it reuses an existing claimable invitation code or
+// mints one, and surfaces it in the logs. The code lives in the invitations
+// table; nothing is written to disk. Becomes a no-op once anyone registers.
 func ensureBootstrapInvite(ctx context.Context, st *store.Store, cfg config.Config) error {
-	invitePath := filepath.Join(cfg.DataDir, "first-run-invite.txt")
-
 	users, err := st.CountUsers(ctx)
 	if err != nil {
 		return err
 	}
 	if users > 0 {
-		_ = os.Remove(invitePath) // first run is over; the file (if any) is stale
-		return nil
+		return nil // first run is over
 	}
 
-	// Reuse the previously-minted first-run code if it's still a valid 8-char
-	// claimable code (so restarts don't pile up codes); otherwise mint a fresh
-	// one. Always a proper generated 8-char code - never a short/seed code.
-	code := readInviteCodeFromFile(invitePath)
-	if code != "" && len(code) == 8 {
-		ok, err := st.IsInviteClaimable(ctx, code)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			code = ""
-		}
-	} else {
-		code = ""
+	// Reuse an existing claimable code so restarts don't pile up codes; otherwise
+	// mint a fresh 8-char one.
+	codes, err := st.UnusedInviteCodes(ctx, 1)
+	if err != nil {
+		return err
 	}
-	if code == "" {
+	var code string
+	if len(codes) > 0 {
+		code = codes[0]
+	} else {
 		if code, err = generateInviteCode(); err != nil {
 			return err
 		}
@@ -102,34 +92,28 @@ func ensureBootstrapInvite(ctx context.Context, st *store.Store, cfg config.Conf
 		}
 	}
 
-	writeInviteFile(invitePath, code, cfg.PublicURL)
 	slog.Warn("FIRST-RUN: register the first account with this invitation code",
-		"code", code, "file", invitePath, "publicUrl", cfg.PublicURL)
+		"code", code, "publicUrl", cfg.PublicURL)
 	return nil
 }
 
-// readInviteCodeFromFile extracts the `code: XXXXXXXX` line from a previously
-// written first-run invite file (empty string if absent/unparseable).
-func readInviteCodeFromFile(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if rest, ok := strings.CutPrefix(line, "code: "); ok {
-			return strings.TrimSpace(rest)
+// loadSecrets loads (or first-run generates) the encrypted server secrets from
+// Postgres. As a one-time migration aid, if LEGACY_SECRETS_FILE points at an old
+// plaintext secrets.json and the database has no secrets yet, it imports that
+// file instead of generating fresh keys (so an existing instance keeps its device
+// tokens + push subscriptions). Normally unset.
+func loadSecrets(ctx context.Context, st *store.Store, cfg config.Config) (secrets.Secrets, error) {
+	if path := os.Getenv("LEGACY_SECRETS_FILE"); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			var legacy secrets.Secrets
+			if err := json.Unmarshal(data, &legacy); err != nil {
+				return secrets.Secrets{}, fmt.Errorf("parse %s: %w", path, err)
+			}
+			slog.Warn("importing legacy secrets file into the database", "file", path)
+			return secrets.Import(ctx, st, cfg.SecretsKey, legacy)
 		}
 	}
-	return ""
-}
-
-func writeInviteFile(path, code, publicURL string) {
-	content := fmt.Sprintf(
-		"Ring - first-run invitation code\n================================\n\ncode: %s\n\nRegister the first account at: %s\n(This file is removed automatically once the first account is created.)\n",
-		code, publicURL)
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		slog.Warn("could not write first-run invite file", "path", path, "err", err)
-	}
+	return secrets.LoadOrCreate(ctx, st, cfg.SecretsKey)
 }
 
 // generateInviteCode returns an 8-char code from an unambiguous uppercase
@@ -168,13 +152,14 @@ func run() error {
 
 	st := store.New(pool)
 
-	// Auto-generate (or load) server secrets - VAPID + token-signing keys - so
-	// the operator never supplies them. Persisted under DataDir.
-	secs, err := secrets.LoadOrCreate(cfg.DataDir)
+	// Auto-generate (or load) the server's secret material - VAPID + token-signing
+	// + TURN keys - encrypted at rest in Postgres with SECRETS_KEY. The operator
+	// never supplies the secrets themselves, only the key that protects them.
+	secs, err := loadSecrets(ctx, st, cfg)
 	if err != nil {
 		return err
 	}
-	slog.Info("secrets ready", "dataDir", cfg.DataDir, "vapidPublicKey", secs.VapidPublicKey)
+	slog.Info("secrets ready", "vapidPublicKey", secs.VapidPublicKey)
 
 	if cfg.IsDev() {
 		// 8-char codes - the register UI requires exactly 8 chars ([A-Z0-9]{8}).
@@ -299,9 +284,9 @@ func run() error {
 			PublicURL: cfg.PublicURL, VapidPublicKey: secs.VapidPublicKey, MaxBlobBytes: cfg.MaxBlobBytes,
 			CallsEnabled: cfg.EnableCalls, TurnSharedSecret: secs.TurnSharedSecret,
 			TurnURLs:      turnURLs,
-			EmojiCacheDir: filepath.Join(cfg.DataDir, "emoji-cache"),
-			StaticDir:     cfg.StaticDir,
-			DevMode:       cfg.IsDev(),
+			Emoji:     st,
+			StaticDir: cfg.StaticDir,
+			DevMode:   cfg.IsDev(),
 		}, cfg.AllowedOrigins),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -317,7 +302,7 @@ func run() error {
 	// Pre-populate the self-hosted emoji cache with a curated common set so those
 	// emoji never hit Google. Runs in the background (one-time per fresh deploy).
 	if cfg.WarmEmoji {
-		go api.WarmEmojiCache(ctx, filepath.Join(cfg.DataDir, "emoji-cache"))
+		go api.WarmEmojiCache(ctx, st)
 	}
 
 	// Periodically sweep aged-out relay frames. The service worker's read-only

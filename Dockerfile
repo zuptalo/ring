@@ -11,13 +11,11 @@
 #           -t ghcr.io/zuptalo/ring:develop --build-arg VERSION=develop --push .
 # Run:    docker run -p 8080:8080 -e ENV=production \
 #           -e DATABASE_URL=postgres://... -e PUBLIC_URL=https://ring.example.com \
-#           -v ring_data:/data ghcr.io/zuptalo/ring:develop
+#           -e SECRETS_KEY=$(openssl rand -hex 32) ghcr.io/zuptalo/ring:develop
 #
-# Persistence: ringd writes its generated secrets + first-run invite to /data as
-# the non-root user (UID 10001). A named volume (as above, and in the compose
-# file) inherits that ownership automatically. If you bind-mount a HOST path
-# instead (-v /srv/ring:/data), pre-create it owned by 10001:10001 first, or the
-# non-root process cannot write and the container exits at boot.
+# Stateless: all persistent state (incl. the server's secret material, encrypted
+# at rest with SECRETS_KEY) lives in Postgres. No volume/mount is needed. Keep
+# SECRETS_KEY stable and backed up; losing it makes the stored secrets unrecoverable.
 
 # --- Stage 1: build the PWA -------------------------------------------------
 # Pinned to the build host's native arch ($BUILDPLATFORM): the Vite output is
@@ -61,24 +59,20 @@ LABEL org.opencontainers.image.source="https://github.com/zuptalo/ring" \
       org.opencontainers.image.description="Private, end-to-end encrypted messenger and calling PWA with a Go backend, served as a single all-in-one image." \
       org.opencontainers.image.vendor="Zuptalo"
 # ca-certificates: outbound TLS (Web Push, the emoji proxy). wget: healthcheck.
-# Deterministic UID/GID (10001) so a bind-mounted /data can be pre-chowned to a
-# known owner (named volumes inherit it automatically).
 RUN apk add --no-cache ca-certificates wget tzdata \
-    && addgroup -S -g 10001 ring \
-    && adduser -S -u 10001 -G ring -h /app ring
+    && addgroup -S ring && adduser -S -G ring -h /app ring
 WORKDIR /app
 COPY --from=server /out/ringd /app/ringd
 COPY --from=web /web/dist /app/web
-RUN mkdir -p /data && chown -R ring:ring /app /data
-# STATIC_DIR turns on single-container mode (ringd serves /app/web at /). DATA_DIR
-# holds auto-generated secrets + the first-run invite; mount it to persist them.
+RUN chown -R ring:ring /app
+# STATIC_DIR turns on single-container mode (ringd serves /app/web at /). The
+# container is stateless: all persistence (including secrets, encrypted with
+# SECRETS_KEY) is in Postgres, so no volume is needed.
 ENV ENV=production \
     PORT=8080 \
-    STATIC_DIR=/app/web \
-    DATA_DIR=/data
+    STATIC_DIR=/app/web
 USER ring
 EXPOSE 8080
-VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
 ENTRYPOINT ["/app/ringd"]

@@ -7,12 +7,15 @@
 # Quick start:
 #   export PUBLIC_URL=https://ring.example.com
 #   export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+#   export SECRETS_KEY=$(openssl rand -hex 32)   # keep this stable + backed up
 #   docker compose up -d          # pulls ghcr.io/zuptalo/ring:latest
 #   # or: docker compose up -d --build   to build the image from this checkout
 #
-# Put a TLS-terminating reverse proxy (Caddy, nginx, Traefik) in front and point
-# it at port 8080. Calls (WebRTC) stay off unless you also provide a public relay
-# IP and a TURNS certificate; see server/.env.example for the ENABLE_CALLS knobs.
+# The app container is stateless: all state (incl. its secrets, encrypted at rest
+# with SECRETS_KEY) lives in Postgres, so only the db has a volume. Put a TLS-
+# terminating reverse proxy (Caddy, nginx, Traefik) in front and point it at port
+# 8080. Calls (WebRTC) stay off unless you also provide a public relay IP and a
+# TURNS certificate; see server/.env.example for the ENABLE_CALLS knobs.
 
 services:
   ring:
@@ -27,10 +30,9 @@ services:
       ENV: production
       DATABASE_URL: postgres://ring:${POSTGRES_PASSWORD:-ring}@db:5432/ring?sslmode=disable
       PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL to the public https URL of this instance}
+      SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY (openssl rand -hex 32); keep it stable + backed up}
     ports:
       - "8080:8080"
-    volumes:
-      - ring_data:/data
 
   db:
     image: postgres:18
@@ -48,5 +50,4 @@ services:
       retries: 10
 
 volumes:
-  ring_data:
   ring_pgdata:

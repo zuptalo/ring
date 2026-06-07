@@ -79,6 +79,12 @@ type PushStore interface {
 	DeleteSubscription(ctx context.Context, userID, endpoint string) error
 }
 
+// EmojiStore is the Postgres-backed cache for the self-hosted Noto emoji proxy.
+type EmojiStore interface {
+	GetEmoji(ctx context.Context, path string) (bytes []byte, contentType string, found bool, err error)
+	PutEmoji(ctx context.Context, path, contentType string, bytes []byte) error
+}
+
 // InviteStore mints + lists user-generated invitation codes.
 type InviteStore interface {
 	CreateInvitation(ctx context.Context, creatorID string) (string, error)
@@ -116,8 +122,8 @@ type Handlers struct {
 	CallsEnabled     bool
 	TurnSharedSecret string
 	TurnURLs         []string
-	// On-disk cache dir for the self-hosted Noto emoji proxy (GET /v1/emoji/...).
-	EmojiCacheDir string
+	// Postgres-backed cache for the self-hosted Noto emoji proxy (GET /v1/emoji/...).
+	Emoji EmojiStore
 	// StaticDir, when non-empty, is a directory of built PWA assets served at /
 	// with SPA fallback so a single container serves the app and the API on the
 	// same origin. Empty in dev/tests (Vite serves the client), so the catch-all

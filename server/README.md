@@ -33,20 +33,25 @@ defaults work for local dev.
 
 ### Zero-config secrets & first-run
 
-In production the only inputs you must provide are **`DATABASE_URL`** (an
-external Postgres - point it at an **empty** database and a role that may create
-tables; the server runs all migrations on boot) and **`PUBLIC_URL`** (the
-externally-reachable URL). The server fails fast with a clear message if either
-is missing when `ENV!=dev`. Everything else is generated on first boot and
-persisted under `DATA_DIR` (default `./data`):
+In production the inputs you must provide are **`DATABASE_URL`** (an external
+Postgres - point it at an **empty** database and a role that may create tables;
+the server runs all migrations on boot), **`PUBLIC_URL`** (the externally-
+reachable URL), and **`SECRETS_KEY`**. The server fails fast with a clear message
+if any is missing when `ENV!=dev`. The container is **stateless** - everything
+persists in Postgres, no data volume:
 
-- **Server secrets** (`data/secrets.json`, mode 0600) - VAPID keypair for Web
-  Push and a token-signing key. Loaded if present, generated + saved if not, and
-  forward-compatible (new secret types fill in on the next boot).
+- **Server secrets** (`server_secrets` table) - VAPID keypair for Web Push, a
+  token-signing key, and the TURN shared secret. Generated on first boot and
+  stored **encrypted at rest** (AES-256-GCM) with a key derived from
+  **`SECRETS_KEY`** (`openssl rand -hex 32`), so a database dump on its own cannot
+  use them. Keep `SECRETS_KEY` stable + backed up; changing/losing it makes the
+  stored secrets unrecoverable (regenerated → tokens + push subscriptions
+  invalidated). Forward-compatible (new secret types fill in on the next boot).
+  A one-time `LEGACY_SECRETS_FILE=/path/secrets.json` imports an old on-disk
+  secrets file into the DB instead of generating fresh keys.
 - **First-run invitation code** - when the system has zero accounts, a code is
-  ensured (minted if none exist), logged (`FIRST-RUN … code=…`), and written to
-  `data/first-run-invite.txt`. The file is removed once the first account is
-  created.
+  ensured (reused if a claimable one exists, else minted) and logged
+  (`FIRST-RUN … code=…`). It lives in the `invitations` table; nothing on disk.
 
 Clients can self-configure from **`GET /v1/config`** → `{publicUrl,
 vapidPublicKey}` (public, no auth).

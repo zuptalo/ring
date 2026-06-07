@@ -28,12 +28,15 @@ in front of port 8080).
 ```sh
 export PUBLIC_URL=https://ring.example.com
 export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+export SECRETS_KEY=$(openssl rand -hex 32)   # keep this stable + backed up
 docker compose up -d
 ```
 
-This pulls `ghcr.io/zuptalo/ring:latest` and starts it with PostgreSQL. On first
-boot the server generates its own secrets (VAPID + token-signing keys) under the
-`ring_data` volume and prints a first-run invitation code in the logs:
+This pulls `ghcr.io/zuptalo/ring:latest` and starts it with PostgreSQL. The app
+container is **stateless** - on first boot the server generates its own secrets
+(VAPID + token-signing + TURN) and stores them **encrypted in Postgres** (with
+`SECRETS_KEY`), so only the database has a volume. It prints a first-run
+invitation code in the logs:
 
 ```sh
 docker compose logs ring | grep FIRST-RUN
@@ -44,18 +47,18 @@ instead of pulling it, use `docker compose up -d --build`.
 
 ### Configuration
 
-With the `docker compose` quick start above you only set `PUBLIC_URL` (and
-optionally `POSTGRES_PASSWORD`); `DATABASE_URL` is wired to the bundled database
-for you. Running the image standalone (`docker run`) is the only case where you
-must pass `DATABASE_URL` yourself. Point it at an empty database; the server
-creates every table on boot. Everything else has working defaults. The notable
-knobs:
+With the `docker compose` quick start above you set `PUBLIC_URL` and `SECRETS_KEY`
+(and optionally `POSTGRES_PASSWORD`); `DATABASE_URL` is wired to the bundled
+database for you. Running the image standalone (`docker run`) is the only case
+where you must pass `DATABASE_URL` yourself. Point it at an empty database; the
+server creates every table on boot. Everything else has working defaults. The
+notable knobs:
 
 | Variable          | Default        | Purpose                                           |
 | ----------------- | -------------- | ------------------------------------------------- |
 | `DATABASE_URL`    | (required)     | PostgreSQL connection string.                     |
 | `PUBLIC_URL`      | (required)     | Canonical public URL; builds invite links.        |
-| `DATA_DIR`        | `/data`        | Auto-generated secrets + first-run invite.        |
+| `SECRETS_KEY`     | (required)     | Encrypts server secrets at rest in PG; keep stable.|
 | `STATIC_DIR`      | `/app/web`     | Built PWA served by ringd (set in the image).     |
 | `MAX_BLOB_MB`     | `256`          | Per-upload media cap.                             |
 | `ENABLE_CALLS`    | `false` (prod) | Embedded TURN + SFU. Needs a relay IP + TURNS cert.|

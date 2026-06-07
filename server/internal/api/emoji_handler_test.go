@@ -1,14 +1,42 @@
 package api
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 )
+
+// fakeEmojiStore is an in-memory EmojiStore for tests.
+type fakeEmojiStore struct {
+	m map[string]struct {
+		bytes []byte
+		ct    string
+	}
+}
+
+func newFakeEmojiStore() *fakeEmojiStore {
+	return &fakeEmojiStore{m: map[string]struct {
+		bytes []byte
+		ct    string
+	}{}}
+}
+
+func (f *fakeEmojiStore) GetEmoji(_ context.Context, path string) ([]byte, string, bool, error) {
+	v, ok := f.m[path]
+	if !ok {
+		return nil, "", false, nil
+	}
+	return v.bytes, v.ct, true, nil
+}
+
+func (f *fakeEmojiStore) PutEmoji(_ context.Context, path, ct string, bytes []byte) error {
+	f.m[path] = struct {
+		bytes []byte
+		ct    string
+	}{bytes, ct}
+	return nil
+}
 
 // Only well-formed Noto emoji paths are accepted (no SSRF / traversal).
 func TestEmojiProxyRejectsBadPaths(t *testing.T) {
@@ -16,7 +44,7 @@ func TestEmojiProxyRejectsBadPaths(t *testing.T) {
 		"../secret", "1f600/evil.txt", "http://evil.com/x", "1f600/../../etc/passwd",
 		"ZZZ/lottie.json", "1f600/512.png", "/lottie.json", "1f600",
 	}
-	h := &Handlers{} // no cache dir → never reaches the network for these
+	h := &Handlers{} // no store → never reaches the network for these
 	for _, p := range bad {
 		req := httptest.NewRequest(http.MethodGet, "/v1/emoji/"+p, nil)
 		req.SetPathValue("path", p)
@@ -28,16 +56,13 @@ func TestEmojiProxyRejectsBadPaths(t *testing.T) {
 	}
 }
 
-// A cached asset is served from disk without hitting the network.
+// A cached asset is served from the store without hitting the network.
 func TestEmojiProxyServesFromCache(t *testing.T) {
-	dir := t.TempDir()
-	h := &Handlers{EmojiCacheDir: dir}
+	store := newFakeEmojiStore()
+	h := &Handlers{Emoji: store}
 	const path = "1f600/lottie.json"
 	want := []byte(`{"v":"5.0"}`)
-
-	sum := sha256.Sum256([]byte(path))
-	cacheFile := filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
-	if err := os.WriteFile(cacheFile, want, 0o644); err != nil {
+	if err := store.PutEmoji(context.Background(), path, "application/json", want); err != nil {
 		t.Fatal(err)
 	}
 

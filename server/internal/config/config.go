@@ -21,8 +21,12 @@ type Config struct {
 	// to reach the backend, and it builds invitation share links. Everything
 	// else (secrets, first-run invite) is auto-generated.
 	PublicURL string
-	// DataDir holds auto-generated state (secrets, first-run invite file).
-	DataDir string
+	// SecretsKey (SECRETS_KEY) encrypts the server's secret material at rest in
+	// Postgres (AES-256-GCM). Required outside dev; in dev it falls back to a fixed
+	// development key so the server runs configless. Must stay stable: changing it
+	// makes the stored secrets unrecoverable (they would be regenerated, which
+	// invalidates every device token + push subscription).
+	SecretsKey string
 	// StaticDir, when set (STATIC_DIR), is a directory of built PWA assets that
 	// ringd serves at / with SPA fallback, so one container serves both the app
 	// and the API on the same origin. Empty in dev (Vite serves the client and
@@ -94,7 +98,7 @@ func Load() (Config, error) {
 		AllowedOrigins:      splitComma(env("ALLOWED_ORIGINS", "http://localhost:5173")),
 		Env:                 envName,
 		PublicURL:           os.Getenv("PUBLIC_URL"),
-		DataDir:             env("DATA_DIR", "./data"),
+		SecretsKey:          os.Getenv("SECRETS_KEY"),
 		StaticDir:           os.Getenv("STATIC_DIR"),
 		WarmEmoji:           envBool("WARM_EMOJI", false),
 		EnableCalls:         envBool("ENABLE_CALLS", dev),
@@ -117,6 +121,9 @@ func Load() (Config, error) {
 		if c.PublicURL == "" {
 			c.PublicURL = "http://localhost:8080"
 		}
+		if c.SecretsKey == "" {
+			c.SecretsKey = "dev-secrets-key-not-for-production"
+		}
 	}
 
 	var missing []string
@@ -125,6 +132,9 @@ func Load() (Config, error) {
 	}
 	if c.PublicURL == "" {
 		missing = append(missing, "PUBLIC_URL")
+	}
+	if c.SecretsKey == "" {
+		missing = append(missing, "SECRETS_KEY")
 	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf(

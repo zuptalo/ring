@@ -86,7 +86,7 @@ export default async function globalSetup(): Promise<void> {
       ENABLE_CALLS: 'true',
       TURN_LISTEN: ':3479',
       RELAY_IP: '127.0.0.1',
-      DATA_DIR: path.join(TMP, 'e2e-data'),
+      SECRETS_KEY: 'e2e-secrets-key',
     },
   });
   ringd.unref();

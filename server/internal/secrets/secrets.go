@@ -1,24 +1,35 @@
 // Package secrets loads-or-generates the server's long-lived secret material on
-// first run and persists it to the data directory, so the operator never has to
-// supply or rotate it by hand. Everything here is auto-generatable; the only
-// thing an operator must provide is the public URL (see internal/config).
+// first run and persists it, encrypted, in Postgres, so the operator never has to
+// supply or rotate it by hand and the container stays stateless (one DB backup
+// restores everything).
 //
-// Adding a new secret is forward-compatible: add a field + a generator below,
-// and it's filled in (and the file rewritten) on the next boot for existing
-// installs.
+// At rest the secrets are AES-256-GCM ciphertext, encrypted with a key derived
+// from the SECRETS_KEY env var, so a database dump on its own cannot use them.
+//
+// Adding a new secret is forward-compatible: add a field + a generator below, and
+// it is filled in (and the row re-encrypted) on the next boot for existing installs.
 package secrets
 
 import (
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 )
 
-const fileName = "secrets.json"
+// SecretsStore is the persistence the secrets package needs: read/write a single
+// encrypted blob. *store.Store satisfies it (GetServerSecret/PutServerSecret).
+type SecretsStore interface {
+	GetServerSecret(ctx context.Context) ([]byte, bool, error)
+	PutServerSecret(ctx context.Context, secret []byte) error
+}
 
 // Secrets holds the auto-generated server secret material.
 type Secrets struct {
@@ -36,55 +47,141 @@ type Secrets struct {
 	TurnSharedSecret string `json:"turnSharedSecret"`
 }
 
-// LoadOrCreate reads the secrets file from dir, generating (and persisting) any
-// missing pieces. Idempotent: subsequent calls return the same values.
-func LoadOrCreate(dir string) (Secrets, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return Secrets{}, fmt.Errorf("create data dir: %w", err)
+// LoadOrCreate reads the encrypted secrets row from the store and decrypts it
+// with key, generating (and persisting) any missing pieces. Idempotent. A
+// decryption failure means a wrong or rotated SECRETS_KEY and is returned as a
+// hard error (never silently regenerated, which would invalidate every device
+// token + push subscription).
+func LoadOrCreate(ctx context.Context, st SecretsStore, key string) (Secrets, error) {
+	aead, err := newAEAD(key)
+	if err != nil {
+		return Secrets{}, err
 	}
-	path := filepath.Join(dir, fileName)
 
 	var s Secrets
-	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &s); err != nil {
-			return Secrets{}, fmt.Errorf("parse %s: %w", path, err)
+	blob, found, err := st.GetServerSecret(ctx)
+	if err != nil {
+		return Secrets{}, fmt.Errorf("read server secrets: %w", err)
+	}
+	if found {
+		plain, err := decrypt(aead, blob)
+		if err != nil {
+			return Secrets{}, fmt.Errorf("decrypt server secrets (wrong or rotated SECRETS_KEY?): %w", err)
 		}
-	} else if !os.IsNotExist(err) {
-		return Secrets{}, fmt.Errorf("read %s: %w", path, err)
+		if err := json.Unmarshal(plain, &s); err != nil {
+			return Secrets{}, fmt.Errorf("parse server secrets: %w", err)
+		}
 	}
 
+	changed, err := fillMissing(&s)
+	if err != nil {
+		return Secrets{}, err
+	}
+	if !found || changed {
+		if err := persist(ctx, st, aead, s); err != nil {
+			return Secrets{}, err
+		}
+	}
+	return s, nil
+}
+
+// Import seeds the encrypted store from a plaintext Secrets value (e.g. a legacy
+// secrets.json read off disk during a one-time migration), only when the store
+// has none yet. Returns the resulting secrets. A no-op if the store already has a row.
+func Import(ctx context.Context, st SecretsStore, key string, legacy Secrets) (Secrets, error) {
+	aead, err := newAEAD(key)
+	if err != nil {
+		return Secrets{}, err
+	}
+	if _, found, err := st.GetServerSecret(ctx); err != nil {
+		return Secrets{}, err
+	} else if found {
+		return LoadOrCreate(ctx, st, key) // already initialized; ignore the legacy file
+	}
+	if _, err := fillMissing(&legacy); err != nil {
+		return Secrets{}, err
+	}
+	if err := persist(ctx, st, aead, legacy); err != nil {
+		return Secrets{}, err
+	}
+	return legacy, nil
+}
+
+// fillMissing generates any absent secret field, reporting whether anything changed.
+func fillMissing(s *Secrets) (bool, error) {
 	changed := false
 	if s.VapidPublicKey == "" || s.VapidPrivateKey == "" {
 		pub, priv, err := generateVAPID()
 		if err != nil {
-			return Secrets{}, err
+			return false, err
 		}
 		s.VapidPublicKey, s.VapidPrivateKey = pub, priv
 		changed = true
 	}
 	if s.TokenSigningKey == "" {
-		key, err := randomKey(32)
+		k, err := randomKey(32)
 		if err != nil {
-			return Secrets{}, err
+			return false, err
 		}
-		s.TokenSigningKey = key
+		s.TokenSigningKey = k
 		changed = true
 	}
 	if s.TurnSharedSecret == "" {
-		key, err := randomKey(32)
+		k, err := randomKey(32)
 		if err != nil {
-			return Secrets{}, err
+			return false, err
 		}
-		s.TurnSharedSecret = key
+		s.TurnSharedSecret = k
 		changed = true
 	}
+	return changed, nil
+}
 
-	if changed {
-		if err := writeAtomic(path, s); err != nil {
-			return Secrets{}, err
-		}
+func persist(ctx context.Context, st SecretsStore, aead cipher.AEAD, s Secrets) error {
+	plain, err := json.Marshal(s)
+	if err != nil {
+		return err
 	}
-	return s, nil
+	blob, err := encrypt(aead, plain)
+	if err != nil {
+		return err
+	}
+	if err := st.PutServerSecret(ctx, blob); err != nil {
+		return fmt.Errorf("write server secrets: %w", err)
+	}
+	return nil
+}
+
+// newAEAD derives a 32-byte AES-256 key from the operator-supplied SECRETS_KEY
+// (any passphrase; recommend `openssl rand -hex 32`) and returns a GCM cipher.
+func newAEAD(key string) (cipher.AEAD, error) {
+	if key == "" {
+		return nil, errors.New("SECRETS_KEY is empty")
+	}
+	sum := sha256.Sum256([]byte(key))
+	block, err := aes.NewCipher(sum[:])
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+// encrypt returns nonce || GCM-ciphertext.
+func encrypt(aead cipher.AEAD, plain []byte) ([]byte, error) {
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	return aead.Seal(nonce, nonce, plain, nil), nil
+}
+
+// decrypt parses nonce || GCM-ciphertext.
+func decrypt(aead cipher.AEAD, blob []byte) ([]byte, error) {
+	ns := aead.NonceSize()
+	if len(blob) < ns {
+		return nil, errors.New("ciphertext too short")
+	}
+	return aead.Open(nil, blob[:ns], blob[ns:], nil)
 }
 
 // generateVAPID returns a P-256 keypair as base64url: the public key is the
@@ -105,19 +202,4 @@ func randomKey(n int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func writeAtomic(path string, s Secrets) error {
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write secrets: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("finalize secrets: %w", err)
-	}
-	return nil
 }
