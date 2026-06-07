@@ -50,10 +50,17 @@ test('post-sign-in push onboarding enters Chats after Allow', async ({ page, con
   await code.pressSequentially(inviteCode, { delay: 20 });
   // The completed 8-char code AUTO-advances to the dedicated username step (no
   // Continue tap) - pick an immutable username on its own screen, then submit.
+  // Derive it from the per-attempt invite code so it is UNIQUE per attempt: the
+  // "I've saved it" step below finalizes (creates) the account, so a hardcoded
+  // username taken on a flaky first attempt would make every retry collide on a
+  // duplicate username and never reach the push step. (Same reason freshCode()
+  // exists for the invite.) Code is [A-Za-z0-9]{8}; "ada." + it stays within the
+  // username regex ^[A-Za-z0-9_]([A-Za-z0-9_.]{1,28})[A-Za-z0-9_]$.
+  const uname = `ada.${inviteCode.toLowerCase()}`;
   const username = page.locator('ion-modal ion-input input').first();
   await username.waitFor({ state: 'visible', timeout: 30_000 });
   await username.click();
-  await username.pressSequentially('ada.lovelace', { delay: 20 });
+  await username.pressSequentially(uname, { delay: 20 });
   await page.getByRole('button', { name: 'Create account' }).click();
 
   // The recovery code is shown BEFORE the server account exists: the invite code and
