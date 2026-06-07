@@ -89,6 +89,16 @@ func (s *Store) Register(ctx context.Context, code, username, usernameFold strin
 		`UPDATE invitations SET used_by = $1, used_at = now() WHERE code = $2`, userID, code); err != nil {
 		return "", "", err
 	}
+	// The inviter and invitee are connected from the start (the invite is the
+	// handshake), so directory-gated messaging works between them immediately.
+	if inviter != nil && *inviter != "" {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO connections (requester, target, state) VALUES ($1, $2, 'accepted')
+			 ON CONFLICT (requester, target) DO UPDATE SET state = 'accepted', updated_at = now()`,
+			*inviter, userID); err != nil {
+			return "", "", err
+		}
+	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO tokens (token_hash, user_id) VALUES ($1, $2)`, tokenHash, userID); err != nil {
 		return "", "", err
