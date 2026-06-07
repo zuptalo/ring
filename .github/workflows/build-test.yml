@@ -62,6 +62,16 @@ jobs:
       # launches an isolated test ringd; bring the database up and wait for health.
       - name: Start PostgreSQL
         run: docker compose -f server/docker-compose.yml up -d --wait
+      # Cache the downloaded browser binaries (~150 MB) keyed off the lockfile, which
+      # pins the Playwright version, so we only re-download when it changes. The
+      # install below still runs --with-deps (apt OS libs) quickly; on a cache hit it
+      # finds the browsers present and skips the download.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: playwright-${{ runner.os }}-
       - name: Install Playwright (chromium + system deps)
         run: npx playwright install --with-deps chromium
       - name: Run e2e
