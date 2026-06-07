@@ -63,8 +63,11 @@ notable knobs:
 | `MAX_BLOB_MB`     | `256`          | Per-upload media cap.                             |
 | `ENABLE_CALLS`    | `false` (prod) | Embedded TURN + SFU. Needs a relay IP + TURNS cert.|
 
-Calls (WebRTC) stay off outside dev until you provide a public relay IP and a
-TURNS certificate. See `server/.env.example` for the full list.
+Calls (WebRTC) stay off (`ENABLE_CALLS` unset) until you set them up: media rides
+TURN-over-TLS on 443, which needs an **L4 / SNI-passthrough** proxy (a plain HTTP
+reverse proxy can't carry it). See **`server/docs/CALLING.md`** for the full recipe
+(including fronting an HTTP-only proxy like Synology DSM or nginx-proxy-manager with
+a dedicated edge proxy).
 
 ### Behind a reverse proxy
 

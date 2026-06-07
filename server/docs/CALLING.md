@@ -5,7 +5,9 @@ and a group-call SFU - no external STUN/TURN/SFU services. This doc covers what
 the deployment needs so calls work for real users over the public URL.
 
 It applies to a deployment fronted by a **layer-4 (SNI-routable) proxy/tunnel**
-on a single public `:443` (the `ring-dev.zuptalo.com` setup).
+on a single public `:443` (the `ring-dev.zuptalo.com` setup). If your front proxy
+is HTTP-only (e.g. Synology DSM's reverse proxy or nginx-proxy-manager), front it
+with a small dedicated L4 edge proxy - see section 3.
 
 ---
 
@@ -40,6 +42,16 @@ send every other SNI to the existing web proxy.
 > inside the `ringd` process - it never leaves the host. So the relay address
 > only needs to be locally deliverable. `RELAY_IP` defaults to `127.0.0.1`;
 > leave it unset. (This is exactly what the e2e tests exercise.)
+
+### Choosing the TURN hostname (and censorship resistance)
+
+The TURN host is yours to name; it appears as the **SNI in the TLS ClientHello**,
+so in censored networks pick a **neutral name** (e.g. `m.<domain>`) rather than
+`turn.<domain>` to avoid SNI-keyword blocking. What actually defeats DPI is that
+the media rides **TURNS on 443**, byte-for-byte indistinguishable from HTTPS - a
+"discreet" non-443 port does **not** help (censors fingerprint the TURN protocol
+regardless of port and routinely drop UDP / non-443 ports). Set this name as
+`TURN_HOST` and use it in the SNI rule below.
 
 ---
 
@@ -101,8 +113,18 @@ INFO group-call SFU ready relayVia="turn:127.0.0.1:<port>?transport=udp"
 
 ## 3. L4 SNI passthrough rule
 
-Route `turn.<host>:443` to `127.0.0.1:3478` (ringd), passing the TLS through
-untouched. Pick the one matching your proxy:
+Route the TURN host's `:443` to ringd's TURNS listener (e.g. `127.0.0.1:3478`),
+passing the TLS through untouched. Pick the one matching your proxy:
+
+> **If your existing reverse proxy is HTTP-only** (Synology DSM, nginx-proxy-manager):
+> it terminates TLS and can't passthrough, so it can't be this router. Run one of the
+> configs below as a **dedicated edge proxy that owns `:443`** (a separate box, or in
+> front of the NAS): send the TURN SNI to ringd's TURNS listener and point the
+> **default backend at your existing proxy's TLS port** (passthrough) so it keeps
+> serving everything else unchanged. Note the app host and the TURN host are
+> **different ports on ringd**: HTTP `:8080` (the edge proxy terminates TLS and forwards
+> HTTP) vs TURNS `:3478` (raw TLS passthrough; ringd terminates). With this, only `:443`
+> stays internet-facing - ringd's `:8080`/`:3478` are reached over the LAN.
 
 ### nginx (`stream` + `ssl_preread`)
 
