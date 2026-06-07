@@ -43,6 +43,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
 
 # --- Stage 3: runtime -------------------------------------------------------
 FROM alpine:3.20
+# Links the GHCR package to its repository (and lets the package inherit the
+# repo's access, so the repo's Actions can publish with the default token).
+LABEL org.opencontainers.image.source="https://github.com/zuptalo/ring"
 # ca-certificates: outbound TLS (Web Push, the emoji proxy). wget: healthcheck.
 # Deterministic UID/GID (10001) so a bind-mounted /data can be pre-chowned to a
 # known owner (named volumes inherit it automatically).
