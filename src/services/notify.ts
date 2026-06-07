@@ -18,7 +18,7 @@
  */
 import { toastController, alertController } from '@ionic/vue';
 import router from '@/router';
-import { getSetting } from '@/db/queries';
+import { getSetting, isChatMuted } from '@/db/queries';
 import { subscribe } from '@/db/idb';
 import { notifyLocal } from '@/services/push';
 import { isUnlockedNow } from '@/services/crypto/identity';
@@ -130,6 +130,9 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
   // passcode gate), nor during the brief settle window right after landing in
   // the app (avoids a banner burst as the gate dismisses / messages drain).
   if (!isUnlockedNow() || Date.now() < settledUntil) return;
+  // Per-chat mute suppresses all alerting for this chat (the message still arrives
+  // and grows the unread badge). Requests have no chat to mute.
+  if (n.chatId && (await isChatMuted(n.chatId))) return;
   const p = await ensurePrefs();
   // Backgrounded: hand off to an OS notification (covers the connected-but-hidden
   // gap; truly-offline is covered by the server push). Requests always notify;

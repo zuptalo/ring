@@ -73,6 +73,10 @@ export interface Chat {
   // read-only (composer/forward disabled) even after the contact is removed from
   // the address book. The conversation is kept; deleting it is the user's choice.
   ghosted?: boolean;
+  // Per-chat mute: suppress alerting (OS notification, in-app banner, sound) for this
+  // chat until this epoch-ms time. A far-future value means "muted always". Local
+  // only (the message still arrives + counts toward the badge); never synced.
+  mutedUntil?: number;
 }
 
 export type MessageKind =

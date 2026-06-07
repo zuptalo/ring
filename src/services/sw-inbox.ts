@@ -156,9 +156,13 @@ function noteForPayload(
   const groupChat = isGroup ? chats.find((c) => c.id === payload.groupId) : undefined;
   const senderName = known || 'Someone';
   const preview = showPreview ? notifyPreview(payload) : 'New message';
-  const chatId = isGroup
-    ? payload.groupId
-    : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from)?.id;
+  const chat = isGroup
+    ? groupChat
+    : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
+  // Per-chat mute: don't show an OS notification for a muted chat (the frame was
+  // still fetched above, so the sender's delivery receipt is unaffected).
+  if (chat?.mutedUntil && chat.mutedUntil > Date.now()) return { note: null, wasMessage: true };
+  const chatId = chat?.id;
   return {
     note: {
       ids: [f.id as string],

@@ -1656,6 +1656,24 @@ async function resendRecentOutgoing(chatId: string): Promise<void> {
   }
 }
 
+/** Mute (or unmute) a chat's alerting until `until` epoch-ms (a far-future value =
+ *  always; null/0 = unmute). The message still arrives and counts toward the badge;
+ *  only the OS notification / in-app banner / sound are suppressed. Local only. */
+export async function setChatMute(chatId: string, until: number | null): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  if (until && until > now()) chat.mutedUntil = until;
+  else delete chat.mutedUntil;
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
+/** Whether a chat's alerting is currently muted. */
+export async function isChatMuted(chatId: string): Promise<boolean> {
+  const chat = await getChat(chatId);
+  return !!chat?.mutedUntil && chat.mutedUntil > now();
+}
+
 async function setChatPending(chatId: string, pending: boolean): Promise<void> {
   const chat = await getChat(chatId);
   if (!chat) return;
