@@ -224,6 +224,17 @@ func (s *SFU) Leave(roomID, userID string) {
 	s.signalPeers(r)
 }
 
+// Renegotiate re-offers to a room's peers. Called when a client changed its track
+// set mid-call (e.g. toggled video) and the SFU needs to send a fresh offer so the
+// added track is received (and forwarded) or the removed one is dropped. The recv
+// transceivers created at Join mean an audio-only joiner can start sending video
+// later without any new transceiver here.
+func (s *SFU) Renegotiate(roomID string) {
+	if r := s.roomIfExists(roomID); r != nil {
+		s.signalPeers(r)
+	}
+}
+
 func (s *SFU) addTrack(r *room, t *webrtc.TrackRemote) *webrtc.TrackLocalStaticRTP {
 	local, err := webrtc.NewTrackLocalStaticRTP(t.Codec().RTPCodecCapability, t.ID(), t.StreamID())
 	if err != nil {

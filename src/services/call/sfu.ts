@@ -242,6 +242,30 @@ export class GroupSession {
     return true;
   }
 
+  /** Whether we're currently publishing a video track. */
+  hasVideo(): boolean {
+    return !!this.pc?.getSenders().some((s) => s.track?.kind === 'video');
+  }
+
+  /** Add a video track mid-call (audio->video) and ask the SFU to re-offer so it's
+   *  negotiated and forwarded. E2EE is attached to the new sender. */
+  async addVideoTrack(track: MediaStreamTrack): Promise<void> {
+    if (!this.pc) return;
+    const sender = this.pc.addTrack(track, this.local ?? new MediaStream([track]));
+    attachSenderE2EE(sender, this.keyring);
+    await sendLive({ t: 'sfu-renegotiate', roomId: this.roomId });
+  }
+
+  /** Remove our video track mid-call (video->audio) and ask the SFU to re-offer. */
+  async removeVideoTrack(): Promise<void> {
+    const sender = this.pc?.getSenders().find((s) => s.track?.kind === 'video');
+    if (this.pc && sender) {
+      sender.track?.stop();
+      this.pc.removeTrack(sender);
+    }
+    await sendLive({ t: 'sfu-renegotiate', roomId: this.roomId });
+  }
+
   remoteTrackCount(): number {
     let n = 0;
     for (const s of this.remote.values()) n += s.getTracks().length;

@@ -85,6 +85,7 @@ import {
   acceptCall,
   rejectCall,
   hangupCall,
+  toggleVideoMode,
   callState,
   callMeta,
   remoteStream,
@@ -368,6 +369,8 @@ export function installTestHook(): void {
     accept: () => acceptCall(),
     reject: () => rejectCall(),
     hangup: () => hangupCall(),
+    /** Toggle the current call between audio-only and video (1:1 or group). */
+    toggleVideo: () => toggleVideoMode(),
 
     /** Call introspection for assertions. */
     callState: () => callState.value,
@@ -377,6 +380,9 @@ export function installTestHook(): void {
       (remoteStream.value?.getTracks().length ?? 0) +
       remoteStreams.value.reduce((n, s) => n + s.getTracks().length, 0),
     remoteStreamCount: () => remoteStreams.value.length,
+    remoteVideoTracks: () =>
+      (remoteStream.value?.getVideoTracks().length ?? 0) +
+      remoteStreams.value.reduce((n, s) => n + s.getVideoTracks().length, 0),
     localTracks: () => localStream.value?.getTracks().length ?? 0,
   };
   (window as unknown as { __ringTest: typeof api }).__ringTest = api;

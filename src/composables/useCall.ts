@@ -1086,11 +1086,14 @@ async function stopScreenShare(): Promise<void> {
   }
 }
 
-/** Toggle a 1:1 call between audio-only and video (adds/removes the camera track and
- *  renegotiates). Group audio<->video isn't supported here (needs an SFU re-offer). */
+/** Toggle a call between audio-only and video (adds/removes the camera track). For
+ *  1:1 this re-offers directly; for a group call the new/removed track is negotiated
+ *  by the SFU (GroupSession.add/removeVideoTrack send an sfu-renegotiate). */
 export async function toggleVideoMode(): Promise<void> {
   const meta = callMeta.value;
-  if (!pc || !meta || meta.isGroup) return;
+  if (!meta) return;
+  if (meta.isGroup ? !groupSession : !pc) return;
+
   if (meta.kind === 'audio') {
     let s: MediaStream;
     try {
@@ -1101,27 +1104,39 @@ export async function toggleVideoMode(): Promise<void> {
     }
     const track = s.getVideoTracks()[0];
     if (!track) return;
-    const sender = videoSender();
-    if (sender) await sender.replaceTrack(track);
-    else pc.addTrack(track, localStream.value ?? s);
+    if (meta.isGroup) {
+      await groupSession!.addVideoTrack(track);
+    } else {
+      const sender = videoSender();
+      if (sender) await sender.replaceTrack(track);
+      else pc!.addTrack(track, localStream.value ?? s);
+    }
     setLocalVideoTrack(track, true);
     meta.kind = 'video';
     cameraOff.value = false;
-    await renegotiate();
-    if (audioRoute.value !== 'bluetooth') await setRoute('speaker');
+    if (!meta.isGroup) {
+      await renegotiate();
+      if (audioRoute.value !== 'bluetooth') await setRoute('speaker'); // 1:1 only routes to earpiece/speaker
+    }
   } else {
     screenSharing.value = false;
     activeScreenTrack?.stop();
     activeScreenTrack = null;
-    const sender = videoSender();
-    if (sender) {
-      sender.track?.stop();
-      await sender.replaceTrack(null);
+    if (meta.isGroup) {
+      await groupSession!.removeVideoTrack();
+    } else {
+      const sender = videoSender();
+      if (sender) {
+        sender.track?.stop();
+        await sender.replaceTrack(null);
+      }
     }
     setLocalVideoTrack(null, true);
     meta.kind = 'audio';
-    await renegotiate();
-    if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
+    if (!meta.isGroup) {
+      await renegotiate();
+      if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
+    }
   }
 }
 

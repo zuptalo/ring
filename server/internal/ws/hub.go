@@ -27,6 +27,9 @@ type CallSFU interface {
 	Answer(roomID, userID string, sdp json.RawMessage) error
 	ICE(roomID, userID string, cand json.RawMessage) error
 	Leave(roomID, userID string)
+	// Renegotiate re-offers to a room's peers after a client changed its tracks
+	// mid-call (e.g. a group member toggled their camera on or off).
+	Renegotiate(roomID string)
 }
 
 const (
@@ -967,5 +970,13 @@ func (c *Client) handleFrame(data []byte) {
 		if err := c.hub.sfu.ICE(f.RoomID, c.userID, f.Ciphertext); err != nil {
 			slog.Error("sfu ice", "err", err)
 		}
+
+	case "sfu-renegotiate":
+		// A participant added/removed a track mid-call (camera on/off) → have the SFU
+		// re-offer so the new track set is negotiated and forwarded.
+		if c.hub.sfu == nil || f.RoomID == "" {
+			return
+		}
+		c.hub.sfu.Renegotiate(f.RoomID)
 	}
 }

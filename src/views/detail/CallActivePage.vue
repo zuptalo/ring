@@ -85,8 +85,16 @@
           <video ref="spkVideo" class="route-sink" autoplay playsinline />
         </template>
 
-        <!-- Header: name + status/duration/bitrate, plus a connection warning. -->
-        <div class="overlay-top">
+        <!-- Header: name + status/duration/bitrate, plus a connection warning.
+             Long-press toggles a small diagnostics readout (for spot-checking the
+             audio route + track state on a real device). -->
+        <div
+          class="overlay-top"
+          @pointerdown="diagDown"
+          @pointerup="diagUp"
+          @pointerleave="diagUp"
+          @pointercancel="diagUp"
+        >
           <h2 class="name">{{ callMeta?.name }}</h2>
           <p class="status">{{ statusText }}</p>
           <p v-if="connectionWarning" class="warn">
@@ -95,6 +103,7 @@
           <p v-if="callState === 'connected'" class="stats">
             ↑ {{ callStats.kbpsUp }} ↓ {{ callStats.kbpsDown }} kbps
           </p>
+          <pre v-if="showDiag" class="diag">{{ diag }}</pre>
         </div>
 
         <!-- Controls. -->
@@ -114,13 +123,7 @@
           <button v-if="canRoute" class="ctl" aria-label="Audio output" @click="chooseOutput">
             <ion-icon :icon="routeIcon" />
           </button>
-          <button
-            v-if="hasMore"
-            class="ctl"
-            :class="{ active: screenSharing }"
-            aria-label="More"
-            @click="openMore"
-          >
+          <button class="ctl" :class="{ active: screenSharing }" aria-label="More" @click="openMore">
             <ion-icon :icon="ellipsisHorizontalOutline" />
           </button>
           <button class="ctl hangup" aria-label="Hang up" @click="hangup">
@@ -355,10 +358,6 @@ onMounted(() => {
 });
 
 /* ---- secondary controls (camera flip, screen share, video<->audio) in a sheet ---- */
-// 1:1 always has an applicable action; a group call only when it carries video (the
-// SFU can't add video mid-call from the client), so an audio-only group hides it.
-const hasMore = computed(() => (callMeta.value?.isGroup ? callMeta.value?.kind === 'video' : true));
-
 async function openMore(): Promise<void> {
   const isGroup = !!callMeta.value?.isGroup;
   const isVideo = callMeta.value?.kind === 'video';
@@ -366,18 +365,22 @@ async function openMore(): Promise<void> {
   if (isVideo && !screenSharing.value) {
     buttons.push({ text: 'Flip camera', icon: cameraReverseOutline, handler: () => void switchCamera() });
   }
-  buttons.push({
-    text: screenSharing.value ? 'Stop screen share' : 'Share screen',
-    icon: desktopOutline,
-    handler: () => void toggleScreenShare(),
-  });
-  if (!isGroup) {
+  // Screen share needs a video sender to swap; on a group audio call there isn't one
+  // (turn on video first), so only offer it for 1:1 or a group video call.
+  if (!isGroup || isVideo) {
     buttons.push({
-      text: isVideo ? 'Switch to audio only' : 'Turn on video',
-      icon: isVideo ? videocamOffOutline : videocamOutline,
-      handler: () => void toggleVideoMode(),
+      text: screenSharing.value ? 'Stop screen share' : 'Share screen',
+      icon: desktopOutline,
+      handler: () => void toggleScreenShare(),
     });
   }
+  // Video<->audio now works for group calls too (the SFU re-offers the added/removed
+  // track), so it's always offered.
+  buttons.push({
+    text: isVideo ? 'Switch to audio only' : 'Turn on video',
+    icon: isVideo ? videocamOffOutline : videocamOutline,
+    handler: () => void toggleVideoMode(),
+  });
   buttons.push({ text: 'Cancel', role: 'cancel' });
   const sheet = await actionSheetController.create({ header: 'Call options', buttons });
   await sheet.present();
@@ -433,6 +436,39 @@ const statusText = computed(() => {
 function hangup(): void {
   void hangupCall();
 }
+
+/* ---- diagnostics (long-press the header) for on-device spot-checks ---- */
+const showDiag = ref(false);
+let diagTimer: ReturnType<typeof setTimeout> | undefined;
+function diagDown(): void {
+  diagTimer = setTimeout(() => (showDiag.value = !showDiag.value), 600);
+}
+function diagUp(): void {
+  if (diagTimer) clearTimeout(diagTimer);
+  diagTimer = undefined;
+}
+const diag = computed(() => {
+  const ls = localStream.value;
+  const local = ls ? ls.getTracks().map((t) => `${t.kind}${t.enabled ? '' : ':off'}`).join(' ') || '-' : '-';
+  const remote = callMeta.value?.isGroup
+    ? `${remoteStreams.value.length} peers, ${remoteStreams.value.reduce((n, s) => n + s.getVideoTracks().length, 0)} video`
+    : remoteStream.value
+      ? remoteStream.value.getTracks().map((t) => t.kind).join(' ') || '-'
+      : '-';
+  const sink = callMeta.value?.isGroup
+    ? 'tiles (speaker)'
+    : isIOS() && audioRoute.value === 'speaker'
+      ? '<video> loudspeaker'
+      : '<audio> earpiece';
+  return [
+    `platform: ${isIOS() ? 'iOS' : 'other'}`,
+    `call: ${callMeta.value?.kind}${callMeta.value?.isGroup ? ' group' : ' 1:1'}`,
+    `route: ${audioRoute.value} via ${sink}`,
+    `camera: ${cameraFacing.value}${screenSharing.value ? ' +screenshare' : ''}`,
+    `local: ${local}`,
+    `remote: ${remote}`,
+  ].join('\n');
+});
 </script>
 
 <style scoped>
@@ -580,6 +616,17 @@ function hangup(): void {
   font-size: 12px;
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
+}
+.diag {
+  margin: 10px auto 0;
+  display: inline-block;
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  white-space: pre;
 }
 .warn {
   margin: 4px 0 0;

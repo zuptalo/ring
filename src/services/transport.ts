@@ -196,6 +196,11 @@ export interface SfuIceFrame {
   roomId: string;
   ciphertext?: unknown; // ICE candidate JSON (reuses the ciphertext slot as opaque carrier)
 }
+/** Client → SFU: my tracks changed mid-call (camera on/off) — please re-offer. */
+export interface SfuRenegotiateFrame {
+  t: 'sfu-renegotiate';
+  roomId: string;
+}
 
 export type CallFrame =
   | CallOfferFrame
@@ -210,7 +215,8 @@ export type CallFrame =
   | CallKeyRequestFrame
   | SfuOfferFrame
   | SfuAnswerFrame
-  | SfuIceFrame;
+  | SfuIceFrame
+  | SfuRenegotiateFrame;
 
 /** Connect-request notifications (server -> client): an incoming request, or an
  *  update (accepted/rejected) to a request we sent. The client re-reads the

@@ -104,6 +104,29 @@ test('group call: three participants exchange media via the SFU', async ({ brows
     );
   }
 
+  // Mid-call audio->video: A turns on video. The SFU must re-offer (it was an
+  // audio-only call) so B and C start receiving A's new video track. This proves the
+  // group video toggle + sfu-renegotiate path end-to-end.
+  await a.page.evaluate(() => (window as any).__ringTest.toggleVideo());
+  for (const p of [b, c]) {
+    await p.page.waitForFunction(
+      () => (window as any).__ringTest.remoteVideoTracks() >= 1,
+      null,
+      { timeout: 30_000 },
+    );
+  }
+
+  // And back to audio-only: A's video track is removed and the SFU re-offers, so B
+  // and C stop receiving video.
+  await a.page.evaluate(() => (window as any).__ringTest.toggleVideo());
+  for (const p of [b, c]) {
+    await p.page.waitForFunction(
+      () => (window as any).__ringTest.remoteVideoTracks() === 0,
+      null,
+      { timeout: 30_000 },
+    );
+  }
+
   // Everyone tears down.
   for (const p of [a, b, c]) {
     await p.page.evaluate(() => (window as any).__ringTest.hangup());
