@@ -86,6 +86,8 @@ import {
   rejectCall,
   hangupCall,
   toggleVideoMode,
+  acceptUpgrade,
+  upgradeRequest,
   callState,
   callMeta,
   remoteStream,
@@ -369,8 +371,12 @@ export function installTestHook(): void {
     accept: () => acceptCall(),
     reject: () => rejectCall(),
     hangup: () => hangupCall(),
-    /** Toggle the current call between audio-only and video (1:1 or group). */
+    /** Toggle video: 1:1 audio->video sends a consent request; group is immediate. */
     toggleVideo: () => toggleVideoMode(),
+    /** Whether a 1:1 video-upgrade request is currently prompting us. */
+    upgradeRequested: () => upgradeRequest.value,
+    /** Accept an incoming 1:1 video-upgrade request. */
+    acceptVideoUpgrade: () => acceptUpgrade(),
 
     /** Call introspection for assertions. */
     callState: () => callState.value,

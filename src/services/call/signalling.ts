@@ -82,9 +82,19 @@ export async function openSealedSignal(
   }
 }
 
-/** Send a payload-free 1:1 control frame (ringing/accept/reject/cancel/busy/end). */
+/** Send a payload-free 1:1 control frame (ringing/accept/reject/cancel/busy/end, and
+ *  the consent-gated audio<->video upgrade request/accept/reject). */
 export function sendControl(
-  frameType: 'call-ringing' | 'call-accept' | 'call-reject' | 'call-cancel' | 'call-busy' | 'call-end',
+  frameType:
+    | 'call-ringing'
+    | 'call-accept'
+    | 'call-reject'
+    | 'call-cancel'
+    | 'call-busy'
+    | 'call-end'
+    | 'call-upgrade-request'
+    | 'call-upgrade-accept'
+    | 'call-upgrade-reject',
   to: string,
   callId: string,
   extra?: { reason?: string; duration?: number },

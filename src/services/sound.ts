@@ -19,7 +19,12 @@ export type ToneName =
   | 'pop'
   | 'pulse'
   | 'glow'
-  | 'beacon';
+  | 'beacon'
+  // Call-progress cues (caller side): looped while dialing, looped once the callee's
+  // device acknowledges (ringing), and a one-shot when nobody answers.
+  | 'calling'
+  | 'ringing'
+  | 'noanswer';
 
 interface Note {
   freq: number;
@@ -31,11 +36,16 @@ interface Note {
 
 // Note frequencies (equal-tempered).
 const E6 = 1318.51;
+const C6 = 1046.5;
 const B5 = 987.77;
 const G5 = 783.99;
 const E5 = 659.25;
+const D5 = 587.33;
 const C5 = 523.25;
 const A5 = 880.0;
+const A4 = 440.0;
+const F4 = 349.23;
+const Bb4 = 466.16;
 
 const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
   // Soft single blip, the default.
@@ -64,6 +74,24 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
     { freq: C5, start: 0, dur: 0.12, type: 'triangle' },
     { freq: E5, start: 0.1, dur: 0.12, type: 'triangle' },
     { freq: G5, start: 0.2, dur: 0.22, type: 'triangle' },
+  ],
+  // Caller "calling" ringback: a mellow low double-beep, looped before the callee
+  // acknowledges.
+  calling: [
+    { freq: D5, start: 0, dur: 0.18, type: 'sine', gain: 0.22 },
+    { freq: A4, start: 0.22, dur: 0.22, type: 'sine', gain: 0.22 },
+  ],
+  // Caller "ringing": a brighter rising triple, looped once their device is ringing.
+  ringing: [
+    { freq: E5, start: 0, dur: 0.13, type: 'triangle', gain: 0.26 },
+    { freq: A5, start: 0.13, dur: 0.13, type: 'triangle', gain: 0.26 },
+    { freq: C6, start: 0.27, dur: 0.18, type: 'triangle', gain: 0.26 },
+  ],
+  // Caller "no answer": a descending three-note, played once at timeout.
+  noanswer: [
+    { freq: D5, start: 0, dur: 0.18, type: 'sine', gain: 0.25 },
+    { freq: Bb4, start: 0.22, dur: 0.2, type: 'sine', gain: 0.22 },
+    { freq: F4, start: 0.44, dur: 0.34, type: 'sine', gain: 0.2 },
   ],
 };
 

@@ -17,7 +17,7 @@
  * per-chat tags collapse the page- and SW-shown notes so there's never a duplicate.
  */
 import { precacheAndRoute } from 'workbox-precaching';
-import { previewPending, markShown, unreadCount, type SwNote } from '@/services/sw-inbox';
+import { previewPending, markShown, unreadCount, ackCall, type SwNote } from '@/services/sw-inbox';
 import { resubscribePush } from '@/services/sw-push';
 
 declare const self: ServiceWorkerGlobalScope & {
@@ -80,6 +80,7 @@ async function showCall(): Promise<void> {
     icon: ICON,
     badge: ICON,
     tag: 'ring-call',
+    renotify: true, // each repeated ring push re-alerts (a single updating notification)
     requireInteraction: true, // a ring shouldn't auto-dismiss before it's seen
     data: { url: '/tabs/chats' },
   });
@@ -283,9 +284,11 @@ self.addEventListener('push', (event) => {
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       if (pushKind(event) === 'call') {
         // A call is never queued on the relay; the tickle itself is the signal.
-        // Show the ring immediately and nudge any device to reconnect so the live
-        // call-offer (buffered briefly server-side) flushes and rings in-app.
+        // Show the ring immediately, ack reachability (so the caller's UI flips to
+        // "Ringing"), and nudge any device to reconnect so the live call-offer
+        // (buffered briefly server-side) flushes and rings in-app.
         await showCall();
+        void ackCall();
         for (const client of clients) client.postMessage({ type: 'ring:drain' });
         return;
       }

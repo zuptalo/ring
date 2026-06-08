@@ -201,6 +201,15 @@ export interface SfuRenegotiateFrame {
   t: 'sfu-renegotiate';
   roomId: string;
 }
+/** 1:1 audio<->video upgrade consent (no SDP; relayed like the other call control
+ *  frames): the requester asks, the other party accepts or rejects, and only then do
+ *  both sides add their cameras + renegotiate. */
+export interface CallUpgradeFrame {
+  t: 'call-upgrade-request' | 'call-upgrade-accept' | 'call-upgrade-reject';
+  to?: string;
+  from?: string;
+  callId: string;
+}
 
 export type CallFrame =
   | CallOfferFrame
@@ -216,7 +225,8 @@ export type CallFrame =
   | SfuOfferFrame
   | SfuAnswerFrame
   | SfuIceFrame
-  | SfuRenegotiateFrame;
+  | SfuRenegotiateFrame
+  | CallUpgradeFrame;
 
 /** Connect-request notifications (server -> client): an incoming request, or an
  *  update (accepted/rejected) to a request we sent. The client re-reads the

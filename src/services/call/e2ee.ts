@@ -16,14 +16,31 @@
  * everywhere.
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { EPOCH_BYTES, HEADER, writeEpoch, readEpoch } from './e2ee-format';
 
-/** Whether this browser supports the insertable-streams path we use. */
-export function supportsMediaE2EE(): boolean {
-  return (
-    typeof RTCRtpSender !== 'undefined' &&
+/** Which encoded-frame transform API this browser exposes for per-frame E2EE:
+ *  'insertable' = Chromium's createEncodedStreams (main thread); 'script' = the
+ *  standard worker-based RTCRtpScriptTransform (Safari/iOS 15.4+, modern Chrome).
+ *  We prefer 'insertable' where present so the established Chromium path is unchanged,
+ *  and fall back to 'script' (which is what enables iOS). Both emit identical frames,
+ *  so a mix of clients interoperate in one call. */
+export function getTransformAPI(): 'insertable' | 'script' | null {
+  if (typeof RTCRtpSender === 'undefined') return null;
+  if (
     typeof (RTCRtpSender.prototype as any).createEncodedStreams === 'function' &&
     typeof (RTCRtpReceiver.prototype as any).createEncodedStreams === 'function'
-  );
+  ) {
+    return 'insertable';
+  }
+  if (typeof (globalThis as any).RTCRtpScriptTransform === 'function' && 'transform' in RTCRtpSender.prototype) {
+    return 'script';
+  }
+  return null;
+}
+
+/** Whether this browser can run encrypted group calls (either transform API). */
+export function supportsMediaE2EE(): boolean {
+  return getTransformAPI() !== null;
 }
 
 /** Per-call key set, addressable by epoch (so rekeys overlap cleanly). */
@@ -69,23 +86,9 @@ function unb64(s: string): Uint8Array {
 export const keyToB64 = b64;
 export const keyFromB64 = unb64;
 
-// The epoch is written as a 6-byte (48-bit) big-endian prefix, NOT a single byte.
-// Epochs are Date.now()-based (see GroupSession), so they're globally monotonic and
-// never collide across a key-master handover; a 1-byte epoch could alias two
-// different keys to the same tag after a handover, silently dropping every frame.
-// NOTE: this is a backward-incompatible frame format; all participants must agree.
-const EPOCH_BYTES = 6;
-const HEADER = EPOCH_BYTES + 12; // epoch + iv
-
-function writeEpoch(buf: Uint8Array, epoch: number): void {
-  const view = new DataView(buf.buffer, buf.byteOffset, EPOCH_BYTES);
-  view.setUint16(0, Math.floor(epoch / 0x100000000) & 0xffff); // high 16 bits
-  view.setUint32(2, epoch >>> 0); // low 32 bits
-}
-function readEpoch(buf: Uint8Array): number {
-  const view = new DataView(buf.buffer, buf.byteOffset, EPOCH_BYTES);
-  return view.getUint16(0) * 0x100000000 + view.getUint32(2);
-}
+// The frame layout (6-byte epoch + 12-byte IV + AES-GCM ciphertext) lives in the
+// shared e2ee-format module so the insertable-streams path here and the worker
+// (RTCRtpScriptTransform) path emit byte-identical frames and interoperate.
 
 /** Encrypt transform: AES-GCM the whole encoded payload with the current key. */
 function encryptTransform(keyring: Keyring) {

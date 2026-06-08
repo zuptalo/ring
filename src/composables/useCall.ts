@@ -29,7 +29,7 @@ import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import { sendSealedSignal, openSealedSignal, sendControl, chatIdForPeer } from '@/services/call/signalling';
 import { GroupSession } from '@/services/call/sfu';
 import { supportsMediaE2EE } from '@/services/call/e2ee';
-import { startLoopTone, stopLoopTone } from '@/services/sound';
+import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
 import type { CallFrame } from '@/services/transport';
 
@@ -45,6 +45,10 @@ export const cameraOff = ref(false);
 // (in which case the outgoing video track is the display, not the camera).
 export const cameraFacing = ref<'user' | 'environment'>('user');
 export const screenSharing = ref(false);
+// 1:1 audio->video upgrade consent: `upgradePending` = we asked and are waiting for
+// the peer's accept/reject; `upgradeRequest` = the peer asked us and a prompt shows.
+export const upgradePending = ref(false);
+export const upgradeRequest = ref(false);
 export const callStats = ref({ durationSec: 0, kbpsUp: 0, kbpsDown: 0 });
 // Group calls: the remote participants' streams (one per peer) for the tile grid.
 export const remoteStreams = ref<MediaStream[]>([]);
@@ -75,9 +79,11 @@ export function supportsAudioOutput(): boolean {
   );
 }
 
-/** iOS (incl. iPadOS posing as Mac). On iOS there's no setSinkId, but a 1:1 call's
- *  remote audio can still be steered between the earpiece (an <audio> element) and
- *  the loudspeaker (a <video> element); the call UI uses this to offer the toggle. */
+/** iOS (incl. iPadOS posing as Mac). iOS has NO web API to pick earpiece vs
+ *  loudspeaker (no setSinkId; navigator.audioSession only biases), so the call UI
+ *  offers no manual route toggle there; the OS owns it (proximity + Control Center +
+ *  auto-Bluetooth). We just bias toward the earpiece via the play-and-record session
+ *  category and play remote audio through a single <audio> element. */
 export function isIOS(): boolean {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
@@ -120,11 +126,9 @@ function devicesByRoute(): Partial<Record<AudioRoute, MediaDeviceInfo>> {
  *  output selection is supported (the OS may or may not honor the split, but the
  *  user still gets the toggle); Bluetooth appears only while a BT sink exists. */
 export const availableRoutes = computed<AudioRoute[]>(() => {
-  if (!supportsAudioOutput()) {
-    // iOS: no output-selection API, but for a 1:1 call we can still flip earpiece /
-    // speaker via the audio-vs-video element trick (Bluetooth follows the system).
-    return isIOS() && !callMeta.value?.isGroup ? ['earpiece', 'speaker'] : [];
-  }
+  // No output-selection API (iOS) -> no manual route toggle at all; the OS owns the
+  // route (proximity sensor, Control Center, automatic Bluetooth).
+  if (!supportsAudioOutput()) return [];
   const routes: AudioRoute[] = ['earpiece', 'speaker'];
   if (devicesByRoute().bluetooth) routes.unshift('bluetooth');
   return routes;
@@ -480,6 +484,8 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   cameraOff.value = false;
   cameraFacing.value = 'user';
   screenSharing.value = false;
+  upgradePending.value = false;
+  upgradeRequest.value = false;
   activeScreenTrack?.stop();
   activeScreenTrack = null;
   screenAddedVideo = false;
@@ -584,13 +590,15 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
   }
 
   setState('dialing');
-  startLoopTone('pulse', 3000); // ringback
+  startLoopTone('calling', 2800); // "calling" ringback (not yet ringing)
   // Caller-side timeout: the server may be buffering the offer for an offline
   // (push-woken) callee, so we can't rely on a fast "unavailable", give up
   // ourselves if nobody answers.
   clearDialTimer();
   dialTimer = setTimeout(() => {
     if (callState.value === 'dialing' || callState.value === 'remote-ringing') {
+      stopLoopTone();
+      playTone('noanswer'); // one-shot "no answer" cue
       void sendControl('call-cancel', contactId, callId, { reason: 'timeout' });
       void teardown('timeout');
     }
@@ -628,7 +636,7 @@ async function enterGroupCall(
   members: string[] = [],
 ): Promise<void> {
   if (!supportsMediaE2EE()) {
-    await toast('Encrypted group calls need a recent Chrome or Edge');
+    await toast('Encrypted group calls aren’t supported in this browser');
     await teardown('failed', { silent: true });
     return;
   }
@@ -774,14 +782,19 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
       try {
         await pc.setRemoteDescription({ type: signal.sdpType ?? 'offer', sdp: signal.sdp });
         await drainPendingIce();
-        // Adopt the peer's call kind if it changed (they turned video on/off), so our
-        // UI shows or hides the video stage to match. Pick up the kind-appropriate
-        // default audio route on the change (unless on Bluetooth).
-        if (signal.kind && cur.kind !== signal.kind) {
-          cur.kind = signal.kind;
-          if (audioRoute.value !== 'bluetooth') {
-            await setRoute(signal.kind === 'video' ? 'speaker' : 'earpiece');
+        // A renegotiation may carry a DOWNGRADE to audio (the peer dropped video for
+        // the call). Mirror it: remove our video too + go to the earpiece, so neither
+        // side is left showing a dead video tile. UPGRADES (audio->video) never arrive
+        // as a raw renegotiation; they go through the consent flow (call-upgrade-*).
+        if (signal.kind === 'audio' && cur.kind === 'video') {
+          cur.kind = 'audio';
+          const vsender = videoSender();
+          if (vsender) {
+            vsender.track?.stop();
+            await vsender.replaceTrack(null);
           }
+          setLocalVideoTrack(null, true);
+          if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
         }
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -1112,15 +1125,96 @@ async function stopScreenShare(): Promise<void> {
   }
 }
 
-/** Toggle a call between audio-only and video (adds/removes the camera track). For
- *  1:1 this re-offers directly; for a group call the new/removed track is negotiated
- *  by the SFU (GroupSession.add/removeVideoTrack send an sfu-renegotiate). */
+/** Capture the local camera and add it to the 1:1 PC (replacing any existing video
+ *  sender), update the preview + kind, and optionally re-offer. Shared by the upgrade
+ *  requester (after the peer accepts) and the acceptor. */
+async function addLocalVideo(renegotiateAfter: boolean): Promise<boolean> {
+  const meta = callMeta.value;
+  if (!pc || !meta) return false;
+  let s: MediaStream;
+  try {
+    s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+  } catch {
+    await toast('Camera unavailable');
+    return false;
+  }
+  const track = s.getVideoTracks()[0];
+  if (!track) return false;
+  const sender = videoSender();
+  if (sender) await sender.replaceTrack(track);
+  else pc.addTrack(track, localStream.value ?? s);
+  setLocalVideoTrack(track, true);
+  meta.kind = 'video';
+  cameraOff.value = false;
+  if (renegotiateAfter) await renegotiate();
+  if (audioRoute.value !== 'bluetooth') await setRoute('speaker');
+  return true;
+}
+
+/** Remove the local 1:1 video track (downgrade to audio-only) and reset the route. */
+async function removeLocalVideo(): Promise<void> {
+  const meta = callMeta.value;
+  if (!pc || !meta) return;
+  screenSharing.value = false;
+  activeScreenTrack?.stop();
+  activeScreenTrack = null;
+  const sender = videoSender();
+  if (sender) {
+    sender.track?.stop();
+    await sender.replaceTrack(null);
+  }
+  setLocalVideoTrack(null, true);
+  meta.kind = 'audio';
+  if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
+}
+
+/** Ask the 1:1 peer to switch the call to video (consent-gated). The peer gets a
+ *  prompt; only on accept do BOTH sides add their cameras. */
+export async function requestVideoUpgrade(): Promise<void> {
+  const meta = callMeta.value;
+  if (!pc || !meta || meta.isGroup || meta.kind !== 'audio' || !meta.peerUserId) return;
+  if (upgradePending.value) return;
+  upgradePending.value = true;
+  await sendControl('call-upgrade-request', meta.peerUserId, meta.callId);
+  // Clear the pending indicator if the peer never responds.
+  setTimeout(() => (upgradePending.value = false), 25_000);
+}
+
+/** Accept an incoming video-upgrade request: add OUR camera (so the peer sees us too),
+ *  then tell the requester to add theirs + re-offer. */
+export async function acceptUpgrade(): Promise<void> {
+  upgradeRequest.value = false;
+  const meta = callMeta.value;
+  if (!pc || !meta || meta.isGroup || !meta.peerUserId) return;
+  if (!(await addLocalVideo(false))) {
+    await sendControl('call-upgrade-reject', meta.peerUserId, meta.callId);
+    return;
+  }
+  await sendControl('call-upgrade-accept', meta.peerUserId, meta.callId);
+}
+
+/** Decline an incoming video-upgrade request: stay audio-only. */
+export async function rejectUpgrade(): Promise<void> {
+  upgradeRequest.value = false;
+  const meta = callMeta.value;
+  if (meta?.peerUserId) await sendControl('call-upgrade-reject', meta.peerUserId, meta.callId);
+}
+
+/** Toggle a call between audio-only and video. 1:1 audio->video goes through the
+ *  consent flow (requestVideoUpgrade); 1:1 video->audio downgrades unilaterally (the
+ *  peer mirrors it via the renegotiation). Group audio<->video is per-participant
+ *  (no consent), negotiated by the SFU. */
 export async function toggleVideoMode(): Promise<void> {
   const meta = callMeta.value;
   if (!meta) return;
   if (meta.isGroup ? !groupSession : !pc) return;
 
   if (meta.kind === 'audio') {
+    if (!meta.isGroup) {
+      await requestVideoUpgrade(); // 1:1 needs both parties' consent
+      return;
+    }
+    // Group: turn on my own video immediately (the SFU forwards it).
     let s: MediaStream;
     try {
       s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
@@ -1130,38 +1224,21 @@ export async function toggleVideoMode(): Promise<void> {
     }
     const track = s.getVideoTracks()[0];
     if (!track) return;
-    if (meta.isGroup) {
-      await groupSession!.addVideoTrack(track);
-    } else {
-      const sender = videoSender();
-      if (sender) await sender.replaceTrack(track);
-      else pc!.addTrack(track, localStream.value ?? s);
-    }
+    await groupSession!.addVideoTrack(track);
     setLocalVideoTrack(track, true);
     meta.kind = 'video';
     cameraOff.value = false;
-    if (!meta.isGroup) {
-      await renegotiate();
-      if (audioRoute.value !== 'bluetooth') await setRoute('speaker'); // 1:1 only routes to earpiece/speaker
-    }
   } else {
-    screenSharing.value = false;
-    activeScreenTrack?.stop();
-    activeScreenTrack = null;
     if (meta.isGroup) {
+      screenSharing.value = false;
+      activeScreenTrack?.stop();
+      activeScreenTrack = null;
       await groupSession!.removeVideoTrack();
+      setLocalVideoTrack(null, true);
+      meta.kind = 'audio';
     } else {
-      const sender = videoSender();
-      if (sender) {
-        sender.track?.stop();
-        await sender.replaceTrack(null);
-      }
-    }
-    setLocalVideoTrack(null, true);
-    meta.kind = 'audio';
-    if (!meta.isGroup) {
-      await renegotiate();
-      if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
+      await removeLocalVideo();
+      await renegotiate(); // tell the peer to mirror the downgrade
     }
   }
 }
@@ -1175,9 +1252,42 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       return;
 
     case 'call-ringing': {
+      // The callee's device acknowledged the call (its page is ringing, OR its
+      // service worker showed the call notification and acked via /v1/call/ack and
+      // the server forwarded this). Either way the phone is reachable → "Ringing".
       const meta = callMeta.value;
       if (meta && meta.callId === frame.callId && callState.value === 'dialing') {
         setState('remote-ringing');
+        startLoopTone('ringing', 2600); // switch the ringback to the "ringing" cue
+      }
+      return;
+    }
+
+    case 'call-upgrade-request': {
+      // The 1:1 peer wants to switch us to video → show an accept/decline prompt.
+      const meta = callMeta.value;
+      if (meta && !meta.isGroup && meta.callId === frame.callId && meta.kind === 'audio') {
+        upgradeRequest.value = true;
+      }
+      return;
+    }
+
+    case 'call-upgrade-accept': {
+      // The peer accepted our upgrade request → add our camera + re-offer (so both
+      // sides now send video and neither sees a black tile).
+      const meta = callMeta.value;
+      if (meta && !meta.isGroup && meta.callId === frame.callId && upgradePending.value) {
+        upgradePending.value = false;
+        await addLocalVideo(true);
+      }
+      return;
+    }
+
+    case 'call-upgrade-reject': {
+      const meta = callMeta.value;
+      if (meta && meta.callId === frame.callId && upgradePending.value) {
+        upgradePending.value = false;
+        void toast('Video request declined');
       }
       return;
     }
@@ -1341,6 +1451,8 @@ export function useCall() {
     callStats,
     cameraFacing,
     screenSharing,
+    upgradePending,
+    upgradeRequest,
     startDirectCall,
     acceptCall,
     rejectCall,
@@ -1350,5 +1462,7 @@ export function useCall() {
     switchCamera,
     toggleScreenShare,
     toggleVideoMode,
+    acceptUpgrade,
+    rejectUpgrade,
   };
 }

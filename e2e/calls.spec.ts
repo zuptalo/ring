@@ -38,6 +38,44 @@ test('1:1 audio call connects end-to-end and both sides receive media', async ({
 });
 
 /**
+ * 1:1 audio->video upgrade is CONSENT-gated: the requester asks, the other party
+ * must accept, and only then do BOTH sides add their cameras (so each receives the
+ * other's video, fixing the old one-way/black-tile behaviour). Proves the new
+ * call-upgrade-request/accept flow end-to-end.
+ */
+test('1:1 audio call upgrades to video only with the peer’s consent', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'RINGUPG1');
+  const b = await createAccount(ctxB, 'RINGUPG2');
+  await pair(a, b);
+
+  await startCall(a, b.id, 'audio');
+  await waitCallState(b, ['incoming']);
+  await accept(b);
+  await waitCallState(a, ['connected']);
+  await waitCallState(b, ['connected']);
+
+  // A requests video. B must get a prompt; no unilateral switch happens.
+  await a.page.evaluate(() => (window as any).__ringTest.toggleVideo());
+  await b.page.waitForFunction(() => (window as any).__ringTest.upgradeRequested() === true, null, {
+    timeout: 15_000,
+  });
+
+  // B accepts → both add cameras → each side receives the other's video track.
+  await b.page.evaluate(() => (window as any).__ringTest.acceptVideoUpgrade());
+  for (const p of [a, b]) {
+    await p.page.waitForFunction(() => (window as any).__ringTest.remoteVideoTracks() >= 1, null, {
+      timeout: 20_000,
+    });
+  }
+
+  await hangup(a);
+  await ctxA.close();
+  await ctxB.close();
+});
+
+/**
  * Background ringing: a callee that is OFFLINE when the call is placed should
  * still ring once it reconnects (push-woken). The server briefly buffers the
  * offer and delivers it on reconnect.

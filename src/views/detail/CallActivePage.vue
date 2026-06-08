@@ -77,12 +77,11 @@
             @pointercancel="onPipCancel"
           />
 
-          <!-- Remote audio sinks (1:1). On iOS, audio from an <audio> element routes
-               to the earpiece and from a <video> element to the loudspeaker, which is
-               how the earpiece/speaker toggle works there; on Chromium setSinkId on
-               the <audio> selects the device. -->
+          <!-- Remote audio sink (1:1): a single hidden <audio> element. On Chromium
+               setSinkId on it selects the output device; on iOS the OS owns the route
+               (we never attach the stream to a <video>, which would force the
+               loudspeaker and double-play the audio). One element = no AGC fighting. -->
           <audio ref="earAudio" class="route-sink" autoplay playsinline />
-          <video ref="spkVideo" class="route-sink" autoplay playsinline />
         </template>
 
         <!-- Header: name + status/duration/bitrate, plus a connection warning.
@@ -104,6 +103,22 @@
             ↑ {{ callStats.kbpsUp }} ↓ {{ callStats.kbpsDown }} kbps
           </p>
           <pre v-if="showDiag" class="diag">{{ diag }}</pre>
+        </div>
+
+        <!-- We asked to switch to video; waiting for the peer to accept/decline. -->
+        <p v-if="upgradePending" class="upgrade-pending">
+          <ion-spinner name="dots" /> Asking to switch to video…
+        </p>
+
+        <!-- The peer asked to switch to video: accept or decline (consent-gated). -->
+        <div v-if="upgradeRequest" class="upgrade-prompt">
+          <p>{{ callMeta?.name }} wants to switch to video</p>
+          <div class="upgrade-actions">
+            <button class="up-btn decline" @click="rejectUpgrade">Decline</button>
+            <button class="up-btn accept" @click="acceptUpgrade">
+              <ion-icon :icon="videocamOutline" /> Accept
+            </button>
+          </div>
         </div>
 
         <!-- Controls. -->
@@ -147,6 +162,7 @@ import {
   callState, callMeta, localStream, remoteStream, remoteStreams, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
   switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare,
+  upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, supportsAudioOutput, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   type AudioRoute,
 } from '@/composables/useCall';
@@ -154,7 +170,6 @@ import {
 const mainVideo = ref<HTMLVideoElement | null>(null);
 const pipVideo = ref<HTMLVideoElement | null>(null);
 const earAudio = ref<HTMLAudioElement | null>(null);
-const spkVideo = ref<HTMLVideoElement | null>(null);
 const stageEl = ref<HTMLElement | null>(null);
 
 /* ---- 1:1 stage: which stream is fullscreen, and where the PiP sits ---- */
@@ -272,14 +287,10 @@ const routeIcon = computed(() =>
       ? volumeHighOutline
       : phonePortraitOutline,
 );
-// Offer the earpiece/speaker toggle wherever we can actually switch: Chromium (via
-// setSinkId) and, for 1:1 calls, iOS (via the audio-vs-video element trick). Group
-// calls on iOS still defer to the system route.
-const canRoute = computed(() =>
-  callMeta.value?.isGroup
-    ? supportsAudioOutput() && availableRoutes.value.length > 1
-    : availableRoutes.value.length > 1,
-);
+// Only offer the earpiece/speaker/BT toggle where it actually works: Chromium via
+// setSinkId (`supportsAudioOutput`). iOS has no such API, so we show no toggle there
+// and let the OS own the route (proximity + Control Center + auto-Bluetooth).
+const canRoute = computed(() => supportsAudioOutput() && availableRoutes.value.length > 1);
 
 /** Point a media element's audio at the chosen output device (best-effort). */
 function applySinkTo(el: HTMLMediaElement | null): void {
@@ -287,29 +298,19 @@ function applySinkTo(el: HTMLMediaElement | null): void {
   if (el && sink) void sink.call(el, audioOutputId.value).catch(() => {});
 }
 
-/** Point a sink element at a stream (or detach) and (un)mute it. */
-function setSink(el: HTMLMediaElement | null, stream: MediaStream | null, mute: boolean): void {
-  if (!el) return;
-  if (el.srcObject !== (stream ?? null)) el.srcObject = stream;
-  el.muted = mute;
-  if (stream && !mute) void el.play?.().catch(() => {});
-}
-
-/** Route the 1:1 remote audio to the chosen output. On iOS, 'speaker' plays the
- *  stream through the hidden <video> (loudspeaker) and everything else through the
- *  <audio> (earpiece); on Chromium it always plays through the <audio> with setSinkId
- *  picking the device. The visible call videos are muted, so this is the only audio. */
+/** Route the 1:1 remote audio through the single hidden <audio> element. On Chromium
+ *  setSinkId selects the output device; on iOS the OS owns the route (we never attach
+ *  the stream to a <video>, which forced the loudspeaker and made two players' AGC
+ *  fight, oscillating the volume). The visible call videos stay muted. */
 function routeRemoteAudio(): void {
   if (callMeta.value?.isGroup) return; // group audio plays via the tiles
+  const el = earAudio.value;
   const stream = remoteStream.value;
-  if (isIOS() && audioRoute.value === 'speaker') {
-    setSink(spkVideo.value, stream, false);
-    setSink(earAudio.value, null, true);
-  } else {
-    setSink(earAudio.value, stream, false);
-    setSink(spkVideo.value, null, true);
-    applySinkTo(earAudio.value); // Chromium device selection (no-op on iOS)
-  }
+  if (!el) return;
+  if (el.srcObject !== (stream ?? null)) el.srcObject = stream;
+  el.muted = false;
+  if (stream) void el.play?.().catch(() => {});
+  applySinkTo(el); // Chromium device selection (no-op on iOS)
 }
 
 function attach(el: HTMLVideoElement | null, stream: MediaStream | null): void {
@@ -339,10 +340,7 @@ watch([pipVideo, pipStream, pipHasVideo], () =>
 watch(audioOutputId, applySinkAll);
 // Re-route the 1:1 remote audio whenever the stream, the chosen route, the sink
 // elements, or the call kind (audio<->video changes the default route) changes.
-watch(
-  [remoteStream, audioRoute, earAudio, spkVideo, () => callMeta.value?.kind],
-  routeRemoteAudio,
-);
+watch([remoteStream, audioOutputId, earAudio], routeRemoteAudio);
 watch(remoteStreams, (streams) => {
   // If the spotlighted participant left, drop back to the even grid (no black stage).
   if (
@@ -462,15 +460,12 @@ const diag = computed(() => {
     : remoteStream.value
       ? remoteStream.value.getTracks().map((t) => t.kind).join(' ') || '-'
       : '-';
-  const sink = callMeta.value?.isGroup
-    ? 'tiles (speaker)'
-    : isIOS() && audioRoute.value === 'speaker'
-      ? '<video> loudspeaker'
-      : '<audio> earpiece';
+  const sink = callMeta.value?.isGroup ? 'tiles' : '<audio>';
+  const routeStr = isIOS() ? 'OS-controlled (no web toggle)' : audioRoute.value;
   return [
     `platform: ${isIOS() ? 'iOS' : 'other'}`,
     `call: ${callMeta.value?.kind}${callMeta.value?.isGroup ? ' group' : ' 1:1'}`,
-    `route: ${audioRoute.value} via ${sink}`,
+    `route: ${routeStr} via ${sink}`,
     `camera: ${cameraFacing.value}${screenSharing.value ? ' +screenshare' : ''}`,
     `local: ${local}`,
     `remote: ${remote}`,
@@ -683,5 +678,67 @@ const diag = computed(() => {
 .ctl.hangup {
   background: var(--ion-color-danger, #eb445a);
   transform: rotate(135deg);
+}
+/* Video-upgrade consent UI (1:1). */
+.upgrade-pending {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(max(36px, env(safe-area-inset-bottom)) + 76px);
+  text-align: center;
+  color: #fff;
+  opacity: 0.85;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 3;
+}
+.upgrade-prompt {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(max(36px, env(safe-area-inset-bottom)) + 84px);
+  margin: 0 auto;
+  max-width: 420px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(20, 20, 22, 0.92);
+  backdrop-filter: blur(14px);
+  color: #fff;
+  text-align: center;
+  z-index: 4;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.4);
+}
+.upgrade-prompt p {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.upgrade-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+.up-btn {
+  flex: 1;
+  max-width: 160px;
+  padding: 11px 14px;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.up-btn.decline {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.up-btn.accept {
+  background: var(--ion-color-primary, #10b981);
+  color: #fff;
 }
 </style>

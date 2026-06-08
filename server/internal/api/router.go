@@ -222,6 +222,9 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	// Sender-side reconcile: which of my still-'sent' messages were delivered while
 	// I was offline (so a dropped 'delivered' receipt is recovered on reconnect).
 	mux.Handle("POST /v1/deliveries/check", authMW(http.HandlerFunc(h.deliveriesCheck)))
+	// A callee's service worker acks an incoming-call ring push (proves reachable →
+	// the caller's UI flips Calling -> Ringing).
+	mux.Handle("POST /v1/call/ack", authMW(http.HandlerFunc(h.callAck)))
 
 	// Encrypted media blobs (7d).
 	mux.Handle("POST /v1/blobs", authMW(http.HandlerFunc(h.uploadBlob)))

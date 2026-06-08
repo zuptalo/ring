@@ -211,6 +211,18 @@ function aggregate(raw: SwNote[]): SwNote[] {
  * (the SW can't decrypt → caller falls back to a generic notification). Never
  * persists or acks.
  */
+/** Tell the server this device received a call ring push (proves it's reachable), so
+ *  the caller's UI flips "Calling" -> "Ringing". Best-effort, no body. */
+export async function ackCall(): Promise<void> {
+  const token = await readSessionToken();
+  if (!token) return;
+  try {
+    await fetch(`${API}/call/ack`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    /* best-effort: a missed ack just leaves the caller on "Calling" */
+  }
+}
+
 export async function previewPending(): Promise<PreviewResult> {
   const token = await readSessionToken();
   if (!token) {

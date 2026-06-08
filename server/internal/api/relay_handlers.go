@@ -99,6 +99,18 @@ func (h *Handlers) relayAck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// callAck (POST /v1/call/ack) is posted by a callee's service worker when it shows
+// an incoming-call notification. It proves the device is reachable (it received the
+// ring push), so the server flips every caller currently ringing this user from
+// "Calling" to "Ringing". No body; the authenticated user IS the callee.
+func (h *Handlers) callAck(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	if uid != "" && h.Hub != nil {
+		h.Hub.AckCallReachable(uid)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type deliveriesCheckRequest struct {
 	IDs []string `json:"ids"`
 }

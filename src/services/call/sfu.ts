@@ -14,6 +14,7 @@ import { getTurnConfig } from '@/services/call/turn';
 import {
   Keyring,
   supportsMediaE2EE,
+  getTransformAPI,
   attachSenderE2EE,
   attachReceiverE2EE,
   keyToB64,
@@ -47,6 +48,11 @@ export class GroupSession {
   private lastKeyReqAt = 0; // throttle outbound key-requests
   private members: string[]; // initiator-only: group members to ring on the first join
   private cb: GroupCallbacks;
+  // Per-frame E2EE transport: Chromium uses insertable streams on the main thread;
+  // Safari/iOS uses the standard worker-based RTCRtpScriptTransform (one shared
+  // worker per session, fed the keyring's keys). Both emit identical frames.
+  private transformApi = getTransformAPI();
+  private worker: Worker | null = null;
 
   constructor(roomId: string, kind: CallKind, cb: GroupCallbacks, members: string[] = []) {
     this.roomId = roomId;
@@ -86,26 +92,63 @@ export class GroupSession {
   /** (Re)create the PeerConnection, publish our (E2EE) tracks and wire its events.
    *  Shared by start() and recover() so an ICE failure can rebuild the transport
    *  without a fresh getUserMedia or dropping the keyring. */
+  /** One shared E2EE worker for the RTCRtpScriptTransform path (Safari/iOS); created
+   *  lazily, fed key updates, and asked to report missing-key epochs. */
+  private ensureWorker(): Worker | null {
+    if (this.transformApi !== 'script') return null;
+    if (!this.worker) {
+      this.worker = new Worker(new URL('./e2ee-worker.ts', import.meta.url), { type: 'module' });
+      this.worker.onmessage = (e: MessageEvent) => {
+        if (e.data?.type === 'missing' && typeof e.data.epoch === 'number') this.onMissingKey(e.data.epoch);
+      };
+      // Seed any keys we already hold (e.g. on an ICE-recovery rebuild).
+      for (const [epoch, raw] of this.rawKeys) this.worker.postMessage({ type: 'key', epoch, raw: raw.slice() });
+    }
+    return this.worker;
+  }
+
+  /** Attach the per-frame E2EE transform to a sender (encrypt) or receiver (decrypt),
+   *  using whichever transform API this browser exposes. */
+  private attachE2EE(rtp: RTCRtpSender | RTCRtpReceiver, op: 'encrypt' | 'decrypt'): void {
+    if (this.transformApi === 'script') {
+      const w = this.ensureWorker();
+      if (w) (rtp as any).transform = new (globalThis as any).RTCRtpScriptTransform(w, { operation: op });
+      return;
+    }
+    if (op === 'encrypt') attachSenderE2EE(rtp as RTCRtpSender, this.keyring);
+    else attachReceiverE2EE(rtp as RTCRtpReceiver, this.keyring, (epoch) => this.onMissingKey(epoch));
+  }
+
+  /** Set a group key both locally (insertable path / epoch tracking) and in the
+   *  worker (script path), so whichever transform runs has it. */
+  private rawKeys = new Map<number, Uint8Array>(); // epoch -> raw (to seed a rebuilt worker)
+  private async applyKey(epoch: number, raw: Uint8Array): Promise<void> {
+    await this.keyring.set(epoch, raw);
+    this.rawKeys.set(epoch, raw.slice());
+    if (this.transformApi === 'script') this.ensureWorker()?.postMessage({ type: 'key', epoch, raw: raw.slice() });
+  }
+
   private async buildPeerConnection(): Promise<void> {
     const turn = await getTurnConfig();
     if (!this.local) return; // torn down while we awaited TURN creds → abort
 
     // Relay-only, matching the SFU side: under the 443-only deployment the only
-    // reachable path to the SFU is via the TURN relay. encodedInsertableStreams
-    // enables the per-frame E2EE transforms.
+    // reachable path to the SFU is via the TURN relay. encodedInsertableStreams is the
+    // Chromium insertable-streams flag; the standard RTCRtpScriptTransform (Safari)
+    // needs no PC flag, so only set it for the insertable path.
     this.pc = new RTCPeerConnection({
       iceServers: turn.iceServers,
       iceTransportPolicy: 'relay',
-      encodedInsertableStreams: true,
+      ...(this.transformApi === 'insertable' ? { encodedInsertableStreams: true } : {}),
     } as any);
 
     for (const track of this.local!.getTracks()) {
       const sender = this.pc.addTrack(track, this.local!);
-      attachSenderE2EE(sender, this.keyring);
+      this.attachE2EE(sender, 'encrypt');
     }
 
     this.pc.ontrack = (e) => {
-      attachReceiverE2EE(e.receiver, this.keyring, (epoch) => this.onMissingKey(epoch));
+      this.attachE2EE(e.receiver, 'decrypt');
       const stream = e.streams[0];
       if (stream) {
         this.remote.set(stream.id, stream);
@@ -169,7 +212,7 @@ export class GroupSession {
     this.epoch = Math.max(Date.now(), this.epoch + 1, this.keyring.current + 1);
     const raw = crypto.getRandomValues(new Uint8Array(32));
     this.currentRaw = raw; // kept so we can answer a key-request resend
-    await this.keyring.set(this.epoch, raw);
+    await this.applyKey(this.epoch, raw);
     const b64 = keyToB64(raw);
     for (const m of members) {
       if (m === this.selfId) continue;
@@ -177,9 +220,9 @@ export class GroupSession {
     }
   }
 
-  /** Inbound group media key (from the master) → add to our keyring. */
+  /** Inbound group media key (from the master) → add to our keyring (+ the worker). */
   async onKey(epoch: number, keyB64: string): Promise<void> {
-    await this.keyring.set(epoch, keyFromB64(keyB64));
+    await this.applyKey(epoch, keyFromB64(keyB64));
   }
 
   /** We received media for an epoch we have no key for → ask the master to resend
@@ -294,6 +337,11 @@ export class GroupSession {
     this.pc = null;
     this.local = null;
     this.remote.clear();
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
+    this.rawKeys.clear();
   }
 
   private emitRemote(): void {

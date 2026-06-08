@@ -146,7 +146,28 @@ type Hub struct {
 	callBuf  map[string][]bufferedCall // recipient → briefly-held call offers
 	ringMu   sync.Mutex
 	ringHist map[string][]time.Time // userID → recent group-ring timestamps (rate limit)
+	// Per outgoing 1:1 call: a goroutine that re-pushes a ring tickle every few
+	// seconds so a backgrounded callee gets a "ringing" (not one-shot) alert; each
+	// push the callee's SW receives is acked (/v1/call/ack) which flips the caller's
+	// UI from "Calling" to "Ringing". Keyed by callId; cancelled when the call is
+	// answered/declined/cancelled/ended.
+	callRingMu sync.Mutex
+	callRings  map[string]*callRing
 }
+
+type callRing struct {
+	caller string
+	callee string
+	cancel context.CancelFunc
+}
+
+const (
+	// A backgrounded callee is re-pushed this many times, this far apart, to feel
+	// like ringing (distinct visible notifications, not one tickle). The window
+	// (count*interval) sits within the dial timeout.
+	callRingCount    = 5
+	callRingInterval = 5 * time.Second
+)
 
 const (
 	// maxGroupRing caps how many members one group-call invite fans out to, and
@@ -176,8 +197,84 @@ func NewHub() *Hub {
 		conns:    make(map[string]map[*Client]struct{}),
 		watchers: make(map[string]map[*Client]struct{}),
 		rooms:    call.NewRegistry(),
-		callBuf:  make(map[string][]bufferedCall),
-		ringHist: make(map[string][]time.Time),
+		callBuf:   make(map[string][]bufferedCall),
+		ringHist:  make(map[string][]time.Time),
+		callRings: make(map[string]*callRing),
+	}
+}
+
+// startCallRing re-pushes a call tickle to `callee` every few seconds (up to
+// callRingCount) so a backgrounded device rings rather than buzzing once. Idempotent
+// per callId. The notifier is captured from the originating connection.
+func (h *Hub) startCallRing(notifier Notifier, caller, callee, callID string) {
+	if notifier == nil || callID == "" || callee == "" {
+		return
+	}
+	h.callRingMu.Lock()
+	if _, exists := h.callRings[callID]; exists {
+		h.callRingMu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.callRings[callID] = &callRing{caller: caller, callee: callee, cancel: cancel}
+	h.callRingMu.Unlock()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("call ring goroutine panicked", "recover", r, "stack", string(debug.Stack()))
+			}
+		}()
+		defer h.stopCallRing(callID)
+		for i := 0; i < callRingCount; i++ {
+			if ctx.Err() != nil {
+				return
+			}
+			func() {
+				nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer ncancel()
+				notifier.NotifyCall(nctx, callee)
+			}()
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(callRingInterval):
+			}
+		}
+	}()
+}
+
+// stopCallRing cancels any active ring loop for a call (answered/declined/ended).
+func (h *Hub) stopCallRing(callID string) {
+	if callID == "" {
+		return
+	}
+	h.callRingMu.Lock()
+	if e := h.callRings[callID]; e != nil {
+		e.cancel()
+		delete(h.callRings, callID)
+	}
+	h.callRingMu.Unlock()
+}
+
+// AckCallReachable is called when `callee`'s device acknowledged a call ring (its
+// service worker showed the notification and posted /v1/call/ack). For every active
+// outgoing ring targeting this callee, tell the caller their phone is reachable by
+// forwarding a call-ringing frame, so the caller's UI flips "Calling" -> "Ringing".
+func (h *Hub) AckCallReachable(callee string) {
+	type tgt struct{ caller, callID string }
+	var tgts []tgt
+	h.callRingMu.Lock()
+	for id, e := range h.callRings {
+		if e.callee == callee {
+			tgts = append(tgts, tgt{e.caller, id})
+		}
+	}
+	h.callRingMu.Unlock()
+	for _, t := range tgts {
+		if payload, err := json.Marshal(frame{T: "call-ringing", CallID: t.callID, From: callee}); err == nil {
+			h.Send(t.caller, payload)
+		}
 	}
 }
 
@@ -900,7 +997,10 @@ func (c *Client) handleFrame(data []byte) {
 		// short-lived, high-urgency call tickle (distinct from a message tickle) so
 		// the service worker shows an "Incoming call" alert immediately.
 		if !c.hub.isActiveFresh(f.To) || !delivered {
-			c.notifyAsync(f.To, true)
+			// Re-push every few seconds (up to a cap) so a backgrounded callee rings
+			// instead of buzzing once; the callee's SW acks each push (/v1/call/ack),
+			// which flips the caller's UI to "Ringing". Cancelled on answer/decline/end.
+			c.hub.startCallRing(c.notifier, c.userID, f.To, f.CallID)
 		}
 		// No live socket at all → hold the offer briefly so a push-woken device
 		// that reconnects still rings. The caller keeps ringing; its own dial
@@ -910,10 +1010,17 @@ func (c *Client) handleFrame(data []byte) {
 		}
 
 	case "call-ringing", "call-answer", "call-ice", "call-accept",
-		"call-reject", "call-cancel", "call-busy", "call-end":
-		// Pure live relay of the remaining 1:1 signalling. The sender is
-		// authoritative; SDP/ICE stay E2EE'd in Ciphertext.
+		"call-reject", "call-cancel", "call-busy", "call-end",
+		"call-upgrade-request", "call-upgrade-accept", "call-upgrade-reject":
+		// Pure live relay of the remaining 1:1 signalling (incl. the consent-gated
+		// audio<->video upgrade). The sender is authoritative; SDP/ICE stay E2EE'd.
 		c.relayCall(f)
+		// Once the callee engages (ringing/answered) or the call resolves, stop the
+		// re-push ring loop so it can't keep buzzing a settled call.
+		switch f.T {
+		case "call-ringing", "call-answer", "call-accept", "call-reject", "call-cancel", "call-busy", "call-end":
+			c.hub.stopCallRing(f.CallID)
+		}
 
 	case "call-key":
 		// Group media key, sealed peer-to-peer; relayed live, never inspected.

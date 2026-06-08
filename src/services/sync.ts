@@ -117,10 +117,15 @@ export async function handleIncomingFrame(frame: Frame): Promise<void> {
     case 'call-cancel':
     case 'call-busy':
     case 'call-end':
+    case 'call-upgrade-request':
+    case 'call-upgrade-accept':
+    case 'call-upgrade-reject':
     case 'call-join':
     case 'call-leave':
     case 'call-roster':
     case 'call-key':
+    case 'call-key-request':
+    case 'call-group-invite':
     case 'sfu-offer':
     case 'sfu-answer':
     case 'sfu-ice': {
