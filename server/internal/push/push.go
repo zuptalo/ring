@@ -36,10 +36,11 @@ const (
 	// notification fires until the app is reopened). 28 days is the practical max
 	// most push services honor; a single content-free tickle is cheap to hold.
 	msgTTL = 28 * 24 * 60 * 60 // 2419200s
-	// callTTL: a ring is real-time. A tickle that can't wake the device within a
-	// dial timeout is a missed call, so it must NOT linger and resurrect a stale
-	// ring minutes later.
-	callTTL = 45
+	// callTTL: a ring is real-time. A tickle that can't wake the device within the
+	// caller's answer window is a missed call, so it must NOT linger and resurrect a
+	// stale ring minutes later. 60s gives the callee time to open the app from the
+	// notification and answer (kept in step with callBufferTTL + the caller timeout).
+	callTTL = 60
 	// msgTopic collapses a burst of undelivered MESSAGE tickles to the same
 	// subscription into a single wake-up - the SW drains the whole relay queue on
 	// any wake, so collapsing loses nothing. Per RFC 8030 collapsing is scoped to

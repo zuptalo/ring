@@ -118,8 +118,8 @@ func TestNotifyHeaders(t *testing.T) {
 	}
 
 	n.NotifyCall(context.Background(), "u1")
-	if cap.ttl != "45" {
-		t.Errorf("call TTL = %q, want 45", cap.ttl)
+	if cap.ttl != "60" {
+		t.Errorf("call TTL = %q, want 60", cap.ttl)
 	}
 	if cap.urgency != "high" {
 		t.Errorf("call Urgency = %q, want high", cap.urgency)

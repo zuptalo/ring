@@ -223,7 +223,11 @@ let lastLoss = { lost: 0, recv: 0 };
 let returnPath = '/tabs/calls';
 
 const RING_TIMEOUT_MS = 35_000; // callee: auto-decline if unanswered
-const DIAL_TIMEOUT_MS = 30_000; // caller: give up if nobody answers (30s, no-answer)
+const DIAL_TIMEOUT_MS = 30_000; // caller: give up if NO sign of reachability (30s)
+// Once the callee is confirmed reachable (call-ringing, e.g. its push was acked), give
+// it a longer answer window so the caller doesn't hang up while the callee is still
+// cold-starting the app from the push (which cancelled the ring the instant it opened).
+const ANSWER_TIMEOUT_MS = 60_000;
 const GRACE_MS = 12_000; // mid-call: tolerate a blip before ending
 
 // Group calls: the set of OTHER participants that actually joined during the call
@@ -368,6 +372,21 @@ function onConnected(): void {
 function clearDialTimer(): void {
   if (dialTimer) clearTimeout(dialTimer);
   dialTimer = null;
+}
+
+/** Caller-side give-up: after `ms` with no answer, play the no-answer cue, tell the
+ *  callee to stop ringing, and end. Armed short while only dialing, then re-armed to a
+ *  longer window once the callee proves reachable (call-ringing). */
+function armDialTimeout(peerUserId: string, callId: string, ms: number): void {
+  clearDialTimer();
+  dialTimer = setTimeout(() => {
+    if (callState.value === 'dialing' || callState.value === 'remote-ringing') {
+      stopLoopTone();
+      playTone('noanswer');
+      void sendControl('call-cancel', peerUserId, callId, { reason: 'timeout' });
+      void teardown('timeout');
+    }
+  }, ms);
 }
 
 function startTimers(): void {
@@ -654,15 +673,7 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
   // Caller-side timeout: the server may be buffering the offer for an offline
   // (push-woken) callee, so we can't rely on a fast "unavailable", give up
   // ourselves if nobody answers.
-  clearDialTimer();
-  dialTimer = setTimeout(() => {
-    if (callState.value === 'dialing' || callState.value === 'remote-ringing') {
-      stopLoopTone();
-      playTone('noanswer'); // one-shot "no answer" cue
-      void sendControl('call-cancel', contactId, callId, { reason: 'timeout' });
-      void teardown('timeout');
-    }
-  }, DIAL_TIMEOUT_MS);
+  armDialTimeout(contactId, callId, DIAL_TIMEOUT_MS);
   navigateToCall();
 }
 
@@ -1373,6 +1384,9 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       if (meta && meta.callId === frame.callId && callState.value === 'dialing') {
         setState('remote-ringing');
         startLoopTone('ringing', 2600); // switch the ringback to the "ringing" cue
+        // Reachable now: extend the give-up window so we keep ringing while the callee
+        // opens the app from the push and answers, instead of cancelling at 30s.
+        if (meta.peerUserId) armDialTimeout(meta.peerUserId, meta.callId, ANSWER_TIMEOUT_MS);
       }
       return;
     }

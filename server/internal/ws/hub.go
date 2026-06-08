@@ -188,9 +188,10 @@ type bufferedCall struct {
 
 // callBufferTTL bounds how long an undelivered call offer is held for a
 // reconnecting device. Short - a real-time call is stale beyond this - but kept
-// in step with the call push TTL (~45s) so a device woken by a call tickle still
-// finds the buffered offer when its WebSocket reconnects.
-const callBufferTTL = 45 * time.Second
+// in step with the call push TTL (60s) and the caller's answer window so a device
+// woken by a call tickle still finds the buffered offer when it cold-starts the app
+// from the notification and its WebSocket reconnects.
+const callBufferTTL = 60 * time.Second
 
 func NewHub() *Hub {
 	return &Hub{
