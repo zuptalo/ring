@@ -238,8 +238,11 @@ async function sendGroupCard(members: string[], card: GroupCard): Promise<void> 
 
 /* ---- reactions ---- */
 
+/** Up to 3 reactions per person on a single message (Teams-style). */
+export const MAX_REACTIONS_PER_USER = 3;
+
 /** Apply a reaction change to a message in place (shared by local + inbound).
- *  One reaction per user: a new emoji replaces the prior one; `at` resolves
+ *  Up to MAX_REACTIONS_PER_USER per user, toggled per emoji; `at` resolves
  *  out-of-order updates so a stale frame can't override a newer choice. */
 function applyReaction(
   message: Message,
@@ -249,30 +252,42 @@ function applyReaction(
   at: number,
 ): void {
   const list = message.reactions ?? [];
-  const existing = list.find((r) => r.userId === userId);
-  if (existing && existing.at > at) return; // stale update, ignore
-  const next: Reaction[] = list.filter((r) => r.userId !== userId);
-  if (!remove) next.push({ userId, emoji, at });
+  // Reactions are now per (user, emoji): a user can hold up to 3 distinct emoji on one
+  // message (Teams-style), each toggled independently. Staleness is per (user, emoji).
+  const existing = list.find((r) => r.userId === userId && r.emoji === emoji);
+  if (existing && existing.at > at) return; // stale update for this exact reaction
+  const next: Reaction[] = list.filter((r) => !(r.userId === userId && r.emoji === emoji));
+  if (!remove) {
+    if (next.filter((r) => r.userId === userId).length >= MAX_REACTIONS_PER_USER) return; // at cap
+    next.push({ userId, emoji, at });
+  }
   message.reactions = next;
   message.updatedAt = now();
 }
 
-/** Toggle the local user's reaction on a message and propagate it to the chat
- *  (the peer for 1:1, every member for a group). Re-reacting with the same emoji
- *  clears it; a different emoji replaces it. Works on your own messages too. */
-export async function reactToMessage(messageId: string, emoji: string): Promise<void> {
+/** Toggle one of the local user's reactions on a message and propagate it to the chat
+ *  (the peer for 1:1, every member for a group). Tapping an emoji you already used on
+ *  this message clears it; tapping a new one adds it (up to MAX_REACTIONS_PER_USER).
+ *  Returns what happened so the UI can nudge when the cap is hit. Works on your own
+ *  messages too. */
+export async function reactToMessage(
+  messageId: string,
+  emoji: string,
+): Promise<'added' | 'removed' | 'limit'> {
   const message = await getMessage(messageId);
-  if (!message) return;
+  if (!message) return 'removed';
   const self = getSelfUserId() ?? '';
-  const mine = (message.reactions ?? []).find((r) => r.userId === self);
-  const remove = mine?.emoji === emoji; // tapping your current emoji clears it
+  const mine = (message.reactions ?? []).filter((r) => r.userId === self);
+  const has = mine.some((r) => r.emoji === emoji);
+  if (!has && mine.length >= MAX_REACTIONS_PER_USER) return 'limit'; // already at the cap
+  const remove = has; // tapping one of your existing emoji clears just that one
   const at = now();
   applyReaction(message, self, emoji, remove, at);
   await put('messages', message);
   if (!remove) void recordEmojiUse(emoji); // most-used drives the quick-react order
 
   const chat = await getChat(message.chatId);
-  if (!chat) return;
+  if (!chat) return remove ? 'removed' : 'added';
   // Surface the reaction in the chats list (WhatsApp-style), like a new activity.
   if (!remove) {
     chat.lastMessage = `You reacted ${emoji} to "${previewText(message)}"`;
@@ -285,6 +300,7 @@ export async function reactToMessage(messageId: string, emoji: string): Promise<
   const payload: MessagePayload = { body: '', kind: 'reaction', timestamp: at, reaction };
   if (chat.isGroup) await sealAndEnqueueGroup(chat, uid(), payload);
   else await sealAndEnqueue(chat, uid(), payload);
+  return remove ? 'removed' : 'added';
 }
 
 /** Apply an inbound reaction from `from` to the target message (side effect,

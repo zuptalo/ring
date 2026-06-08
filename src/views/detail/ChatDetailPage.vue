@@ -335,7 +335,7 @@
                 type="button"
                 class="reaction"
                 :class="{ mine: g.mine }"
-                @click.stop="reactToMessage(m.id, g.emoji)"
+                @click.stop="onReact(m.id, g.emoji)"
               >
                 <span class="r-emoji"><emoji :emoji="g.emoji" /></span>
                 <span v-if="g.count > 1" class="r-count">{{ g.count }}</span>
@@ -438,7 +438,7 @@
                 type="button"
                 class="reaction"
                 :class="{ mine: g.mine }"
-                @click.stop="reactToMessage(item.messages[0].id, g.emoji)"
+                @click.stop="onReact(item.messages[0].id, g.emoji)"
               >
                 <span class="r-emoji"><emoji :emoji="g.emoji" /></span>
                 <span v-if="g.count > 1" class="r-count">{{ g.count }}</span>
@@ -882,7 +882,21 @@ function groupedReactions(reactions: Reaction[] | undefined) {
   }
   return [...map.values()];
 }
-const myEmoji = (m: Message) => (m.reactions ?? []).find((r) => r.userId === selfId)?.emoji;
+// The user's own reactions on a message (up to 3), to highlight them in the picker.
+const myEmojisFor = (m: Message) =>
+  (m.reactions ?? []).filter((r) => r.userId === selfId).map((r) => r.emoji);
+
+// React, surfacing the 3-reaction cap if it's hit (tapping a chip or a quick emoji).
+async function onReact(messageId: string, emoji: string): Promise<void> {
+  if ((await reactToMessage(messageId, emoji)) === 'limit') {
+    const t = await toastController.create({
+      message: 'You can add up to 3 reactions.',
+      duration: 1600,
+      position: 'bottom',
+    });
+    await t.present();
+  }
+}
 
 // Whether an item starts a new day (the divider renders above it). True for the
 // oldest loaded item too.
@@ -1038,9 +1052,9 @@ async function openMenu(m: Message, ev: Event) {
       canCopy: !!m.body,
       canSave,
       canSaveAll,
-      myEmoji: myEmoji(m),
+      myEmojis: myEmojisFor(m),
       reactionCount: m.reactions?.length ?? 0,
-      quick: await quickReactEmojis(),
+      quick: await quickReactEmojis(4),
     },
     event: ev,
     reference: 'event',
@@ -1050,7 +1064,7 @@ async function openMenu(m: Message, ev: Event) {
   await popover.present();
   const { data } = await popover.onWillDismiss();
   if (!data) return;
-  if (data.action === 'react') await reactToMessage(m.id, data.emoji);
+  if (data.action === 'react') await onReact(m.id, data.emoji);
   else if (data.action === 'more') await openEmojiPicker(m);
   else if (data.action === 'details') await openReactionDetails(m);
   else if (data.action === 'reply') void startReply(m);

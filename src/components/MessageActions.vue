@@ -9,7 +9,7 @@
         :key="e"
         type="button"
         class="ma-emoji"
-        :class="{ on: e === myEmoji }"
+        :class="{ on: myEmojis?.includes(e) }"
         @click="pick(e)"
       >
         <emoji :emoji="e" />
@@ -65,14 +65,17 @@ const props = defineProps<{
   canCopy: boolean;
   canSave?: boolean; // single image/video/file/audio: offer "Save"
   canSaveAll?: boolean; // album bubble: offer "Save all"
-  myEmoji?: string;
+  myEmojis?: string[]; // the user's current reactions on this message (up to 3)
   reactionCount?: number;
   quick?: string[]; // most-used-first quick-react set (from the caller)
 }>();
 
-// Quick-react set; the "+" opens the full picker. Falls back to a default set.
-const DEFAULT_QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
-const quickSet = computed(() => (props.quick && props.quick.length ? props.quick : DEFAULT_QUICK));
+// Exactly 4 quick emoji + a "+"; the "+" opens the full picker. All fit without
+// scrolling (Teams-style). Falls back to a default set.
+const DEFAULT_QUICK = ['👍', '❤️', '😂', '😮'];
+const quickSet = computed(() =>
+  (props.quick && props.quick.length ? props.quick : DEFAULT_QUICK).slice(0, 4),
+);
 
 // Report the chosen emoji; the caller (reactToMessage) toggles it off if it's
 // already the user's current reaction.
@@ -92,22 +95,13 @@ const choose = (action: string) => void popoverController.dismiss({ action });
 .ma-emojis {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 2px;
   padding: 6px 6px 4px;
-  /* Only the emoji row scrolls horizontally (when there are many frequent ones);
-     pan-x claims that gesture for this row alone and contain stops it chaining out. */
-  overflow-x: auto;
-  overflow-y: hidden;
-  touch-action: pan-x;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-.ma-emojis::-webkit-scrollbar {
-  display: none;
+  /* No horizontal scroll: the 4 quick emoji + the "+" are all visible at once. */
 }
 .ma-emoji {
-  flex: 0 0 auto; /* fixed width so the row can overflow + scroll */
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
