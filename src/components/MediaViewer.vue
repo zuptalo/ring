@@ -2,8 +2,6 @@
   <ion-modal
     :is-open="open"
     class="viewer-modal"
-    :enter-animation="fadeEnter"
-    :leave-animation="fadeLeave"
     @did-present="goToStart"
     @did-dismiss="$emit('close')"
   >
@@ -103,7 +101,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { IonModal, IonContent, IonIcon, createAnimation } from '@ionic/vue';
+import { IonModal, IonContent, IonIcon } from '@ionic/vue';
 import {
   chevronBack, pencil, ellipsisHorizontal, imagesOutline, chatbubbleOutline,
   happyOutline, arrowUndoOutline, shareOutline, downloadOutline, star, starOutline, trashOutline,
@@ -148,20 +146,6 @@ const cur = computed(() => props.items[index.value] ?? props.items[0]);
 // Only mount video players for the visible slide (+ neighbours) so off-screen
 // videos never load or autoplay.
 const nearby = (i: number) => Math.abs(i - index.value) <= 1;
-
-/* ---- fade present/dismiss (no slide-up, so the media doesn't open low then jump) ---- */
-function fadeEnter(baseEl: HTMLElement) {
-  const root = baseEl.shadowRoot;
-  const parts: ReturnType<typeof createAnimation>[] = [];
-  const wrapper = root?.querySelector('.modal-wrapper') as HTMLElement | null;
-  if (wrapper) parts.push(createAnimation().addElement(wrapper).fromTo('opacity', '0', '1'));
-  const backdrop = root?.querySelector('ion-backdrop') as HTMLElement | null;
-  if (backdrop) parts.push(createAnimation().addElement(backdrop).fromTo('opacity', '0.01', '1'));
-  return createAnimation().addElement(baseEl).easing('ease-out').duration(180).addAnimation(parts);
-}
-function fadeLeave(baseEl: HTMLElement) {
-  return fadeEnter(baseEl).direction('reverse');
-}
 
 function goToStart(): void {
   index.value = props.start;
