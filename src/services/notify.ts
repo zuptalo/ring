@@ -16,9 +16,10 @@
  * The badge counters are handled separately (useBadges); this only adds the
  * "active" alerting on top.
  */
-import { toastController, alertController } from '@ionic/vue';
+import { ref } from 'vue';
+import { alertController } from '@ionic/vue';
 import router from '@/router';
-import { getSetting, isChatMuted } from '@/db/queries';
+import { getSetting, isChatMuted, getChat } from '@/db/queries';
 import { subscribe } from '@/db/idb';
 import { notifyLocal } from '@/services/push';
 import { isUnlockedNow } from '@/services/crypto/identity';
@@ -76,6 +77,33 @@ export interface IncomingNotice {
   chatId?: string; // for messages → deep-link target
   name: string; // sender / requester display name
   body: string; // preview text ("Hi!", "📷 Photo", "wants to connect")
+  avatar?: string; // optional; messages resolve the chat avatar if omitted
+}
+
+/* ---- in-app notification banners (custom green overlay; see NotificationBanners.vue) ---- */
+
+export interface NotifyBanner {
+  id: string;
+  kind: IncomingKind;
+  name: string;
+  body: string;
+  avatar: string;
+  url: string;
+}
+// Live list the overlay renders. Capped + deduped by target so a chatty
+// conversation collapses to one banner instead of stacking.
+export const notifyBanners = ref<NotifyBanner[]>([]);
+const BANNER_MS = 4500;
+const MAX_BANNERS = 3;
+
+function showBanner(b: Omit<NotifyBanner, 'id'>): void {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  notifyBanners.value = [...notifyBanners.value.filter((x) => x.url !== b.url), { ...b, id }].slice(-MAX_BANNERS);
+  setTimeout(() => dismissBanner(id), BANNER_MS);
+}
+
+export function dismissBanner(id: string): void {
+  notifyBanners.value = notifyBanners.value.filter((b) => b.id !== id);
 }
 
 /* ---- which chat is on screen (set by ChatDetailPage) ---- */
@@ -173,13 +201,12 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
     return;
   }
 
-  // Default: a banner at the top, auto-dismissing, with a View action.
-  const t = await toastController.create({
-    header: headline,
-    message: n.kind === 'request' ? undefined : n.body,
-    duration: 3500,
-    position: 'top',
-    buttons: [{ text: 'View', handler: () => void router.push(url) }],
-  });
-  await t.present();
+  // Default: a green banner at the top showing the chat avatar + name + preview,
+  // auto-dismissing, tap to open (see NotificationBanners.vue). Resolve the chat's
+  // avatar/name for a message; a request has no chat (the overlay shows a fallback).
+  let avatar = n.avatar ?? '';
+  if (n.kind === 'message' && n.chatId && !avatar) {
+    avatar = (await getChat(n.chatId))?.avatar ?? '';
+  }
+  showBanner({ kind: n.kind, name: n.name, body: n.body, avatar, url });
 }

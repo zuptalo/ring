@@ -11,6 +11,8 @@
     <install-guard />
     <!-- Global incoming-call ringer: shows over any route while a call rings. -->
     <incoming-call-overlay />
+    <!-- In-app notification banners (green, with avatar + name): over any route. -->
+    <notification-banners />
   </ion-app>
 </template>
 
@@ -28,6 +30,7 @@ import { useAutoLock } from '@/composables/useAutoLock';
 import KeyGuard from '@/components/KeyGuard.vue';
 import InstallGuard from '@/components/InstallGuard.vue';
 import IncomingCallOverlay from '@/components/IncomingCallOverlay.vue';
+import NotificationBanners from '@/components/NotificationBanners.vue';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed } from '@/db/queries';
@@ -223,5 +226,15 @@ body.keyboard-open ion-footer {
    transform shifts the whole overlay layer, taking the toast with it. */
 ion-toast.app-update-toast {
   transform: translateY(calc(-1 * (var(--keyboard-height, 0px) + 60px)));
+  /* Match the in-app notification banners: deep app-green, white text, readable in
+     both themes. */
+  --background: #0a7d5c;
+  --color: #fff;
+  --border-color: var(--ion-color-primary, #10b981);
+  --border-style: solid;
+  --border-width: 0 0 0 4px;
+}
+ion-toast.app-update-toast::part(button) {
+  color: #fff;
 }
 </style>
