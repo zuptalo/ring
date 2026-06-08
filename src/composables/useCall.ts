@@ -24,6 +24,7 @@ import {
   markCallMissed,
   recordGroupCall,
   logCallToChat,
+  sendMessage,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow } from '@/services/crypto/identity';
@@ -995,6 +996,23 @@ export async function rejectCall(): Promise<void> {
     void sendControl('call-reject', meta.peerUserId, meta.callId, { reason: 'declined' });
   }
   await teardown('declined', { silent: meta.isGroup });
+}
+
+/** Decline an incoming 1:1 call AND send the caller a quick canned reply ("In a
+ *  meeting." etc.) into the chat, like the phone's "Decline with message". */
+export async function declineWithMessage(text: string): Promise<void> {
+  const meta = callMeta.value;
+  const body = text.trim();
+  const chatId = meta?.chatId;
+  // Send the reply before tearing down (teardown clears the call, not the chat).
+  if (chatId && body) {
+    try {
+      await sendMessage(chatId, body);
+    } catch {
+      /* best-effort: still decline even if the reply couldn't be sent */
+    }
+  }
+  await rejectCall();
 }
 
 /** Leave the full-screen call UI WITHOUT ending the call: return to wherever the call

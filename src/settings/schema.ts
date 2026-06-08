@@ -457,6 +457,20 @@ export const SETTINGS: Record<string, SettingNode> = {
     ],
   },
 
+  /* ===== CALLS ===== */
+  calls: {
+    id: 'calls',
+    title: 'Calls',
+    groups: [
+      {
+        items: [
+          { type: 'route', title: 'Decline with message', path: '/settings/calls-declines', icon: 'chat' },
+        ],
+        footer: 'Customize the quick replies you can send when you decline a call.',
+      },
+    ],
+  },
+
   /* ===== APPEARANCE ===== */
   appearance: {
     id: 'appearance',
@@ -732,6 +746,7 @@ export const YOU_SECTIONS: { id: string; title: string; icon: string }[] = [
   { id: 'account', title: 'Account', icon: 'key' },
   { id: 'privacy', title: 'Privacy', icon: 'lock' },
   { id: 'chats', title: 'Chats', icon: 'chat' },
+  { id: 'calls', title: 'Calls', icon: 'call' },
   { id: 'appearance', title: 'Appearance', icon: 'palette' },
   { id: 'notifications', title: 'Notifications', icon: 'bell' },
   { id: 'storage', title: 'Storage and data', icon: 'download' },

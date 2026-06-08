@@ -12,6 +12,16 @@
         {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
       </div>
     </div>
+    <!-- Decline with a quick message (1:1 only): pick a canned reply, sent into the
+         chat as we decline. Customizable under Settings > Calls. -->
+    <button
+      v-if="!callMeta.isGroup"
+      class="ring-btn message"
+      aria-label="Decline with message"
+      @click="declineMenu"
+    >
+      <ion-icon :icon="chatbubbleEllipsesOutline" />
+    </button>
     <button class="ring-btn decline" aria-label="Decline" @click="reject">
       <ion-icon :icon="callOutline" />
     </button>
@@ -22,15 +32,28 @@
 </template>
 
 <script setup lang="ts">
-import { IonAvatar, IonIcon } from '@ionic/vue';
-import { callOutline, videocamOutline } from 'ionicons/icons';
-import { callState, callMeta, acceptCall, rejectCall } from '@/composables/useCall';
+import { IonAvatar, IonIcon, actionSheetController } from '@ionic/vue';
+import { callOutline, videocamOutline, chatbubbleEllipsesOutline } from 'ionicons/icons';
+import { callState, callMeta, acceptCall, rejectCall, declineWithMessage } from '@/composables/useCall';
+import { getQuickDeclines } from '@/services/quick-declines';
 
 function accept(): void {
   void acceptCall();
 }
 function reject(): void {
   void rejectCall();
+}
+async function declineMenu(): Promise<void> {
+  const replies = await getQuickDeclines();
+  const sheet = await actionSheetController.create({
+    header: 'Decline with a message',
+    buttons: [
+      ...replies.map((text) => ({ text, handler: () => void declineWithMessage(text) })),
+      { text: 'Decline without message', role: 'destructive', handler: () => void rejectCall() },
+      { text: 'Cancel', role: 'cancel' },
+    ],
+  });
+  await sheet.present();
 }
 </script>
 
@@ -103,6 +126,15 @@ function reject(): void {
 }
 .ring-btn ion-icon {
   font-size: 21px;
+}
+.message {
+  /* Smaller, subtler than decline/accept: a secondary "reply instead" affordance. */
+  width: 38px;
+  height: 38px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.message ion-icon {
+  font-size: 18px;
 }
 .decline {
   background: var(--ion-color-danger, #eb445a);

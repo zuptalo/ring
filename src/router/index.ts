@@ -115,6 +115,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/detail/AboutPage.vue'),
   },
   {
+    path: '/settings/calls-declines',
+    component: () => import('@/views/detail/CallsDeclinesPage.vue'),
+  },
+  {
     path: '/settings/:section',
     component: () => import('@/views/detail/SettingDetailPage.vue'),
   },
