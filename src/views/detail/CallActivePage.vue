@@ -5,18 +5,42 @@
         <!-- Group call: tap a tile to spotlight it on the main stage (the rest
              become a side filmstrip); no spotlight = an even grid (default). -->
         <div v-if="callMeta?.isGroup" class="group">
+          <!-- Fullscreen stage: a spotlighted tile, OR (WhatsApp-style) the single
+               remote when only one other person is on the call. -->
           <video
-            v-if="spotlightId && spotlightStream"
-            :key="spotlightId"
-            :ref="(el) => attach(el as HTMLVideoElement | null, spotlightStream)"
+            v-if="stageStream"
+            :key="stageKey"
+            :ref="(el) => attach(el as HTMLVideoElement | null, stageStream)"
             class="main-video"
-            :class="{ mirror: spotlightId === SELF }"
-            :muted="spotlightId === SELF"
+            :class="{ mirror: stageIsSelf }"
+            :muted="stageIsSelf"
             autoplay
             playsinline
-            @click="promote(null)"
+            @click="spotlightId && promote(null)"
           />
-          <div class="group-grid" :class="{ filmstrip: spotlightId }" :style="spotlightId ? undefined : gridStyle">
+          <!-- Our own camera as a draggable PiP in the single-remote (2-person) layout. -->
+          <video
+            v-if="showSelfPip"
+            :ref="(el) => attach(el as HTMLVideoElement | null, localStream)"
+            class="pip-video mirror"
+            :style="pipStyle"
+            muted
+            autoplay
+            playsinline
+            @pointerdown="onPipDown"
+            @pointermove="onPipMove"
+            @pointerup="onPipUp"
+            @pointercancel="onPipCancel"
+          />
+          <!-- Even grid (3+ people) or the spotlight filmstrip. The grid tracks use
+               minmax(0,1fr) + overflow:hidden so tiles always scale to fit and never
+               spill past the bottom of the screen. -->
+          <div
+            v-if="showGroupGrid || spotlightId"
+            class="group-grid"
+            :class="{ filmstrip: spotlightId }"
+            :style="spotlightId ? undefined : gridStyle"
+          >
             <video
               v-for="s in gridStreams"
               :key="s.id"
@@ -289,6 +313,27 @@ function promote(id: string | null): void {
   spotlightId.value = id;
 }
 
+// WhatsApp-style stage. With exactly ONE other person (and no spotlight), that remote
+// fills the screen and our own camera is a draggable PiP (instead of a tall/narrow
+// split). 3+ people use the even grid; tapping a tile spotlights it.
+const singleRemote = computed(() => !spotlightId.value && remoteStreams.value.length === 1);
+const stageStream = computed(() =>
+  spotlightId.value
+    ? spotlightStream.value
+    : singleRemote.value
+      ? remoteStreams.value[0]
+      : null,
+);
+const stageIsSelf = computed(() => spotlightId.value === SELF);
+const stageKey = computed(() => spotlightId.value ?? stageStream.value?.id ?? 'stage');
+const showGroupGrid = computed(() => !spotlightId.value && remoteStreams.value.length >= 2);
+// Our own camera shows as a PiP only in the single-remote layout (in the grid we are a
+// tile; while spotlighting we sit in the filmstrip).
+const groupSelfHasVideo = computed(
+  () => callMeta.value?.kind === 'video' && !!localStream.value && !cameraOff.value,
+);
+const showSelfPip = computed(() => singleRemote.value && groupSelfHasVideo.value);
+
 // Even-grid layout: pick a column count that keeps tiles roughly rectangular rather
 // than tall-and-narrow. On a portrait phone two tiles stack (full-width, landscape);
 // otherwise we cap at 2-3 columns. `leaving` tiles count so the grid stays steady
@@ -304,12 +349,18 @@ const tileCount = computed(
 );
 const gridCols = computed(() => {
   const n = Math.max(1, tileCount.value);
-  if (n === 1) return 1;
-  if (n === 2) return portrait.value ? 1 : 2;
-  if (n <= 6) return 2;
+  if (n <= 2) return portrait.value ? 1 : 2;
+  if (n <= 6) return 2; // WhatsApp keeps two columns up to ~6
   return 3;
 });
-const gridStyle = computed(() => ({ gridTemplateColumns: `repeat(${gridCols.value}, 1fr)` }));
+const gridRows = computed(() => Math.ceil(Math.max(1, tileCount.value) / gridCols.value));
+// minmax(0, 1fr) (not a bare 1fr, which is minmax(auto, 1fr)) stops a video tile's
+// intrinsic size from blowing the track out past the container, so the grid always
+// fits the stage; explicit rows + overflow:hidden keep tiles inside the screen.
+const gridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(${gridCols.value}, minmax(0, 1fr))`,
+  gridTemplateRows: `repeat(${gridRows.value}, minmax(0, 1fr))`,
+}));
 
 // The route button reflects the LIVE route so the user can tell where audio is going.
 // Earpiece uses a phone-handset icon (clearly distinct from the loudspeaker).
@@ -548,6 +599,7 @@ const diag = computed(() => {
 .group {
   position: absolute;
   inset: 0;
+  overflow: hidden;
 }
 .main-video {
   position: absolute;
@@ -583,11 +635,12 @@ const diag = computed(() => {
   position: absolute;
   inset: 0;
   display: grid;
-  /* Column count comes from gridStyle (count + orientation aware); rows fill evenly so
-     tiles stay roughly rectangular instead of tall-and-narrow. */
-  grid-auto-rows: 1fr;
+  /* Columns AND rows come from gridStyle (count + orientation aware) using
+     minmax(0,1fr) tracks so a tile's intrinsic video size can't blow the grid out;
+     overflow:hidden is a backstop so nothing ever spills past the stage. */
   gap: 4px;
   padding: 4px;
+  overflow: hidden;
 }
 .group-grid .tile {
   width: 100%;
