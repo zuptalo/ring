@@ -16,7 +16,7 @@
             playsinline
             @click="promote(null)"
           />
-          <div class="group-grid" :class="{ filmstrip: spotlightId }">
+          <div class="group-grid" :class="{ filmstrip: spotlightId }" :style="spotlightId ? undefined : gridStyle">
             <video
               v-for="s in gridStreams"
               :key="s.id"
@@ -35,6 +35,11 @@
               muted
               @click="promote(SELF)"
             />
+            <!-- A participant who just left: a waving hand that fades out (keeping the
+                 layout steady for a beat, then freeing room for the rest to grow). -->
+            <div v-for="l in leaving" :key="l.id" class="tile leaving">
+              <span class="leave-wave"><emoji emoji="👋" /></span>
+            </div>
           </div>
           <div v-if="remoteStreams.length === 0" class="group-waiting">
             <ion-spinner name="crescent" />
@@ -151,8 +156,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, nextTick } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { IonPage, IonContent, IonAvatar, IonIcon, IonSpinner, actionSheetController } from '@ionic/vue';
+import Emoji from '@/components/Emoji.vue';
 import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
@@ -278,6 +284,28 @@ function promote(id: string | null): void {
   spotlightId.value = id;
 }
 
+// Even-grid layout: pick a column count that keeps tiles roughly rectangular rather
+// than tall-and-narrow. On a portrait phone two tiles stack (full-width, landscape);
+// otherwise we cap at 2-3 columns. `leaving` tiles count so the grid stays steady
+// while a departed participant's waving placeholder fades, then the rest grow.
+const portrait = ref(true);
+function updateOrientation(): void {
+  portrait.value = window.innerHeight >= window.innerWidth;
+}
+const leaving = ref<{ id: string }[]>([]);
+let prevStreamIds: string[] = [];
+const tileCount = computed(
+  () => gridStreams.value.length + (showSelfTile.value ? 1 : 0) + leaving.value.length,
+);
+const gridCols = computed(() => {
+  const n = Math.max(1, tileCount.value);
+  if (n === 1) return 1;
+  if (n === 2) return portrait.value ? 1 : 2;
+  if (n <= 6) return 2;
+  return 3;
+});
+const gridStyle = computed(() => ({ gridTemplateColumns: `repeat(${gridCols.value}, 1fr)` }));
+
 // The route button reflects the LIVE route so the user can tell where audio is going.
 // Earpiece uses a phone-handset icon (clearly distinct from the loudspeaker).
 const routeIcon = computed(() =>
@@ -315,9 +343,13 @@ function routeRemoteAudio(): void {
 
 function attach(el: HTMLVideoElement | null, stream: MediaStream | null): void {
   if (!el) return;
-  if (el.srcObject !== stream) {
-    el.srcObject = stream;
-    void el.play?.().catch(() => {}); // a swap re-points srcObject; nudge playback
+  if (el.srcObject !== stream) el.srcObject = stream;
+  if (stream) {
+    // Always (re)play, not only on a srcObject swap: a preview that became visible
+    // or had its stream attached while hidden needs a fresh play() or it stays black
+    // on older iOS (e.g. iPhone 8). Nudge again shortly after, once it's laid out.
+    void el.play?.().catch(() => {});
+    setTimeout(() => void el.play?.().catch(() => {}), 150);
   }
   applySinkTo(el);
 }
@@ -342,6 +374,18 @@ watch(audioOutputId, applySinkAll);
 // elements, or the call kind (audio<->video changes the default route) changes.
 watch([remoteStream, audioOutputId, earAudio], routeRemoteAudio);
 watch(remoteStreams, (streams) => {
+  const ids = streams.map((s) => s.id);
+  // A participant whose stream just disappeared left → show a brief waving-hand
+  // placeholder that fades out before the grid reflows (the rest then grow).
+  for (const gone of prevStreamIds) {
+    if (!ids.includes(gone) && !leaving.value.some((l) => l.id === gone)) {
+      leaving.value = [...leaving.value, { id: gone }];
+      setTimeout(() => {
+        leaving.value = leaving.value.filter((l) => l.id !== gone);
+      }, 1800);
+    }
+  }
+  prevStreamIds = ids;
   // If the spotlighted participant left, drop back to the even grid (no black stage).
   if (
     spotlightId.value &&
@@ -356,10 +400,13 @@ watch(remoteStreams, (streams) => {
   void nextTick(applySinkAll);
 });
 onMounted(() => {
+  updateOrientation();
+  window.addEventListener('resize', updateOrientation);
   attach(mainVideo.value, mainHasVideo.value ? mainStream.value : null);
   attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null);
   routeRemoteAudio();
 });
+onUnmounted(() => window.removeEventListener('resize', updateOrientation));
 
 /* ---- secondary controls (camera flip, screen share, video<->audio) in a sheet ---- */
 async function openMore(): Promise<void> {
@@ -531,35 +578,72 @@ const diag = computed(() => {
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(45%, 1fr));
+  /* Column count comes from gridStyle (count + orientation aware); rows fill evenly so
+     tiles stay roughly rectangular instead of tall-and-narrow. */
+  grid-auto-rows: 1fr;
   gap: 4px;
   padding: 4px;
 }
 .group-grid .tile {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   object-fit: cover;
   background: #111;
   border-radius: 8px;
-  min-height: 0;
   cursor: pointer;
 }
 .group-grid .tile.self {
   outline: 2px solid var(--ion-color-primary, #10b981);
 }
-/* When a participant is spotlighted, the others become a scrollable strip pinned
-   to the right edge, clear of the top overlay and the bottom controls. */
+/* A departed participant's placeholder: a waving hand that fades out. */
+.group-grid .tile.leaving {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  animation: tile-leave 1.8s ease forwards;
+}
+.leave-wave {
+  font-size: 44px;
+  display: inline-flex;
+  transform-origin: 70% 70%;
+  animation: wave-bob 0.8s ease-in-out infinite;
+}
+@keyframes tile-leave {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes wave-bob {
+  0%,
+  100% {
+    transform: rotate(-9deg);
+  }
+  50% {
+    transform: rotate(13deg);
+  }
+}
+/* When a participant is spotlighted, the others become a horizontal strip along the
+   bottom, just above the controls (clear of the safe area). */
 .group-grid.filmstrip {
-  inset: max(16px, env(safe-area-inset-top)) 8px 116px auto;
-  left: auto;
-  width: 92px;
+  inset: auto 8px calc(max(16px, env(safe-area-inset-bottom)) + 92px) 8px;
+  top: auto;
+  height: 92px;
   display: grid;
-  grid-template-columns: 92px;
-  grid-auto-rows: 120px;
-  grid-auto-flow: row;
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: 116px;
+  grid-auto-rows: 92px;
   gap: 8px;
   padding: 0;
-  overflow-y: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   z-index: 2;
 }
 .group-waiting {

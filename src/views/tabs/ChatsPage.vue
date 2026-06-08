@@ -131,7 +131,7 @@ import {
 import {
   createOutline, personAddOutline, peopleOutline, trashOutline,
   cameraOutline, videocamOutline, micOutline, documentOutline, imagesOutline,
-  locationOutline, barChartOutline, personOutline, musicalNotesOutline, compassOutline,
+  locationOutline, barChartOutline, personOutline, musicalNotesOutline, compassOutline, callOutline,
 } from 'ionicons/icons';
 import { listChats, listContacts, startDirectChat, deleteChat } from '@/db/queries';
 import { useLiveQuery } from '@/composables/useLiveQuery';
@@ -154,6 +154,7 @@ const PREVIEW_ICONS: Record<NonNullable<Chat['lastKind']>, string | null> = {
   poll: barChartOutline,
   contact: personOutline,
   audio: musicalNotesOutline,
+  call: callOutline,
   text: null,
   reaction: null,
 };

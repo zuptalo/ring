@@ -50,7 +50,8 @@ export interface Chat {
     | 'location'
     | 'poll'
     | 'contact'
-    | 'audio';
+    | 'audio'
+    | 'call';
   lastMessageTime: number; // epoch ms
   unread: number;
   interactions?: number; // messages sent/received, drives "Frequently contacted"
@@ -92,7 +93,20 @@ export type MessageKind =
   | 'audio'
   | 'location'
   | 'poll'
-  | 'contact';
+  | 'contact'
+  // A local-only, centered informational row logging a call's outcome (never sent to
+  // the peer; each side logs its own). The `call` field carries the details.
+  | 'call';
+
+/** Call-log details carried on a kind === 'call' informational message row. */
+export interface CallLog {
+  direction: 'incoming' | 'outgoing';
+  video: boolean;
+  missed: boolean; // unanswered / declined / nobody joined
+  durationSec?: number; // connected calls only
+  isGroup?: boolean;
+  participants?: string[]; // group: display names of who actually joined (excl. self)
+}
 
 /** Title/artist for a shared audio file (music). Read from the file's tags when
  *  possible, then confirmed/edited by the sender before sending. Cover art and
@@ -217,12 +231,13 @@ export interface Message {
   poll?: Poll; // kind === 'poll'
   contact?: SharedContact; // kind === 'contact'
   audio?: AudioMeta; // kind === 'audio' (shared music file: title/artist)
+  callLog?: CallLog; // kind === 'call' (call-outcome informational row)
   updatedAt: number;
 }
 
 export interface Call {
   id: string;
-  contactId: string;
+  contactId: string; // 1:1: the peer; group: the group chat (room) id
   name: string;
   avatar: string;
   direction: 'incoming' | 'outgoing';
@@ -233,6 +248,11 @@ export interface Call {
   seen?: boolean; // a missed call counts toward the badge until seen
   timestamp: number; // epoch ms
   updatedAt: number;
+  // Group calls: recorded too (id is a fresh uid, not the reused room id), with the
+  // participants that actually joined (excl. self) for the Calls-tab detail.
+  isGroup?: boolean;
+  roomId?: string;
+  participants?: string[];
 }
 
 /** A friend request. `direction` distinguishes an incoming request (someone

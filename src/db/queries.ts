@@ -23,7 +23,7 @@ import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
 } from '@/services/crypto/message';
 import type {
-  Alert, Call, Chat, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
+  Alert, Call, CallLog, Chat, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
   GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting,
 } from './types';
 
@@ -2925,6 +2925,79 @@ export async function markCallMissed(callId: string): Promise<void> {
   call.seen = call.direction !== 'incoming'; // outgoing never pings the badge
   call.updatedAt = now();
   await put('calls', call);
+}
+
+/** Record a GROUP call in the Calls tab. Unlike 1:1 (createCall→finishCall), a group
+ *  call is logged once at the end with a fresh id (the room id is reused across calls)
+ *  and the set of participants that actually joined. */
+export async function recordGroupCall(meta: {
+  roomId: string;
+  name: string;
+  avatar: string;
+  direction: 'incoming' | 'outgoing';
+  video: boolean;
+  durationSec: number;
+  participants: string[];
+  missed: boolean;
+}): Promise<void> {
+  const ts = now();
+  await put<Call>('calls', {
+    id: uid(),
+    contactId: meta.roomId,
+    name: meta.name,
+    avatar: meta.avatar,
+    direction: meta.direction,
+    missed: meta.missed,
+    video: meta.video,
+    durationSec: meta.durationSec,
+    seen: true,
+    timestamp: ts,
+    updatedAt: ts,
+    isGroup: true,
+    roomId: meta.roomId,
+    participants: meta.participants,
+  });
+}
+
+const clockDur = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+/** Preview/summary text for a call-log chat row + chats-list preview. */
+export function callLogPreview(log: CallLog): string {
+  if (log.isGroup) {
+    if (log.missed) return 'Group call, no answer';
+    return log.durationSec ? `Group call · ${clockDur(log.durationSec)}` : 'Group call';
+  }
+  if (log.missed) return log.direction === 'incoming' ? 'Missed call' : 'No answer';
+  return `Call · ${clockDur(log.durationSec ?? 0)}`;
+}
+
+/** Insert a LOCAL-ONLY informational "call" row into a chat's history (each side logs
+ *  its own; never sent to the peer), and update the chat's last-message preview. Works
+ *  for a 1:1 chat (chatId = peer) and a group chat (chatId = room id). */
+export async function logCallToChat(chatId: string, log: CallLog): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  const ts = now();
+  const preview = callLogPreview(log);
+  const message: Message = {
+    id: uid(),
+    chatId,
+    senderId: 'me',
+    senderName: 'You',
+    body: preview,
+    kind: 'call',
+    timestamp: ts,
+    outgoing: log.direction === 'outgoing',
+    status: 'read', // informational; never enqueued, no receipts
+    callLog: log,
+    updatedAt: ts,
+  };
+  await put('messages', message);
+  chat.lastMessage = preview;
+  chat.lastKind = 'call';
+  chat.lastMessageTime = ts;
+  chat.updatedAt = ts;
+  await put('chats', chat);
 }
 
 /* ---- invitations (pending placeholders + auto-accept) ---- */

@@ -85,7 +85,18 @@
              the bubble markup is reused unchanged. -->
         <template v-if="item.kind === 'msg'">
         <template v-for="m in [item.message]" :key="m.id">
-        <div class="bubble-row" :class="{ out: m.outgoing }">
+        <!-- Call log: a centered informational row (not a bubble). Tap to call back. -->
+        <div v-if="m.kind === 'call'" class="call-row" role="button" @click="onCallRow(m)">
+          <ion-icon
+            :icon="m.callLog?.video ? videocamOutline : callOutline"
+            :class="{ 'call-missed': m.callLog?.missed }"
+          />
+          <span class="call-row-text">{{ m.body }}</span>
+          <span v-if="m.callLog?.participants?.length" class="call-row-parts">
+            {{ m.callLog.participants.join(', ') }}
+          </span>
+        </div>
+        <div v-else class="bubble-row" :class="{ out: m.outgoing }">
           <!-- Group chats: the sender's avatar next to their messages (shown once
                per consecutive run; a spacer keeps continuation bubbles aligned). -->
           <template v-if="chat?.isGroup && !m.outgoing">
@@ -739,6 +750,11 @@ function openSenderProfile(senderId: string): void {
 
 // Place a voice/video call: 1:1 (direct P2P) or, for a group chat, a group call
 // joining the SFU room keyed by the chat id.
+// Tapping a call-log row calls back, in the same mode (voice/video) as the logged call.
+function onCallRow(m: Message): void {
+  void startCall(m.callLog?.video ? 'Video' : 'Voice');
+}
+
 async function startCall(kind: 'Voice' | 'Video') {
   const c = chat.value;
   if (!c) return;
@@ -2935,6 +2951,36 @@ function cancelRecording() {
   color: var(--app-text-muted);
   font-size: 12px;
   font-weight: 600;
+}
+/* Centered call-log row (not a bubble). */
+.call-row {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 86%;
+  margin: 6px auto;
+  padding: 6px 14px;
+  border-radius: 14px;
+  background: var(--app-surface);
+  color: var(--app-text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.call-row ion-icon {
+  font-size: 17px;
+}
+.call-row .call-missed {
+  color: var(--ion-color-danger, #eb445a);
+}
+.call-row-text {
+  font-weight: 600;
+}
+.call-row-parts {
+  opacity: 0.8;
+  font-size: 12px;
 }
 .picker-host {
   display: flex;

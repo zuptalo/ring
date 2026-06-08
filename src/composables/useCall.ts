@@ -22,6 +22,8 @@ import {
   createCall,
   finishCall,
   markCallMissed,
+  recordGroupCall,
+  logCallToChat,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow } from '@/services/crypto/identity';
@@ -221,8 +223,12 @@ let lastLoss = { lost: 0, recv: 0 };
 let returnPath = '/tabs/calls';
 
 const RING_TIMEOUT_MS = 35_000; // callee: auto-decline if unanswered
-const DIAL_TIMEOUT_MS = 45_000; // caller: give up if nobody answers
+const DIAL_TIMEOUT_MS = 30_000; // caller: give up if nobody answers (30s, no-answer)
 const GRACE_MS = 12_000; // mid-call: tolerate a blip before ending
+
+// Group calls: the set of OTHER participants that actually joined during the call
+// (accumulated from call-roster frames), for the call log + Calls-tab record.
+const groupJoined = new Set<string>();
 
 /* ---- helpers ---- */
 
@@ -493,16 +499,59 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   lastManualRouteAt = 0; // don't carry a manual-override window into the next call
   applyAudioSession('auto'); // iOS: release the voice audio category
 
-  // Persist the outcome to local call history (with the data used).
+  // Persist the outcome to local call history (Calls tab) AND a local-only
+  // informational row in the chat (1:1 or group). Each side logs its own. Internal
+  // teardowns (answered-elsewhere, glare) pass silent → no user-facing log.
   if (meta) {
-    if (wasConnected) {
-      const durationSec = Math.max(0, Math.floor((Date.now() - (meta.startedAt ?? Date.now())) / 1000));
-      await finishCall(meta.callId, durationSec, totalBytes);
-    } else {
-      await markCallMissed(meta.callId);
+    const durationSec = wasConnected
+      ? Math.max(0, Math.floor((Date.now() - (meta.startedAt ?? Date.now())) / 1000))
+      : 0;
+    const video = meta.kind === 'video';
+    // 1:1 Calls-tab record (unchanged behaviour).
+    if (!meta.isGroup) {
+      if (wasConnected) await finishCall(meta.callId, durationSec, totalBytes);
+      else await markCallMissed(meta.callId);
     }
-    if (meta) meta.endedReason = reason;
+    if (!opts?.silent) {
+      if (meta.isGroup) {
+        const joinedIds = [...groupJoined];
+        const missed = joinedIds.length === 0; // nobody else joined → "no answer"
+        // Resolve to display names (snapshot) so the log/row need no async lookup.
+        const participants = await Promise.all(
+          joinedIds.map(async (id) => (await getContact(id))?.name ?? id.slice(0, 8)),
+        );
+        await recordGroupCall({
+          roomId: meta.roomId ?? meta.callId,
+          name: meta.name,
+          avatar: meta.avatar,
+          direction: meta.direction,
+          video,
+          durationSec,
+          participants,
+          missed,
+        });
+        if (meta.roomId) {
+          await logCallToChat(meta.roomId, {
+            direction: meta.direction,
+            video,
+            missed,
+            durationSec: missed ? undefined : durationSec,
+            isGroup: true,
+            participants,
+          });
+        }
+      } else if (meta.chatId) {
+        await logCallToChat(meta.chatId, {
+          direction: meta.direction,
+          video,
+          missed: !wasConnected, // unanswered either way (text differs by direction)
+          durationSec: wasConnected ? durationSec : undefined,
+        });
+      }
+    }
+    meta.endedReason = reason;
   }
+  groupJoined.clear();
 
   setState('ended');
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
@@ -1369,6 +1418,7 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // leave the count unchanged) is still classified correctly.
       const before = new Set((callMeta.value?.roster ?? []).filter((id) => id !== self));
       const after = frame.members.filter((id) => id !== self);
+      after.forEach((id) => groupJoined.add(id)); // remember everyone who joined, for the call log
       const afterSet = new Set(after);
       const someoneLeft = [...before].some((id) => !afterSet.has(id));
       if (callMeta.value) callMeta.value.roster = frame.members;
