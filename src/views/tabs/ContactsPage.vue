@@ -25,16 +25,17 @@
         </ion-toolbar>
       </ion-header>
 
-      <!-- Freshly-joined users (only the inviter as a contact) get a nudge to grow
-           their network by browsing the directory. -->
-      <div v-if="showBrowseHint" class="browse-hint" @click="router.push('/directory')">
-        <ion-icon :icon="compassOutline" />
-        <ion-label class="ion-text-wrap">
-          <h3>Find people to chat with</h3>
-          <p>Browse the user directory to connect with others on Ring.</p>
-        </ion-label>
-        <ion-button size="small" fill="solid">Browse</ion-button>
-      </div>
+      <!-- Always-available entry point to grow your network by browsing the public
+           directory. Pinned to the top of Contacts so it's reachable at any time. -->
+      <ion-list class="browse-list">
+        <ion-item button :detail="true" lines="full" @click="router.push('/directory')">
+          <ion-icon slot="start" :icon="compassOutline" color="primary" />
+          <ion-label>
+            <h2>Browse user directory</h2>
+            <p>Find people to chat with on Ring</p>
+          </ion-label>
+        </ion-item>
+      </ion-list>
 
       <ion-list v-if="incomingRequests.length">
         <ion-list-header>
@@ -377,9 +378,6 @@ async function rejectConn(req: ConnItem): Promise<void> {
   await sheet.present();
 }
 
-// Nudge a freshly-joined user (only the inviter as a contact) to browse the directory.
-const showBrowseHint = computed(() => (contacts.value?.length ?? 0) <= 1);
-
 onMounted(() => {
   void refreshServerInvites();
   void refreshConnections();
@@ -409,30 +407,12 @@ const groups = computed(() => {
 </script>
 
 <style scoped>
-.browse-hint {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 12px 16px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: rgba(var(--ion-color-primary-rgb), 0.1);
-  cursor: pointer;
+/* Pinned "Browse user directory" row sits flush above the requests/contacts lists. */
+.browse-list {
+  padding-top: 0;
 }
-.browse-hint ion-icon {
-  font-size: 28px;
-  color: var(--ion-color-primary);
-  flex-shrink: 0;
-}
-.browse-hint h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-.browse-hint p {
-  margin: 2px 0 0;
-  font-size: 13px;
-  color: var(--app-text-muted);
+.browse-list ion-icon {
+  font-size: 24px;
 }
 .empty {
   text-align: center;
