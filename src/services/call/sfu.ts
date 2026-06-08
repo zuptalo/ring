@@ -230,6 +230,18 @@ export class GroupSession {
     }
   }
 
+  /** Replace the outgoing video track in place (camera flip / screen share). Keeps
+   *  the sender (so its E2EE transform stays attached) and needs no renegotiation.
+   *  Returns false if this session has no video sender (an audio-only group call),
+   *  since adding video would require an SFU re-offer we don't drive from the client.
+   *  Only the sender is touched here; the caller updates the local-preview stream. */
+  async replaceVideoTrack(track: MediaStreamTrack): Promise<boolean> {
+    const sender = this.pc?.getSenders().find((s) => s.track?.kind === 'video');
+    if (!sender) return false;
+    await sender.replaceTrack(track);
+    return true;
+  }
+
   remoteTrackCount(): number {
     let n = 0;
     for (const s of this.remote.values()) n += s.getTracks().length;

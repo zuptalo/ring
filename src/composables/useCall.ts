@@ -41,6 +41,10 @@ export const localStream = ref<MediaStream | null>(null);
 export const remoteStream = ref<MediaStream | null>(null);
 export const muted = ref(false);
 export const cameraOff = ref(false);
+// Which camera the local video track is using, and whether we're sharing the screen
+// (in which case the outgoing video track is the display, not the camera).
+export const cameraFacing = ref<'user' | 'environment'>('user');
+export const screenSharing = ref(false);
 export const callStats = ref({ durationSec: 0, kbpsUp: 0, kbpsDown: 0 });
 // Group calls: the remote participants' streams (one per peer) for the tile grid.
 export const remoteStreams = ref<MediaStream[]>([]);
@@ -69,6 +73,15 @@ export function supportsAudioOutput(): boolean {
     'setSinkId' in HTMLMediaElement.prototype &&
     !!navigator.mediaDevices?.enumerateDevices
   );
+}
+
+/** iOS (incl. iPadOS posing as Mac). On iOS there's no setSinkId, but a 1:1 call's
+ *  remote audio can still be steered between the earpiece (an <audio> element) and
+ *  the loudspeaker (a <video> element); the call UI uses this to offer the toggle. */
+export function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /iphone|ipad|ipod/i.test(ua) || (/Macintosh/.test(ua) && typeof document !== 'undefined' && 'ontouchend' in document);
 }
 
 const BT_RE = /(bluetooth|airpod|\bbt\b|hands[-\s]?free|a2dp|\ble audio\b|wh-|wf-|buds|beats|headset)/i;
@@ -107,7 +120,11 @@ function devicesByRoute(): Partial<Record<AudioRoute, MediaDeviceInfo>> {
  *  output selection is supported (the OS may or may not honor the split, but the
  *  user still gets the toggle); Bluetooth appears only while a BT sink exists. */
 export const availableRoutes = computed<AudioRoute[]>(() => {
-  if (!supportsAudioOutput()) return [];
+  if (!supportsAudioOutput()) {
+    // iOS: no output-selection API, but for a 1:1 call we can still flip earpiece /
+    // speaker via the audio-vs-video element trick (Bluetooth follows the system).
+    return isIOS() && !callMeta.value?.isGroup ? ['earpiece', 'speaker'] : [];
+  }
   const routes: AudioRoute[] = ['earpiece', 'speaker'];
   if (devicesByRoute().bluetooth) routes.unshift('bluetooth');
   return routes;
@@ -447,6 +464,11 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   pendingIce.length = 0;
   muted.value = false;
   cameraOff.value = false;
+  cameraFacing.value = 'user';
+  screenSharing.value = false;
+  activeScreenTrack?.stop();
+  activeScreenTrack = null;
+  screenAddedVideo = false;
   routeInitialized = false; // next call re-applies its kind/BT default route
   lastManualRouteAt = 0; // don't carry a manual-override window into the next call
 
@@ -737,6 +759,15 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
       try {
         await pc.setRemoteDescription({ type: signal.sdpType ?? 'offer', sdp: signal.sdp });
         await drainPendingIce();
+        // Adopt the peer's call kind if it changed (they turned video on/off), so our
+        // UI shows or hides the video stage to match. Pick up the kind-appropriate
+        // default audio route on the change (unless on Bluetooth).
+        if (signal.kind && cur.kind !== signal.kind) {
+          cur.kind = signal.kind;
+          if (audioRoute.value !== 'bluetooth') {
+            await setRoute(signal.kind === 'video' ? 'speaker' : 'earpiece');
+          }
+        }
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await sendSealedSignal('call-answer', cur.chatId, from, cur.callId, {
@@ -887,7 +918,211 @@ export function toggleMute(): void {
 
 export function toggleCamera(): void {
   cameraOff.value = !cameraOff.value;
+  // Acts on whichever video track is live (camera, or the screen while sharing), so
+  // the user can blank/resume the outgoing video without ending the call.
   localStream.value?.getVideoTracks().forEach((t) => (t.enabled = !cameraOff.value));
+}
+
+/* ---- mid-call media changes (camera flip, screen share, video<->audio) ----
+ *
+ * replaceTrack swaps a track in-place with NO renegotiation (camera flip, screen
+ * share over an existing video sender), so it works for 1:1 AND for the SFU sender
+ * in a group call. ADDING or REMOVING video (audio<->video, or sharing the screen
+ * from an audio-only call) changes the m-line set and needs a fresh offer/answer;
+ * that's only wired for 1:1 here (the SFU is server-offers-only, so group calls must
+ * already carry video to flip the camera or screen-share). */
+
+let activeScreenTrack: MediaStreamTrack | null = null;
+let screenAddedVideo = false; // screen share added video to an audio-only 1:1 call
+
+function videoSender(): RTCRtpSender | null {
+  return pc?.getSenders().find((s) => s.track?.kind === 'video') ?? null;
+}
+
+/** Send a fresh offer for the current 1:1 PC (after adding/removing a track). The
+ *  peer answers via handleOffer's renegotiation branch. */
+async function renegotiate(): Promise<void> {
+  const meta = callMeta.value;
+  if (!pc || !meta || meta.isGroup || !meta.chatId || !meta.peerUserId) return;
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await sendSealedSignal('call-offer', meta.chatId, meta.peerUserId, meta.callId, {
+      callId: meta.callId,
+      type: 'offer',
+      kind: meta.kind,
+      sdp: offer.sdp,
+      sdpType: offer.type,
+    });
+  } catch (e) {
+    console.warn('[call] renegotiate failed', e);
+  }
+}
+
+/** Put `track` into the local preview stream (so the on-screen self-view updates),
+ *  replacing + optionally stopping the previous video track. */
+function setLocalVideoTrack(track: MediaStreamTrack | null, stopOld: boolean): void {
+  const ls = localStream.value;
+  if (!ls) {
+    if (track) localStream.value = new MediaStream([track]);
+    return;
+  }
+  for (const old of ls.getVideoTracks()) {
+    ls.removeTrack(old);
+    if (stopOld) old.stop();
+  }
+  if (track) {
+    track.enabled = !cameraOff.value;
+    ls.addTrack(track);
+  }
+}
+
+/** Replace the outgoing video track on whichever connection is active. Returns false
+ *  if there's no video sender to replace (e.g. an audio-only group call). */
+async function replaceOutgoingVideo(track: MediaStreamTrack): Promise<boolean> {
+  if (groupSession) return groupSession.replaceVideoTrack(track);
+  const sender = videoSender();
+  if (!sender) return false;
+  await sender.replaceTrack(track);
+  return true;
+}
+
+/** Flip between the front and rear camera mid-call (camera calls only). */
+export async function switchCamera(): Promise<void> {
+  if (screenSharing.value) return; // flip applies to the camera, not the shared screen
+  const next = cameraFacing.value === 'user' ? 'environment' : 'user';
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: next } } });
+  } catch {
+    await toast('Could not switch camera');
+    return;
+  }
+  const track = stream.getVideoTracks()[0];
+  if (!track) return;
+  if (!(await replaceOutgoingVideo(track))) {
+    track.stop();
+    return;
+  }
+  cameraFacing.value = next;
+  setLocalVideoTrack(track, true);
+}
+
+/** Start/stop sharing the screen. While sharing, the outgoing video track is the
+ *  display capture; stopping restores the camera (or returns an audio call to audio).
+ *  Audio routes to the loudspeaker while sharing (unless on Bluetooth). */
+export async function toggleScreenShare(): Promise<void> {
+  if (screenSharing.value) {
+    await stopScreenShare();
+    return;
+  }
+  let display: MediaStream;
+  try {
+    display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch {
+    return; // user dismissed the OS picker
+  }
+  const screenTrack = display.getVideoTracks()[0];
+  if (!screenTrack) return;
+  // The OS "Stop sharing" affordance ends the track directly.
+  screenTrack.addEventListener('ended', () => void stopScreenShare());
+
+  const meta = callMeta.value;
+  if (await replaceOutgoingVideo(screenTrack)) {
+    // Had a video sender already (video call) → swapped the track in place.
+  } else if (!meta?.isGroup && pc && meta) {
+    // Audio-only 1:1 call → add a video track and renegotiate to carry it.
+    pc.addTrack(screenTrack, localStream.value ?? new MediaStream([screenTrack]));
+    meta.kind = 'video';
+    screenAddedVideo = true;
+    await renegotiate();
+  } else {
+    // Audio-only group call: can't add video without an SFU re-offer.
+    screenTrack.stop();
+    await toast('Start the call with video to share your screen');
+    return;
+  }
+  activeScreenTrack = screenTrack;
+  setLocalVideoTrack(screenTrack, true);
+  screenSharing.value = true;
+  cameraOff.value = false;
+  if (audioRoute.value !== 'bluetooth') await setRoute('speaker'); // shared content → loudspeaker
+}
+
+async function stopScreenShare(): Promise<void> {
+  if (!screenSharing.value) return;
+  screenSharing.value = false;
+  activeScreenTrack?.stop();
+  activeScreenTrack = null;
+  const meta = callMeta.value;
+
+  if (screenAddedVideo && pc && meta) {
+    // Screen share had upgraded an audio call → drop back to audio-only.
+    screenAddedVideo = false;
+    const sender = videoSender();
+    if (sender) {
+      sender.track?.stop();
+      await sender.replaceTrack(null);
+    }
+    setLocalVideoTrack(null, true);
+    meta.kind = 'audio';
+    await renegotiate();
+    if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
+    return;
+  }
+
+  // Otherwise restore the camera (a fresh capture; the old one was stopped on share).
+  let camTrack: MediaStreamTrack | null = null;
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+    camTrack = s.getVideoTracks()[0] ?? null;
+  } catch {
+    camTrack = null;
+  }
+  if (camTrack && (await replaceOutgoingVideo(camTrack))) {
+    setLocalVideoTrack(camTrack, true);
+  } else {
+    camTrack?.stop();
+  }
+}
+
+/** Toggle a 1:1 call between audio-only and video (adds/removes the camera track and
+ *  renegotiates). Group audio<->video isn't supported here (needs an SFU re-offer). */
+export async function toggleVideoMode(): Promise<void> {
+  const meta = callMeta.value;
+  if (!pc || !meta || meta.isGroup) return;
+  if (meta.kind === 'audio') {
+    let s: MediaStream;
+    try {
+      s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+    } catch {
+      await toast('Camera unavailable');
+      return;
+    }
+    const track = s.getVideoTracks()[0];
+    if (!track) return;
+    const sender = videoSender();
+    if (sender) await sender.replaceTrack(track);
+    else pc.addTrack(track, localStream.value ?? s);
+    setLocalVideoTrack(track, true);
+    meta.kind = 'video';
+    cameraOff.value = false;
+    await renegotiate();
+    if (audioRoute.value !== 'bluetooth') await setRoute('speaker');
+  } else {
+    screenSharing.value = false;
+    activeScreenTrack?.stop();
+    activeScreenTrack = null;
+    const sender = videoSender();
+    if (sender) {
+      sender.track?.stop();
+      await sender.replaceTrack(null);
+    }
+    setLocalVideoTrack(null, true);
+    meta.kind = 'audio';
+    await renegotiate();
+    if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
+  }
 }
 
 /* ---- inbound frame dispatch (called from sync.ts) ---- */
@@ -1063,11 +1298,16 @@ export function useCall() {
     muted,
     cameraOff,
     callStats,
+    cameraFacing,
+    screenSharing,
     startDirectCall,
     acceptCall,
     rejectCall,
     hangupCall,
     toggleMute,
     toggleCamera,
+    switchCamera,
+    toggleScreenShare,
+    toggleVideoMode,
   };
 }

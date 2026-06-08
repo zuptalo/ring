@@ -45,12 +45,14 @@
         <!-- 1:1 call: one stream fills the screen, the other is a draggable PiP.
              Tap the PiP to swap which is fullscreen; drag it to any of 9 anchors. -->
         <template v-else>
+          <!-- Both 1:1 videos are muted; remote audio plays through the dedicated
+               sinks below so we can steer earpiece vs loudspeaker. -->
           <video
             v-show="mainHasVideo"
             ref="mainVideo"
             class="main-video"
-            :class="{ mirror: mainIsLocal }"
-            :muted="mainIsLocal"
+            :class="{ mirror: mainIsLocal && cameraFacing === 'user' }"
+            muted
             autoplay
             playsinline
           />
@@ -66,7 +68,7 @@
             ref="pipVideo"
             class="pip-video"
             :style="pipStyle"
-            :muted="pipIsLocal"
+            muted
             autoplay
             playsinline
             @pointerdown="onPipDown"
@@ -74,6 +76,13 @@
             @pointerup="onPipUp"
             @pointercancel="onPipCancel"
           />
+
+          <!-- Remote audio sinks (1:1). On iOS, audio from an <audio> element routes
+               to the earpiece and from a <video> element to the loudspeaker, which is
+               how the earpiece/speaker toggle works there; on Chromium setSinkId on
+               the <audio> selects the device. -->
+          <audio ref="earAudio" class="route-sink" autoplay playsinline />
+          <video ref="spkVideo" class="route-sink" autoplay playsinline />
         </template>
 
         <!-- Header: name + status/duration/bitrate, plus a connection warning. -->
@@ -105,6 +114,15 @@
           <button v-if="canRoute" class="ctl" aria-label="Audio output" @click="chooseOutput">
             <ion-icon :icon="routeIcon" />
           </button>
+          <button
+            v-if="hasMore"
+            class="ctl"
+            :class="{ active: screenSharing }"
+            aria-label="More"
+            @click="openMore"
+          >
+            <ion-icon :icon="ellipsisHorizontalOutline" />
+          </button>
           <button class="ctl hangup" aria-label="Hang up" @click="hangup">
             <ion-icon :icon="callOutline" />
           </button>
@@ -119,17 +137,21 @@ import { computed, ref, watch, onMounted, nextTick } from 'vue';
 import { IonPage, IonContent, IonAvatar, IonIcon, IonSpinner, actionSheetController } from '@ionic/vue';
 import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
-  volumeHighOutline, volumeLowOutline, bluetoothOutline, warningOutline,
+  volumeHighOutline, bluetoothOutline, warningOutline,
+  phonePortraitOutline, cameraReverseOutline, desktopOutline, ellipsisHorizontalOutline,
 } from 'ionicons/icons';
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, muted, cameraOff, callStats,
-  connectionWarning, hangupCall, toggleMute, toggleCamera,
-  audioOutputId, supportsAudioOutput, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
+  connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
+  switchCamera, toggleScreenShare, toggleVideoMode,
+  audioOutputId, supportsAudioOutput, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   type AudioRoute,
 } from '@/composables/useCall';
 
 const mainVideo = ref<HTMLVideoElement | null>(null);
 const pipVideo = ref<HTMLVideoElement | null>(null);
+const earAudio = ref<HTMLAudioElement | null>(null);
+const spkVideo = ref<HTMLVideoElement | null>(null);
 const stageEl = ref<HTMLElement | null>(null);
 
 /* ---- 1:1 stage: which stream is fullscreen, and where the PiP sits ---- */
@@ -239,21 +261,52 @@ function promote(id: string | null): void {
 }
 
 // The route button reflects the LIVE route so the user can tell where audio is going.
+// Earpiece uses a phone-handset icon (clearly distinct from the loudspeaker).
 const routeIcon = computed(() =>
   audioRoute.value === 'bluetooth'
     ? bluetoothOutline
     : audioRoute.value === 'speaker'
       ? volumeHighOutline
-      : volumeLowOutline,
+      : phonePortraitOutline,
 );
-// Only offer routing where the platform supports it (Chromium) and there's a
-// choice to make. iOS controls the audio route via the system, not the web app.
-const canRoute = computed(() => supportsAudioOutput() && availableRoutes.value.length > 1);
+// Offer the earpiece/speaker toggle wherever we can actually switch: Chromium (via
+// setSinkId) and, for 1:1 calls, iOS (via the audio-vs-video element trick). Group
+// calls on iOS still defer to the system route.
+const canRoute = computed(() =>
+  callMeta.value?.isGroup
+    ? supportsAudioOutput() && availableRoutes.value.length > 1
+    : availableRoutes.value.length > 1,
+);
 
 /** Point a media element's audio at the chosen output device (best-effort). */
 function applySinkTo(el: HTMLMediaElement | null): void {
   const sink = (el as unknown as { setSinkId?: (id: string) => Promise<void> } | null)?.setSinkId;
   if (el && sink) void sink.call(el, audioOutputId.value).catch(() => {});
+}
+
+/** Point a sink element at a stream (or detach) and (un)mute it. */
+function setSink(el: HTMLMediaElement | null, stream: MediaStream | null, mute: boolean): void {
+  if (!el) return;
+  if (el.srcObject !== (stream ?? null)) el.srcObject = stream;
+  el.muted = mute;
+  if (stream && !mute) void el.play?.().catch(() => {});
+}
+
+/** Route the 1:1 remote audio to the chosen output. On iOS, 'speaker' plays the
+ *  stream through the hidden <video> (loudspeaker) and everything else through the
+ *  <audio> (earpiece); on Chromium it always plays through the <audio> with setSinkId
+ *  picking the device. The visible call videos are muted, so this is the only audio. */
+function routeRemoteAudio(): void {
+  if (callMeta.value?.isGroup) return; // group audio plays via the tiles
+  const stream = remoteStream.value;
+  if (isIOS() && audioRoute.value === 'speaker') {
+    setSink(spkVideo.value, stream, false);
+    setSink(earAudio.value, null, true);
+  } else {
+    setSink(earAudio.value, stream, false);
+    setSink(spkVideo.value, null, true);
+    applySinkTo(earAudio.value); // Chromium device selection (no-op on iOS)
+  }
 }
 
 function attach(el: HTMLVideoElement | null, stream: MediaStream | null): void {
@@ -275,6 +328,12 @@ function applySinkAll(): void {
 watch([mainVideo, mainStream], () => attach(mainVideo.value, mainStream.value));
 watch([pipVideo, pipStream], () => attach(pipVideo.value, pipStream.value));
 watch(audioOutputId, applySinkAll);
+// Re-route the 1:1 remote audio whenever the stream, the chosen route, the sink
+// elements, or the call kind (audio<->video changes the default route) changes.
+watch(
+  [remoteStream, audioRoute, earAudio, spkVideo, () => callMeta.value?.kind],
+  routeRemoteAudio,
+);
 watch(remoteStreams, (streams) => {
   // If the spotlighted participant left, drop back to the even grid (no black stage).
   if (
@@ -292,7 +351,37 @@ watch(remoteStreams, (streams) => {
 onMounted(() => {
   attach(mainVideo.value, mainStream.value);
   attach(pipVideo.value, pipStream.value);
+  routeRemoteAudio();
 });
+
+/* ---- secondary controls (camera flip, screen share, video<->audio) in a sheet ---- */
+// 1:1 always has an applicable action; a group call only when it carries video (the
+// SFU can't add video mid-call from the client), so an audio-only group hides it.
+const hasMore = computed(() => (callMeta.value?.isGroup ? callMeta.value?.kind === 'video' : true));
+
+async function openMore(): Promise<void> {
+  const isGroup = !!callMeta.value?.isGroup;
+  const isVideo = callMeta.value?.kind === 'video';
+  const buttons: Parameters<typeof actionSheetController.create>[0]['buttons'] = [];
+  if (isVideo && !screenSharing.value) {
+    buttons.push({ text: 'Flip camera', icon: cameraReverseOutline, handler: () => void switchCamera() });
+  }
+  buttons.push({
+    text: screenSharing.value ? 'Stop screen share' : 'Share screen',
+    icon: desktopOutline,
+    handler: () => void toggleScreenShare(),
+  });
+  if (!isGroup) {
+    buttons.push({
+      text: isVideo ? 'Switch to audio only' : 'Turn on video',
+      icon: isVideo ? videocamOffOutline : videocamOutline,
+      handler: () => void toggleVideoMode(),
+    });
+  }
+  buttons.push({ text: 'Cancel', role: 'cancel' });
+  const sheet = await actionSheetController.create({ header: 'Call options', buttons });
+  await sheet.present();
+}
 
 const ROUTE_LABEL: Record<AudioRoute, string> = {
   earpiece: 'Earpiece',
@@ -390,6 +479,15 @@ function hangup(): void {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+/* Hidden audio/video elements used only to steer the 1:1 remote audio route; they
+   must stay in the DOM and playing, but take no space. */
+.route-sink {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 .group-grid {
   position: absolute;
