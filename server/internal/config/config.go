@@ -100,6 +100,14 @@ type Config struct {
 	// AcmeDirectoryURL (ACME_DIRECTORY_URL) overrides the ACME server, e.g. the
 	// Let's Encrypt staging URL while testing (avoids prod rate limits). Empty = LE prod.
 	AcmeDirectoryURL string
+	// AcmeEabKid / AcmeEabHmacKey (ACME_EAB_KID / ACME_EAB_HMAC_KEY) enable External
+	// Account Binding (RFC 8555 7.3.4), required by non-LE CAs like Google Trust
+	// Services and ZeroSSL. Use these (with that CA's ACME_DIRECTORY_URL) to issue
+	// from a CA whose root old Android trusts when Let's Encrypt's ISRG roots aren't
+	// in the device store. The HMAC key is base64url (as the CA hands it out); ringd
+	// decodes it. Both must be set or EAB stays off (plain LE).
+	AcmeEabKid     string
+	AcmeEabHmacKey string
 	// TLSPort (TLS_PORT, default 8443) is the port ringd serves the HTTPS app on
 	// when Acme is enabled (a passthrough proxy routes the app host's :443 here).
 	TLSPort string
@@ -137,6 +145,8 @@ func Load() (Config, error) {
 		Acme:                envBool("ACME", false),
 		AcmeEmail:           os.Getenv("ACME_EMAIL"),
 		AcmeDirectoryURL:    os.Getenv("ACME_DIRECTORY_URL"),
+		AcmeEabKid:          os.Getenv("ACME_EAB_KID"),
+		AcmeEabHmacKey:      os.Getenv("ACME_EAB_HMAC_KEY"),
 		TLSPort:             env("TLS_PORT", "8443"),
 		MaxBlobBytes:        maxInt(envInt("MAX_BLOB_MB", 256), 1) << 20, // floor 1 MiB
 	}

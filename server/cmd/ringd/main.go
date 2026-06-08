@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -448,6 +449,18 @@ func newCertManager(ctx context.Context, st *store.Store, cfg config.Config) (*a
 	}
 	if cfg.AcmeDirectoryURL != "" {
 		m.Client = &acme.Client{DirectoryURL: cfg.AcmeDirectoryURL}
+	}
+	// External Account Binding: non-LE CAs (Google Trust Services, ZeroSSL) bind the
+	// ACME account to credentials they pre-issue (KID + HMAC key). Use this to issue
+	// from a CA whose root older Android trusts (e.g. GTS -> GlobalSign Root R1) when
+	// Let's Encrypt's ISRG roots aren't in the device store. The CA hands out the HMAC
+	// key as base64url; autocert HMAC-signs with the RAW bytes, so decode it here.
+	if cfg.AcmeEabKid != "" && cfg.AcmeEabHmacKey != "" {
+		key, derr := base64.RawURLEncoding.DecodeString(strings.TrimRight(cfg.AcmeEabHmacKey, "="))
+		if derr != nil {
+			return nil, fmt.Errorf("decode ACME_EAB_HMAC_KEY (expected base64url): %w", derr)
+		}
+		m.ExternalAccountBinding = &acme.ExternalAccountBinding{KID: cfg.AcmeEabKid, Key: key}
 	}
 	return m, nil
 }
