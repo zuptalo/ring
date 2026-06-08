@@ -51,6 +51,11 @@ function detectPlatform(): InstallPlatform {
 const mustInstall = ref(false);
 const platform = ref<InstallPlatform>('desktop');
 const canPrompt = ref(false);
+// Android only: set true when we've waited for `beforeinstallprompt` and it never
+// fired, which means this browser (e.g. old Chrome / a WebView on Android 6) can't
+// install Ring as a real standalone PWA - "Add to Home" would only make a shortcut.
+// The guard uses it to explain that, instead of showing steps that won't work.
+const installUnavailable = ref(false);
 let deferredPrompt: BeforeInstallPromptEvent | null = null;
 let started = false;
 
@@ -59,6 +64,15 @@ function start(): void {
   started = true;
   platform.value = detectPlatform();
   mustInstall.value = !isStandalone() && !isLocalhost();
+
+  // On Android a capable Chrome fires `beforeinstallprompt` within a moment of load;
+  // if it hasn't after a short wait (and we're still gated), this browser can't do a
+  // real install, so surface the clearer guidance.
+  if (platform.value === 'android' && mustInstall.value) {
+    setTimeout(() => {
+      if (!canPrompt.value) installUnavailable.value = true;
+    }, 2500);
+  }
 
   // If the page is ever (re)evaluated as standalone, drop the gate.
   try {
@@ -74,6 +88,7 @@ function start(): void {
     e.preventDefault();
     deferredPrompt = e as BeforeInstallPromptEvent;
     canPrompt.value = true;
+    installUnavailable.value = false; // a real install IS possible here
   });
   window.addEventListener('appinstalled', () => {
     deferredPrompt = null;
@@ -97,5 +112,5 @@ export async function promptInstall(): Promise<void> {
 
 export function useInstallGuard() {
   start();
-  return { mustInstall, platform, canPrompt };
+  return { mustInstall, platform, canPrompt, installUnavailable };
 }

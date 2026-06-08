@@ -1,8 +1,7 @@
 <template>
-  <!-- In-app notification banners: a green (app-brand) card with the chat avatar +
-       name + preview, tap to open. Green so it reads clearly in light AND dark
-       themes; white text on a deep emerald for legibility, with the vibrant icon
-       green as the edge + avatar accent. -->
+  <!-- In-app notification banners (iOS/Telegram style): a neutral translucent card
+       with the chat avatar + bold name + preview and a small grab handle. Tap to
+       open; auto-dismisses. Readable in both light and dark themes. -->
   <div class="nb-stack">
     <div
       v-for="b in banners"
@@ -13,24 +12,24 @@
       @click="open(b)"
       @keydown.enter="open(b)"
     >
-      <div class="nb-avatar">
-        <img v-if="b.avatar" :src="b.avatar" :alt="b.name" />
-        <ion-icon v-else :icon="b.kind === 'request' ? personAddOutline : chatbubbleEllipsesOutline" />
+      <div class="nb-main">
+        <div class="nb-avatar">
+          <img v-if="b.avatar" :src="b.avatar" :alt="b.name" />
+          <ion-icon v-else :icon="b.kind === 'request' ? personAddOutline : chatbubbleEllipsesOutline" />
+        </div>
+        <div class="nb-text">
+          <div class="nb-name">{{ b.name }}</div>
+          <div class="nb-body">{{ b.body }}</div>
+        </div>
       </div>
-      <div class="nb-text">
-        <div class="nb-name">{{ b.name }}</div>
-        <div class="nb-body">{{ b.body }}</div>
-      </div>
-      <button class="nb-close" aria-label="Dismiss" @click.stop="dismissBanner(b.id)">
-        <ion-icon :icon="closeOutline" />
-      </button>
+      <span class="nb-handle" aria-hidden="true" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { IonIcon } from '@ionic/vue';
-import { closeOutline, personAddOutline, chatbubbleEllipsesOutline } from 'ionicons/icons';
+import { personAddOutline, chatbubbleEllipsesOutline } from 'ionicons/icons';
 import router from '@/router';
 import { notifyBanners, dismissBanner, type NotifyBanner } from '@/services/notify';
 
@@ -58,21 +57,27 @@ function open(b: NotifyBanner): void {
 .nb {
   pointer-events: auto;
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
   width: 100%;
   max-width: 560px;
   margin: 0 auto;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border-left: 4px solid var(--ion-color-primary, #10b981);
+  padding: 10px 14px 6px;
+  border-radius: 18px;
   color: #fff;
-  /* Deep emerald: clearly the app's green, dark enough for crisp white text in any
-     theme (white-on-#10b981 alone fails contrast). */
-  background: #0a7d5c;
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.3);
+  /* Neutral translucent slate (light theme); a darker charcoal in dark theme below.
+     Self-contained + white text so it stays legible over any background. */
+  background: rgba(58, 60, 66, 0.92);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.32);
   cursor: pointer;
   animation: nb-in 0.22s ease;
+}
+@media (prefers-color-scheme: dark) {
+  .nb {
+    background: rgba(44, 44, 48, 0.82);
+  }
 }
 @keyframes nb-in {
   from {
@@ -84,17 +89,21 @@ function open(b: NotifyBanner): void {
     transform: translateY(0);
   }
 }
+.nb-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .nb-avatar {
   flex: none;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.2);
-  border: 2px solid var(--ion-color-primary, #10b981);
+  background: rgba(255, 255, 255, 0.16);
 }
 .nb-avatar img {
   width: 100%;
@@ -103,7 +112,7 @@ function open(b: NotifyBanner): void {
   display: block;
 }
 .nb-avatar ion-icon {
-  font-size: 22px;
+  font-size: 20px;
   color: #fff;
 }
 .nb-text {
@@ -119,25 +128,17 @@ function open(b: NotifyBanner): void {
 }
 .nb-body {
   font-size: 14px;
-  opacity: 0.94;
+  opacity: 0.88;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.nb-close {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
-  cursor: pointer;
-}
-.nb-close ion-icon {
-  font-size: 18px;
+/* Decorative grab handle, like the screenshots. */
+.nb-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  margin: 2px auto 0;
+  background: rgba(255, 255, 255, 0.4);
 }
 </style>

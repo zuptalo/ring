@@ -327,6 +327,19 @@ function addLocalTracks(conn: RTCPeerConnection, stream: MediaStream): void {
   for (const track of stream.getTracks()) conn.addTrack(track, stream);
 }
 
+/** Tell iOS (WebKit 16.4+) which audio session category to use. 'play-and-record'
+ *  is the voice-call category, which routes to the EARPIECE (receiver) by default
+ *  instead of the loudspeaker; 'auto' restores normal media behaviour after a call.
+ *  No-op where the API is absent (Chromium, older iOS). */
+function applyAudioSession(type: 'play-and-record' | 'auto'): void {
+  try {
+    const as = (navigator as unknown as { audioSession?: { type?: string } }).audioSession;
+    if (as) as.type = type;
+  } catch {
+    /* unsupported */
+  }
+}
+
 function onConnected(): void {
   clearGrace();
   clearDialTimer();
@@ -337,6 +350,7 @@ function onConnected(): void {
   const meta = callMeta.value;
   if (meta) meta.startedAt = Date.now();
   startTimers();
+  applyAudioSession('play-and-record'); // iOS: prefer the earpiece (voice category)
   void initAudioRoute(); // enumerate outputs + pick this call's starting route
 }
 
@@ -471,6 +485,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   screenAddedVideo = false;
   routeInitialized = false; // next call re-applies its kind/BT default route
   lastManualRouteAt = 0; // don't carry a manual-override window into the next call
+  applyAudioSession('auto'); // iOS: release the voice audio category
 
   // Persist the outcome to local call history (with the data used).
   if (meta) {
@@ -1008,12 +1023,23 @@ export async function switchCamera(): Promise<void> {
   setLocalVideoTrack(track, true);
 }
 
+/** Whether this platform can capture the screen. getDisplayMedia exists on desktop
+ *  + Android Chrome, but NOT on iOS Safari/PWA (a hard WebKit limitation), so we
+ *  hide the option there instead of letting it silently no-op. */
+export function canScreenShare(): boolean {
+  return typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+}
+
 /** Start/stop sharing the screen. While sharing, the outgoing video track is the
  *  display capture; stopping restores the camera (or returns an audio call to audio).
  *  Audio routes to the loudspeaker while sharing (unless on Bluetooth). */
 export async function toggleScreenShare(): Promise<void> {
   if (screenSharing.value) {
     await stopScreenShare();
+    return;
+  }
+  if (!canScreenShare()) {
+    await toast('Screen sharing isn’t supported on this device');
     return;
   }
   let display: MediaStream;

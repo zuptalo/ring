@@ -49,6 +49,20 @@
         </ion-text>
       </div>
 
+      <!-- Old Android / WebView that can't do a real PWA install (no
+           beforeinstallprompt): explain why, rather than show steps whose
+           "Add to Home" only makes a shortcut. -->
+      <div v-if="platform === 'android' && installUnavailable" class="ion-padding">
+        <div class="cant-install">
+          <ion-icon :icon="warningOutline" />
+          <span>
+            This browser can’t install Ring as an app, it would only add a shortcut
+            (which can’t run in the background or receive notifications). Update Chrome
+            to the latest version, or open Ring in a newer browser, then install.
+          </span>
+        </div>
+      </div>
+
       <!-- Native install button (Chromium / Android, when available). -->
       <div v-if="canPrompt" class="ion-padding">
         <ion-button expand="block" shape="round" @click="install">
@@ -103,10 +117,10 @@ import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonContent,
   IonText, IonButton, IonIcon, IonList, IonListHeader, IonItem, IonLabel, IonNote,
 } from '@ionic/vue';
-import { downloadOutline, shareOutline } from 'ionicons/icons';
+import { downloadOutline, shareOutline, warningOutline } from 'ionicons/icons';
 import { useInstallGuard, promptInstall } from '@/composables/useInstallGuard';
 
-const { mustInstall, platform, canPrompt } = useInstallGuard();
+const { mustInstall, platform, canPrompt, installUnavailable } = useInstallGuard();
 
 const install = (): void => void promptInstall();
 
@@ -154,6 +168,23 @@ ion-page {
   max-width: 760px;
   margin: 0 auto;
   padding-top: max(env(safe-area-inset-top, 0px), 8px);
+}
+/* Callout for browsers that can't do a real install (old Android Chrome/WebView). */
+.cant-install {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ion-color-warning) 16%, transparent);
+  color: var(--ion-color-warning-shade, #b88600);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.cant-install ion-icon {
+  flex: none;
+  font-size: 20px;
+  margin-top: 1px;
 }
 /* One identical 24×24 start-slot wrapper per step. Putting a uniform element in
    the slot (instead of an icon vs note vs svg) is what makes every row's label

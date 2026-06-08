@@ -146,7 +146,7 @@ import {
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
-  switchCamera, toggleScreenShare, toggleVideoMode,
+  switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare,
   audioOutputId, supportsAudioOutput, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   type AudioRoute,
 } from '@/composables/useCall';
@@ -326,10 +326,16 @@ function applySinkAll(): void {
   stageEl.value?.querySelectorAll('video').forEach((v) => applySinkTo(v));
 }
 
-// 1:1: bind each physical element to whichever stream currently fills its slot, so a
-// swap re-attaches both (re-pointing srcObject + re-applying the audio sink).
-watch([mainVideo, mainStream], () => attach(mainVideo.value, mainStream.value));
-watch([pipVideo, pipStream], () => attach(pipVideo.value, pipStream.value));
+// 1:1: bind each physical element to its slot's stream ONLY when that slot actually
+// shows video. For an audio call the remote stream must never reach a <video> (a
+// playing <video>, even muted, forces iOS to the loudspeaker and defeats the <audio>
+// earpiece sink); audio then flows solely through routeRemoteAudio's sink elements.
+watch([mainVideo, mainStream, mainHasVideo], () =>
+  attach(mainVideo.value, mainHasVideo.value ? mainStream.value : null),
+);
+watch([pipVideo, pipStream, pipHasVideo], () =>
+  attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null),
+);
 watch(audioOutputId, applySinkAll);
 // Re-route the 1:1 remote audio whenever the stream, the chosen route, the sink
 // elements, or the call kind (audio<->video changes the default route) changes.
@@ -352,8 +358,8 @@ watch(remoteStreams, (streams) => {
   void nextTick(applySinkAll);
 });
 onMounted(() => {
-  attach(mainVideo.value, mainStream.value);
-  attach(pipVideo.value, pipStream.value);
+  attach(mainVideo.value, mainHasVideo.value ? mainStream.value : null);
+  attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null);
   routeRemoteAudio();
 });
 
@@ -366,8 +372,9 @@ async function openMore(): Promise<void> {
     buttons.push({ text: 'Flip camera', icon: cameraReverseOutline, handler: () => void switchCamera() });
   }
   // Screen share needs a video sender to swap; on a group audio call there isn't one
-  // (turn on video first), so only offer it for 1:1 or a group video call.
-  if (!isGroup || isVideo) {
+  // (turn on video first), so only offer it for 1:1 or a group video call. Also hide
+  // it where the platform can't capture the screen (iOS Safari has no getDisplayMedia).
+  if ((!isGroup || isVideo) && canScreenShare()) {
     buttons.push({
       text: screenSharing.value ? 'Stop screen share' : 'Share screen',
       icon: desktopOutline,
@@ -642,14 +649,21 @@ const diag = computed(() => {
   right: 0;
   bottom: max(36px, env(safe-area-inset-bottom));
   display: flex;
-  gap: 28px;
+  /* Five buttons must fit a ~360pt phone without the flexbox squishing them into
+     ovals: a tighter gap + side padding + non-shrinking circular buttons, and wrap
+     as a last resort on very narrow screens. */
+  gap: 14px;
+  row-gap: 14px;
+  flex-wrap: wrap;
+  padding: 0 12px;
   align-items: center;
   justify-content: center;
   z-index: 2;
 }
 .ctl {
-  width: 60px;
-  height: 60px;
+  flex: 0 0 auto; /* never shrink → stays a circle */
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.16);
@@ -660,7 +674,7 @@ const diag = computed(() => {
   cursor: pointer;
 }
 .ctl ion-icon {
-  font-size: 26px;
+  font-size: 25px;
 }
 .ctl.active {
   background: #fff;

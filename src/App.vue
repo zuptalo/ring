@@ -226,13 +226,11 @@ body.keyboard-open ion-footer {
    transform shifts the whole overlay layer, taking the toast with it. */
 ion-toast.app-update-toast {
   transform: translateY(calc(-1 * (var(--keyboard-height, 0px) + 60px)));
-  /* Match the in-app notification banners: deep app-green, white text, readable in
+  /* Neutral dark, matching the in-app notification banners; white text reads in
      both themes. */
-  --background: #0a7d5c;
+  --background: #2c2c30;
   --color: #fff;
-  --border-color: var(--ion-color-primary, #10b981);
-  --border-style: solid;
-  --border-width: 0 0 0 4px;
+  --border-radius: 14px;
 }
 ion-toast.app-update-toast::part(button) {
   color: #fff;
