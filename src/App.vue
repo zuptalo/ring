@@ -9,8 +9,10 @@
     <!-- Outermost gate: blocks a plain browser tab until Ring is installed
          (overlays everything, including the key gate). -->
     <install-guard />
-    <!-- Global incoming-call ringer: shows over any route while a call rings. -->
+    <!-- Global incoming-call ringer: a non-blocking banner while a call rings. -->
     <incoming-call-overlay />
+    <!-- Floating call widget when a call runs but the call screen is minimized. -->
+    <minimized-call />
     <!-- In-app notification banners (green, with avatar + name): over any route. -->
     <notification-banners />
   </ion-app>
@@ -30,6 +32,7 @@ import { useAutoLock } from '@/composables/useAutoLock';
 import KeyGuard from '@/components/KeyGuard.vue';
 import InstallGuard from '@/components/InstallGuard.vue';
 import IncomingCallOverlay from '@/components/IncomingCallOverlay.vue';
+import MinimizedCall from '@/components/MinimizedCall.vue';
 import NotificationBanners from '@/components/NotificationBanners.vue';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate } from '@/composables/useAppUpdate';

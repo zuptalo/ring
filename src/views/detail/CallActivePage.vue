@@ -99,6 +99,11 @@
           @pointerleave="diagUp"
           @pointercancel="diagUp"
         >
+          <!-- Minimize: leave the full-screen call (it keeps running as a floating
+               widget) so you can use the app while on the call. -->
+          <button class="minimize-btn" aria-label="Minimize call" @click.stop="minimizeCall">
+            <ion-icon :icon="chevronDownOutline" />
+          </button>
           <h2 class="name">{{ callMeta?.name }}</h2>
           <p class="status">{{ statusText }}</p>
           <p v-if="connectionWarning" class="warn">
@@ -162,12 +167,12 @@ import Emoji from '@/components/Emoji.vue';
 import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
-  phonePortraitOutline, cameraReverseOutline, desktopOutline, ellipsisHorizontalOutline,
+  phonePortraitOutline, cameraReverseOutline, desktopOutline, ellipsisHorizontalOutline, chevronDownOutline,
 } from 'ionicons/icons';
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
-  switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare,
+  switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare, minimizeCall,
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, supportsAudioOutput, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   type AudioRoute,
@@ -686,6 +691,24 @@ const diag = computed(() => {
   text-align: center;
   z-index: 1;
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+}
+.minimize-btn {
+  position: absolute;
+  left: 8px;
+  top: -4px;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.minimize-btn ion-icon {
+  font-size: 24px;
 }
 .name {
   margin: 0;

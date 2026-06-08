@@ -9,7 +9,9 @@
              completes (headerReady), WhatsApp-style, so any toolbar reflow while
              the back button + title region settle is never visible. -->
         <ion-buttons slot="start">
-          <ion-back-button default-href="/tabs/chats" text="" />
+          <!-- The back button doubles as an unread counter for the REST of the app
+               ("< 5"), so new messages in other chats aren't missed while you're here. -->
+          <ion-back-button default-href="/tabs/chats" :text="backText" />
         </ion-buttons>
         <button
           v-if="chat"
@@ -677,7 +679,7 @@ import {
   quickReactEmojis,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
-  unblockContact, detectTerminated, firstMessageOnOrAfter,
+  unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
@@ -1471,6 +1473,14 @@ const chat = useLiveQuery<Chat | undefined>(
   ['chats'],
   undefined,
 );
+
+// Back button doubles as an unread badge for the REST of the app. This chat is marked
+// read on open, so the total minus this chat's unread is "everything else".
+const totalUnread = useLiveQuery(() => countUnread(), ['chats'], 0);
+const backText = computed(() => {
+  const other = Math.max(0, totalUnread.value - (chat.value?.unread ?? 0));
+  return other > 0 ? (other > 99 ? '99+' : String(other)) : '';
+});
 
 // The 1:1 peer's contact (live), to drive the ghosted/blocked composer states.
 const peerId = computed(() =>

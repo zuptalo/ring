@@ -975,6 +975,22 @@ export async function rejectCall(): Promise<void> {
   await teardown('declined', { silent: meta.isGroup });
 }
 
+/** Leave the full-screen call UI WITHOUT ending the call: return to wherever the call
+ *  was placed from. The call keeps running and the floating MinimizedCall widget shows
+ *  it, so the user can keep using the app and tap to re-expand. */
+export function minimizeCall(): void {
+  if (router.currentRoute.value.fullPath === '/call-active') {
+    void router.replace(returnPath);
+  }
+}
+
+/** Re-expand a minimized call back to the full-screen call screen. */
+export function expandCall(): void {
+  if (router.currentRoute.value.fullPath !== '/call-active') {
+    void router.push('/call-active');
+  }
+}
+
 /** Hang up the current (outgoing/connecting/connected) call. */
 export async function hangupCall(): Promise<void> {
   const meta = callMeta.value;

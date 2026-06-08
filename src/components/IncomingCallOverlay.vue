@@ -1,25 +1,23 @@
 <template>
-  <!-- Global incoming-call UI: a fixed overlay shown over any route while a call
-       is ringing. Accept is the user gesture that also unlocks audio playback. -->
-  <div v-if="callState === 'incoming' && callMeta" class="incoming">
-    <div class="who">
-      <ion-avatar class="avatar">
-        <img :src="callMeta.avatar" :alt="callMeta.name" />
-      </ion-avatar>
-      <h2 class="name">{{ callMeta.name }}</h2>
-      <p class="kind">
-        {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming
-        {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
-      </p>
+  <!-- Incoming-call ring: a NON-blocking banner at the top so you can keep using the
+       app (e.g. finish a chat) while deciding. Accepting is the gesture that unlocks
+       audio AND switches to the full-screen call screen. -->
+  <div v-if="callState === 'incoming' && callMeta" class="ring-banner">
+    <ion-avatar class="ring-avatar">
+      <img :src="callMeta.avatar" :alt="callMeta.name" />
+    </ion-avatar>
+    <div class="ring-text">
+      <div class="ring-name">{{ callMeta.name }}</div>
+      <div class="ring-kind">
+        {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
+      </div>
     </div>
-    <div class="actions">
-      <button class="btn decline" aria-label="Decline" @click="reject">
-        <ion-icon :icon="callOutline" />
-      </button>
-      <button class="btn accept" aria-label="Accept" @click="accept">
-        <ion-icon :icon="callMeta.kind === 'video' ? videocamOutline : callOutline" />
-      </button>
-    </div>
+    <button class="ring-btn decline" aria-label="Decline" @click="reject">
+      <ion-icon :icon="callOutline" />
+    </button>
+    <button class="ring-btn accept" aria-label="Accept" @click="accept">
+      <ion-icon :icon="callMeta.kind === 'video' ? videocamOutline : callOutline" />
+    </button>
   </div>
 </template>
 
@@ -37,66 +35,81 @@ function reject(): void {
 </script>
 
 <style scoped>
-.incoming {
+.ring-banner {
   position: fixed;
-  inset: 0;
-  z-index: 20000;
+  top: max(8px, env(safe-area-inset-top));
+  left: 10px;
+  right: 10px;
+  max-width: 560px;
+  margin: 0 auto;
+  z-index: 20000; /* above content + the notification banners */
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  padding: max(48px, env(safe-area-inset-top)) 24px max(48px, env(safe-area-inset-bottom));
-  background: rgba(0, 0, 0, 0.92);
-  color: #fff;
-  backdrop-filter: blur(8px);
-}
-.who {
-  margin-top: 12vh;
-  display: flex;
-  flex-direction: column;
   align-items: center;
   gap: 12px;
-  text-align: center;
+  padding: 10px 12px;
+  border-radius: 18px;
+  color: #fff;
+  background: #0a7d5c; /* app green; an incoming call is a "go" action */
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.4);
+  animation: ring-in 0.22s ease;
 }
-.avatar {
-  width: 112px;
-  height: 112px;
+@keyframes ring-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
-.name {
-  margin: 0;
-  font-size: 26px;
-  font-weight: 600;
+.ring-avatar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 2px solid rgba(255, 255, 255, 0.8);
 }
-.kind {
-  margin: 0;
-  opacity: 0.7;
+.ring-text {
+  flex: 1;
+  min-width: 0;
+}
+.ring-name {
+  font-weight: 700;
   font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.actions {
-  display: flex;
-  gap: 72px;
-  align-items: center;
+.ring-kind {
+  font-size: 13px;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.btn {
-  width: 68px;
-  height: 68px;
+.ring-btn {
+  flex: none;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 30px;
+  font-size: 21px;
   color: #fff;
   cursor: pointer;
 }
-.btn ion-icon {
-  font-size: 30px;
+.ring-btn ion-icon {
+  font-size: 21px;
 }
 .decline {
   background: var(--ion-color-danger, #eb445a);
   transform: rotate(135deg);
 }
 .accept {
-  background: var(--ion-color-success, #2dd36f);
+  background: #fff;
+  color: #0a7d5c;
 }
 </style>
