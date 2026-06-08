@@ -1029,7 +1029,36 @@ let activeScreenTrack: MediaStreamTrack | null = null;
 let screenAddedVideo = false; // screen share added video to an audio-only 1:1 call
 
 function videoSender(): RTCRtpSender | null {
-  return pc?.getSenders().find((s) => s.track?.kind === 'video') ?? null;
+  // Match by the TRANSCEIVER's media kind, not the sender's current track. A 1:1
+  // video->audio downgrade nulls the track (replaceTrack(null)) but leaves the sender
+  // and its video m-line alive for the life of the PC. Filtering on s.track?.kind would
+  // miss that dormant sender, so a later audio->video re-upgrade would addTrack a SECOND
+  // video m-line and the live track would land on an inactive direction the peer never
+  // receives (local self-view still shows, audio keeps flowing: the reported bug).
+  // receiver.track.kind keeps reporting 'video' even when the sender's track is null, so
+  // we always reuse the one existing video transceiver via replaceTrack.
+  const tx = pc?.getTransceivers().find((t) => t.receiver?.track?.kind === 'video');
+  return tx?.sender ?? null;
+}
+
+/** Test-only introspection: number of video transceivers on the 1:1 PC, matched by the
+ *  receiver's media kind so a dormant sender whose track was nulled still counts. Used
+ *  to prove a re-upgrade reuses the single video m-line instead of adding a duplicate. */
+export function videoTransceiverCount(): number {
+  return pc?.getTransceivers().filter((t) => t.receiver?.track?.kind === 'video').length ?? 0;
+}
+
+/** Test-only: cumulative inbound video frames decoded on the 1:1 PC. A real media-flow
+ *  signal (independent of the receiver track's muted attribute, which is unreliable in
+ *  headless Chromium) for asserting that video actually reaches us after a re-upgrade. */
+export async function inboundVideoFrames(): Promise<number> {
+  if (!pc) return 0;
+  let frames = 0;
+  (await pc.getStats()).forEach((r) => {
+    const s = r as { type: string; kind?: string; framesDecoded?: number };
+    if (s.type === 'inbound-rtp' && s.kind === 'video') frames += s.framesDecoded ?? 0;
+  });
+  return frames;
 }
 
 /** Send a fresh offer for the current 1:1 PC (after adding/removing a track). The

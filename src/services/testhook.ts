@@ -94,6 +94,8 @@ import {
   remoteStreams,
   localStream,
   callStats,
+  videoTransceiverCount,
+  inboundVideoFrames,
 } from '@/composables/useCall';
 
 export function installTestHook(): void {
@@ -389,6 +391,12 @@ export function installTestHook(): void {
     remoteVideoTracks: () =>
       (remoteStream.value?.getVideoTracks().length ?? 0) +
       remoteStreams.value.reduce((n, s) => n + s.getVideoTracks().length, 0),
+    /** Number of 1:1 video transceivers (1 = healthy; 2 = the duplicate-m-line bug a
+     *  re-upgrade after a downgrade used to create, which stranded the live video). */
+    videoTransceivers: () => videoTransceiverCount(),
+    /** Cumulative inbound video frames decoded: a real media-flow signal, independent
+     *  of the receiver track's muted attribute (unreliable in headless Chromium). */
+    inboundVideoFrames: () => inboundVideoFrames(),
     localTracks: () => localStream.value?.getTracks().length ?? 0,
   };
   (window as unknown as { __ringTest: typeof api }).__ringTest = api;
