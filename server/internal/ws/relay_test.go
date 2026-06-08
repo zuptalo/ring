@@ -23,6 +23,8 @@ type memRelay struct {
 	queue   map[string][]store.RelayItem // recipient -> items (FIFO)
 	senders map[string]map[string]string // recipient -> msgID -> sender
 	blocks  map[string]map[string]bool   // blocker -> blocked -> true
+	deliv   []store.Delivery             // recorded deliveries (sender-scoped lookup)
+	delivBy map[string]string            // msgID -> sender, for the lookup
 }
 
 func newMemRelay() *memRelay {
@@ -30,6 +32,7 @@ func newMemRelay() *memRelay {
 		queue:   map[string][]store.RelayItem{},
 		senders: map[string]map[string]string{},
 		blocks:  map[string]map[string]bool{},
+		delivBy: map[string]string{},
 	}
 }
 
@@ -87,6 +90,38 @@ func (m *memRelay) DeleteRelay(_ context.Context, recipient, msgID string) (stri
 	}
 	m.queue[recipient] = kept
 	return sender, true, nil
+}
+
+func (m *memRelay) RecordDelivery(_ context.Context, sender, recipient, msgID string) error {
+	if sender == "" || recipient == "" || msgID == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, d := range m.deliv {
+		if d.MsgID == msgID && d.Recipient == recipient {
+			return nil // idempotent
+		}
+	}
+	m.deliv = append(m.deliv, store.Delivery{MsgID: msgID, Recipient: recipient, DeliveredMs: 1})
+	m.delivBy[msgID] = sender
+	return nil
+}
+
+func (m *memRelay) DeliveriesFor(_ context.Context, sender string, msgIDs []string) ([]store.Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := map[string]bool{}
+	for _, id := range msgIDs {
+		want[id] = true
+	}
+	var out []store.Delivery
+	for _, d := range m.deliv {
+		if want[d.MsgID] && m.delivBy[d.MsgID] == sender {
+			out = append(out, d)
+		}
+	}
+	return out, nil
 }
 
 func (m *memRelay) SetPresencePrefs(_ context.Context, _, _, _ string) error { return nil }

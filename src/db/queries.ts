@@ -1699,6 +1699,34 @@ async function resendRecentOutgoing(chatId: string): Promise<void> {
   }
 }
 
+/* ---- delivery reconcile (recover a 'delivered' receipt dropped while we were offline) ---- */
+
+const RECONCILE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+const RECONCILE_ID_CAP = 500;
+
+/**
+ * Collect the ids of our recent OUTGOING messages whose delivery isn't confirmed
+ * yet - 1:1 messages still at 'sent', and group messages with any member not yet
+ * 'delivered'. On reconnect these are handed to the server (checkDeliveries) so a
+ * 'delivered' receipt that was dropped because WE were offline when the recipient
+ * acked is recovered. Bounded by a recency window + a hard cap so the check is cheap.
+ */
+export async function collectUnconfirmedOutgoing(): Promise<string[]> {
+  const since = now() - RECONCILE_WINDOW_MS;
+  const all = await getAll<Message>('messages');
+  const ids: string[] = [];
+  for (const m of all) {
+    if (!m.outgoing || m.timestamp < since) continue;
+    const recs = m.receipts;
+    if (recs && recs.length) {
+      if (recs.some((r) => !r.deliveredAt)) ids.push(m.id);
+    } else if (m.status === 'sent') {
+      ids.push(m.id);
+    }
+  }
+  return ids.slice(-RECONCILE_ID_CAP);
+}
+
 /** Set (or clear) disappearing messages for a chat: messages sent from now on
  *  self-destruct after `ttlMs` (null/0 = off). The setting is shared with the
  *  peer(s) via a `ttl` control so it disappears for everyone. */

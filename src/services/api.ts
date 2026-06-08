@@ -304,6 +304,30 @@ export async function fetchServerConfig(): Promise<{
   return (await res.json()) as { publicUrl: string; vapidPublicKey: string; maxBlobBytes?: number; version?: string };
 }
 
+/** One reconciled delivery: a message we sent reached `recipient` (a group message
+ *  reports one entry per member). */
+export interface DeliveredEntry {
+  messageId: string;
+  recipient: string;
+  at: number;
+}
+
+/**
+ * Reconcile our still-'sent' messages on reconnect: ask the server which of the
+ * given message ids it has recorded as delivered (so a 'delivered' receipt that was
+ * dropped while we were offline is recovered). Returns the delivered entries.
+ */
+export async function checkDeliveries(ids: string[]): Promise<DeliveredEntry[]> {
+  if (!ids.length) return [];
+  const res = await fetch(`${apiBaseUrl()}/v1/deliveries/check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error(`deliveries check failed: ${res.status}`);
+  return ((await res.json()) as { delivered?: DeliveredEntry[] }).delivered ?? [];
+}
+
 /* ---- connect-request lifecycle (directory-initiated 1:1 connections) ---- */
 
 export interface ConnReq {

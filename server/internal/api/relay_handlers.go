@@ -48,6 +48,11 @@ func (h *Handlers) relayPending(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		frames = append(frames, json.RawMessage(it.Payload))
 		if it.Sender != "" && it.MsgID != "" {
+			// Record durably first so the sender can reconcile even if it's offline
+			// right now and this live receipt is dropped.
+			if err := h.Relay.RecordDelivery(r.Context(), it.Sender, uid, it.MsgID); err != nil {
+				slog.Error("record delivery failed", "err", err, "msg", it.MsgID)
+			}
 			receipt, _ := json.Marshal(map[string]any{
 				"t": "receipt", "messageId": it.MsgID, "status": "delivered", "at": time.Now().UnixMilli(), "from": uid,
 			})
@@ -82,6 +87,9 @@ func (h *Handlers) relayAck(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if found && sender != "" {
+			if err := h.Relay.RecordDelivery(r.Context(), sender, uid, id); err != nil {
+				slog.Error("record delivery failed", "err", err, "msg", id)
+			}
 			receipt, _ := json.Marshal(map[string]any{
 				"t": "receipt", "messageId": id, "status": "delivered", "at": time.Now().UnixMilli(), "from": uid,
 			})
@@ -89,4 +97,38 @@ func (h *Handlers) relayAck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type deliveriesCheckRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// deliveriesCheck (POST /v1/deliveries/check) lets a sender reconcile its still-
+// 'sent' messages on reconnect: given a list of message ids it originated, it
+// returns the durably-recorded deliveries (one entry per recipient, so a group
+// message can report each member). This recovers a 'delivered' receipt that was
+// dropped because the sender was offline at the moment the recipient acked.
+func (h *Handlers) deliveriesCheck(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	var req deliveriesCheckRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Bound the query the same way the client bounds what it asks about.
+	const maxIDs = 500
+	if len(req.IDs) > maxIDs {
+		req.IDs = req.IDs[:maxIDs]
+	}
+	rows, err := h.Relay.DeliveriesFor(r.Context(), uid, req.IDs)
+	if err != nil {
+		slog.Error("deliveries check failed", "err", err, "user", uid)
+		httpx.Error(w, http.StatusInternalServerError, "could not load deliveries")
+		return
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, map[string]any{"messageId": d.MsgID, "recipient": d.Recipient, "at": d.DeliveredMs})
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"delivered": out})
 }

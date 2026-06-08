@@ -13,7 +13,8 @@ import { subscribe } from '@/db/idb';
 import { isAuthenticated, getToken, verifySessionOrReset, getPendingInviter } from '@/services/auth';
 import { WebSocketTransport, type Frame, type Transport, type TransportState } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides } from '@/db/queries';
+import { getChat, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing } from '@/db/queries';
+import { checkDeliveries } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
 import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
@@ -88,6 +89,37 @@ async function sendPresenceSelf(active: boolean): Promise<void> {
   }
 }
 
+/**
+ * Reconcile delivery receipts on reconnect. A 'delivered' receipt is sent to the
+ * sender over a non-blocking socket when the recipient acks; if the sender happened
+ * to be offline at that instant the receipt is lost and the message stays 'sent'
+ * forever even though it was delivered. The server now records deliveries durably,
+ * so here we ask which of our still-unconfirmed outgoing messages were delivered and
+ * apply the missing receipts (via the normal receipt path, so group aggregation and
+ * the monotonic clamp all hold). Best-effort: retried on the next reconnect.
+ */
+async function reconcileDeliveries(): Promise<void> {
+  if (!isUnlocked.value) return; // messages are unreadable while locked; nothing to reconcile
+  try {
+    const ids = await collectUnconfirmedOutgoing();
+    if (!ids.length) return;
+    const delivered = await checkDeliveries(ids);
+    for (const d of delivered) {
+      // `from` = the recipient that received it, so applyReceipt scopes a group
+      // member's receipt correctly (mirrors a live 'delivered' receipt's shape).
+      await handleIncomingFrame({
+        t: 'receipt',
+        messageId: d.messageId,
+        status: 'delivered',
+        at: d.at,
+        from: d.recipient,
+      });
+    }
+  } catch {
+    /* retried on next reconnect */
+  }
+}
+
 /** We count as "active" (online to peers) only when the app is foregrounded AND
  *  unlocked, so a device sitting at the passcode gate shows offline even though
  *  the relay is connected (for delivery receipts). */
@@ -141,6 +173,7 @@ function start(): void {
     if (s === 'online' && transport) {
       cancelSessionCheck(); // the WS auth passed → our token is valid
       void drainOutbox(transport); // flush what queued offline
+      void reconcileDeliveries(); // recover any 'delivered' receipt dropped while we were offline
       void resumePendingMediaJobs(); // re-attempt any interrupted/failed-but-retryable media
       // Publish our bundle (so peers can start sessions), then top up the
       // one-time prekey pool if it's low. Chained so the count check sees the

@@ -219,6 +219,9 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	// live client still drains + acks over the WebSocket).
 	mux.Handle("GET /v1/relay/pending", authMW(http.HandlerFunc(h.relayPending)))
 	mux.Handle("POST /v1/relay/ack", authMW(http.HandlerFunc(h.relayAck)))
+	// Sender-side reconcile: which of my still-'sent' messages were delivered while
+	// I was offline (so a dropped 'delivered' receipt is recovered on reconnect).
+	mux.Handle("POST /v1/deliveries/check", authMW(http.HandlerFunc(h.deliveriesCheck)))
 
 	// Encrypted media blobs (7d).
 	mux.Handle("POST /v1/blobs", authMW(http.HandlerFunc(h.uploadBlob)))

@@ -30,7 +30,8 @@ type fakeStore struct {
 	profiles  map[string]*store.DirectoryUser // userID -> directory profile
 	relay     map[string][]relayRow           // recipient -> queued frames
 	relaySeq  int64
-	contacts  map[string][]string // owner -> contact ids
+	contacts  map[string][]string         // owner -> contact ids
+	deliv     map[string][]store.Delivery // sender -> recorded deliveries
 }
 
 func newFakeStore() *fakeStore {
@@ -240,6 +241,38 @@ func (f *fakeStore) DeleteRelay(_ context.Context, recipient, msgID string) (str
 	return "", false, nil
 }
 
+func (f *fakeStore) RecordDelivery(_ context.Context, sender, recipient, msgID string) error {
+	if sender == "" || recipient == "" || msgID == "" {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.deliv == nil {
+		f.deliv = map[string][]store.Delivery{}
+	}
+	for _, d := range f.deliv[sender] {
+		if d.MsgID == msgID && d.Recipient == recipient {
+			return nil // idempotent
+		}
+	}
+	f.deliv[sender] = append(f.deliv[sender], store.Delivery{MsgID: msgID, Recipient: recipient, DeliveredMs: 1})
+	return nil
+}
+func (f *fakeStore) DeliveriesFor(_ context.Context, sender string, msgIDs []string) ([]store.Delivery, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := map[string]bool{}
+	for _, id := range msgIDs {
+		want[id] = true
+	}
+	var out []store.Delivery
+	for _, d := range f.deliv[sender] {
+		if want[d.MsgID] {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
 func (f *fakeStore) SetPresencePrefs(context.Context, string, string, string) error { return nil }
 func (f *fakeStore) TouchLastSeen(context.Context, string) error                    { return nil }
 func (f *fakeStore) GetPresence(context.Context, []string) (map[string]store.PresenceInfo, error) {

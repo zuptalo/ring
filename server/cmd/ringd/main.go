@@ -377,11 +377,19 @@ func run() error {
 			case <-ticker.C:
 				sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				n, err := st.SweepRelayOlderThan(sctx, relayRetention)
-				cancel()
 				if err != nil {
 					slog.Error("relay sweep", "err", err)
 				} else if n > 0 {
 					slog.Info("relay sweep", "removed", n)
+				}
+				// Delivery records (sender-reconcile state) age out on the same
+				// schedule/retention as the relay queue they shadow.
+				dn, derr := st.SweepDeliveriesOlderThan(sctx, relayRetention)
+				cancel()
+				if derr != nil {
+					slog.Error("deliveries sweep", "err", derr)
+				} else if dn > 0 {
+					slog.Info("deliveries sweep", "removed", dn)
 				}
 			}
 		}

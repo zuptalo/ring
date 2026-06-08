@@ -56,6 +56,10 @@ type RelayStore interface {
 	EnqueueRelay(ctx context.Context, recipient, sender, msgID string, payload []byte) error
 	PendingForRecipient(ctx context.Context, recipient string) ([]store.RelayItem, error)
 	DeleteRelay(ctx context.Context, recipient, msgID string) (sender string, found bool, err error)
+	// RecordDelivery durably notes msgID (from sender) reached recipient, so the
+	// sender can reconcile a dropped 'delivered' receipt on reconnect.
+	RecordDelivery(ctx context.Context, sender, recipient, msgID string) error
+	DeliveriesFor(ctx context.Context, sender string, msgIDs []string) ([]store.Delivery, error)
 	SetPresencePrefs(ctx context.Context, userID, onlineTier, lastSeenTier string) error
 	TouchLastSeen(ctx context.Context, userID string) error
 	GetPresence(ctx context.Context, ids []string) (map[string]store.PresenceInfo, error)
@@ -784,6 +788,12 @@ func (c *Client) handleFrame(data []byte) {
 			return
 		}
 		if found {
+			// Record durably first so the sender can reconcile this 'delivered' on its
+			// next reconnect even if it's offline right now and the receipt below is
+			// dropped (non-blocking Send to an absent sender is a no-op).
+			if err := c.store.RecordDelivery(ctx, sender, c.userID, f.RefID); err != nil {
+				slog.Error("record delivery", "err", err)
+			}
 			// From = the recipient that acked, so the sender scopes the outbox removal
 			// to this recipient's copy (a group message has one copy per member, all
 			// sharing the message id).
