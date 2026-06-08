@@ -230,6 +230,7 @@ const GRACE_MS = 12_000; // mid-call: tolerate a blip before ending
 // (accumulated from call-roster frames), for the call log + Calls-tab record.
 const groupJoined = new Set<string>();
 
+
 /* ---- helpers ---- */
 
 function setState(s: CallState): void {
@@ -452,6 +453,16 @@ function navigateToCall(): void {
 
 /** Tear everything down and reset to idle. Logs the call result locally. */
 export async function teardown(reason: EndReason, opts?: { silent?: boolean }): Promise<void> {
+  // Idempotency: tear down + log each call exactly once even if several end-signals
+  // race (a remote call-end AND the PC closing, a timeout AND a reject, ...). The flag
+  // lives on the per-call CallMeta object and is set synchronously here, before any
+  // await, so a concurrent second teardown returns. (A per-callId guard would be wrong:
+  // group calls reuse the roomId as their callId across calls.)
+  const ending = callMeta.value;
+  if (ending) {
+    if (ending.tornDown) return;
+    ending.tornDown = true;
+  }
   clearRingTimeout();
   clearDialTimer();
   clearGrace();
@@ -1318,7 +1329,16 @@ export async function toggleVideoMode(): Promise<void> {
     }
     const track = s.getVideoTracks()[0];
     if (!track) return;
-    await groupSession!.addVideoTrack(track);
+    // Publish BEFORE touching the local preview / kind, and surface a failure instead
+    // of half-applying (a throw here used to leave a black self tile + nothing sent).
+    try {
+      await groupSession!.addVideoTrack(track);
+    } catch (e) {
+      console.warn('[call] group addVideoTrack failed', e);
+      track.stop();
+      await toast('Could not turn on video');
+      return;
+    }
     setLocalVideoTrack(track, true);
     meta.kind = 'video';
     cameraOff.value = false;

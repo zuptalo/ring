@@ -45,4 +45,7 @@ export interface CallMeta {
   // timing
   startedAt?: number; // set when 'connected'
   endedReason?: EndReason;
+  // internal: set the moment teardown begins so a call is torn down + logged exactly
+  // once even if several end-signals race (a fresh CallMeta object per call resets it).
+  tornDown?: boolean;
 }

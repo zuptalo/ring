@@ -74,7 +74,8 @@ export class GroupSession {
 
     this.local = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: this.kind === 'video',
+      // Explicit facingMode (not a bare `true`) is more reliable on older iOS Safari.
+      video: this.kind === 'video' ? { facingMode: { ideal: 'user' } } : false,
     });
     this.cb.onLocalStream(this.local);
 
@@ -295,7 +296,11 @@ export class GroupSession {
   async addVideoTrack(track: MediaStreamTrack): Promise<void> {
     if (!this.pc) return;
     const sender = this.pc.addTrack(track, this.local ?? new MediaStream([track]));
-    attachSenderE2EE(sender, this.keyring);
+    // Use the API-aware helper (like buildPeerConnection), NOT attachSenderE2EE: the
+    // latter is insertable-streams only (createEncodedStreams), which is undefined on
+    // iOS Safari and threw here, so turning video on mid-call silently failed on iPhone
+    // (no self preview, nothing published) while audio + receive kept working.
+    this.attachE2EE(sender, 'encrypt');
     await sendLive({ t: 'sfu-renegotiate', roomId: this.roomId });
   }
 
