@@ -42,6 +42,13 @@ export function useViewportHeight() {
       // iOS still reports even though the keyboard now covers that area).
       const keyboardOpen = baselineHeight - vv.height > 150;
       document.body.classList.toggle('keyboard-open', keyboardOpen);
+      // Publish the keyboard's height so bottom-anchored overlays (e.g. the update
+      // toast, which iOS positions against the layout viewport, behind the keyboard)
+      // can lift themselves above it. Zero when the keyboard is closed.
+      document.documentElement.style.setProperty(
+        '--keyboard-height',
+        `${keyboardOpen ? Math.round(baselineHeight - vv.height) : 0}px`,
+      );
     };
 
     apply();

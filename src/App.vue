@@ -215,4 +215,13 @@ body.keyboard-open ion-footer {
   border-radius: 16px;
   overflow: hidden;
 }
+
+/* The "update available" toast is anchored to the bottom (easier to reach than the
+   top), lifted clear of the bottom tab bar / chat composer. When the keyboard is up,
+   iOS keeps the toast pinned to the layout viewport (behind the keyboard), so we add
+   the published --keyboard-height to raise it above the keyboard + composer. The
+   transform shifts the whole overlay layer, taking the toast with it. */
+ion-toast.app-update-toast {
+  transform: translateY(calc(-1 * (var(--keyboard-height, 0px) + 60px)));
+}
 </style>

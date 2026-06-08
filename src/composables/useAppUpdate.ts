@@ -25,13 +25,17 @@ const CHECK_THROTTLE_MS = 10_000;
 
 /**
  * Ask the service worker to check for a newer deployed build. Safe to call on app
- * open, foreground, and whenever the server connection drops (a deploy restarts the
- * server). Throttled; a found update surfaces the version toast via needRefresh.
+ * open, foreground, and whenever the server connection drops or is restored (a deploy
+ * restarts the server). Throttled to avoid hammering, EXCEPT when `force` is set:
+ * a reconnect is a strong "the server may have just been redeployed" signal, and the
+ * offline check that fired moments earlier (often while the network was still down,
+ * so it couldn't actually fetch the new worker) would otherwise swallow it within the
+ * throttle window. A found update surfaces the version toast via needRefresh.
  */
-export function checkForUpdate(): void {
+export function checkForUpdate(force = false): void {
   if (!swReg) return;
   const now = Date.now();
-  if (now - lastCheck < CHECK_THROTTLE_MS) return;
+  if (!force && now - lastCheck < CHECK_THROTTLE_MS) return;
   lastCheck = now;
   void swReg.update().catch(() => {});
 }
@@ -71,7 +75,10 @@ export function useAppUpdate(): void {
       const toast = await toastController.create({
         header: 'Update available',
         message: label,
-        position: 'top',
+        // Sit at the bottom, above the tab bar / chat composer (and above the
+        // keyboard when it's up); see the .app-update-toast rules in App.vue.
+        position: 'bottom',
+        cssClass: 'app-update-toast',
         // No duration: stay until the user chooses.
         buttons: [
           { text: 'Later', role: 'cancel' },

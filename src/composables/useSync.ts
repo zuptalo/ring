@@ -198,6 +198,12 @@ function start(): void {
         void refreshContactProfiles();
       }
       void refreshConnections(); // reconcile incoming/outgoing connect requests
+      // A reconnect can mean the server was just redeployed; check for a new build
+      // now (forced past the throttle, since the offline check moments ago likely
+      // ran while the network was still down and couldn't fetch the new worker).
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        checkForUpdate(true);
+      }
       void applyPushPreference(true); // (re)register or drop push per the notification prefs
       void sendPresencePrefs(); // upload our sharing booleans
       void sendPresenceSub(); // watch our contacts' presence
