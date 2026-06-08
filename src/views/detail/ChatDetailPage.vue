@@ -707,6 +707,7 @@ import { type Quality } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
 import { resolutionLabel, fileSizeLabel, generateVideoPoster } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
+import { normalizeOutgoing } from '@/utils/text';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
 import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact } from '@/db/types';
@@ -1453,16 +1454,6 @@ function onComposerInput(e: CustomEvent): void {
 // start with blank lines / be opened with nothing typed.
 function onComposerEnter(e: KeyboardEvent): void {
   if (!draft.value.trim()) e.preventDefault();
-}
-
-// Tidy an outgoing message: strip trailing spaces on each line, collapse runs of
-// blank lines to at most one, and drop leading/trailing blank lines, so messages
-// don't carry unnecessary vertical space.
-function normalizeOutgoing(text: string): string {
-  return text
-    .replace(/[^\S\n]+$/gm, '') // trailing spaces/tabs per line
-    .replace(/\n{3,}/g, '\n\n') // at most one blank line between paragraphs
-    .trim(); // leading/trailing blank lines + whitespace
 }
 
 const cameraInput = ref<HTMLInputElement | null>(null);

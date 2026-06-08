@@ -89,20 +89,63 @@ export interface NotifyBanner {
   body: string;
   avatar: string;
   url: string;
+  chatId?: string; // message banners only: target for inline quick-reply
 }
 // Live list the overlay renders. Capped + deduped by target so a chatty
 // conversation collapses to one banner instead of stacking.
 export const notifyBanners = ref<NotifyBanner[]>([]);
 const BANNER_MS = 4500;
 const MAX_BANNERS = 3;
+// Pending auto-dismiss timers by banner id, so a banner can be HELD open while the
+// user is composing an inline quick-reply (holdBanner) instead of vanishing mid-type.
+const bannerTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// URLs whose quick-reply is open: these banners are exempt from the MAX_BANNERS cap so
+// a burst of other chats can't silently evict an open reply (+ its typed draft). Keyed
+// by url (not id) since a same-chat follow-up replaces the banner with a fresh id.
+const pinnedUrls = new Set<string>();
 
 function showBanner(b: Omit<NotifyBanner, 'id'>): void {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  notifyBanners.value = [...notifyBanners.value.filter((x) => x.url !== b.url), { ...b, id }].slice(-MAX_BANNERS);
-  setTimeout(() => dismissBanner(id), BANNER_MS);
+  // Replacing a same-target banner: clear its old timer so it can't dismiss the new one.
+  for (const old of notifyBanners.value.filter((x) => x.url === b.url)) clearBannerTimer(old.id);
+  const merged = [...notifyBanners.value.filter((x) => x.url !== b.url), { ...b, id }];
+  // Keep every pinned (open-reply) banner, then fill the remaining slots with the most
+  // recent others, instead of a blind tail-slice that could drop a pinned banner.
+  const pinned = merged.filter((x) => pinnedUrls.has(x.url));
+  const room = Math.max(0, MAX_BANNERS - pinned.length);
+  const others = merged.filter((x) => !pinnedUrls.has(x.url)).slice(-room);
+  const kept = new Set([...pinned, ...others].map((x) => x.id));
+  for (const dropped of merged.filter((x) => !kept.has(x.id))) clearBannerTimer(dropped.id);
+  notifyBanners.value = merged.filter((x) => kept.has(x.id)); // preserves arrival order
+  bannerTimers.set(id, setTimeout(() => dismissBanner(id), BANNER_MS));
+}
+
+function clearBannerTimer(id: string): void {
+  const t = bannerTimers.get(id);
+  if (t) clearTimeout(t);
+  bannerTimers.delete(id);
+}
+
+// Stop a banner's auto-dismiss (the user opened its quick-reply); it then only goes
+// away on send, swipe-up dismiss, or tap-through.
+export function holdBanner(id: string): void {
+  clearBannerTimer(id);
+}
+
+// Exempt / un-exempt a target's banner from the cap while its quick-reply is open.
+export function pinBanner(url: string): void {
+  pinnedUrls.add(url);
+}
+export function unpinBanner(url: string): void {
+  pinnedUrls.delete(url);
 }
 
 export function dismissBanner(id: string): void {
+  clearBannerTimer(id);
+  // Drop any pin for the removed banner's url so the set can't leak (a leaked pin would
+  // make every future banner for that chat immortal).
+  const gone = notifyBanners.value.find((b) => b.id === id);
+  if (gone) pinnedUrls.delete(gone.url);
   notifyBanners.value = notifyBanners.value.filter((b) => b.id !== id);
 }
 
@@ -208,5 +251,5 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
   if (n.kind === 'message' && n.chatId && !avatar) {
     avatar = (await getChat(n.chatId))?.avatar ?? '';
   }
-  showBanner({ kind: n.kind, name: n.name, body: n.body, avatar, url });
+  showBanner({ kind: n.kind, name: n.name, body: n.body, avatar, url, chatId: n.chatId });
 }
