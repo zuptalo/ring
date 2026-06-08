@@ -605,6 +605,7 @@
       @favorite="onViewerFavorite"
       @del="onViewerDelete"
       @share="onViewerShare"
+      @save="onViewerSave"
       @caption="onViewerCaption"
       @goto="onViewerGoto"
       @allmedia="onViewerAllMedia"
@@ -674,6 +675,7 @@ import VoicePlayer from '@/components/VoicePlayer.vue';
 import VideoNote from '@/components/VideoNote.vue';
 import VideoNoteRecorder from '@/components/VideoNoteRecorder.vue';
 import MediaViewer from '@/components/MediaViewer.vue';
+import { saveMessagesMedia } from '@/services/media-save';
 import ForwardPicker from '@/components/ForwardPicker.vue';
 import LocationBubble from '@/components/LocationBubble.vue';
 import PollBubble from '@/components/PollBubble.vue';
@@ -945,6 +947,39 @@ function onViewerShare(id: string): void {
   viewer.value.open = false;
   openForward(id);
 }
+function onViewerSave(id: string): void {
+  void saveMediaForMessages([id]);
+}
+
+// All message ids in an album (oldest first), for "Save all".
+function albumMessageIds(m: Message): string[] {
+  if (!m.albumId) return [m.id];
+  return messages.value
+    .filter((x) => x.albumId === m.albumId && !x.deleted)
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map((x) => x.id);
+}
+
+// Save one or more messages' media to the device, with a brief confirmation. The
+// share sheet ('shared') and a user-cancelled sheet ('cancelled') need no toast;
+// a direct download does, and an empty/failed set warns.
+async function saveMediaForMessages(ids: string[]): Promise<void> {
+  let result: Awaited<ReturnType<typeof saveMessagesMedia>>;
+  try {
+    result = await saveMessagesMedia(ids);
+  } catch {
+    result = 'empty';
+  }
+  const msg = result === 'downloaded' ? 'Saved to your device' : result === 'empty' ? 'Nothing to save' : '';
+  if (!msg) return;
+  const t = await toastController.create({
+    message: msg,
+    duration: 1500,
+    position: 'bottom',
+    color: result === 'empty' ? 'danger' : undefined,
+  });
+  await t.present();
+}
 async function onViewerCaption(id: string): Promise<void> {
   const m = viewerMsg(id);
   const alert = await alertController.create({
@@ -972,12 +1007,18 @@ function onViewerAllMedia(): void {
 async function openMenu(m: Message, ev: Event) {
   const y = (ev as MouseEvent).clientY ?? window.innerHeight;
   const side = y < window.innerHeight / 2 ? 'bottom' : 'top';
+  // A single image/video/file/audio offers "Save"; an album bubble offers "Save all".
+  const SAVE_KINDS = ['image', 'video', 'file', 'audio', 'voice'];
+  const canSaveAll = !!m.albumId;
+  const canSave = !canSaveAll && SAVE_KINDS.includes(m.kind) && (!!m.mediaId || !!m.pendingMedia);
   const popover = await popoverController.create({
     component: MessageActions,
     cssClass: 'reaction-popover',
     componentProps: {
       isOutgoing: m.outgoing,
       canCopy: !!m.body,
+      canSave,
+      canSaveAll,
       myEmoji: myEmoji(m),
       reactionCount: m.reactions?.length ?? 0,
       quick: await quickReactEmojis(),
@@ -995,6 +1036,8 @@ async function openMenu(m: Message, ev: Event) {
   else if (data.action === 'details') await openReactionDetails(m);
   else if (data.action === 'reply') void startReply(m);
   else if (data.action === 'forward') openForward(m.id);
+  else if (data.action === 'save') void saveMediaForMessages([m.id]);
+  else if (data.action === 'saveAll') void saveMediaForMessages(albumMessageIds(m));
   else if (data.action === 'info') router.push(`/chat/${chatId}/info/${m.id}`);
   else if (data.action === 'copy') navigator.clipboard?.writeText(m.body).catch(() => {});
 }
@@ -1867,10 +1910,10 @@ async function onVideoNoteSend(blob: Blob, dur: number): Promise<void> {
   await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply });
 }
 
-// Ask for an optional album name; defaults to today's date. Returns the name, or
-// null if cancelled.
-function promptAlbumName(): Promise<string | null> {
-  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+// Ask for an optional album name; defaults to the album's date (the earliest of the
+// chosen photos/videos). Returns the name, or null if cancelled.
+function promptAlbumName(suggestedDate?: string): Promise<string | null> {
+  const date = suggestedDate || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   return new Promise((resolve) => {
     void alertController
       .create({
@@ -1949,7 +1992,11 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
     const albumId = otherFiles.length > 1 && allMedia ? crypto.randomUUID() : undefined;
     let albumName: string | undefined;
     if (albumId) {
-      const name = await promptAlbumName();
+      // Suggest the EARLIEST capture date among the chosen media (their file
+      // lastModified), not today, so the album reads as when the photos were taken.
+      const times = otherFiles.map((f) => f.lastModified).filter((t) => t > 0);
+      const earliest = times.length ? Math.min(...times) : Date.now();
+      const name = await promptAlbumName(new Date(earliest).toISOString().slice(0, 10));
       if (name === null) return; // cancelled
       albumName = name;
     }

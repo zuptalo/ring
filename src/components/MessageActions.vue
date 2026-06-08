@@ -28,6 +28,14 @@
         <ion-icon slot="start" :icon="arrowRedoOutline" />
         <ion-label>Forward</ion-label>
       </ion-item>
+      <ion-item v-if="canSave" button :detail="false" @click="choose('save')">
+        <ion-icon slot="start" :icon="downloadOutline" />
+        <ion-label>Save</ion-label>
+      </ion-item>
+      <ion-item v-if="canSaveAll" button :detail="false" @click="choose('saveAll')">
+        <ion-icon slot="start" :icon="downloadOutline" />
+        <ion-label>Save all</ion-label>
+      </ion-item>
       <ion-item v-if="reactionCount" button :detail="false" @click="choose('details')">
         <ion-icon slot="start" :icon="happyOutline" />
         <ion-label>Reactions ({{ reactionCount }})</ion-label>
@@ -47,7 +55,7 @@
 <script setup lang="ts">
 import { IonList, IonItem, IonLabel, IonIcon, popoverController } from '@ionic/vue';
 import {
-  addOutline, informationCircleOutline, copyOutline, happyOutline, arrowUndoOutline, arrowRedoOutline,
+  addOutline, informationCircleOutline, copyOutline, happyOutline, arrowUndoOutline, arrowRedoOutline, downloadOutline,
 } from 'ionicons/icons';
 import { computed } from 'vue';
 import Emoji from '@/components/Emoji.vue';
@@ -55,6 +63,8 @@ import Emoji from '@/components/Emoji.vue';
 const props = defineProps<{
   isOutgoing: boolean;
   canCopy: boolean;
+  canSave?: boolean; // single image/video/file/audio: offer "Save"
+  canSaveAll?: boolean; // album bubble: offer "Save all"
   myEmoji?: string;
   reactionCount?: number;
   quick?: string[]; // most-used-first quick-react set (from the caller)
@@ -75,14 +85,21 @@ const choose = (action: string) => void popoverController.dismiss({ action });
   width: 248px;
   max-width: 248px;
   overflow: hidden; /* the menu itself never scrolls, only the emoji row does */
+  /* Own only vertical panning so a horizontal swipe anywhere outside the emoji row
+     can't drag the whole menu sideways (it bled into the action rows before). */
+  touch-action: pan-y;
 }
 .ma-emojis {
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 6px 6px 4px;
-  /* Only the emoji row scrolls horizontally (when there are many frequent ones). */
+  /* Only the emoji row scrolls horizontally (when there are many frequent ones);
+     pan-x claims that gesture for this row alone and contain stops it chaining out. */
   overflow-x: auto;
+  overflow-y: hidden;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -117,6 +134,7 @@ const choose = (action: string) => void popoverController.dismiss({ action });
 .ma-actions {
   padding: 0;
   border-top: 1px solid var(--ion-color-step-150, rgba(0, 0, 0, 0.08));
+  touch-action: pan-y;
 }
 .ma-actions ion-item {
   --min-height: 44px;
