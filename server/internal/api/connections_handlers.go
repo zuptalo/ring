@@ -111,6 +111,31 @@ func (h *Handlers) rejectConnection(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// linkConnection (POST /v1/connections/link) creates an accepted connection from the
+// caller to {target} WITHOUT a request - used by the client to connect group
+// co-members (group membership is the consent) so fan-out can fetch their bundles
+// under the gate. No notification (it isn't a request the peer needs to act on).
+func (h *Handlers) linkConnection(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var req connTargetReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil ||
+		!uuidRE.MatchString(req.Target) || req.Target == uid {
+		httpx.Error(w, http.StatusBadRequest, "invalid target")
+		return
+	}
+	// AcceptConnection(target, requester) creates accepted(requester->target); here
+	// caller is the requester, so this is accepted(caller->target).
+	if err := h.Connections.AcceptConnection(r.Context(), req.Target, uid); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not link")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type connDTO struct {
 	Requester string `json:"requester"`
 	Target    string `json:"target"`

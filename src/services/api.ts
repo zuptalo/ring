@@ -345,6 +345,17 @@ export async function connectReject(requester: string, block: boolean): Promise<
   if (!res.ok) throw new Error(`connect reject failed: ${res.status}`);
 }
 
+/** Create an accepted connection to `target` without a request (group co-members:
+ *  membership is the consent), so fan-out can fetch their bundle under the gate. */
+export async function connectLink(target: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/connections/link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ target }),
+  });
+  if (!res.ok) throw new Error(`connect link failed: ${res.status}`);
+}
+
 /** The caller's incoming (awaiting accept) + outgoing (pending/rejected) requests. */
 export async function listConnections(): Promise<{ incoming: ConnReq[]; outgoing: ConnReq[] }> {
   const res = await fetch(`${apiBaseUrl()}/v1/connections`, { headers: authHeaders() });

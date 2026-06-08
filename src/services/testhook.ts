@@ -69,6 +69,7 @@ import {
   createInvitation, deleteAccount, fetchPeerBundle,
   connectRequest as apiConnectRequest, connectAccept as apiConnectAccept,
   connectReject as apiConnectReject, listConnections as apiListConnections,
+  connectLink as apiConnectLink,
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
 import { syncContactEdges } from '@/services/directory';
@@ -352,6 +353,7 @@ export function installTestHook(): void {
     deleteMediaLargerThan: (bytes: number, chatId?: string) => dbDeleteMediaLargerThan(bytes, chatId),
     /** Server-side directory search → [{id, username, displayName}]. */
     connectRequest: (target: string) => apiConnectRequest(target),
+    connectLink: (target: string) => apiConnectLink(target),
     connectAccept: (requester: string) => apiConnectAccept(requester),
     connectReject: (requester: string, block: boolean) => apiConnectReject(requester, block),
     connections: () => apiListConnections(),

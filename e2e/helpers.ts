@@ -84,6 +84,10 @@ async function waitBundle(viewer: RingClient, peerId: string): Promise<void> {
  *  connected), then we wait until both prekey bundles are fetchable so the first
  *  message reliably bootstraps the X3DH session. */
 export async function pair(a: RingClient, b: RingClient): Promise<void> {
+  // The connect-request gate requires an accepted connection before a peer's prekey
+  // bundle is fetchable. One link makes Connected() true both ways.
+  await a.page.evaluate((peer) => (window as any).__ringTest.connectLink(peer), b.id);
+  await b.page.evaluate((peer) => (window as any).__ringTest.connectLink(peer), a.id);
   await waitBundle(a, b.id);
   await waitBundle(b, a.id);
   await a.page.evaluate((peer) => (window as any).__ringTest.importDirectoryUser(peer), b.id);

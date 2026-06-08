@@ -194,6 +194,7 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	mux.Handle("POST /v1/connections/request", authMW(http.HandlerFunc(h.requestConnection)))
 	mux.Handle("POST /v1/connections/accept", authMW(http.HandlerFunc(h.acceptConnection)))
 	mux.Handle("POST /v1/connections/reject", authMW(http.HandlerFunc(h.rejectConnection)))
+	mux.Handle("POST /v1/connections/link", authMW(http.HandlerFunc(h.linkConnection)))
 
 	// Public in-network directory: discover any member, fetch one profile, update
 	// your own profile, and (legacy) claim a username. The literal /me/* patterns

@@ -25,6 +25,49 @@
         </ion-toolbar>
       </ion-header>
 
+      <!-- Freshly-joined users (only the inviter as a contact) get a nudge to grow
+           their network by browsing the directory. -->
+      <div v-if="showBrowseHint" class="browse-hint" @click="router.push('/directory')">
+        <ion-icon :icon="compassOutline" />
+        <ion-label class="ion-text-wrap">
+          <h3>Find people to chat with</h3>
+          <p>Browse the user directory to connect with others on Ring.</p>
+        </ion-label>
+        <ion-button size="small" fill="solid">Browse</ion-button>
+      </div>
+
+      <ion-list v-if="incomingRequests.length">
+        <ion-list-header>
+          <ion-label>Connection requests</ion-label>
+        </ion-list-header>
+        <ion-item v-for="req in incomingRequests" :key="req.userId" :detail="false">
+          <ion-avatar slot="start">
+            <img :src="req.avatar || initialsAvatar(req.name)" :alt="req.name" />
+          </ion-avatar>
+          <ion-label class="ion-text-wrap">
+            <h2>{{ req.name }}</h2>
+            <p>wants to connect</p>
+          </ion-label>
+          <ion-button slot="end" fill="solid" size="small" @click="acceptConn(req.userId)">Accept</ion-button>
+          <ion-button slot="end" fill="clear" size="small" color="medium" @click="rejectConn(req)">Reject</ion-button>
+        </ion-item>
+      </ion-list>
+
+      <ion-list v-if="outgoingRequests.length">
+        <ion-list-header>
+          <ion-label>Sent</ion-label>
+        </ion-list-header>
+        <ion-item v-for="req in outgoingRequests" :key="req.userId" :detail="false">
+          <ion-avatar slot="start">
+            <img :src="req.avatar || initialsAvatar(req.name)" :alt="req.name" />
+          </ion-avatar>
+          <ion-label class="ion-text-wrap">
+            <h2>{{ req.name }}</h2>
+            <p>{{ req.state === 'rejected' ? 'Declined' : 'Request sent' }}</p>
+          </ion-label>
+        </ion-item>
+      </ion-list>
+
       <ion-list v-if="requests.length">
         <ion-list-header>
           <ion-label>Requests</ion-label>
@@ -163,7 +206,11 @@ import {
   actionSheetController, toastController, onIonViewWillEnter,
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
-import { personAddOutline, trashOutline, ellipsisHorizontal } from 'ionicons/icons';
+import { personAddOutline, trashOutline, ellipsisHorizontal, compassOutline } from 'ionicons/icons';
+import {
+  incomingRequests, outgoingRequests, acceptConnect, rejectConnect, refreshConnections,
+  type ConnItem,
+} from '@/services/connections';
 import {
   acceptRequest, cancelSentRequest, deleteContact,
   listContacts, listPendingRequests, listSentRequests, rejectRequest,
@@ -314,12 +361,35 @@ async function doCancel(code: string): Promise<void> {
   void toast(serverOk ? 'Invite cancelled.' : 'Removed from your list. The code may still work until it expires.');
 }
 
+// Connect-request actions (the connection store reconciles via WS frames + connect).
+async function acceptConn(userId: string): Promise<void> {
+  await acceptConnect(userId);
+}
+async function rejectConn(req: ConnItem): Promise<void> {
+  const sheet = await actionSheetController.create({
+    header: req.name,
+    buttons: [
+      { text: 'Decline', handler: () => void rejectConnect(req.userId, false) },
+      { text: 'Decline and block', role: 'destructive', handler: () => void rejectConnect(req.userId, true) },
+      { text: 'Cancel', role: 'cancel' },
+    ],
+  });
+  await sheet.present();
+}
+
+// Nudge a freshly-joined user (only the inviter as a contact) to browse the directory.
+const showBrowseHint = computed(() => (contacts.value?.length ?? 0) <= 1);
+
 onMounted(() => {
   void refreshServerInvites();
+  void refreshConnections();
   nowTimer = setInterval(() => (now.value = Date.now()), 30_000);
 });
 onUnmounted(() => clearInterval(nowTimer));
-onIonViewWillEnter(() => void refreshServerInvites());
+onIonViewWillEnter(() => {
+  void refreshServerInvites();
+  void refreshConnections();
+});
 
 function loadMore(ev: InfiniteScrollCustomEvent) {
   visible.value += PAGE;
@@ -339,6 +409,31 @@ const groups = computed(() => {
 </script>
 
 <style scoped>
+.browse-hint {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 16px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(var(--ion-color-primary-rgb), 0.1);
+  cursor: pointer;
+}
+.browse-hint ion-icon {
+  font-size: 28px;
+  color: var(--ion-color-primary);
+  flex-shrink: 0;
+}
+.browse-hint h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.browse-hint p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
 .empty {
   text-align: center;
   margin-top: 40px;

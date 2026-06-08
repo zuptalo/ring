@@ -60,7 +60,11 @@
       </ion-list>
 
       <div v-if="chats.length === 0" class="empty">
-        <ion-note>No chats found</ion-note>
+        <ion-note>No chats yet</ion-note>
+        <ion-button class="browse-btn" fill="solid" size="small" @click="router.push('/directory')">
+          <ion-icon slot="start" :icon="compassOutline" />
+          Browse the directory
+        </ion-button>
       </div>
     </ion-content>
 
@@ -127,7 +131,7 @@ import {
 import {
   createOutline, personAddOutline, peopleOutline, trashOutline,
   cameraOutline, videocamOutline, micOutline, documentOutline, imagesOutline,
-  locationOutline, barChartOutline, personOutline, musicalNotesOutline,
+  locationOutline, barChartOutline, personOutline, musicalNotesOutline, compassOutline,
 } from 'ionicons/icons';
 import { listChats, listContacts, startDirectChat, deleteChat } from '@/db/queries';
 import { useLiveQuery } from '@/composables/useLiveQuery';

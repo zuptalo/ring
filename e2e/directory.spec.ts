@@ -17,11 +17,11 @@ const bodies = (p: any, chatId: string): Promise<string[]> =>
   p.page.evaluate((id: string) => (window as any).__ringTest.messages(id).then((ms: any[]) => ms.map((m) => m.body)), chatId);
 
 /**
- * Public in-network directory: two accounts that have NEVER exchanged a friend
- * request still discover each other (with their display name) and can message
- * straight away - the friend-gate is gone; Block is the only barrier.
+ * Public in-network directory: two accounts discover each other (with display
+ * name) and, after a connect request is accepted, can message. The connect-request
+ * gate means a peer's prekey bundle is only fetchable once connected.
  */
-test('directory: members are discoverable and chat works with no handshake', async ({ browser }) => {
+test('directory: discover, connect-request + accept, then chat works', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'DIRTST01');
@@ -32,13 +32,14 @@ test('directory: members are discoverable and chat works with no handshake', asy
   // Each account has a permanent username (the testhook derives u_<code>).
   expect(await a.page.evaluate(() => (window as any).__ringTest.selfUsername())).toBe('u_dirtst01');
 
-  // A pulls the directory → B shows up as a contact with their display name, and
-  // with NO friend request to accept.
+  // A pulls the directory → B shows up as a contact with their display name.
   await syncDir(a);
   await expect.poll(() => contactIds(a).then((ids) => ids.includes(b.id))).toBe(true);
   await expect.poll(() => contactName(a, b.id)).toBe('Bob');
 
-  // A messages B immediately (no handshake). B's open inbox surfaces the chat.
+  // Connect-request gate: A requests, B accepts; only then is B's bundle fetchable.
+  await a.page.evaluate((id) => (window as any).__ringTest.connectRequest(id), b.id);
+  await b.page.evaluate((id) => (window as any).__ringTest.connectAccept(id), a.id);
   await expect.poll(() => bundleReady(a, b.id)).toBe(true);
   const chat = await a.page.evaluate((id: string) => (window as any).__ringTest.startChat(id), b.id);
   await a.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'hi bob'), chat);

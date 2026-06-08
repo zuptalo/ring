@@ -20,6 +20,8 @@ import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
 import { publishOwnProfile, syncContactEdges, refreshContactProfiles } from '@/services/directory';
 import { applyPushPreference, disablePush, revalidatePushSubscription } from '@/services/push';
 import { checkForUpdate } from '@/composables/useAppUpdate';
+import { refreshConnections } from '@/services/connections';
+import { notifyIncoming } from '@/services/notify';
 import { runInviteSync } from '@/services/invites';
 import { clearPresence } from '@/composables/usePresence';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
@@ -162,6 +164,7 @@ function start(): void {
         // peer-to-peer "share my name & photo").
         void refreshContactProfiles();
       }
+      void refreshConnections(); // reconcile incoming/outgoing connect requests
       void applyPushPreference(true); // (re)register or drop push per the notification prefs
       void sendPresencePrefs(); // upload our sharing booleans
       void sendPresenceSub(); // watch our contacts' presence
@@ -184,6 +187,15 @@ function start(): void {
   // Call signalling + presence stay concurrent (latency-sensitive, no DB race).
   let inboundChain: Promise<void> = Promise.resolve();
   transport.onMessage((f) => {
+    // Connect-request notifications: re-read the authoritative state, and alert on a
+    // new incoming request (so it surfaces like a friend request).
+    if (f.t === 'connect-req' || f.t === 'connect-update') {
+      void refreshConnections();
+      if (f.t === 'connect-req') {
+        void notifyIncoming({ kind: 'request', name: 'Someone', body: 'wants to connect' });
+      }
+      return;
+    }
     const live = f.t.startsWith('call-') || f.t.startsWith('sfu-') || f.t === 'presence';
     if (live) {
       void handleIncomingFrame(f);

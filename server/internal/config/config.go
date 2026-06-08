@@ -48,8 +48,8 @@ type Config struct {
 	MaxBlobBytes int
 
 	// RequireConnection enables the server-enforced connect-request gate (a peer's
-	// prekey bundle is only fetchable with an accepted connection). Off by default
-	// (open network); enable once clients use the connect-request flow.
+	// prekey bundle is only fetchable with an accepted connection). On by default;
+	// set REQUIRE_CONNECTION=false to fall back to the open-network model.
 	RequireConnection bool
 
 	// --- Calling (WebRTC) ---
@@ -124,7 +124,7 @@ func Load() (Config, error) {
 		StaticDir:           os.Getenv("STATIC_DIR"),
 		WarmEmoji:           envBool("WARM_EMOJI", false),
 		EnableCalls:         envBool("ENABLE_CALLS", dev),
-		RequireConnection:   envBool("REQUIRE_CONNECTION", false),
+		RequireConnection:   envBool("REQUIRE_CONNECTION", true),
 		TurnRealm:           os.Getenv("TURN_REALM"),
 		TurnHost:            os.Getenv("TURN_HOST"),
 		TurnListen:          env("TURN_LISTEN", ":3478"),

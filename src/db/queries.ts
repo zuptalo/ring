@@ -8,7 +8,7 @@ import { enqueue, removeOutboxByFrameId } from './outbox';
 import { recordTombstone } from './tombstones';
 import { uid } from '@/utils/uid';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError } from '@/services/media-transfer';
 import { getSecret, setSecret } from '@/db/secrets';
@@ -632,6 +632,16 @@ function groupCard(
  * from the members ("Fredi & Ailin" / "Kambiz & 6 more") per each viewer's
  * perspective, and a default group icon is used. Returns the group chat id.
  */
+/** Connect (gate-link) to every group co-member, so message fan-out can fetch their
+ *  prekey bundles under the connect-request gate (group membership is the consent).
+ *  Best-effort + fire-and-forget; idempotent on the server. */
+function linkGroupMembers(memberIds: string[]): void {
+  const self = getSelfUserId() ?? '';
+  for (const id of memberIds) {
+    if (id && id !== self) void connectLink(id).catch(() => {});
+  }
+}
+
 export async function createGroup(name: string, memberIds: string[]): Promise<string> {
   const self = getSelfUserId() ?? '';
   const groupId = uid();
@@ -652,6 +662,7 @@ export async function createGroup(name: string, memberIds: string[]): Promise<st
     customAvatar: false,
     updatedAt: ts,
   });
+  linkGroupMembers(memberIds); // connect to co-members so fan-out works under the gate
   await sendGroupCard(memberIds, {
     t: 'create',
     groupId,
@@ -672,6 +683,7 @@ export async function addToGroup(chatId: string, memberId: string): Promise<void
   const chat = await getChat(chatId);
   if (!chat?.isGroup || chat.participantIds.includes(memberId)) return;
   const self = getSelfUserId() ?? '';
+  linkGroupMembers([memberId]); // connect to the new member so fan-out reaches them
   const ts = now();
   chat.participantIds = [...chat.participantIds, memberId];
   const roster = await buildRoster([self, ...chat.participantIds]);
@@ -696,6 +708,7 @@ export async function inviteToGroup(chatId: string, memberId: string): Promise<v
   if (!chat?.isGroup) return;
   const self = getSelfUserId() ?? '';
   if (!memberId || memberId === self || chat.participantIds.includes(memberId)) return;
+  linkGroupMembers([memberId]); // connect to the invitee so we can fetch their bundle
   const invited = chat.invitedIds ?? [];
   if (!invited.includes(memberId)) {
     chat.invitedIds = [...invited, memberId];
@@ -2315,6 +2328,9 @@ export async function drainPendingIncoming(): Promise<void> {
 async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
   const self = getSelfUserId() ?? '';
   const existing = await getChat(card.groupId);
+  // Connect to every co-member named in the card (incl. the sender), so we can fetch
+  // their bundles to fan out group messages under the connect-request gate.
+  linkGroupMembers([from, ...card.members.map((m) => m.id)]);
 
   // --- accept-first invitation flow ---
 

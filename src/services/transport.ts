@@ -212,6 +212,19 @@ export type CallFrame =
   | SfuAnswerFrame
   | SfuIceFrame;
 
+/** Connect-request notifications (server -> client): an incoming request, or an
+ *  update (accepted/rejected) to a request we sent. The client re-reads the
+ *  authoritative state from GET /v1/connections on either. */
+export interface ConnectReqFrame {
+  t: 'connect-req';
+  from: string;
+}
+export interface ConnectUpdateFrame {
+  t: 'connect-update';
+  from: string;
+  state: string; // 'accepted' | 'rejected'
+}
+
 export type Frame =
   | MsgFrame
   | ReceiptFrame
@@ -223,6 +236,8 @@ export type Frame =
   | PresenceSubFrame
   | PresenceSelfFrame
   | PresenceFrame
+  | ConnectReqFrame
+  | ConnectUpdateFrame
   | CallFrame;
 
 export interface Transport {

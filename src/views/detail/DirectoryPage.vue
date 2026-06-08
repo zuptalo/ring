@@ -58,10 +58,11 @@ import { useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonContent,
   IonSearchbar, IonList, IonItem, IonAvatar, IonLabel, IonNote, IonSpinner,
-  actionSheetController,
+  actionSheetController, toastController,
 } from '@ionic/vue';
 import { fetchDirectory, type DirectoryUser } from '@/services/api';
 import { importDirectoryUser } from '@/services/directory';
+import { requestConnect } from '@/services/connections';
 import { getContact, startDirectChat } from '@/db/queries';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { initialsAvatar } from '@/db/avatars';
@@ -106,20 +107,35 @@ async function save(u: DirectoryUser): Promise<string | null> {
   return importDirectoryUser(u.id);
 }
 
+async function connect(u: DirectoryUser): Promise<void> {
+  if (!(await ensureProfile())) return; // require a name + photo before reaching out
+  try {
+    const state = await requestConnect(u.id);
+    if (state === 'accepted') {
+      // Already connected → go straight to the chat.
+      const c = await getContact(u.id);
+      if (c) router.push(`/chat/${await startDirectChat(c)}`);
+      return;
+    }
+    const t = await toastController.create({
+      message: state === 'rejected' ? 'Your request was declined.' : 'Connection request sent.',
+      duration: 1800,
+      position: 'top',
+    });
+    await t.present();
+  } catch {
+    const t = await toastController.create({ message: 'Could not send request. Try again.', duration: 1500, color: 'danger' });
+    await t.present();
+  }
+}
+
 async function openActions(u: DirectoryUser): Promise<void> {
   const sheet = await actionSheetController.create({
     header: `${u.displayName} · @${u.username}`,
     buttons: [
       {
-        text: 'Message',
-        handler: () => {
-          void (async () => {
-            if (!(await ensureProfile())) return; // require a name + photo first
-            await save(u);
-            const c = await getContact(u.id);
-            if (c) router.push(`/chat/${await startDirectChat(c)}`);
-          })();
-        },
+        text: 'Connect',
+        handler: () => void connect(u),
       },
       {
         text: 'Save to contacts',

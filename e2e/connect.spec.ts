@@ -8,10 +8,9 @@ const search = (p: any, q: string) =>
   ev(p, (s) => (window as any).__ringTest.searchDirectory(s).then((us: any[]) => us.map((u) => u.username)), q);
 
 /**
- * Connect-request lifecycle (the directory-initiated handshake). The gate itself
- * (REQUIRE_CONNECTION) is opt-in and off in the e2e backend; this verifies the
- * request/accept/reject state machine and that reject+block hides you from the
- * requester's directory.
+ * Connect-request lifecycle (the directory-initiated handshake) AND that the gate is
+ * actually enforced: a peer's prekey bundle is NOT fetchable before they accept, and
+ * IS after. Also verifies reject+block hides you from the requester's directory.
  */
 test('connect requests: request -> accept, and reject+block hides from directory', async ({ browser }) => {
   test.setTimeout(90_000);
@@ -28,8 +27,16 @@ test('connect requests: request -> accept, and reject+block hides from directory
     .poll(async () => (await conns(b)).incoming.map((r: any) => r.requester), { timeout: 20_000 })
     .toContain(a.id);
 
+  // GATE ENFORCED: before B accepts, A cannot fetch B's prekey bundle.
+  expect(await ev(a, (id) => (window as any).__ringTest.peerBundleExists(id), b.id)).toBe(false);
+
   // B accepts -> the incoming request clears (the pair is now connected).
   await ev(b, (id) => (window as any).__ringTest.connectAccept(id), a.id);
+
+  // GATE: now connected, A CAN fetch B's bundle.
+  await expect
+    .poll(() => ev(a, (id) => (window as any).__ringTest.peerBundleExists(id), b.id), { timeout: 20_000 })
+    .toBe(true);
   await expect
     .poll(async () => (await conns(b)).incoming.map((r: any) => r.requester), { timeout: 20_000 })
     .not.toContain(a.id);
