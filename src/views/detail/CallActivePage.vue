@@ -24,15 +24,15 @@
                    layout steady for a beat, then the rest reflow and grow). -->
               <span v-if="t.leaving" class="leave-wave"><emoji emoji="👋" /></span>
               <template v-else>
-                <!-- Remote tiles stay unmuted (group audio plays through the tiles);
-                     our own tile is muted to avoid echo. The <video> stays mounted
-                     even with the camera off so the participant's audio keeps flowing;
-                     the camera-off icon just overlays it. -->
+                <!-- All tiles are MUTED here: remote audio plays through the persistent
+                     global CallMediaSink so it survives minimising. The <video> stays
+                     mounted (for video display) even with the camera off; the camera-off
+                     icon just overlays it. -->
                 <video
                   :ref="(el) => attach(el as HTMLVideoElement | null, t.stream)"
                   class="tile-video"
                   :class="{ mirror: t.isSelf && localMirror }"
-                  :muted="t.isSelf"
+                  muted
                   autoplay
                   playsinline
                 />
@@ -117,11 +117,8 @@
             </button>
           </div>
 
-          <!-- Remote audio sink (1:1): a single hidden <audio> element. On Chromium
-               setSinkId on it selects the output device; on iOS the OS owns the route
-               (we never attach the stream to a <video>, which would force the
-               loudspeaker and double-play the audio). One element = no AGC fighting. -->
-          <audio ref="earAudio" class="route-sink" autoplay playsinline />
+          <!-- Remote audio plays through the global CallMediaSink (App.vue), so it keeps
+               playing when this screen is minimised; the videos above stay muted. -->
         </template>
 
         <!-- Header: name + status/duration/bitrate, plus a connection warning.
@@ -220,7 +217,6 @@ import type { Contact } from '@/db/types';
 
 const mainVideo = ref<HTMLVideoElement | null>(null);
 const pipVideo = ref<HTMLVideoElement | null>(null);
-const earAudio = ref<HTMLAudioElement | null>(null);
 const stageEl = ref<HTMLElement | null>(null);
 
 /* ---- 1:1 stage: which stream is fullscreen, and where the PiP sits ---- */
@@ -459,21 +455,6 @@ function applySinkTo(el: HTMLMediaElement | null): void {
   if (el && sink) void sink.call(el, audioOutputId.value).catch(() => {});
 }
 
-/** Route the 1:1 remote audio through the single hidden <audio> element. On Chromium
- *  setSinkId selects the output device; on iOS the OS owns the route (we never attach
- *  the stream to a <video>, which forced the loudspeaker and made two players' AGC
- *  fight, oscillating the volume). The visible call videos stay muted. */
-function routeRemoteAudio(): void {
-  if (callMeta.value?.isGroup) return; // group audio plays via the tiles
-  const el = earAudio.value;
-  const stream = remoteStream.value;
-  if (!el) return;
-  if (el.srcObject !== (stream ?? null)) el.srcObject = stream;
-  el.muted = false;
-  if (stream) void el.play?.().catch(() => {});
-  applySinkTo(el); // Chromium device selection (no-op on iOS)
-}
-
 function attach(el: HTMLVideoElement | null, stream: MediaStream | null): void {
   if (!el) return;
   if (el.srcObject !== stream) el.srcObject = stream;
@@ -494,8 +475,8 @@ function applySinkAll(): void {
 
 // 1:1: bind each physical element to its slot's stream ONLY when that slot actually
 // shows video. For an audio call the remote stream must never reach a <video> (a
-// playing <video>, even muted, forces iOS to the loudspeaker and defeats the <audio>
-// earpiece sink); audio then flows solely through routeRemoteAudio's sink elements.
+// playing <video>, even muted, forces iOS to the loudspeaker and defeats the earpiece
+// route); audio always flows through the global CallMediaSink's <audio> elements.
 watch([mainVideo, mainStream, mainHasVideo], () =>
   attach(mainVideo.value, mainHasVideo.value ? mainStream.value : null),
 );
@@ -503,9 +484,6 @@ watch([pipVideo, pipStream, pipHasVideo], () =>
   attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null),
 );
 watch(audioOutputId, applySinkAll);
-// Re-route the 1:1 remote audio whenever the stream, the chosen route, the sink
-// elements, or the call kind (audio<->video changes the default route) changes.
-watch([remoteStream, audioOutputId, earAudio], routeRemoteAudio);
 watch(remoteStreams, (streams) => {
   const ids = streams.map((s) => s.id);
   // A participant whose stream just disappeared left → show a brief waving-hand
@@ -536,7 +514,6 @@ onMounted(() => {
   }
   attach(mainVideo.value, mainHasVideo.value ? mainStream.value : null);
   attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null);
-  routeRemoteAudio();
 });
 onUnmounted(() => {
   stageRO?.disconnect();
@@ -701,13 +678,6 @@ const diag = computed(() => {
 }
 /* Hidden audio/video elements used only to steer the 1:1 remote audio route; they
    must stay in the DOM and playing, but take no space. */
-.route-sink {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
 /* Group layout: equally-sized floating tiles, centred and wrapped. Each tile's pixel
    size is computed in script (tileDims) to pack every participant into the stage as
    large as possible, so tiles grow when few are on the call and shrink as more join -

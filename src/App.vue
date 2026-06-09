@@ -13,6 +13,9 @@
     <incoming-call-overlay />
     <!-- Floating call widget when a call runs but the call screen is minimized. -->
     <minimized-call />
+    <!-- Persistent remote-audio sink: keeps call audio playing across navigation
+         (e.g. while minimized), independent of any call screen. -->
+    <call-media-sink />
     <!-- In-app notification banners (green, with avatar + name): over any route. -->
     <notification-banners />
   </ion-app>
@@ -33,6 +36,7 @@ import KeyGuard from '@/components/KeyGuard.vue';
 import InstallGuard from '@/components/InstallGuard.vue';
 import IncomingCallOverlay from '@/components/IncomingCallOverlay.vue';
 import MinimizedCall from '@/components/MinimizedCall.vue';
+import CallMediaSink from '@/components/CallMediaSink.vue';
 import NotificationBanners from '@/components/NotificationBanners.vue';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate } from '@/composables/useAppUpdate';
