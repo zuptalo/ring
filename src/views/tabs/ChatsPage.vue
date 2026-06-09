@@ -35,6 +35,11 @@
           <ion-label>Archived</ion-label>
           <ion-note slot="end">{{ archivedCount }}</ion-note>
         </ion-item>
+        <!-- Locked chats entry (no count, to avoid revealing how many). Gated on open. -->
+        <ion-item v-if="hasLocked" button :detail="true" @click="router.push('/chats/locked')">
+          <ion-icon slot="start" :icon="lockClosedOutline" color="medium" />
+          <ion-label>Locked chats</ion-label>
+        </ion-item>
 
         <ChatListItem
           v-for="chat in chats"
@@ -138,7 +143,7 @@ import {
   IonLabel, IonNote, IonModal,
 } from '@ionic/vue';
 import {
-  createOutline, personAddOutline, peopleOutline, compassOutline, archiveOutline,
+  createOutline, personAddOutline, peopleOutline, compassOutline, archiveOutline, lockClosedOutline,
 } from 'ionicons/icons';
 import ChatListItem from '@/components/ChatListItem.vue';
 import ChatActionsHost from '@/components/ChatActionsHost.vue';
@@ -146,7 +151,7 @@ import ChatFilterBar from '@/components/ChatFilterBar.vue';
 import ChatListsSheet from '@/components/ChatListsSheet.vue';
 import EditChatTabsModal from '@/components/EditChatTabsModal.vue';
 import NewListModal from '@/components/NewListModal.vue';
-import { listArchivedChats, listContacts, startDirectChat } from '@/db/queries';
+import { listArchivedChats, listLockedChats, listContacts, startDirectChat } from '@/db/queries';
 import { useChatFilters } from '@/services/chat-filters';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useConnect } from '@/composables/useConnect';
@@ -166,6 +171,9 @@ const newListOpen = ref(false);
 // Count for the Archived entry row.
 const archived = useLiveQuery(() => listArchivedChats(), ['chats', 'messages'], [] as Chat[]);
 const archivedCount = computed(() => archived.value.length);
+// Whether any chat is locked (entry shows; count hidden for privacy).
+const locked = useLiveQuery(() => listLockedChats(), ['chats', 'messages'], [] as Chat[]);
+const hasLocked = computed(() => locked.value.length > 0);
 
 function open(id: string) {
   router.push(`/chat/${id}`);

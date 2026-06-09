@@ -56,6 +56,13 @@ test('chat filters: favorites, groups, pin order, archive, lists, unread, tab pe
   const inList = await matching(`list:${listId}`);
   expect(inList.sort()).toEqual([group, chatC].sort());
 
+  // Lock: chatC leaves the main list and appears in the locked view.
+  await a.page.evaluate((id) => (window as any).__ringTest.lockChat(id, true), chatC);
+  expect(await a.page.evaluate(() => (window as any).__ringTest.chatOrder())).not.toContain(chatC);
+  expect(await a.page.evaluate(() => (window as any).__ringTest.lockedChatIds())).toContain(chatC);
+  await a.page.evaluate((id) => (window as any).__ringTest.lockChat(id, false), chatC);
+  expect(await a.page.evaluate(() => (window as any).__ringTest.chatOrder())).toContain(chatC);
+
   // Tab-filter order persists across a reload (proves the synced setting write).
   const desired = ['all', 'groups', 'unread', `list:${listId}`];
   await a.page.evaluate((ids) => (window as any).__ringTest.setTabFilters(ids), desired);

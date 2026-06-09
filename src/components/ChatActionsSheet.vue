@@ -26,6 +26,10 @@
           <ion-icon slot="start" :icon="informationCircleOutline" />
           <ion-label>{{ chat.isGroup ? 'Group info' : 'Contact info' }}</ion-label>
         </ion-item>
+        <ion-item button :detail="false" @click="toggleLock">
+          <ion-icon slot="start" :icon="chat.locked ? lockOpenOutline : lockClosedOutline" />
+          <ion-label>{{ chat.locked ? 'Unlock chat' : 'Lock chat' }}</ion-label>
+        </ion-item>
         <ion-item button :detail="false" @click="toggleFavorite">
           <ion-icon slot="start" :icon="chat.favorite ? heart : heartOutline" />
           <ion-label>{{ chat.favorite ? 'Remove from Favorites' : 'Add to Favorites' }}</ion-label>
@@ -58,12 +62,14 @@ import {
 import {
   closeOutline, notificationsOffOutline, notificationsOutline, informationCircleOutline,
   heart, heartOutline, listOutline, closeCircleOutline, exitOutline, trashOutline,
+  lockClosedOutline, lockOpenOutline,
 } from 'ionicons/icons';
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  setChatMute, toggleChatFavorite, clearChat, deleteChat, leaveGroup,
+  setChatMute, toggleChatFavorite, clearChat, deleteChat, leaveGroup, setChatLocked,
 } from '@/db/queries';
+import { lockConfigured } from '@/services/chat-lock';
 import type { Chat } from '@/db/types';
 
 const props = defineProps<{ chat: Chat | null; isOpen: boolean }>();
@@ -102,6 +108,32 @@ function openInfo(): void {
 
 async function toggleFavorite(): Promise<void> {
   if (props.chat) await toggleChatFavorite(props.chat.id);
+  emit('dismiss');
+}
+
+async function toggleLock(): Promise<void> {
+  const c = props.chat;
+  if (!c) return;
+  if (c.locked) {
+    // Unlocking from within the (already auth-gated) Locked view: no re-prompt.
+    await setChatLocked(c.id, false);
+    emit('dismiss');
+    return;
+  }
+  // Locking requires an app passcode to exist; otherwise send them to set one up.
+  if (!(await lockConfigured())) {
+    emit('dismiss');
+    const sheet = await actionSheetController.create({
+      header: 'Set an app passcode first to lock chats.',
+      buttons: [
+        { text: 'Set up App lock', handler: () => void router.push('/settings/privacy-app-lock') },
+        { text: 'Cancel', role: 'cancel' as const },
+      ],
+    });
+    await sheet.present();
+    return;
+  }
+  await setChatLocked(c.id, true);
   emit('dismiss');
 }
 

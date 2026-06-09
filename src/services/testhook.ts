@@ -71,7 +71,9 @@ import {
   markChatUnread as dbMarkChatUnread,
   createChatList as dbCreateChatList,
   setChatInList as dbSetChatInList,
+  setChatLocked as dbSetChatLocked,
   listChatLists,
+  listLockedChats,
   getSetting,
 } from '@/db/queries';
 import {
@@ -321,6 +323,9 @@ export function installTestHook(): void {
     chatOrder: async (): Promise<string[]> => (await listChats()).map((c) => c.id),
     /** Ids of archived chats. */
     archivedChatIds: async (): Promise<string[]> => (await listArchivedChats()).map((c) => c.id),
+    lockChat: (id: string, locked: boolean) => dbSetChatLocked(id, locked),
+    /** Ids of locked chats (the auth-gated view's contents). */
+    lockedChatIds: async (): Promise<string[]> => (await listLockedChats()).map((c) => c.id),
     /** Ids of chats matching a filter chip (over the main list), for assertions. */
     chatsMatching: async (filter: string): Promise<string[]> => {
       const lists = new Map((await listChatLists()).map((l) => [l.id, l]));
