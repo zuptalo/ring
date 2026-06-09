@@ -20,7 +20,7 @@ import {
   keyToB64,
   keyFromB64,
 } from '@/services/call/e2ee';
-import { sendSealedKey } from '@/services/call/signalling';
+import { sendSealedKey, sendSealedStreamId } from '@/services/call/signalling';
 import type { CallKind } from '@/services/call/types';
 
 export interface GroupCallbacks {
@@ -30,6 +30,8 @@ export interface GroupCallbacks {
   onLocalStream: (stream: MediaStream) => void;
   /** Called when the PC reaches connected/failed. */
   onConnectionState: (state: RTCPeerConnectionState) => void;
+  /** Called when the streamId→userId map (for labelling tiles) changes. */
+  onStreamMap: (map: Record<string, string>) => void;
 }
 
 export class GroupSession {
@@ -43,6 +45,8 @@ export class GroupSession {
   private pendingIce: RTCIceCandidateInit[] = [];
   private roster: string[] = [];
   private distributedFor = ''; // roster signature we last keyed for
+  private announcedTo = ''; // roster signature we last announced our stream id for
+  private streamOwners = new Map<string, string>(); // remote userId → their stream id
   private epoch = 0;
   private currentRaw: Uint8Array | null = null; // raw bytes of the epoch we minted (master), for resends
   private lastKeyReqAt = 0; // throttle outbound key-requests
@@ -195,9 +199,11 @@ export class GroupSession {
     await sendLive({ t: 'call-join', roomId: this.roomId, kind: this.kind });
   }
 
-  /** Roster update from the server → (re)key if we're the key master. */
+  /** Roster update from the server → announce our stream id, then (re)key if we're the
+   *  key master. */
   async onRoster(members: string[]): Promise<void> {
     this.roster = members;
+    await this.announceStreamId(members);
     const master = members.slice().sort()[0];
     if (master !== this.selfId) return;
     const sig = members.slice().sort().join(',');
@@ -224,6 +230,48 @@ export class GroupSession {
   /** Inbound group media key (from the master) → add to our keyring (+ the worker). */
   async onKey(epoch: number, keyB64: string): Promise<void> {
     await this.applyKey(epoch, keyFromB64(keyB64));
+  }
+
+  /** Tell every other member which stream id is ours, so they can label our tile with
+   *  our name/avatar. Unlike keying (master only), EVERY member announces its own id.
+   *  Re-announced on each roster change so a new joiner learns existing members' ids
+   *  and we (re)learn nobody's — prune departed members from our local map too. */
+  private async announceStreamId(members: string[]): Promise<void> {
+    // Drop mappings for anyone who has left, so a stale tile label can't linger.
+    const present = new Set(members);
+    let pruned = false;
+    for (const id of [...this.streamOwners.keys()]) {
+      if (!present.has(id)) {
+        this.streamOwners.delete(id);
+        pruned = true;
+      }
+    }
+    if (pruned) this.emitStreamMap();
+
+    if (!this.local) return; // not publishing yet → nothing to announce
+    const sig = members.slice().sort().join(',');
+    if (sig === this.announcedTo) return; // already announced for this roster
+    this.announcedTo = sig;
+    const streamId = this.local.id;
+    for (const m of members) {
+      if (m === this.selfId) continue;
+      await sendSealedStreamId(m, this.roomId, streamId);
+    }
+  }
+
+  /** Inbound stream-id announcement from a peer → remember which stream is theirs. */
+  onStreamId(fromUserId: string, streamId: string): void {
+    if (!fromUserId || !streamId || fromUserId === this.selfId) return;
+    if (this.streamOwners.get(fromUserId) === streamId) return;
+    this.streamOwners.set(fromUserId, streamId);
+    this.emitStreamMap();
+  }
+
+  /** Publish the current streamId→userId mapping (the shape the UI wants). */
+  private emitStreamMap(): void {
+    const map: Record<string, string> = {};
+    for (const [userId, streamId] of this.streamOwners) map[streamId] = userId;
+    this.cb.onStreamMap(map);
   }
 
   /** We received media for an epoch we have no key for → ask the master to resend
@@ -342,6 +390,8 @@ export class GroupSession {
     this.pc = null;
     this.local = null;
     this.remote.clear();
+    this.streamOwners.clear();
+    this.announcedTo = '';
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;

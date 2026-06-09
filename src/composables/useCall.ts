@@ -55,6 +55,9 @@ export const upgradeRequest = ref(false);
 export const callStats = ref({ durationSec: 0, kbpsUp: 0, kbpsDown: 0 });
 // Group calls: the remote participants' streams (one per peer) for the tile grid.
 export const remoteStreams = ref<MediaStream[]>([]);
+// Group calls: maps a remote stream id → the userId that owns it, so a tile can show
+// that participant's name/avatar. Announced peer-to-peer (sealed); see GroupSession.
+export const groupStreamOwners = ref<Record<string, string>>({});
 // A transient status shown during the call when the connection is degraded
 // ('Reconnecting…' while ICE is down, 'Connection unstable' on high packet loss).
 export const connectionWarning = ref<string | null>(null);
@@ -515,6 +518,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   localStream.value = null;
   remoteStream.value = null;
   remoteStreams.value = [];
+  groupStreamOwners.value = {};
   pendingOffer = null;
   pendingIce.length = 0;
   muted.value = false;
@@ -730,6 +734,7 @@ async function enterGroupCall(
     {
       onLocalStream: (s) => (localStream.value = s),
       onRemoteStreams: (s) => (remoteStreams.value = s),
+      onStreamMap: (m) => (groupStreamOwners.value = m),
       onConnectionState: (st) => {
         if (st === 'connected') {
           clearGrace();
@@ -1559,6 +1564,20 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       return;
     }
 
+    case 'call-streamid': {
+      // A peer announced which stream id is theirs → record it so we can label their
+      // tile with their name/avatar. Sealed peer-to-peer, opened like a call-key.
+      const gs = groupSession;
+      if (!gs || frame.roomId !== gs.roomId || !frame.from) return;
+      const chatId = await chatIdForPeer(frame.from);
+      if (!chatId) return;
+      const signal = await openSealedSignal(chatId, frame.ciphertext);
+      if (groupSession === gs && signal?.type === 'streamid' && signal.streamId) {
+        gs.onStreamId(frame.from, signal.streamId);
+      }
+      return;
+    }
+
     case 'call-group-invite':
       // Server fan-out of an incoming group call → ring locally so we can join.
       await handleGroupInvite(frame);
@@ -1593,6 +1612,7 @@ export function useCall() {
     callMeta,
     localStream,
     remoteStream,
+    groupStreamOwners,
     muted,
     cameraOff,
     callStats,

@@ -174,6 +174,15 @@ export interface CallKeyFrame {
   roomId: string;
   ciphertext?: unknown; // sealed { epoch, key }
 }
+/** Peer-to-peer announcement of "my outgoing stream id is X" (sealed; never seen by
+ *  the server). Lets each member label an incoming stream with its owner's name. */
+export interface CallStreamIdFrame {
+  t: 'call-streamid';
+  to?: string;
+  from?: string;
+  roomId: string;
+  ciphertext?: unknown; // sealed { streamId }
+}
 /** Client↔SFU negotiation (plain, the SFU is the endpoint, carries no keys). */
 export interface SfuOfferFrame {
   t: 'sfu-offer';
@@ -220,6 +229,7 @@ export type CallFrame =
   | CallLeaveFrame
   | CallRosterFrame
   | CallKeyFrame
+  | CallStreamIdFrame
   | CallGroupInviteFrame
   | CallKeyRequestFrame
   | SfuOfferFrame

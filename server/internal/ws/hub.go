@@ -1027,6 +1027,11 @@ func (c *Client) handleFrame(data []byte) {
 		// Group media key, sealed peer-to-peer; relayed live, never inspected.
 		c.relayCall(f)
 
+	case "call-streamid":
+		// A member's "this stream is mine" announcement, sealed peer-to-peer (lets
+		// peers label tiles with names/avatars); relayed live, never inspected.
+		c.relayCall(f)
+
 	case "call-key-request":
 		// A member missing the current group key asks the master (f.To) to resend it.
 		// Live relay only (like call-key); the master re-seals and sends.

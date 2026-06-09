@@ -48,7 +48,7 @@ export interface ContactCard {
  */
 export interface CallSignal {
   callId: string;
-  type: 'offer' | 'answer' | 'ice' | 'key';
+  type: 'offer' | 'answer' | 'ice' | 'key' | 'streamid';
   kind?: 'audio' | 'video'; // on offer
   sdp?: string; // offer/answer
   sdpType?: RTCSdpType; // offer/answer
@@ -56,6 +56,10 @@ export interface CallSignal {
   roomId?: string; // group calls
   epoch?: number; // group media key
   key?: string; // group media key (b64url of 32 raw bytes)
+  // group calls: the sender's outgoing MediaStream id, announced peer-to-peer so each
+  // member can map an incoming (otherwise anonymous) stream to its owner for the
+  // name/avatar label. Carried E2EE like the key; the server never reads it.
+  streamId?: string;
 }
 
 /**

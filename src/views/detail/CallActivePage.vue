@@ -36,10 +36,14 @@
                   autoplay
                   playsinline
                 />
+                <!-- Camera off / audio-only: show the participant's avatar (their
+                     name's initials avatar when we have no contact) instead of a bare
+                     icon. The <video> above stays mounted so their audio keeps playing. -->
                 <div v-if="!tileHasVideo(t)" class="tile-camoff">
-                  <ion-icon :icon="videocamOffOutline" />
+                  <img v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
+                  <ion-icon v-else :icon="videocamOffOutline" />
                 </div>
-                <span v-if="t.isSelf" class="tile-label">You</span>
+                <span v-if="t.name" class="tile-label">{{ t.name }}</span>
               </template>
             </div>
           </div>
@@ -168,13 +172,18 @@ import {
   phonePortraitOutline, cameraReverseOutline, desktopOutline, ellipsisHorizontalOutline, chevronDownOutline,
 } from 'ionicons/icons';
 import {
-  callState, callMeta, localStream, remoteStream, remoteStreams, muted, cameraOff, callStats,
+  callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
   switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare, minimizeCall,
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, supportsAudioOutput, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   type AudioRoute,
 } from '@/composables/useCall';
+import { useLiveQuery } from '@/composables/useLiveQuery';
+import { listContacts } from '@/db/queries';
+import { getSecret } from '@/db/secrets';
+import { initialsAvatar } from '@/db/avatars';
+import type { Contact } from '@/db/types';
 
 const mainVideo = ref<HTMLVideoElement | null>(null);
 const pipVideo = ref<HTMLVideoElement | null>(null);
@@ -284,22 +293,49 @@ interface Tile {
   stream: MediaStream | null;
   isSelf: boolean;
   leaving: boolean;
+  name: string; // '' → no name label (an as-yet-unidentified participant)
+  avatar: string; // '' → fall back to the camera-off icon
 }
 
+// Reactive contacts, keyed by userId, so a tile can resolve its owner's name + avatar
+// synchronously (mirrors ChatDetailPage). Updates live if a contact card changes.
+const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c])));
+
+// Our own profile (for the "You" tile when our camera is off). Profile fields are
+// encrypted at rest, so fetch once on mount; they don't change mid-call.
+const selfName = ref('You');
+const selfAvatar = ref('');
+
 // Tiles = every remote feed + our own outgoing feed + any leaving placeholders.
-// Incoming and outgoing are treated identically: equally-sized floating units.
+// Incoming and outgoing are treated identically: equally-sized floating units. Each
+// remote stream's owner is resolved via the peer-announced streamId→userId map
+// (groupStreamOwners); until that announcement lands a tile is just unlabeled.
 const tiles = computed<Tile[]>(() => {
-  const list: Tile[] = remoteStreams.value.map((s) => ({
-    key: s.id,
-    stream: s,
-    isSelf: false,
-    leaving: false,
-  }));
+  const list: Tile[] = remoteStreams.value.map((s) => {
+    const userId = groupStreamOwners.value[s.id];
+    const contact = userId ? contactsMap.value.get(userId) : undefined;
+    return {
+      key: s.id,
+      stream: s,
+      isSelf: false,
+      leaving: false,
+      name: contact?.name ?? '',
+      avatar: contact ? contact.avatar || initialsAvatar(contact.name) : '',
+    };
+  });
   if (localStream.value) {
-    list.push({ key: SELF, stream: localStream.value, isSelf: true, leaving: false });
+    list.push({
+      key: SELF,
+      stream: localStream.value,
+      isSelf: true,
+      leaving: false,
+      name: 'You',
+      avatar: selfAvatar.value || initialsAvatar(selfName.value),
+    });
   }
   for (const l of leaving.value) {
-    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true });
+    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, name: '', avatar: '' });
   }
   return list;
 });
@@ -441,6 +477,9 @@ watch(remoteStreams, (streams) => {
   void nextTick(applySinkAll);
 });
 onMounted(() => {
+  // Our own name/avatar for the self tile (encrypted at rest → fetched async).
+  void getSecret('profileName', 'You').then((n) => (selfName.value = n || 'You'));
+  void getSecret('profileAvatar', '').then((a) => (selfAvatar.value = a));
   measureStage();
   // Prefer a ResizeObserver on the stage element; fall back to window resize where
   // it's unavailable. Either way, tile sizes recompute when the stage changes size.
@@ -683,6 +722,16 @@ const diag = computed(() => {
 }
 .tile-camoff ion-icon {
   font-size: 30px;
+}
+/* Avatar shown for a camera-off / audio-only participant. Sized relative to the tile
+   so it scales with the floating-tile layout (small in a crowd, large in a 2-up). */
+.tile-avatar {
+  width: 34%;
+  max-width: 96px;
+  min-width: 36px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  object-fit: cover;
 }
 .tile-label {
   position: absolute;

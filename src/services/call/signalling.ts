@@ -43,6 +43,29 @@ export async function sendSealedKey(
 }
 
 /**
+ * Seal our outgoing stream id for one member and send it as a live `call-streamid`
+ * frame. Distributed peer-to-peer over the member's 1:1 ratchet, so the server never
+ * learns the stream↔member binding (it can derive it at the SFU, but we don't hand it
+ * over on the wire). Returns false if no 1:1 session exists with the member.
+ */
+export async function sendSealedStreamId(
+  peerUserId: string,
+  roomId: string,
+  streamId: string,
+): Promise<boolean> {
+  const chatId = await chatIdForPeer(peerUserId);
+  if (!chatId) return false;
+  const sealed = await sealForChat(chatId, peerUserId, false, {
+    body: '',
+    kind: 'call',
+    timestamp: Date.now(),
+    call: { callId: roomId, type: 'streamid', roomId, streamId },
+  });
+  if (!sealed) return false;
+  return sendLive({ t: 'call-streamid', to: sealed.to, roomId, ciphertext: sealed.packet });
+}
+
+/**
  * Seal a CallSignal for the peer and send it as the given 1:1 call frame.
  * Returns false if it couldn't be sealed (no session/account) or sent (offline).
  */
