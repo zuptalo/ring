@@ -158,6 +158,17 @@ function more(): void {
 ion-note.unread {
   color: var(--ion-color-primary, #10b981);
 }
+/* Uniform-width swipe action buttons with a slightly larger icon. */
+ion-item-option {
+  min-width: 84px;
+  font-size: 12px;
+  --padding-start: 4px;
+  --padding-end: 4px;
+}
+ion-item-option ion-icon {
+  font-size: 26px;
+  margin-bottom: 3px;
+}
 /* The Pin/Unpin swipe icon: same pin glyph, struck-through look when already pinned. */
 .pin-off {
   opacity: 0.6;
