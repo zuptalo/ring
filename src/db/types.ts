@@ -82,6 +82,29 @@ export interface Chat {
   // self-destruct after this many ms (carried inside the sealed payload, so they
   // disappear for everyone). Kept in sync with the peer via a `ttl` control signal.
   defaultTtlMs?: number;
+  // ---- Chats-tab organisation (all synced via own-data sync, LWW on updatedAt) ----
+  // Marked a Favorite (drives the Favorites filter chip).
+  favorite?: boolean;
+  // Pinned to the top of the chat list (sorted before unpinned, capped per device).
+  pinned?: boolean;
+  // Archived: hidden from the main list into the Archived view.
+  archived?: boolean;
+  // Locked: hidden from the main list behind the app's auth gate (Locked chats).
+  locked?: boolean;
+  // Manually marked unread by the user (when there were no unread messages). Shows
+  // the unread affordance and matches the Unread filter; cleared when the chat is
+  // opened or a message is sent.
+  manualUnread?: boolean;
+}
+
+/** A user-defined chat filter list (e.g. "Stockholmian"): a named set of chats.
+ *  Synced via own-data sync (in ownsync SYNCED), LWW on updatedAt; membership is
+ *  filtered to still-existing chats at read time. */
+export interface ChatList {
+  id: string;
+  name: string;
+  chatIds: string[];
+  updatedAt: number;
 }
 
 export type MessageKind =

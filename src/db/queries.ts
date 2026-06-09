@@ -23,9 +23,12 @@ import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
 } from '@/services/crypto/message';
 import type {
-  Alert, Call, CallLog, Chat, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
+  Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
   GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting,
 } from './types';
+
+// WhatsApp-style cap on pinned chats.
+export const MAX_PINNED_CHATS = 3;
 
 const now = () => Date.now();
 const matches = (haystack: string, q: string) =>
@@ -33,26 +36,186 @@ const matches = (haystack: string, q: string) =>
 
 /* ---- chats ---- */
 
+// Pinned chats sort above the rest; within each group, newest activity first. Used
+// by both the main list and any filtered view so pins stay on top everywhere.
+function chatOrder(a: Chat, b: Chat): number {
+  if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+  return b.lastMessageTime - a.lastMessageTime;
+}
+
 export async function listChats(q = ''): Promise<Chat[]> {
-  const chats = (await getAll<Chat>('chats')).filter((c) => !c.pending);
+  // The main list hides pending requests, archived chats, and locked chats (the
+  // last two have their own views). Pinned-first, then most-recent.
+  const chats = (await getAll<Chat>('chats')).filter(
+    (c) => !c.pending && !c.archived && !c.locked,
+  );
   const filtered = q
     ? chats.filter((c) => matches(c.name, q) || matches(c.lastMessage, q))
     : chats;
-  return filtered.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+  return filtered.sort(chatOrder);
+}
+
+/** Archived chats (the "Archived" view). Excludes locked chats. */
+export async function listArchivedChats(q = ''): Promise<Chat[]> {
+  const chats = (await getAll<Chat>('chats')).filter((c) => !c.pending && c.archived && !c.locked);
+  const filtered = q ? chats.filter((c) => matches(c.name, q) || matches(c.lastMessage, q)) : chats;
+  return filtered.sort(chatOrder);
+}
+
+/** Locked chats (the "Locked chats" view, gated by the app's auth). */
+export async function listLockedChats(q = ''): Promise<Chat[]> {
+  const chats = (await getAll<Chat>('chats')).filter((c) => !c.pending && c.locked);
+  const filtered = q ? chats.filter((c) => matches(c.name, q) || matches(c.lastMessage, q)) : chats;
+  return filtered.sort(chatOrder);
 }
 
 export function getChat(id: string): Promise<Chat | undefined> {
   return get<Chat>('chats', id);
 }
 
-/** Clear a chat's unread counter (called when the conversation is opened). */
+/** Clear a chat's unread state (called when the conversation is opened). Also clears a
+ *  manual "marked unread" flag. */
 export async function markChatRead(chatId: string): Promise<void> {
   const chat = await getChat(chatId);
-  if (chat && chat.unread) {
+  if (chat && (chat.unread || chat.manualUnread)) {
     chat.unread = 0;
+    delete chat.manualUnread;
     chat.updatedAt = now();
     await put('chats', chat);
   }
+}
+
+/** Mark a chat unread from the list (no unread messages needed): sets a manual flag
+ *  that the Unread filter + the row's unread dot honour. Cleared on open/send. */
+export async function markChatUnread(chatId: string): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat || chat.unread || chat.manualUnread) return;
+  chat.manualUnread = true;
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
+/** Whether a chat counts as unread (real unread messages OR a manual mark). */
+export function chatIsUnread(chat: Chat): boolean {
+  return chat.unread > 0 || !!chat.manualUnread;
+}
+
+/** Toggle a chat's Favorite flag; returns the new state. */
+export async function toggleChatFavorite(chatId: string): Promise<boolean> {
+  const chat = await getChat(chatId);
+  if (!chat) return false;
+  chat.favorite = !chat.favorite;
+  chat.updatedAt = now();
+  await put('chats', chat);
+  return !!chat.favorite;
+}
+
+/** Pin/unpin a chat. Returns false (and makes no change) if pinning would exceed
+ *  MAX_PINNED_CHATS, so the caller can surface a toast. */
+export async function setChatPinned(chatId: string, pinned: boolean): Promise<boolean> {
+  const chat = await getChat(chatId);
+  if (!chat) return false;
+  if (pinned && !chat.pinned) {
+    const count = (await getAll<Chat>('chats')).filter((c) => c.pinned && !c.archived).length;
+    if (count >= MAX_PINNED_CHATS) return false;
+  }
+  if (pinned) chat.pinned = true;
+  else delete chat.pinned;
+  chat.updatedAt = now();
+  await put('chats', chat);
+  return true;
+}
+
+/** Archive/unarchive a chat (moves it in/out of the Archived view). Unarchiving on a
+ *  new message is the caller's concern; this is the explicit user toggle. */
+export async function setChatArchived(chatId: string, archived: boolean): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  if (archived) {
+    chat.archived = true;
+    delete chat.pinned; // archived chats aren't pinned in the main list
+  } else delete chat.archived;
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
+/** Lock/unlock a chat (moves it in/out of the auth-gated Locked chats view). */
+export async function setChatLocked(chatId: string, locked: boolean): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  if (locked) chat.locked = true;
+  else delete chat.locked;
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
+/** Clear a chat's messages but KEEP the conversation (and its ratchet session). The
+ *  row stays in place; only its history + preview are wiped. */
+export async function clearChat(chatId: string): Promise<void> {
+  const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
+  for (const m of msgs) await remove('messages', m.id);
+  const chat = await getChat(chatId);
+  if (chat) {
+    chat.lastMessage = '';
+    chat.lastKind = undefined;
+    chat.unread = 0;
+    delete chat.manualUnread;
+    chat.updatedAt = now();
+    await put('chats', chat);
+  }
+}
+
+/* ---- chat lists (user-defined filter lists) ---- */
+
+/** All custom lists, alphabetical. */
+export async function listChatLists(): Promise<ChatList[]> {
+  return (await getAll<ChatList>('chatlists')).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function getChatList(id: string): Promise<ChatList | undefined> {
+  return get<ChatList>('chatlists', id);
+}
+
+export async function createChatList(name: string, chatIds: string[] = []): Promise<string> {
+  const id = uid();
+  await put('chatlists', { id, name: name.trim(), chatIds: [...new Set(chatIds)], updatedAt: now() });
+  return id;
+}
+
+export async function renameChatList(id: string, name: string): Promise<void> {
+  const list = await getChatList(id);
+  if (!list) return;
+  list.name = name.trim();
+  list.updatedAt = now();
+  await put('chatlists', list);
+}
+
+export async function setChatListMembers(id: string, chatIds: string[]): Promise<void> {
+  const list = await getChatList(id);
+  if (!list) return;
+  list.chatIds = [...new Set(chatIds)];
+  list.updatedAt = now();
+  await put('chatlists', list);
+}
+
+/** Add/remove a single chat to/from a list (used by the per-chat "Add to list"). */
+export async function setChatInList(listId: string, chatId: string, member: boolean): Promise<void> {
+  const list = await getChatList(listId);
+  if (!list) return;
+  const has = list.chatIds.includes(chatId);
+  if (member && !has) list.chatIds.push(chatId);
+  else if (!member && has) list.chatIds = list.chatIds.filter((c) => c !== chatId);
+  else return;
+  list.updatedAt = now();
+  await put('chatlists', list);
+}
+
+/** Delete a custom list (tombstoned so a pull/own-sync can't resurrect it). */
+export async function deleteChatList(id: string): Promise<void> {
+  const deletedAt = now();
+  await recordTombstone('chatlists', id, deletedAt);
+  await enqueue({ t: 'tombstone', store: 'chatlists', recordId: id, deletedAt });
+  await remove('chatlists', id);
 }
 
 /* ---- messages ---- */

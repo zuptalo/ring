@@ -24,7 +24,7 @@ import {
 // Stores backed up by own-data sync. Each row must have `{ id, updatedAt }`.
 // (Messages/calls/media are excluded for v1: large, and messages are already
 // E2EE-relayed.)
-const SYNCED: StoreName[] = ['contacts', 'chats'];
+const SYNCED: StoreName[] = ['contacts', 'chats', 'chatlists'];
 const PAGE = 500;
 
 // Profile + prefs ride as ONE encrypted record (store='profile', id='me'):
@@ -43,7 +43,7 @@ const SYNCED_PREF_KEYS: string[] = [
   'notifications.status.show', 'notifications.status.reactions', 'notifications.status.sound',
   'notifications.reminders', 'notifications.showPreview', 'notifications.badge',
   'notifications.inapp.style', 'notifications.inapp.sounds', 'notifications.inapp.vibrate',
-  'chats.animEmoji', 'chats.animGifs',
+  'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters',
 ];
 
 interface ProfileSnapshot {

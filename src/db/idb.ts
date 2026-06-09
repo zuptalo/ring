@@ -20,11 +20,13 @@ export const STORES = [
   'senderkeys', // group sender-key state
   'outbox', // durable queue of local writes awaiting push
   'tombstones', // soft-delete markers so pull can't resurrect rows
+  // v5: user-defined chat filter lists (Chats-tab "lists").
+  'chatlists',
 ] as const;
 export type StoreName = (typeof STORES)[number];
 
 const DB_NAME = 'ring';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -56,6 +58,9 @@ export function openDB(): Promise<IDBDatabase> {
       for (const name of ['keystore', 'prekeys', 'sessions', 'senderkeys', 'outbox', 'tombstones']) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath: 'id' });
       }
+      // v5: user-defined chat filter lists.
+      if (!db.objectStoreNames.contains('chatlists'))
+        db.createObjectStore('chatlists', { keyPath: 'id' });
     };
     req.onsuccess = () => {
       const db = req.result;
