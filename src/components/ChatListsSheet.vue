@@ -21,14 +21,25 @@
 
       <ion-list :inset="true">
         <ion-item
-          v-for="id in offTabListIds"
-          :key="id"
+          v-for="l in lists"
+          :key="l.id"
           button
           :detail="false"
-          @click="$emit('select', id)"
+          @click="$emit('select', `list:${l.id}`)"
         >
           <ion-icon slot="start" :icon="listOutline" />
-          <ion-label>{{ nameOf(id) }}</ion-label>
+          <ion-label>{{ l.name }}</ion-label>
+          <!-- Manage (rename / members / delete) this list. A plain button (not
+               ion-button) so it reliably stops the row's filter tap. -->
+          <button
+            slot="end"
+            class="edit-btn"
+            aria-label="Edit list"
+            @click.stop="$emit('editList', l.id)"
+            @pointerdown.stop
+          >
+            <ion-icon :icon="ellipsisHorizontal" />
+          </button>
         </ion-item>
         <ion-item button :detail="false" @click="$emit('newList')">
           <ion-icon slot="start" color="primary" :icon="addOutline" />
@@ -40,29 +51,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
 import { IonModal, IonContent, IonList, IonItem, IonLabel, IonIcon, IonButton } from '@ionic/vue';
-import { bulbOutline, listOutline, addOutline } from 'ionicons/icons';
-import { listIdOf, type FilterId } from '@/services/chat-filters';
+import { bulbOutline, listOutline, addOutline, ellipsisHorizontal } from 'ionicons/icons';
+import type { FilterId } from '@/services/chat-filters';
 import type { ChatList } from '@/db/types';
 
-const props = defineProps<{ isOpen: boolean; lists: ChatList[]; tabFilters: FilterId[] }>();
+defineProps<{ isOpen: boolean; lists: ChatList[]; tabFilters: FilterId[] }>();
 defineEmits<{
   (e: 'dismiss'): void;
   (e: 'edit'): void;
   (e: 'newList'): void;
+  (e: 'editList', id: string): void;
   (e: 'select', id: FilterId): void;
 }>();
-
-// Lists that are NOT pinned to the tab (shown here as the overflow).
-const offTabListIds = computed<FilterId[]>(() => {
-  const onTab = new Set(props.tabFilters);
-  return props.lists.map((l) => `list:${l.id}` as FilterId).filter((id) => !onTab.has(id));
-});
-function nameOf(id: FilterId): string {
-  const lid = listIdOf(id);
-  return props.lists.find((l) => l.id === lid)?.name ?? '';
-}
 </script>
 
 <style scoped>
@@ -91,5 +92,15 @@ function nameOf(id: FilterId): string {
 .tip ion-icon {
   font-size: 20px;
   flex: none;
+}
+.edit-btn {
+  background: none;
+  border: none;
+  color: var(--ion-color-medium);
+  font-size: 22px;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
 }
 </style>

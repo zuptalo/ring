@@ -50,24 +50,31 @@
         />
       </ion-list>
 
+      <!-- Empty states. The "Browse the directory" CTA is only for a brand-new user
+           with no chats at all; a filtered view that happens to be empty just says so
+           (the directory is reachable from the Contacts tab). -->
       <div v-if="chats.length === 0" class="empty">
-        <ion-note>No chats yet</ion-note>
-        <ion-button class="browse-btn" fill="solid" size="small" @click="router.push('/directory')">
-          <ion-icon slot="start" :icon="compassOutline" />
-          Browse the directory
-        </ion-button>
+        <template v-if="activeFilter === 'all' && allChats.length === 0">
+          <ion-note>No chats yet</ion-note>
+          <ion-button class="browse-btn" fill="solid" size="small" @click="router.push('/directory')">
+            <ion-icon slot="start" :icon="compassOutline" />
+            Browse the directory
+          </ion-button>
+        </template>
+        <ion-note v-else>{{ emptyMessage }}</ion-note>
       </div>
 
       <ChatActionsHost ref="actions" />
 
-      <!-- Lists "More" sheet + Edit Chats tab editor + New list (chip-row flows). -->
+      <!-- Lists "More" sheet + Edit Chats tab editor + New/Edit list (chip-row flows). -->
       <ChatListsSheet
         :is-open="listsSheetOpen"
         :lists="lists"
         :tab-filters="tabFilters"
-        @dismiss="listsSheetOpen = false"
-        @edit="listsSheetOpen = false; editTabsOpen = true"
-        @new-list="listsSheetOpen = false; newListOpen = true"
+        @dismiss="onSheetDismiss"
+        @edit="queueAfterSheet(() => (editTabsOpen = true))"
+        @new-list="queueAfterSheet(openNewList)"
+        @edit-list="(id) => queueAfterSheet(() => openEditList(id))"
         @select="(id) => { setActive(id); listsSheetOpen = false; }"
       />
       <EditChatTabsModal
@@ -78,8 +85,9 @@
       />
       <NewListModal
         :is-open="newListOpen"
-        @dismiss="newListOpen = false"
-        @created="(id) => { newListOpen = false; setActive(`list:${id}`); }"
+        :list-id="editListId"
+        @dismiss="newListOpen = false; editListId = null;"
+        @created="(id) => { newListOpen = false; editListId = null; setActive(`list:${id}`); }"
       />
     </ion-content>
 
@@ -163,10 +171,48 @@ const actions = ref<InstanceType<typeof ChatActionsHost> | null>(null);
 const { connect, requireProfile } = useConnect();
 
 // Filtered chat list + chips (All / Unread / Favorites / Groups + lists).
-const { chats, activeFilter, setActive, chips, lists, tabFilters } = useChatFilters(search);
+const { chats, activeFilter, setActive, chips, lists, tabFilters, allChats } = useChatFilters(search);
 const listsSheetOpen = ref(false);
 const editTabsOpen = ref(false);
 const newListOpen = ref(false);
+const editListId = ref<string | null>(null);
+
+function openNewList(): void {
+  editListId.value = null;
+  newListOpen.value = true;
+}
+function openEditList(id: string): void {
+  editListId.value = id;
+  newListOpen.value = true;
+}
+
+// Opening a modal while the bottom sheet is still dismissing drops the new modal's
+// transition, so defer the next action until the sheet has fully dismissed.
+const afterSheet = ref<(() => void) | null>(null);
+function queueAfterSheet(fn: () => void): void {
+  afterSheet.value = fn;
+  listsSheetOpen.value = false; // triggers the sheet's did-dismiss → onSheetDismiss
+}
+function onSheetDismiss(): void {
+  listsSheetOpen.value = false;
+  const fn = afterSheet.value;
+  afterSheet.value = null;
+  fn?.();
+}
+
+// Contextual empty-state copy for a filtered view that has no matches.
+const emptyMessage = computed(() => {
+  switch (activeFilter.value) {
+    case 'unread':
+      return 'No unread chats';
+    case 'favorites':
+      return 'No favorite chats yet';
+    case 'groups':
+      return 'No group chats';
+    default:
+      return activeFilter.value.startsWith('list:') ? 'No chats in this list yet' : 'No chats';
+  }
+});
 
 // Count for the Archived entry row.
 const archived = useLiveQuery(() => listArchivedChats(), ['chats', 'messages'], [] as Chat[]);

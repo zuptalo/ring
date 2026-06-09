@@ -56,6 +56,12 @@ test('chat filters: favorites, groups, pin order, archive, lists, unread, tab pe
   const inList = await matching(`list:${listId}`);
   expect(inList.sort()).toEqual([group, chatC].sort());
 
+  // Delete the list: it's gone (and its filter matches nothing). Chats are untouched.
+  await a.page.evaluate((id) => (window as any).__ringTest.deleteList(id), listId);
+  expect(await a.page.evaluate(() => (window as any).__ringTest.listIds())).not.toContain(listId);
+  expect(await matching(`list:${listId}`)).toEqual([]);
+  expect(await a.page.evaluate(() => (window as any).__ringTest.chatOrder())).toContain(group);
+
   // Lock: chatC leaves the main list and appears in the locked view.
   await a.page.evaluate((id) => (window as any).__ringTest.lockChat(id, true), chatC);
   expect(await a.page.evaluate(() => (window as any).__ringTest.chatOrder())).not.toContain(chatC);

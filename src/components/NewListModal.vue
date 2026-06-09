@@ -112,7 +112,8 @@ async function save(): Promise<void> {
 async function confirmDelete(): Promise<void> {
   if (!props.listId) return;
   const sheet = await actionSheetController.create({
-    header: `Delete "${name.value}"? Chats are not deleted.`,
+    header: `Delete "${name.value}"`,
+    subHeader: "This will permanently delete this list. Your conversations won't be affected.",
     buttons: [
       { text: 'Delete list', role: 'destructive', handler: () => void deleteChatList(props.listId as string).then(() => emit('dismiss')) },
       { text: 'Cancel', role: 'cancel' as const },

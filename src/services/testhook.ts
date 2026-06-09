@@ -71,6 +71,7 @@ import {
   markChatUnread as dbMarkChatUnread,
   createChatList as dbCreateChatList,
   setChatInList as dbSetChatInList,
+  deleteChatList as dbDeleteChatList,
   setChatLocked as dbSetChatLocked,
   listChatLists,
   listLockedChats,
@@ -319,6 +320,8 @@ export function installTestHook(): void {
     markChatUnread: (id: string) => dbMarkChatUnread(id),
     createList: (name: string, chatIds: string[]) => dbCreateChatList(name, chatIds),
     addToList: (listId: string, chatId: string) => dbSetChatInList(listId, chatId, true),
+    deleteList: (id: string) => dbDeleteChatList(id),
+    listIds: async (): Promise<string[]> => (await listChatLists()).map((l) => l.id),
     /** Ids of the main (non-archived) chats, in display order (pinned first). */
     chatOrder: async (): Promise<string[]> => (await listChats()).map((c) => c.id),
     /** Ids of archived chats. */
