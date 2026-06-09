@@ -78,8 +78,8 @@
         <ion-list :inset="true">
           <ion-list-header><ion-label>Members</ion-label></ion-list-header>
           <ion-item lines="full">
-            <ion-avatar slot="start"><img :src="selfAvatar" alt="You" /></ion-avatar>
-            <ion-label>You</ion-label>
+            <ion-avatar slot="start"><img :src="selfAvatar" :alt="selfName" /></ion-avatar>
+            <ion-label>{{ selfName }} <span class="you-tag">(You)</span></ion-label>
           </ion-item>
           <ion-item
             v-for="m in members"
@@ -115,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
@@ -130,9 +130,9 @@ import {
   getChat, listContacts, inviteToGroup, removeMember, leaveGroup,
   renameGroup, setGroupAvatar, clearGroupAvatar, setChatMute, setChatTtl,
 } from '@/db/queries';
-import { getSecret } from '@/db/secrets';
 import type { Chat, Contact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { useSelfProfile } from '@/composables/useSelfProfile';
 import { initialsAvatar } from '@/db/avatars';
 
 const route = useRoute();
@@ -200,12 +200,8 @@ async function openTtl(): Promise<void> {
   await sheet.present();
 }
 
-const selfAvatar = ref(initialsAvatar('You'));
-watch(
-  chat,
-  () => void getSecret('profileAvatar', '').then((a) => (selfAvatar.value = a || initialsAvatar('You'))),
-  { immediate: true },
-);
+// Our own chosen name + avatar for the self member row (reactive, app-wide).
+const { name: selfName, avatar: selfAvatar } = useSelfProfile();
 
 // Member profiles (resolve participant ids → contacts).
 const members = computed(() =>
@@ -338,6 +334,10 @@ async function leave(): Promise<void> {
 </script>
 
 <style scoped>
+.you-tag {
+  color: var(--ion-color-medium);
+  font-size: 0.85em;
+}
 .profile {
   padding: 24px 16px 8px;
 }

@@ -181,7 +181,7 @@ import {
 } from '@/composables/useCall';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { listContacts } from '@/db/queries';
-import { getSecret } from '@/db/secrets';
+import { useSelfProfile } from '@/composables/useSelfProfile';
 import { initialsAvatar } from '@/db/avatars';
 import type { Contact } from '@/db/types';
 
@@ -302,10 +302,9 @@ interface Tile {
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
 const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c])));
 
-// Our own profile (for the "You" tile when our camera is off). Profile fields are
-// encrypted at rest, so fetch once on mount; they don't change mid-call.
-const selfName = ref('You');
-const selfAvatar = ref('');
+// Our own chosen name + avatar (shown on our own tile). Reactive so a rename mid-call
+// propagates, and shared with the rest of the app via useSelfProfile.
+const { name: selfName, avatar: selfAvatar } = useSelfProfile();
 
 // Tiles = every remote feed + our own outgoing feed + any leaving placeholders.
 // Incoming and outgoing are treated identically: equally-sized floating units. Each
@@ -330,8 +329,8 @@ const tiles = computed<Tile[]>(() => {
       stream: localStream.value,
       isSelf: true,
       leaving: false,
-      name: 'You',
-      avatar: selfAvatar.value || initialsAvatar(selfName.value),
+      name: selfName.value,
+      avatar: selfAvatar.value,
     });
   }
   for (const l of leaving.value) {
@@ -484,9 +483,6 @@ watch(remoteStreams, (streams) => {
   void nextTick(applySinkAll);
 });
 onMounted(() => {
-  // Our own name/avatar for the self tile (encrypted at rest → fetched async).
-  void getSecret('profileName', 'You').then((n) => (selfName.value = n || 'You'));
-  void getSecret('profileAvatar', '').then((a) => (selfAvatar.value = a));
   measureStage();
   // Prefer a ResizeObserver on the stage element; fall back to window resize where
   // it's unavailable. Either way, tile sizes recompute when the stage changes size.
