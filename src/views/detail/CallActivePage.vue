@@ -2,72 +2,46 @@
   <ion-page>
     <ion-content :fullscreen="true" class="call">
       <div ref="stageEl" class="stage">
-        <!-- Group call: tap a tile to spotlight it on the main stage (the rest
-             become a side filmstrip); no spotlight = an even grid (default). -->
+        <!-- Group call: every participant - each incoming feed AND our own outgoing
+             feed - is an equally-sized floating tile. Tiles are centred and wrap;
+             they grow when few are on the call and shrink as people join, never
+             overlap, and each video uses object-fit:contain so the WHOLE frame shows
+             (no cropping / partial feed). Tile pixel size comes from tileDims. -->
         <div v-if="callMeta?.isGroup" class="group">
-          <!-- Fullscreen stage: a spotlighted tile, OR (WhatsApp-style) the single
-               remote when only one other person is on the call. -->
-          <video
-            v-if="stageStream"
-            :key="stageKey"
-            :ref="(el) => attach(el as HTMLVideoElement | null, stageStream)"
-            class="main-video"
-            :class="{ mirror: stageIsSelf }"
-            :muted="stageIsSelf"
-            autoplay
-            playsinline
-            @click="spotlightId && promote(null)"
-          />
-          <!-- Our own camera as a draggable PiP in the single-remote (2-person) layout. -->
-          <video
-            v-if="showSelfPip"
-            :ref="(el) => attach(el as HTMLVideoElement | null, localStream)"
-            class="pip-video mirror"
-            :style="pipStyle"
-            muted
-            autoplay
-            playsinline
-            @pointerdown="onPipDown"
-            @pointermove="onPipMove"
-            @pointerup="onPipUp"
-            @pointercancel="onPipCancel"
-          />
-          <!-- Even grid (3+ people) or the spotlight filmstrip. The grid tracks use
-               minmax(0,1fr) + overflow:hidden so tiles always scale to fit and never
-               spill past the bottom of the screen. -->
-          <div
-            v-if="showGroupGrid || spotlightId"
-            class="group-grid"
-            :class="{ filmstrip: spotlightId }"
-            :style="spotlightId ? undefined : gridStyle"
-          >
-            <video
-              v-for="s in gridStreams"
-              :key="s.id"
-              :ref="(el) => attach(el as HTMLVideoElement | null, s)"
-              class="tile"
-              autoplay
-              playsinline
-              @click="promote(s.id)"
-            />
-            <video
-              v-if="showSelfTile"
-              :ref="(el) => attach(el as HTMLVideoElement | null, localStream)"
-              class="tile self mirror"
-              autoplay
-              playsinline
-              muted
-              @click="promote(SELF)"
-            />
-            <!-- A participant who just left: a waving hand that fades out (keeping the
-                 layout steady for a beat, then freeing room for the rest to grow). -->
-            <div v-for="l in leaving" :key="l.id" class="tile leaving">
-              <span class="leave-wave"><emoji emoji="👋" /></span>
-            </div>
-          </div>
-          <div v-if="remoteStreams.length === 0" class="group-waiting">
+          <div v-if="tiles.length === 0" class="group-waiting">
             <ion-spinner name="crescent" />
             <p>Waiting for others to join…</p>
+          </div>
+          <div v-else class="tiles">
+            <div
+              v-for="t in tiles"
+              :key="t.key"
+              class="float-tile"
+              :class="{ self: t.isSelf, leaving: t.leaving }"
+              :style="{ width: tileDims.w + 'px', height: tileDims.h + 'px' }"
+            >
+              <!-- A participant who just left: a waving hand that fades out (keeps the
+                   layout steady for a beat, then the rest reflow and grow). -->
+              <span v-if="t.leaving" class="leave-wave"><emoji emoji="👋" /></span>
+              <template v-else>
+                <!-- Remote tiles stay unmuted (group audio plays through the tiles);
+                     our own tile is muted to avoid echo. The <video> stays mounted
+                     even with the camera off so the participant's audio keeps flowing;
+                     the camera-off icon just overlays it. -->
+                <video
+                  :ref="(el) => attach(el as HTMLVideoElement | null, t.stream)"
+                  class="tile-video"
+                  :class="{ mirror: t.isSelf && cameraFacing === 'user' }"
+                  :muted="t.isSelf"
+                  autoplay
+                  playsinline
+                />
+                <div v-if="!tileHasVideo(t)" class="tile-camoff">
+                  <ion-icon :icon="videocamOffOutline" />
+                </div>
+                <span v-if="t.isSelf" class="tile-label">You</span>
+              </template>
+            </div>
           </div>
         </div>
 
@@ -297,70 +271,89 @@ function onPipCancel(): void {
   dragMoved = false;
 }
 
-/* ---- group stage: optional spotlight (tap a tile to promote it) ---- */
+/* ---- group stage: every participant is a floating, auto-sized tile ---- */
 const SELF = '__self__';
-const spotlightId = ref<string | null>(null);
-const spotlightStream = computed(() =>
-  spotlightId.value === SELF
-    ? localStream.value
-    : spotlightId.value
-      ? remoteStreams.value.find((s) => s.id === spotlightId.value) ?? null
-      : null,
-);
-const gridStreams = computed(() => remoteStreams.value.filter((s) => s.id !== spotlightId.value));
-const showSelfTile = computed(() => !!localStream.value && spotlightId.value !== SELF);
-function promote(id: string | null): void {
-  spotlightId.value = id;
-}
 
-// WhatsApp-style stage. With exactly ONE other person (and no spotlight), that remote
-// fills the screen and our own camera is a draggable PiP (instead of a tall/narrow
-// split). 3+ people use the even grid; tapping a tile spotlights it.
-const singleRemote = computed(() => !spotlightId.value && remoteStreams.value.length === 1);
-const stageStream = computed(() =>
-  spotlightId.value
-    ? spotlightStream.value
-    : singleRemote.value
-      ? remoteStreams.value[0]
-      : null,
-);
-const stageIsSelf = computed(() => spotlightId.value === SELF);
-const stageKey = computed(() => spotlightId.value ?? stageStream.value?.id ?? 'stage');
-const showGroupGrid = computed(() => !spotlightId.value && remoteStreams.value.length >= 2);
-// Our own camera shows as a PiP only in the single-remote layout (in the grid we are a
-// tile; while spotlighting we sit in the filmstrip).
-const groupSelfHasVideo = computed(
-  () => callMeta.value?.kind === 'video' && !!localStream.value && !cameraOff.value,
-);
-const showSelfPip = computed(() => singleRemote.value && groupSelfHasVideo.value);
-
-// Even-grid layout: pick a column count that keeps tiles roughly rectangular rather
-// than tall-and-narrow. On a portrait phone two tiles stack (full-width, landscape);
-// otherwise we cap at 2-3 columns. `leaving` tiles count so the grid stays steady
-// while a departed participant's waving placeholder fades, then the rest grow.
-const portrait = ref(true);
-function updateOrientation(): void {
-  portrait.value = window.innerHeight >= window.innerWidth;
-}
+// A participant who just left lingers as a brief waving-hand placeholder so the
+// layout stays steady for a beat before the remaining tiles reflow and grow.
 const leaving = ref<{ id: string }[]>([]);
 let prevStreamIds: string[] = [];
-const tileCount = computed(
-  () => gridStreams.value.length + (showSelfTile.value ? 1 : 0) + leaving.value.length,
-);
-const gridCols = computed(() => {
-  const n = Math.max(1, tileCount.value);
-  if (n <= 2) return portrait.value ? 1 : 2;
-  if (n <= 6) return 2; // WhatsApp keeps two columns up to ~6
-  return 3;
+
+interface Tile {
+  key: string;
+  stream: MediaStream | null;
+  isSelf: boolean;
+  leaving: boolean;
+}
+
+// Tiles = every remote feed + our own outgoing feed + any leaving placeholders.
+// Incoming and outgoing are treated identically: equally-sized floating units.
+const tiles = computed<Tile[]>(() => {
+  const list: Tile[] = remoteStreams.value.map((s) => ({
+    key: s.id,
+    stream: s,
+    isSelf: false,
+    leaving: false,
+  }));
+  if (localStream.value) {
+    list.push({ key: SELF, stream: localStream.value, isSelf: true, leaving: false });
+  }
+  for (const l of leaving.value) {
+    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true });
+  }
+  return list;
 });
-const gridRows = computed(() => Math.ceil(Math.max(1, tileCount.value) / gridCols.value));
-// minmax(0, 1fr) (not a bare 1fr, which is minmax(auto, 1fr)) stops a video tile's
-// intrinsic size from blowing the track out past the container, so the grid always
-// fits the stage; explicit rows + overflow:hidden keep tiles inside the screen.
-const gridStyle = computed(() => ({
-  gridTemplateColumns: `repeat(${gridCols.value}, minmax(0, 1fr))`,
-  gridTemplateRows: `repeat(${gridRows.value}, minmax(0, 1fr))`,
-}));
+
+/** Whether a tile is showing live video. When not, we overlay a camera-off icon but
+ *  keep the <video> mounted so the participant's AUDIO keeps playing. (A peer's video
+ *  track is removed from its stream when they turn the camera off, so the track count
+ *  is a reliable signal and recomputes when remoteStreams is rebuilt.) */
+function tileHasVideo(t: Tile): boolean {
+  if (t.leaving) return false;
+  if (t.isSelf) return !cameraOff.value && !!t.stream?.getVideoTracks().length;
+  return !!t.stream && t.stream.getVideoTracks().length > 0;
+}
+
+// Live stage size, tracked with a ResizeObserver so tile sizing follows the actual
+// element (orientation flips, split-screen, the keyboard) and not just window size.
+const stageSize = ref({ w: 0, h: 0 });
+let stageRO: ResizeObserver | null = null;
+function measureStage(): void {
+  const el = stageEl.value;
+  if (el) stageSize.value = { w: el.clientWidth, h: el.clientHeight };
+}
+
+// Floating-tile geometry. Tiles are uniform, centred and wrapped; we choose the tile
+// size that packs ALL participants into the stage at the largest size (two people get
+// big tiles, a crowd gets small ones - "grow/shrink by audience"). object-fit:contain
+// then shows each whole frame, letterboxed in the tile's own bg, never cropped.
+const TILE_ASPECT = 4 / 3; // tile box shape (the contained video keeps its own aspect)
+const TILE_GAP = 10; // px between tiles - must match the CSS `gap`
+const TILE_PAD = 12; // px stage padding - must match the CSS `padding`
+
+const tileDims = computed(() => {
+  const n = tiles.value.length;
+  const { w: W, h: H } = stageSize.value;
+  if (n === 0 || W === 0 || H === 0) return { w: 0, h: 0 };
+  let best = { w: 0, h: 0, area: 0 };
+  // Try every column count; for each, the rows it implies, then the largest
+  // TILE_ASPECT box that fits one cell. Keep whichever yields the biggest tile.
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const cellW = (W - 2 * TILE_PAD - (cols - 1) * TILE_GAP) / cols;
+    const cellH = (H - 2 * TILE_PAD - (rows - 1) * TILE_GAP) / rows;
+    if (cellW <= 0 || cellH <= 0) continue;
+    let w = cellW;
+    let h = w / TILE_ASPECT;
+    if (h > cellH) {
+      h = cellH;
+      w = h * TILE_ASPECT;
+    }
+    const area = w * h;
+    if (area > best.area) best = { w, h, area };
+  }
+  return { w: Math.floor(best.w), h: Math.floor(best.h) };
+});
 
 // The route button reflects the LIVE route so the user can tell where audio is going.
 // Earpiece uses a phone-handset icon (clearly distinct from the loudspeaker).
@@ -442,27 +435,30 @@ watch(remoteStreams, (streams) => {
     }
   }
   prevStreamIds = ids;
-  // If the spotlighted participant left, drop back to the even grid (no black stage).
-  if (
-    spotlightId.value &&
-    spotlightId.value !== SELF &&
-    !streams.some((s) => s.id === spotlightId.value)
-  ) {
-    spotlightId.value = null;
-  }
   // New tiles mount asynchronously as participants join, re-assert the sink once
   // they're in the DOM (their :ref attach also applies it; this is the safety net
   // for a srcObject/setSinkId ordering race).
   void nextTick(applySinkAll);
 });
 onMounted(() => {
-  updateOrientation();
-  window.addEventListener('resize', updateOrientation);
+  measureStage();
+  // Prefer a ResizeObserver on the stage element; fall back to window resize where
+  // it's unavailable. Either way, tile sizes recompute when the stage changes size.
+  if (typeof ResizeObserver !== 'undefined' && stageEl.value) {
+    stageRO = new ResizeObserver(measureStage);
+    stageRO.observe(stageEl.value);
+  } else {
+    window.addEventListener('resize', measureStage);
+  }
   attach(mainVideo.value, mainHasVideo.value ? mainStream.value : null);
   attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null);
   routeRemoteAudio();
 });
-onUnmounted(() => window.removeEventListener('resize', updateOrientation));
+onUnmounted(() => {
+  stageRO?.disconnect();
+  stageRO = null;
+  window.removeEventListener('resize', measureStage);
+});
 
 /* ---- secondary controls (camera flip, screen share, video<->audio) in a sheet ---- */
 async function openMore(): Promise<void> {
@@ -609,9 +605,6 @@ const diag = computed(() => {
   object-fit: cover;
   background: #111;
 }
-.group .main-video {
-  cursor: pointer;
-}
 .mirror {
   transform: scaleX(-1);
 }
@@ -631,37 +624,91 @@ const diag = computed(() => {
   opacity: 0;
   pointer-events: none;
 }
-.group-grid {
+/* Group layout: equally-sized floating tiles, centred and wrapped. Each tile's pixel
+   size is computed in script (tileDims) to pack every participant into the stage as
+   large as possible, so tiles grow when few are on the call and shrink as more join -
+   and they never overlap. justify-content:center makes a partial last row float in
+   the middle rather than hug an edge. */
+.tiles {
   position: absolute;
   inset: 0;
-  display: grid;
-  /* Columns AND rows come from gridStyle (count + orientation aware) using
-     minmax(0,1fr) tracks so a tile's intrinsic video size can't blow the grid out;
-     overflow:hidden is a backstop so nothing ever spills past the stage. */
-  gap: 4px;
-  padding: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  align-items: center;
+  justify-content: center;
+  gap: 10px; /* == TILE_GAP */
+  padding: 12px; /* == TILE_PAD */
   overflow: hidden;
 }
-.group-grid .tile {
+.float-tile {
+  position: relative;
+  flex: 0 0 auto; /* exact computed size - never stretched or squished */
+  background: #111;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  /* Smoothly grow/shrink as the computed tile size changes on join/leave; new tiles
+     fade + scale in as people arrive. */
+  transition:
+    width 0.25s ease,
+    height 0.25s ease;
+  animation: tile-in 0.25s ease;
+}
+.float-tile.self {
+  outline: 2px solid var(--ion-color-primary, #10b981);
+  outline-offset: -2px;
+}
+.tile-video {
   width: 100%;
   height: 100%;
-  min-width: 0;
-  min-height: 0;
-  object-fit: cover;
+  /* contain (not cover): show each participant's WHOLE frame, never cropped. The
+     letterbox area is the tile's own dark bg, so it reads as a card. */
+  object-fit: contain;
   background: #111;
-  border-radius: 8px;
-  cursor: pointer;
+  display: block;
 }
-.group-grid .tile.self {
-  outline: 2px solid var(--ion-color-primary, #10b981);
+.tile-video.mirror {
+  transform: scaleX(-1);
 }
-/* A departed participant's placeholder: a waving hand that fades out. */
-.group-grid .tile.leaving {
+/* Camera-off (or audio-only) participant: an icon over the still-mounted (audible)
+   video element. */
+.tile-camoff {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: default;
+  color: rgba(255, 255, 255, 0.5);
+}
+.tile-camoff ion-icon {
+  font-size: 30px;
+}
+.tile-label {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  font-size: 11px;
+}
+/* A departed participant's placeholder: a waving hand that fades out. */
+.float-tile.leaving {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   animation: tile-leave 1.8s ease forwards;
+}
+@keyframes tile-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 .leave-wave {
   font-size: 44px;
@@ -686,23 +733,6 @@ const diag = computed(() => {
   50% {
     transform: rotate(13deg);
   }
-}
-/* When a participant is spotlighted, the others become a horizontal strip along the
-   bottom, just above the controls (clear of the safe area). */
-.group-grid.filmstrip {
-  inset: auto 8px calc(max(16px, env(safe-area-inset-bottom)) + 92px) 8px;
-  top: auto;
-  height: 92px;
-  display: grid;
-  grid-template-columns: none;
-  grid-auto-flow: column;
-  grid-auto-columns: 116px;
-  grid-auto-rows: 92px;
-  gap: 8px;
-  padding: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  z-index: 2;
 }
 .group-waiting {
   position: absolute;
