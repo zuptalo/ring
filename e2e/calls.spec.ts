@@ -222,3 +222,109 @@ test('group call: three participants exchange media via the SFU', async ({ brows
   await ctxB.close();
   await ctxC.close();
 });
+
+/**
+ * Group-call tile LABELLING: each participant announces its outgoing stream id to the
+ * others (sealed, peer-to-peer), so every client can map an otherwise-anonymous
+ * incoming MediaStream to its owner and show that contact's name/avatar on the tile.
+ *
+ * This guards the load-bearing assumption behind the labels: that the publisher's
+ * stream id survives forwarding through the SFU, so the announced id (the owner's
+ * localStream.id) matches the stream.id the subscriber actually receives. If it
+ * didn't, the announcements would still arrive but under keys that match NO remote
+ * stream, and the waitForFunction below would time out - failing loudly rather than
+ * silently shipping mislabelled tiles. We assert the mapping at the data layer (the
+ * same groupStreamOwners map the tile computed reads); the template then just binds
+ * contactsMap.get(userId).name, so a correct owner id means a correct label.
+ */
+test('group call: each remote stream is mapped to its owner for tile labels', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+
+  const a = await createAccount(ctxA, 'RINGDEV6');
+  const b = await createAccount(ctxB, 'RINGDEV7');
+  const c = await createAccount(ctxC, 'RINGDEV8');
+
+  await pair(a, b);
+  await pair(a, c);
+  await pair(b, c);
+
+  // Give each account a known local name for its peers, so the owner id a tile
+  // resolves would render a non-empty, predictable label.
+  const names: Record<string, string> = { [a.id]: 'Alice', [b.id]: 'Bob', [c.id]: 'Carol' };
+  for (const [self, peers] of [
+    [a, [b, c]],
+    [b, [a, c]],
+    [c, [a, b]],
+  ] as const) {
+    for (const peer of peers) {
+      await self.page.evaluate(
+        ([id, name]) => (window as any).__ringTest.setContactName(id, name),
+        [peer.id, names[peer.id]] as const,
+      );
+    }
+  }
+
+  const room = 'e2e-group-labels';
+  for (const p of [a, b, c]) {
+    await p.page.evaluate((r) => (window as any).__ringTest.startGroup(r, 'video'), room);
+  }
+
+  // Each participant receives the other two's streams...
+  for (const p of [a, b, c]) {
+    await p.page.waitForFunction(
+      () => (window as any).__ringTest.remoteStreamCount() >= 2,
+      null,
+      { timeout: 60_000 },
+    );
+  }
+
+  // ...and crucially, EVERY remote stream id resolves to an owner via the announced
+  // map (this is the msid-survival proof - keys match the streams we actually got).
+  for (const p of [a, b, c]) {
+    await p.page.waitForFunction(
+      () => {
+        const t = (window as any).__ringTest;
+        const owners = t.groupStreamOwners();
+        const ids = t.remoteStreamIds() as string[];
+        return ids.length >= 2 && ids.every((id) => typeof owners[id] === 'string');
+      },
+      null,
+      { timeout: 60_000 },
+    );
+  }
+
+  // Assert the mapping is CORRECT, not merely present: the set of owners each peer
+  // sees is exactly the other two accounts, and each resolves to the expected name.
+  const idsByName = { Alice: a.id, Bob: b.id, Carol: c.id };
+  for (const [p, expected] of [
+    [a, ['Bob', 'Carol']],
+    [b, ['Alice', 'Carol']],
+    [c, ['Alice', 'Bob']],
+  ] as const) {
+    const owners = (await p.page.evaluate(() => {
+      const t = (window as any).__ringTest;
+      const map = t.groupStreamOwners();
+      const ids = t.remoteStreamIds() as string[];
+      return ids.map((id) => map[id]);
+    })) as string[];
+    const expectedIds = expected.map((n) => idsByName[n]).sort();
+    expect(owners.slice().sort()).toEqual(expectedIds);
+    // Each owner id resolves to the contact name the tile would render.
+    for (const ownerId of owners) {
+      const label = await p.page.evaluate(
+        (id) => (window as any).__ringTest.contactName(id),
+        ownerId,
+      );
+      expect(expected).toContain(label);
+    }
+  }
+
+  for (const p of [a, b, c]) {
+    await p.page.evaluate(() => (window as any).__ringTest.hangup());
+  }
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});

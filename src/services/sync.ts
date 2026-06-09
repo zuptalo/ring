@@ -125,6 +125,7 @@ export async function handleIncomingFrame(frame: Frame): Promise<void> {
     case 'call-roster':
     case 'call-key':
     case 'call-key-request':
+    case 'call-streamid':
     case 'call-group-invite':
     case 'sfu-offer':
     case 'sfu-answer':

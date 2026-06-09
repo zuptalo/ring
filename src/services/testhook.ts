@@ -92,6 +92,7 @@ import {
   callMeta,
   remoteStream,
   remoteStreams,
+  groupStreamOwners,
   localStream,
   callStats,
   videoTransceiverCount,
@@ -388,6 +389,12 @@ export function installTestHook(): void {
       (remoteStream.value?.getTracks().length ?? 0) +
       remoteStreams.value.reduce((n, s) => n + s.getTracks().length, 0),
     remoteStreamCount: () => remoteStreams.value.length,
+    /** Group calls: the ids of the remote streams (one per remote participant). */
+    remoteStreamIds: () => remoteStreams.value.map((s) => s.id),
+    /** Group calls: the streamId→userId map a tile uses to label each remote feed with
+     *  its owner. Keys must match remoteStreamIds (proves the publisher's stream id
+     *  survives SFU forwarding - the assumption the tile labelling rests on). */
+    groupStreamOwners: () => ({ ...groupStreamOwners.value }),
     remoteVideoTracks: () =>
       (remoteStream.value?.getVideoTracks().length ?? 0) +
       remoteStreams.value.reduce((n, s) => n + s.getVideoTracks().length, 0),
