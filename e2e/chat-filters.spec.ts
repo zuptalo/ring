@@ -14,9 +14,9 @@ test('chat filters: favorites, groups, pin order, archive, lists, unread, tab pe
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const ctxC = await browser.newContext();
-  const a = await createAccount(ctxA, 'RINGDEV1');
-  const b = await createAccount(ctxB, 'RINGDEV2');
-  const c = await createAccount(ctxC, 'RINGDEV3');
+  const a = await createAccount(ctxA, 'CHATFLT1');
+  const b = await createAccount(ctxB, 'CHATFLT2');
+  const c = await createAccount(ctxC, 'CHATFLT3');
   await pair(a, b);
   await pair(a, c);
 

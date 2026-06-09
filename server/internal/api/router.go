@@ -168,8 +168,14 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	// The unauthenticated auth endpoints share one per-IP rate limiter so an
 	// attacker can't spread guesses across them. Generous enough for real use
 	// (register once; restore is a couple of calls), tight enough to throttle
-	// brute-force / abuse.
-	authRL := httpx.NewLimiter(20) // 20 requests / minute / IP, combined
+	// brute-force / abuse. In dev/e2e the whole test suite registers many accounts
+	// from one IP in a couple of minutes, which would trip the production limit, so
+	// dev gets an effectively-unlimited bucket (never mounted as a public surface).
+	authPerMin := 20 // 20 requests / minute / IP, combined
+	if h.DevMode {
+		authPerMin = 100000
+	}
+	authRL := httpx.NewLimiter(authPerMin)
 	mux.Handle("POST /v1/register", authRL.Middleware(http.HandlerFunc(h.register)))
 	// New-device restore (recovery code): unauthenticated by design - the new
 	// device has no token yet; it authenticates by signing the server's
