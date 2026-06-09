@@ -3,13 +3,17 @@
        and the filtered lists. Quick actions live on the swipe; the full set is in the
        per-chat "More" sheet (opened via the `more` emit). -->
   <ion-item-sliding ref="sliding">
-    <!-- Start side (swipe right): Mark Unread/Read + Pin/Unpin. -->
+    <!-- Start side (swipe right): Mark Unread/Read + Pin/Unpin. Icon-over-label like
+         WhatsApp. The label names the action: "Read" when it'll clear unread, else
+         "Unread"; "Unpin" when pinned, else "Pin". -->
     <ion-item-options side="start">
       <ion-item-option color="success" @click="toggleRead">
-        <ion-icon slot="icon-only" :icon="unread ? mailOpenOutline : ellipseOutline" />
+        <ion-icon slot="top" :icon="unread ? mailOpenOutline : mailUnreadOutline" />
+        {{ unread ? 'Read' : 'Unread' }}
       </ion-item-option>
       <ion-item-option color="medium" @click="togglePin">
-        <ion-icon slot="icon-only" :icon="chat.pinned ? pinOutline : pinOutline" :class="{ 'pin-off': chat.pinned }" />
+        <ion-icon slot="top" :icon="pinOutline" :class="{ 'pin-off': chat.pinned }" />
+        {{ chat.pinned ? 'Unpin' : 'Pin' }}
       </ion-item-option>
     </ion-item-options>
 
@@ -44,13 +48,15 @@
       </div>
     </ion-item>
 
-    <!-- End side (swipe left): More + Archive/Unarchive. -->
+    <!-- End side (swipe left): More + Archive/Unarchive (icon-over-label). -->
     <ion-item-options side="end">
       <ion-item-option color="medium" @click="more">
-        <ion-icon slot="icon-only" :icon="ellipsisHorizontal" />
+        <ion-icon slot="top" :icon="ellipsisHorizontal" />
+        More
       </ion-item-option>
       <ion-item-option color="success" @click="toggleArchive">
-        <ion-icon slot="icon-only" :icon="archiveOutline" />
+        <ion-icon slot="top" :icon="archiveOutline" />
+        {{ chat.archived ? 'Unarchive' : 'Archive' }}
       </ion-item-option>
     </ion-item-options>
   </ion-item-sliding>
@@ -63,7 +69,7 @@ import {
   IonBadge, IonIcon, toastController,
 } from '@ionic/vue';
 import {
-  pinOutline, archiveOutline, ellipsisHorizontal, mailOpenOutline, ellipseOutline,
+  pinOutline, archiveOutline, ellipsisHorizontal, mailOpenOutline, mailUnreadOutline,
   notificationsOffOutline, lockClosedOutline,
   cameraOutline, videocamOutline, micOutline, documentOutline, imagesOutline,
   locationOutline, barChartOutline, personOutline, musicalNotesOutline, callOutline,

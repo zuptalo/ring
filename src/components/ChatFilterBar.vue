@@ -2,7 +2,9 @@
   <!-- Horizontal, scrollable row of filter chips (All / Unread / Favorites / Groups +
        lists) with a trailing button that opens the lists "More" sheet. -->
   <div class="filter-bar">
-    <div class="chips">
+    <!-- TransitionGroup so a chip that bubbles up on a new unread badge (and slides
+         back when cleared) animates to its new position instead of jumping. -->
+    <TransitionGroup name="chip" tag="div" class="chips">
       <button
         v-for="chip in chips"
         :key="chip.id"
@@ -13,7 +15,7 @@
         {{ chip.label }}
         <span v-if="chip.unread > 0" class="chip-badge">{{ chip.unread }}</span>
       </button>
-    </div>
+    </TransitionGroup>
     <button class="more-btn" aria-label="Edit filters" @click="$emit('openMore')">
       <ion-icon :icon="optionsOutline" />
     </button>
@@ -85,6 +87,10 @@ defineEmits<{ (e: 'select', id: FilterId): void; (e: 'openMore'): void }>();
 }
 .chip.active .chip-badge {
   background: rgba(255, 255, 255, 0.25);
+}
+/* Smoothly slide chips to their new position when the unread-bubbling reorders them. */
+.chip-move {
+  transition: transform 0.3s ease;
 }
 .more-btn {
   flex: 0 0 auto;

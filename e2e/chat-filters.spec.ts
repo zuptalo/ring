@@ -80,3 +80,41 @@ test('chat filters: favorites, groups, pin order, archive, lists, unread, tab pe
   await ctxB.close();
   await ctxC.close();
 });
+
+/**
+ * Filter-chip ordering: the saved order is respected, but a chip that gains an unread
+ * badge bubbles up to the front (after "All") so it's seen, then drops back to its
+ * original place once the unread clears.
+ */
+test('chat filters: unread chips bubble to the front, then settle back', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'CHATFLT1');
+  const b = await createAccount(ctxB, 'CHATFLT2');
+  await pair(a, b);
+
+  const chatB = (await a.page.evaluate((id) => (window as any).__ringTest.startChat(id), b.id)) as string;
+  const listId = (await a.page.evaluate((ids) => (window as any).__ringTest.createList('ZZList', ids), [chatB])) as string;
+  // ZZList pinned LAST on the tab.
+  await a.page.evaluate((id) => (window as any).__ringTest.setTabFilters(['all', 'unread', 'favorites', 'groups', `list:${id}`]), listId);
+
+  await a.page.goto('/tabs/chats');
+  await a.page.waitForSelector('.filter-bar .chip', { timeout: 15000 });
+
+  const labels = async () =>
+    (await a.page.locator('.filter-bar .chip').allTextContents()).map((t) => t.replace(/\s*\d+\s*$/, '').trim());
+
+  // Saved order respected initially.
+  expect(await labels()).toEqual(['All', 'Unread', 'Favorites', 'Groups', 'ZZList']);
+
+  // Mark the list's chat unread → ZZList (and Unread) bubble up ahead of Favorites/Groups.
+  await a.page.evaluate((id) => (window as any).__ringTest.markChatUnread(id), chatB);
+  await expect.poll(labels).toEqual(['All', 'Unread', 'ZZList', 'Favorites', 'Groups']);
+
+  // Clear it → ZZList settles back to its saved last position.
+  await a.page.evaluate((id) => (window as any).__ringTest.markChatRead(id), chatB);
+  await expect.poll(labels).toEqual(['All', 'Unread', 'Favorites', 'Groups', 'ZZList']);
+
+  await ctxA.close();
+  await ctxB.close();
+});

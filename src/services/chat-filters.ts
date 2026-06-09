@@ -14,7 +14,7 @@ import type { Chat, ChatList } from '@/db/types';
 export type FilterId = 'all' | 'unread' | 'favorites' | 'groups' | `list:${string}`;
 
 export const DEFAULT_FILTERS: FilterId[] = ['all', 'unread', 'favorites', 'groups'];
-export const MAX_TAB_FILTERS = 5; // including the always-present "All"
+export const MAX_TAB_FILTERS = 10; // including the always-present "All"
 const TAB_FILTERS_KEY = 'chats.tabFilters';
 
 const BUILTIN_LABELS: Record<'all' | 'unread' | 'favorites' | 'groups', string> = {
@@ -118,9 +118,9 @@ export function useChatFilters(search: Ref<string>): {
     allChats.value.filter((c) => chatMatchesFilter(c, activeFilter.value, listsMap.value)),
   );
 
-  const chips = computed<Chip[]>(() =>
-    // Drop any tab entry whose custom list was deleted.
-    tabFilters.value
+  const chips = computed<Chip[]>(() => {
+    const objs = tabFilters.value
+      // Drop any tab entry whose custom list was deleted.
       .filter((id) => !isListFilter(id) || listsMap.value.has(listIdOf(id) as string))
       .map((id) => {
         const lid = listIdOf(id);
@@ -130,8 +130,14 @@ export function useChatFilters(search: Ref<string>): {
             ? 0
             : allChats.value.filter((c) => chatIsUnread(c) && chatMatchesFilter(c, id, listsMap.value)).length;
         return { id, label, unread };
-      }),
-  );
+      });
+    // "All" is pinned first. Among the rest, a chip with an unread badge bubbles up so
+    // it's seen (keeping its configured relative order); once its unread clears it
+    // drops back to its original place. Stable: both partitions keep the saved order.
+    const all = objs.filter((c) => c.id === 'all');
+    const rest = objs.filter((c) => c.id !== 'all');
+    return [...all, ...rest.filter((c) => c.unread > 0), ...rest.filter((c) => c.unread === 0)];
+  });
 
   return { chats, activeFilter, setActive, chips, lists, allChats, tabFilters };
 }
