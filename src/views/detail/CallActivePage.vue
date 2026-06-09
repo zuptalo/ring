@@ -180,6 +180,15 @@
           <button v-if="canRoute" class="ctl" aria-label="Audio output" @click="chooseOutput">
             <ion-icon :icon="routeIcon" />
           </button>
+          <button
+            v-if="callMeta?.kind === 'video' && pipSupported()"
+            class="ctl"
+            :class="{ active: pipActive }"
+            aria-label="Picture in picture"
+            @click="toggleCallPip"
+          >
+            <ion-icon :icon="tabletPortraitOutline" />
+          </button>
           <button class="ctl" :class="{ active: screenSharing }" aria-label="More" @click="openMore">
             <ion-icon :icon="ellipsisHorizontalOutline" />
           </button>
@@ -200,7 +209,9 @@ import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, ellipsisHorizontalOutline, chevronDownOutline,
+  tabletPortraitOutline,
 } from 'ionicons/icons';
+import { pipSupported, pipActive, toggleCallPip } from '@/composables/useCallPip';
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
