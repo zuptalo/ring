@@ -7,6 +7,7 @@ import { bulkPut, clearStore, get, getAll, getByIndex, put, remove } from './idb
 import { enqueue, removeOutboxByFrameId } from './outbox';
 import { recordTombstone } from './tombstones';
 import { uid } from '@/utils/uid';
+import { capitalizeFirst } from '@/utils/text';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
@@ -1784,7 +1785,8 @@ export async function seedProfileName(): Promise<void> {
   const username = getSelfUsername();
   if (!username) return;
   const current = (await getSecret('profileName', '')).trim();
-  if (!current || current === 'You') await setSecret('profileName', username);
+  // Seed with the username, first letter capitalized for display (e.g. "ada" → "Ada").
+  if (!current || current === 'You') await setSecret('profileName', capitalizeFirst(username));
 }
 
 /** This device's own contact card (name + a downscaled avatar). */

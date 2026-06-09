@@ -25,7 +25,7 @@
             <img :src="chat.avatar" :alt="chat.name" />
           </ion-avatar>
           <span class="chat-header-text">
-            <span class="chat-header-name">{{ chat.name }}</span>
+            <span class="chat-header-name">{{ capitalizeFirst(chat.name) }}</span>
             <span v-if="statusLine" class="chat-header-status">{{ statusLine }}</span>
           </span>
         </button>
@@ -707,7 +707,7 @@ import { type Quality } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
 import { resolutionLabel, fileSizeLabel, generateVideoPoster } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
-import { normalizeOutgoing } from '@/utils/text';
+import { normalizeOutgoing, capitalizeFirst } from '@/utils/text';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
 import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact } from '@/db/types';

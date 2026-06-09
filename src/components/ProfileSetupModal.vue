@@ -79,6 +79,8 @@ import { getSecret, setSecret } from '@/db/secrets';
 import { getSelfUsername } from '@/services/auth';
 import { initialsAvatar } from '@/db/avatars';
 import { publishOwnProfile } from '@/services/directory';
+import { pickImageFile, fileToDataUrl } from '@/utils/pick-image';
+import { capitalizeFirst } from '@/utils/text';
 
 // `mandatory` (onboarding): hide the close button so the only way out is finishing,
 // the profile is required before the new user reaches the rest of onboarding.
@@ -97,9 +99,11 @@ const canFinish = computed(() => !!photo.value && name.value.trim().length > 0);
 
 onMounted(async () => {
   const storedName = (await getSecret('profileName', '')).trim();
-  // Prefill the name with the immutable username when it's still the default, so the
-  // field arrives populated and the user only needs to confirm/edit + add a photo.
-  const seeded = !storedName || storedName === 'You' ? getSelfUsername() ?? '' : storedName;
+  // Prefill the name with the immutable username (first letter capitalized) when it's
+  // still the default, so the field arrives populated and the user only needs to
+  // confirm/edit + add a photo.
+  const seeded =
+    !storedName || storedName === 'You' ? capitalizeFirst(getSelfUsername() ?? '') : storedName;
   name.value = seeded;
   if (seeded && seeded !== storedName) await setSecret('profileName', seeded);
   about.value = await getSecret('profileAbout', DEFAULT_ABOUT);
@@ -127,52 +131,17 @@ async function onAbout(value?: string | null): Promise<void> {
   void publishOwnProfile();
 }
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-// A transient document-attached <input type="file">, the only reliable way to
-// take/choose an image in a PWA (esp. iOS Safari, where a detached input often
-// doesn't fire `change` on first use).
-function pickPhoto(capture: boolean) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = 'image/*';
-  if (capture) input.setAttribute('capture', 'user');
-  input.style.position = 'fixed';
-  input.style.left = '-9999px';
-  document.body.appendChild(input);
-
-  const cleanup = () => input.remove();
-  input.onchange = async () => {
-    try {
-      const file = input.files?.[0];
-      if (file) {
-        const dataUrl = await fileToDataUrl(file);
-        // Persist BEFORE flipping the reactive ref, so canFinish (which enables
-        // "Start messaging") can never be true before the avatar secret is written;
-        // ensureProfile re-validates against the persisted secret, not photo.value.
-        await setSecret('profileAvatar', dataUrl);
-        photo.value = dataUrl;
-        void publishOwnProfile();
-      }
-    } finally {
-      cleanup();
-    }
-  };
-  const onFocus = () => {
-    window.removeEventListener('focus', onFocus);
-    setTimeout(() => {
-      if (document.body.contains(input)) cleanup();
-    }, 800);
-  };
-  window.addEventListener('focus', onFocus);
-  input.click();
+// Take/choose a photo via the shared robust picker (handles the Android camera
+// focus/`change` race). Persist BEFORE flipping the reactive ref, so canFinish
+// (which enables "Start messaging") can never be true before the avatar secret is
+// written; ensureProfile re-validates against the persisted secret, not photo.value.
+async function pickPhoto(capture: boolean): Promise<void> {
+  const file = await pickImageFile(capture);
+  if (!file) return;
+  const dataUrl = await fileToDataUrl(file);
+  await setSecret('profileAvatar', dataUrl);
+  photo.value = dataUrl;
+  void publishOwnProfile();
 }
 
 async function editPhoto() {

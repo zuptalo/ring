@@ -255,8 +255,16 @@ async function newGroup() {
 </script>
 
 <style scoped>
+/* Empty state: the label sits near the top, while the "Browse the directory" CTA is
+   centred horizontally and pushed down toward the middle of the content area. */
 .empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
   margin-top: 40px;
+}
+.browse-btn {
+  margin-top: 30vh;
 }
 </style>

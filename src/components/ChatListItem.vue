@@ -25,7 +25,7 @@
         <span v-if="isOnline" class="presence-dot" aria-hidden="true" />
       </div>
       <ion-label>
-        <h2>{{ chat.name }}</h2>
+        <h2>{{ capitalizeFirst(chat.name) }}</h2>
         <p class="preview-row">
           <ion-icon
             v-if="previewIcon"
@@ -79,6 +79,7 @@ import {
 } from '@/db/queries';
 import { peerPresence } from '@/composables/usePresence';
 import { formatTime } from '@/utils/time';
+import { capitalizeFirst } from '@/utils/text';
 import type { Chat } from '@/db/types';
 
 const props = defineProps<{ chat: Chat }>();

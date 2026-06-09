@@ -168,7 +168,7 @@
                 <span v-if="peerPresence(person.id)?.online" class="presence-dot" aria-hidden="true" />
               </div>
               <ion-label>
-                <h2>{{ person.name }}</h2>
+                <h2>{{ capitalizeFirst(person.name) }}</h2>
                 <p>{{ person.about }}</p>
               </ion-label>
             </ion-item>
@@ -224,6 +224,7 @@ import type { Contact, FriendRequest } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useConnect } from '@/composables/useConnect';
 import { peerPresence } from '@/composables/usePresence';
+import { capitalizeFirst } from '@/utils/text';
 
 const PAGE = 15;
 const router = useRouter();

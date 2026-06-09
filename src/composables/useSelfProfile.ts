@@ -16,9 +16,10 @@ import { getSecret } from '@/db/secrets';
 import { getSelfUsername } from '@/services/auth';
 import { isUnlocked } from '@/services/crypto/identity';
 import { initialsAvatar } from '@/db/avatars';
+import { capitalizeFirst } from '@/utils/text';
 
 export function useSelfProfile(): { name: Ref<string>; avatar: Ref<string> } {
-  const fallbackName = getSelfUsername() ?? 'You';
+  const fallbackName = capitalizeFirst(getSelfUsername() ?? 'You');
   const name = useLiveQuery(
     () => getSecret('profileName', fallbackName),
     ['settings'],

@@ -286,13 +286,16 @@
             autocorrect="off"
             :spellcheck="false"
             enterkeyhint="done"
-            placeholder="e.g. ada.lovelace"
+            placeholder="e.g. ada"
             @keyup.enter="submitPrompt"
           >
             <span slot="start" style="color: var(--ion-color-medium); padding-inline-end: 4px;">@</span>
           </ion-input>
           <ion-text color="medium">
-            <p class="username-hint">3 to 30 letters, digits, “_” or “.”. You can’t change it later.</p>
+            <p class="username-hint">
+              Your name on its own is fine — like <strong>ada</strong>. 3–30 characters; letters and
+              digits, and you can add “_” or “.” if you like. You can’t change it later.
+            </p>
           </ion-text>
           <ion-text v-if="entryError" color="danger"><p>{{ entryError }}</p></ion-text>
           <ion-button

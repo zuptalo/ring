@@ -70,6 +70,7 @@ import { getSelfUsername } from '@/services/auth';
 import { initialsAvatar } from '@/db/avatars';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { publishOwnProfile } from '@/services/directory';
+import { pickImageFile, fileToDataUrl } from '@/utils/pick-image';
 
 const DEFAULT_ABOUT = 'Hey there! I am using Ring.';
 // Fall back to the immutable username (not "You") so the field is prepopulated even
@@ -109,52 +110,13 @@ async function onAbout(value?: string | null): Promise<void> {
 
 /* ---- profile picture ---- */
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-// A transient <input type="file"> is the only way to take/choose an image in a
-// PWA. "Take photo" hints the camera via the capture attribute on mobile.
-// The input MUST be attached to the document: on iOS Safari a detached file
-// input often doesn't fire `change` on the first use (and can be GC'd before
-// the picker returns), which made the first photo pick silently do nothing.
-function pickPhoto(capture: boolean) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = 'image/*';
-  if (capture) input.setAttribute('capture', 'user');
-  input.style.position = 'fixed';
-  input.style.left = '-9999px';
-  document.body.appendChild(input);
-
-  const cleanup = () => input.remove();
-  input.onchange = async () => {
-    try {
-      const file = input.files?.[0];
-      if (file) {
-        await setSecret('profileAvatar', await fileToDataUrl(file));
-        void publishOwnProfile();
-      }
-    } finally {
-      cleanup();
-    }
-  };
-  // If the picker is cancelled, `change` never fires; remove the input once the
-  // window regains focus so it doesn't linger.
-  const onFocus = () => {
-    window.removeEventListener('focus', onFocus);
-    setTimeout(() => {
-      if (document.body.contains(input)) cleanup();
-    }, 800);
-  };
-  window.addEventListener('focus', onFocus);
-
-  input.click();
+// Take/choose a photo via the shared robust picker (handles the Android camera
+// focus/`change` race so the captured photo isn't dropped).
+async function pickPhoto(capture: boolean): Promise<void> {
+  const file = await pickImageFile(capture);
+  if (!file) return;
+  await setSecret('profileAvatar', await fileToDataUrl(file));
+  void publishOwnProfile();
 }
 
 async function editPhoto() {
