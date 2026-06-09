@@ -1,0 +1,112 @@
+# ringd: the all-in-one Ring image (PWA + API + embedded TURN/SFU). Stateless, so
+# no volumes. SINGLE replica with the Recreate strategy: the WebSocket hub and the
+# in-process SFU are singletons, and only one instance should answer the ACME
+# TLS-ALPN-01 challenge / renew certs at a time.
+#
+# Keel auto-updates this Deployment: it polls ghcr.io/zuptalo/ring:develop and,
+# when the tag's digest changes (a new develop build), forces a rolling redeploy.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ring-config
+  namespace: ring
+data:
+  ENV: "production"
+  PORT: "8080"
+  TLS_PORT: "8443"
+  # Canonical public URL (clients + invite links). Host must resolve to the cluster.
+  PUBLIC_URL: "https://${APP_HOST}"
+  ALLOWED_ORIGINS: "https://${APP_HOST}"
+  # Calls: ringd terminates TLS itself and runs the embedded TURN relay. Media
+  # tunnels over TURNS/:443, so RELAY_IP stays loopback (left unset) - no UDP needed.
+  ENABLE_CALLS: "true"
+  # Auto-TLS via Let's Encrypt (TLS-ALPN-01 on :443); certs cached encrypted in PG.
+  ACME: "true"
+  ACME_EMAIL: "${ACME_EMAIL}"
+  # Neutral SNI host for the TURNS listener; also gets its own ACME cert.
+  TURN_HOST: "${TURN_HOST}"
+  # First time, point ACME at staging to avoid LE rate limits, then remove + redeploy:
+  # ACME_DIRECTORY_URL: "https://acme-staging-v02.api.letsencrypt.org/directory"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ringd
+  namespace: ring
+spec:
+  selector:
+    app: ringd
+  ports:
+    - name: http # API + PWA + /healthz + /v1/ws (in-cluster / probes)
+      port: 8080
+      targetPort: 8080
+    - name: https # app HTTPS (ringd autocert) - Traefik passthrough target
+      port: 8443
+      targetPort: 8443
+    - name: turns # TURN-over-TLS - Traefik passthrough target
+      port: 3478
+      targetPort: 3478
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ringd
+  namespace: ring
+  annotations:
+    # Keel: watch the mutable :develop tag and force a redeploy on a new digest.
+    keel.sh/policy: force
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 2m"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ringd
+  template:
+    metadata:
+      labels:
+        app: ringd
+    spec:
+      containers:
+        - name: ringd
+          image: ghcr.io/zuptalo/ring:develop
+          imagePullPolicy: Always
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: https, containerPort: 8443 }
+            - { name: turns, containerPort: 3478 }
+          envFrom:
+            - configMapRef:
+                name: ring-config
+          env:
+            - name: SECRETS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ring-secrets
+                  key: SECRETS_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ring-secrets
+                  key: DATABASE_URL
+          # /healthz returns 200 only when the DB is reachable. The startup probe
+          # gives boot + migrations time before liveness kicks in.
+          startupProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 5
+            failureThreshold: 30 # up to ~150s for first-boot migrations
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
