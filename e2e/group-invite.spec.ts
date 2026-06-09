@@ -106,3 +106,57 @@ test('group invite: membership boundary + graceful pre-join reply/reaction', asy
   await ctxB.close();
   await ctxC.close();
 });
+
+/**
+ * Adding an EXISTING CONTACT to a group joins them immediately - no accept-first
+ * invite (parity with the founding members you pick at group creation). The
+ * pre-join history boundary still holds: the new member never sees earlier messages.
+ */
+test('group add: an existing contact joins immediately, no accept step', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'GRPADD01');
+  const b = await createAccount(ctxB, 'GRPADD02');
+  const c = await createAccount(ctxC, 'GRPADD03');
+  await setProfile(a, 'Alice');
+  await setProfile(b, 'Bob');
+  await setProfile(c, 'Carol');
+
+  await pair(a, b); // B is an initial member
+  await pair(a, c); // C is a saved contact of A → eligible for immediate add
+
+  const gid = (await a.page.evaluate((ids) => (window as any).__ringTest.createGroup('Trip', ids), [b.id])) as string;
+  await b.page.waitForFunction(
+    (g) => (window as any).__ringTest.groupChats().then((gs: any[]) => gs.some((x) => x.id === g)),
+    gid,
+    { timeout: 30_000 },
+  );
+
+  // A sends a message BEFORE adding C (pre-join history).
+  await a.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'before'), gid);
+  await expect.poll(() => bodies(b, gid)).toContain('before');
+
+  // A adds C (an existing contact). No invite is sent; C joins straight away.
+  await a.page.evaluate(([id, cid]) => (window as any).__ringTest.addMemberToGroup(id, cid), [gid, c.id]);
+
+  // C's group chat appears WITHOUT C ever accepting an invite...
+  await c.page.waitForFunction(
+    (g) => (window as any).__ringTest.groupChats().then((gs: any[]) => gs.some((x) => x.id === g)),
+    gid,
+    { timeout: 30_000 },
+  );
+  // ...and C never had a pending group invitation.
+  expect(await inviteIds(c)).not.toContain(gid);
+
+  // Pre-join history boundary still holds: C does not see the earlier message.
+  expect(await bodies(c, gid)).not.toContain('before');
+
+  // A's next message reaches C now that they're a full member.
+  await a.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'after'), gid);
+  await expect.poll(() => bodies(c, gid), { timeout: 30_000 }).toContain('after');
+
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});

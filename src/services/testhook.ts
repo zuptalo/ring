@@ -29,6 +29,7 @@ import {
   listContacts,
   createGroup as dbCreateGroup,
   addToGroup as dbAddToGroup,
+  addMemberToGroup as dbAddMemberToGroup,
   inviteToGroup as dbInviteToGroup,
   acceptGroupInvite as dbAcceptGroupInvite,
   declineGroupInvite as dbDeclineGroupInvite,
@@ -194,6 +195,7 @@ export function installTestHook(): void {
     /* ---- group chat ---- */
     createGroup: (name: string, memberIds: string[]) => dbCreateGroup(name, memberIds),
     addToGroup: (chatId: string, memberId: string) => dbAddToGroup(chatId, memberId),
+    addMemberToGroup: (chatId: string, memberId: string) => dbAddMemberToGroup(chatId, memberId),
     inviteToGroup: (chatId: string, memberId: string) => dbInviteToGroup(chatId, memberId),
     acceptGroupInvite: (groupId: string) => dbAcceptGroupInvite(groupId),
     declineGroupInvite: (groupId: string) => dbDeclineGroupInvite(groupId),

@@ -127,7 +127,7 @@ import {
   imagesOutline, searchOutline, notificationsOutline, notificationsOffOutline, starOutline, timerOutline,
 } from 'ionicons/icons';
 import {
-  getChat, listContacts, inviteToGroup, removeMember, leaveGroup,
+  getChat, listContacts, addMemberToGroup, removeMember, leaveGroup,
   renameGroup, setGroupAvatar, clearGroupAvatar, setChatMute, setChatTtl,
 } from '@/db/queries';
 import type { Chat, Contact } from '@/db/types';
@@ -261,16 +261,17 @@ function onFile(e: Event): void {
   reader.readAsDataURL(file);
 }
 
-// Members added after creation are INVITED, not added immediately; they must
-// accept before they join and start receiving messages (see inviteToGroup).
+// The picker only offers existing contacts, who join immediately (membership is a
+// natural extension of the contact relationship — like the people you pick at group
+// creation). addMemberToGroup keeps an accept-first invite only for non-contacts.
 async function addMember(): Promise<void> {
   const taken = new Set([...(chat.value?.participantIds ?? []), ...(chat.value?.invitedIds ?? [])]);
   const eligible = allContacts.value.filter((c) => !taken.has(c.id));
   if (eligible.length === 0) return;
   const sheet = await actionSheetController.create({
-    header: 'Invite member',
+    header: 'Add member',
     buttons: [
-      ...eligible.map((c) => ({ text: c.name, handler: () => void inviteToGroup(chatId, c.id) })),
+      ...eligible.map((c) => ({ text: c.name, handler: () => void addMemberToGroup(chatId, c.id) })),
       { text: 'Cancel', role: 'cancel' as const },
     ],
   });
