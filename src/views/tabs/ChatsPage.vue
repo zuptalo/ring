@@ -16,6 +16,9 @@
           @ion-input="search = $event.detail.value ?? ''"
         />
       </ion-toolbar>
+      <ion-toolbar>
+        <ChatFilterBar :chips="chips" :active="activeFilter" @select="setActive" @open-more="listsSheetOpen = true" />
+      </ion-toolbar>
     </ion-header>
 
     <ion-content :fullscreen="true">
@@ -51,6 +54,28 @@
       </div>
 
       <ChatActionsHost ref="actions" />
+
+      <!-- Lists "More" sheet + Edit Chats tab editor + New list (chip-row flows). -->
+      <ChatListsSheet
+        :is-open="listsSheetOpen"
+        :lists="lists"
+        :tab-filters="tabFilters"
+        @dismiss="listsSheetOpen = false"
+        @edit="listsSheetOpen = false; editTabsOpen = true"
+        @new-list="listsSheetOpen = false; newListOpen = true"
+        @select="(id) => { setActive(id); listsSheetOpen = false; }"
+      />
+      <EditChatTabsModal
+        :is-open="editTabsOpen"
+        :lists="lists"
+        :tab-filters="tabFilters"
+        @dismiss="editTabsOpen = false"
+      />
+      <NewListModal
+        :is-open="newListOpen"
+        @dismiss="newListOpen = false"
+        @created="(id) => { newListOpen = false; setActive(`list:${id}`); }"
+      />
     </ion-content>
 
     <!-- New chat: pick a contact to start (or open) a direct chat. -->
@@ -117,7 +142,12 @@ import {
 } from 'ionicons/icons';
 import ChatListItem from '@/components/ChatListItem.vue';
 import ChatActionsHost from '@/components/ChatActionsHost.vue';
-import { listChats, listArchivedChats, listContacts, startDirectChat } from '@/db/queries';
+import ChatFilterBar from '@/components/ChatFilterBar.vue';
+import ChatListsSheet from '@/components/ChatListsSheet.vue';
+import EditChatTabsModal from '@/components/EditChatTabsModal.vue';
+import NewListModal from '@/components/NewListModal.vue';
+import { listArchivedChats, listContacts, startDirectChat } from '@/db/queries';
+import { useChatFilters } from '@/services/chat-filters';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useConnect } from '@/composables/useConnect';
 import type { Chat, Contact } from '@/db/types';
@@ -127,12 +157,12 @@ const search = ref('');
 const actions = ref<InstanceType<typeof ChatActionsHost> | null>(null);
 const { connect, requireProfile } = useConnect();
 
-const chats = useLiveQuery(
-  () => listChats(search.value),
-  ['chats', 'messages'],
-  [] as Chat[],
-  () => search.value,
-);
+// Filtered chat list + chips (All / Unread / Favorites / Groups + lists).
+const { chats, activeFilter, setActive, chips, lists, tabFilters } = useChatFilters(search);
+const listsSheetOpen = ref(false);
+const editTabsOpen = ref(false);
+const newListOpen = ref(false);
+
 // Count for the Archived entry row.
 const archived = useLiveQuery(() => listArchivedChats(), ['chats', 'messages'], [] as Chat[]);
 const archivedCount = computed(() => archived.value.length);
