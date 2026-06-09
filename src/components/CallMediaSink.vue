@@ -29,6 +29,9 @@ import { initCallPip } from '@/composables/useCallPip';
 const container = ref<HTMLElement | null>(null);
 const pipVideo = ref<HTMLVideoElement | null>(null);
 
+// Active call states in which there is remote media to play.
+const ACTIVE = ['dialing', 'remote-ringing', 'connecting', 'connected'];
+
 // The single feed shown in Picture-in-Picture: the peer (1:1), or for a group the
 // current active speaker (falling back to the first participant). Only ever set for a
 // VIDEO call - attaching a remote stream to a <video> in an audio-only call can force
@@ -46,9 +49,6 @@ watch([pipVideo, pipStream], () => {
   if (pipStream.value) void el.play?.().catch(() => {});
 });
 onMounted(() => initCallPip(pipVideo.value));
-
-// Active call states in which there is remote media to play.
-const ACTIVE = ['dialing', 'remote-ringing', 'connecting', 'connected'];
 
 // The remote feeds to play: the single peer (1:1) or every participant (group). Empty
 // when no call is active (so the elements unmount and release the streams).
