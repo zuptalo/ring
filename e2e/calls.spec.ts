@@ -328,3 +328,64 @@ test('group call: each remote stream is mapped to its owner for tile labels', as
   await ctxB.close();
   await ctxC.close();
 });
+
+/**
+ * Active-speaker highlight: each tile is metered (Web Audio RMS of the DECODED audio),
+ * and a tile whose level crosses the threshold is flagged as speaking for the UI ring.
+ *
+ * The load-bearing risk is that a remote WebRTC stream tapped by Web Audio can read as
+ * silent if it isn't also rendered to a media element - and our metering runs on the
+ * decoded, E2EE'd remote audio. This test proves the meter reads real energy from a
+ * remote feed and that the speaking set surfaces (the fake media device emits a tone,
+ * so the remote registers as speaking). Threshold tuning isn't asserted - just that the
+ * pipeline reads decoded audio and drives the speaking flag.
+ */
+test('group call: active-speaker metering reads decoded remote audio', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'CALLSPK1');
+  const b = await createAccount(ctxB, 'CALLSPK2');
+  await pair(a, b);
+
+  const room = 'e2e-group-speaker';
+  for (const p of [a, b]) {
+    await p.page.evaluate((r) => (window as any).__ringTest.startGroup(r, 'video'), room);
+  }
+  for (const p of [a, b]) {
+    await p.page.waitForFunction(
+      () => (window as any).__ringTest.remoteStreamCount() >= 1,
+      null,
+      { timeout: 60_000 },
+    );
+  }
+
+  // The meter must read positive energy from the decoded remote audio (the silent-tap
+  // failure mode would leave every remote level at 0 forever).
+  for (const p of [a, b]) {
+    await p.page.waitForFunction(
+      () => {
+        const t = (window as any).__ringTest;
+        const levels = t.groupAudioLevels() as Record<string, number>;
+        const remoteIds = t.remoteStreamIds() as string[];
+        return remoteIds.some((id) => (levels[id] ?? 0) > 0);
+      },
+      null,
+      { timeout: 30_000 },
+    );
+  }
+
+  // ...and that energy drives the speaking set the UI ring binds to.
+  for (const p of [a, b]) {
+    await p.page.waitForFunction(
+      () => ((window as any).__ringTest.activeSpeakers() as string[]).length > 0,
+      null,
+      { timeout: 30_000 },
+    );
+  }
+
+  for (const p of [a, b]) {
+    await p.page.evaluate(() => (window as any).__ringTest.hangup());
+  }
+  await ctxA.close();
+  await ctxB.close();
+});

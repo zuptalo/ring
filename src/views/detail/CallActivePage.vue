@@ -17,7 +17,7 @@
               v-for="t in tiles"
               :key="t.key"
               class="float-tile"
-              :class="{ self: t.isSelf, leaving: t.leaving }"
+              :class="{ self: t.isSelf, leaving: t.leaving, speaking: isSpeaking(t) }"
               :style="{ width: tileDims.w + 'px', height: tileDims.h + 'px' }"
             >
               <!-- A participant who just left: a waving hand that fades out (keeps the
@@ -172,7 +172,7 @@ import {
   phonePortraitOutline, cameraReverseOutline, desktopOutline, ellipsisHorizontalOutline, chevronDownOutline,
 } from 'ionicons/icons';
 import {
-  callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, muted, cameraOff, callStats,
+  callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
   switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare, minimizeCall,
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
@@ -348,6 +348,13 @@ function tileHasVideo(t: Tile): boolean {
   if (t.leaving) return false;
   if (t.isSelf) return !cameraOff.value && !!t.stream?.getVideoTracks().length;
   return !!t.stream && t.stream.getVideoTracks().length > 0;
+}
+
+// A tile is highlighted while its owner is talking. The active-speaker keys (from the
+// audio metering in GroupSession) use the same key space as the tiles - a remote
+// stream id, or SELF for our own feed.
+function isSpeaking(t: Tile): boolean {
+  return !t.leaving && activeSpeakers.value.includes(t.key);
 }
 
 // Live stage size, tracked with a ResizeObserver so tile sizing follows the actual
@@ -697,6 +704,15 @@ const diag = computed(() => {
 .float-tile.self {
   outline: 2px solid var(--ion-color-primary, #10b981);
   outline-offset: -2px;
+}
+/* Active speaker: a bright ring + glow. Placed after .self so it wins when our own
+   tile is the one talking. */
+.float-tile.speaking {
+  outline: 3px solid #34d399;
+  outline-offset: -3px;
+  box-shadow:
+    0 0 16px rgba(52, 211, 153, 0.7),
+    0 6px 20px rgba(0, 0, 0, 0.35);
 }
 .tile-video {
   width: 100%;

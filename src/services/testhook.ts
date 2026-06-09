@@ -93,6 +93,8 @@ import {
   remoteStream,
   remoteStreams,
   groupStreamOwners,
+  groupAudioLevels,
+  activeSpeakers,
   localStream,
   callStats,
   videoTransceiverCount,
@@ -395,6 +397,10 @@ export function installTestHook(): void {
      *  its owner. Keys must match remoteStreamIds (proves the publisher's stream id
      *  survives SFU forwarding - the assumption the tile labelling rests on). */
     groupStreamOwners: () => ({ ...groupStreamOwners.value }),
+    /** Group calls: latest per-tile audio RMS (proves the active-speaker metering
+     *  reads decoded audio, incl. E2EE remote feeds), and the speaking tile keys. */
+    groupAudioLevels: () => groupAudioLevels(),
+    activeSpeakers: () => [...activeSpeakers.value],
     remoteVideoTracks: () =>
       (remoteStream.value?.getVideoTracks().length ?? 0) +
       remoteStreams.value.reduce((n, s) => n + s.getVideoTracks().length, 0),

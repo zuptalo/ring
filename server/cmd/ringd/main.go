@@ -200,6 +200,7 @@ func run() error {
 			"PRESTIR1", "PRESTIR2", "PRESTIR3",
 			"MEDIACLN",
 			"CALLLBL1", "CALLLBL2", "CALLLBL3",
+			"CALLSPK1", "CALLSPK2",
 		}
 		if err := st.SeedDevInvites(ctx, codes); err != nil {
 			return err

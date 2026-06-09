@@ -32,7 +32,20 @@ export interface GroupCallbacks {
   onConnectionState: (state: RTCPeerConnectionState) => void;
   /** Called when the streamId→userId map (for labelling tiles) changes. */
   onStreamMap: (map: Record<string, string>) => void;
+  /** Called when the set of active speakers changes. Each entry is a tile key: a
+   *  remote stream id, or SELF_KEY for our own tile. */
+  onActiveSpeakers: (keys: string[]) => void;
 }
+
+// Tile key for our own outgoing feed - must match the self tile's key in
+// CallActivePage so the speaking highlight lines up.
+const SELF_KEY = '__self__';
+// Active-speaker detection tuning. Web Audio RMS (0..1) above SPEAK_THRESH marks a
+// participant as speaking; the highlight then lingers SPEAK_HOLD_MS past the last
+// loud sample so it doesn't strobe on the natural gaps between syllables.
+const SPEAK_THRESH = 0.05;
+const SPEAK_HOLD_MS = 700;
+const SAMPLE_MS = 120;
 
 export class GroupSession {
   readonly roomId: string;
@@ -57,6 +70,19 @@ export class GroupSession {
   // worker per session, fed the keyring's keys). Both emit identical frames.
   private transformApi = getTransformAPI();
   private worker: Worker | null = null;
+  // Active-speaker detection: one AnalyserNode per audible feed (local + each remote),
+  // sampled on a timer. We measure the DECODED audio via Web Audio rather than the RTP
+  // audio-level header extension because the SFU strips header extensions, so that
+  // signal isn't available here; the decoded path also works identically for E2EE.
+  private audioCtx: AudioContext | null = null;
+  private analysers = new Map<
+    string,
+    { src: MediaStreamAudioSourceNode; an: AnalyserNode; buf: Uint8Array<ArrayBuffer> }
+  >();
+  private levels = new Map<string, number>(); // key → latest RMS (exposed for tests)
+  private speaking = new Set<string>(); // keys currently considered speaking
+  private lastLoud = new Map<string, number>(); // key → last time above threshold (hold)
+  private levelTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(roomId: string, kind: CallKind, cb: GroupCallbacks, members: string[] = []) {
     this.roomId = roomId;
@@ -82,6 +108,7 @@ export class GroupSession {
       video: this.kind === 'video' ? { facingMode: { ideal: 'user' } } : false,
     });
     this.cb.onLocalStream(this.local);
+    this.syncAudioMonitors(); // start metering our own mic for the speaking highlight
 
     await this.buildPeerConnection();
     // Send the member list ONLY on this initial join, so the server rings the group
@@ -387,6 +414,11 @@ export class GroupSession {
         /* already closed */
       }
     }
+    this.stopAudioMonitor();
+    if (this.audioCtx) {
+      void this.audioCtx.close().catch(() => {});
+      this.audioCtx = null;
+    }
     this.pc = null;
     this.local = null;
     this.remote.clear();
@@ -401,5 +433,122 @@ export class GroupSession {
 
   private emitRemote(): void {
     this.cb.onRemoteStreams([...this.remote.values()]);
+    this.syncAudioMonitors(); // (re)wire analysers as participants come and go
+  }
+
+  /** Latest measured RMS per tile key (for tests/diagnostics). */
+  audioLevels(): Record<string, number> {
+    return Object.fromEntries(this.levels);
+  }
+
+  private ensureAudioCtx(): AudioContext | null {
+    if (!this.audioCtx) {
+      const Ctor =
+        window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctor) return null;
+      try {
+        this.audioCtx = new Ctor();
+      } catch {
+        return null;
+      }
+    }
+    // A call starts from a user gesture, but the context can still come up suspended.
+    if (this.audioCtx.state === 'suspended') void this.audioCtx.resume();
+    return this.audioCtx;
+  }
+
+  /** Reconcile the per-feed AnalyserNodes with the current audible streams (local +
+   *  remotes), then make sure the sampling timer is running. Idempotent. */
+  private syncAudioMonitors(): void {
+    const desired = new Map<string, MediaStream>();
+    if (this.local?.getAudioTracks().length) desired.set(SELF_KEY, this.local);
+    for (const [id, s] of this.remote) if (s.getAudioTracks().length) desired.set(id, s);
+
+    if (desired.size === 0) {
+      this.stopAudioMonitor();
+      return;
+    }
+    const ctx = this.ensureAudioCtx();
+    if (!ctx) return;
+
+    for (const [key, stream] of desired) {
+      if (this.analysers.has(key)) continue;
+      try {
+        const src = ctx.createMediaStreamSource(stream);
+        const an = ctx.createAnalyser();
+        an.fftSize = 512;
+        an.smoothingTimeConstant = 0.3;
+        src.connect(an); // analysis only - never connected to destination (no echo)
+        this.analysers.set(key, { src, an, buf: new Uint8Array(new ArrayBuffer(an.fftSize)) });
+      } catch {
+        /* stream may carry no audio yet - retried on the next reconcile */
+      }
+    }
+    for (const [key, node] of [...this.analysers]) {
+      if (desired.has(key)) continue;
+      try {
+        node.src.disconnect();
+        node.an.disconnect();
+      } catch {
+        /* already gone */
+      }
+      this.analysers.delete(key);
+      this.levels.delete(key);
+      if (this.speaking.delete(key)) this.cb.onActiveSpeakers([...this.speaking]);
+      this.lastLoud.delete(key);
+    }
+
+    if (this.levelTimer == null && this.analysers.size > 0) {
+      this.levelTimer = setInterval(() => this.sampleLevels(), SAMPLE_MS);
+    }
+  }
+
+  private sampleLevels(): void {
+    const now = Date.now();
+    let changed = false;
+    for (const [key, { an, buf }] of this.analysers) {
+      an.getByteTimeDomainData(buf);
+      // RMS of the waveform around its 128 midpoint, normalised to 0..1.
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / buf.length);
+      this.levels.set(key, rms);
+      if (rms > SPEAK_THRESH) {
+        this.lastLoud.set(key, now);
+        if (!this.speaking.has(key)) {
+          this.speaking.add(key);
+          changed = true;
+        }
+      } else if (this.speaking.has(key) && now - (this.lastLoud.get(key) ?? 0) > SPEAK_HOLD_MS) {
+        this.speaking.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) this.cb.onActiveSpeakers([...this.speaking]);
+  }
+
+  private stopAudioMonitor(): void {
+    if (this.levelTimer != null) {
+      clearInterval(this.levelTimer);
+      this.levelTimer = null;
+    }
+    for (const node of this.analysers.values()) {
+      try {
+        node.src.disconnect();
+        node.an.disconnect();
+      } catch {
+        /* already gone */
+      }
+    }
+    this.analysers.clear();
+    this.levels.clear();
+    if (this.speaking.size) {
+      this.speaking.clear();
+      this.cb.onActiveSpeakers([]);
+    }
+    this.lastLoud.clear();
   }
 }

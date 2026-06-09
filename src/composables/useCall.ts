@@ -58,6 +58,9 @@ export const remoteStreams = ref<MediaStream[]>([]);
 // Group calls: maps a remote stream id → the userId that owns it, so a tile can show
 // that participant's name/avatar. Announced peer-to-peer (sealed); see GroupSession.
 export const groupStreamOwners = ref<Record<string, string>>({});
+// Group calls: tile keys (remote stream ids, or the self sentinel) currently speaking,
+// for the active-speaker highlight. Driven by GroupSession's audio metering.
+export const activeSpeakers = ref<string[]>([]);
 // A transient status shown during the call when the connection is degraded
 // ('Reconnecting…' while ICE is down, 'Connection unstable' on high packet loss).
 export const connectionWarning = ref<string | null>(null);
@@ -215,6 +218,13 @@ async function initAudioRoute(): Promise<void> {
 
 let pc: RTCPeerConnection | null = null;
 let groupSession: GroupSession | null = null;
+
+/** Latest per-tile audio RMS for the active group call (tile key → level). Empty when
+ *  not in a group call. Exposed for the e2e test hook to verify metering end-to-end. */
+export function groupAudioLevels(): Record<string, number> {
+  return groupSession?.audioLevels() ?? {};
+}
+
 let pendingOffer: { sdp: string; sdpType: RTCSdpType } | null = null;
 const pendingIce: RTCIceCandidateInit[] = [];
 let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -519,6 +529,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   remoteStream.value = null;
   remoteStreams.value = [];
   groupStreamOwners.value = {};
+  activeSpeakers.value = [];
   pendingOffer = null;
   pendingIce.length = 0;
   muted.value = false;
@@ -735,6 +746,7 @@ async function enterGroupCall(
       onLocalStream: (s) => (localStream.value = s),
       onRemoteStreams: (s) => (remoteStreams.value = s),
       onStreamMap: (m) => (groupStreamOwners.value = m),
+      onActiveSpeakers: (keys) => (activeSpeakers.value = keys),
       onConnectionState: (st) => {
         if (st === 'connected') {
           clearGrace();
@@ -1613,6 +1625,7 @@ export function useCall() {
     localStream,
     remoteStream,
     groupStreamOwners,
+    activeSpeakers,
     muted,
     cameraOff,
     callStats,
