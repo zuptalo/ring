@@ -242,9 +242,9 @@ test('group call: each remote stream is mapped to its owner for tile labels', as
   const ctxB = await browser.newContext();
   const ctxC = await browser.newContext();
 
-  const a = await createAccount(ctxA, 'RINGDEV6');
-  const b = await createAccount(ctxB, 'RINGDEV7');
-  const c = await createAccount(ctxC, 'RINGDEV8');
+  const a = await createAccount(ctxA, 'CALLLBL1');
+  const b = await createAccount(ctxB, 'CALLLBL2');
+  const c = await createAccount(ctxC, 'CALLLBL3');
 
   await pair(a, b);
   await pair(a, c);
