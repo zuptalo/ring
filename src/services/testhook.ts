@@ -64,7 +64,20 @@ import {
   deleteMediaLargerThan as dbDeleteMediaLargerThan,
   listMessages,
   listChats,
+  listArchivedChats,
+  toggleChatFavorite as dbToggleChatFavorite,
+  setChatPinned as dbSetChatPinned,
+  setChatArchived as dbSetChatArchived,
+  markChatUnread as dbMarkChatUnread,
+  createChatList as dbCreateChatList,
+  setChatInList as dbSetChatInList,
+  listChatLists,
+  getSetting,
 } from '@/db/queries';
+import {
+  chatMatchesFilter,
+  type FilterId,
+} from '@/services/chat-filters';
 import {
   createInvitation, deleteAccount, fetchPeerBundle,
   connectRequest as apiConnectRequest, connectAccept as apiConnectAccept,
@@ -296,6 +309,28 @@ export function installTestHook(): void {
     /** Visible group chats, as {id, name, members}. */
     groupChats: async () =>
       (await listChats()).filter((c) => c.isGroup).map((c) => ({ id: c.id, name: c.name, members: c.participantIds })),
+
+    /* ---- Chats-tab organisation (filter chips / lists / per-chat ops) ---- */
+    favoriteChat: (id: string) => dbToggleChatFavorite(id),
+    pinChat: (id: string, pinned: boolean) => dbSetChatPinned(id, pinned),
+    archiveChat: (id: string, archived: boolean) => dbSetChatArchived(id, archived),
+    markChatUnread: (id: string) => dbMarkChatUnread(id),
+    createList: (name: string, chatIds: string[]) => dbCreateChatList(name, chatIds),
+    addToList: (listId: string, chatId: string) => dbSetChatInList(listId, chatId, true),
+    /** Ids of the main (non-archived) chats, in display order (pinned first). */
+    chatOrder: async (): Promise<string[]> => (await listChats()).map((c) => c.id),
+    /** Ids of archived chats. */
+    archivedChatIds: async (): Promise<string[]> => (await listArchivedChats()).map((c) => c.id),
+    /** Ids of chats matching a filter chip (over the main list), for assertions. */
+    chatsMatching: async (filter: string): Promise<string[]> => {
+      const lists = new Map((await listChatLists()).map((l) => [l.id, l]));
+      return (await listChats())
+        .filter((c) => chatMatchesFilter(c, filter as FilterId, lists))
+        .map((c) => c.id);
+    },
+    /** Persist / read the tab-filter chip order (synced preference). */
+    setTabFilters: (ids: string[]) => dbSetSetting('chats.tabFilters', ids),
+    getTabFilters: () => getSetting<string[]>('chats.tabFilters', []),
     /** A contact's display name (to verify profiles propagated), or '' if none.
      *  Reads the contact record directly (listContacts hides ghosted ones). */
     contactName: async (id: string): Promise<string> => (await dbGetContact(id))?.name ?? '',
