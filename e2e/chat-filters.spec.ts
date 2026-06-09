@@ -107,9 +107,10 @@ test('chat filters: unread chips bubble to the front, then settle back', async (
   // Saved order respected initially.
   expect(await labels()).toEqual(['All', 'Unread', 'Favorites', 'Groups', 'ZZList']);
 
-  // Mark the list's chat unread → ZZList (and Unread) bubble up ahead of Favorites/Groups.
+  // Mark the list's chat unread → only the ZZList chip bubbles to the front (after All);
+  // the built-in chips keep their saved positions.
   await a.page.evaluate((id) => (window as any).__ringTest.markChatUnread(id), chatB);
-  await expect.poll(labels).toEqual(['All', 'Unread', 'ZZList', 'Favorites', 'Groups']);
+  await expect.poll(labels).toEqual(['All', 'ZZList', 'Unread', 'Favorites', 'Groups']);
 
   // Clear it → ZZList settles back to its saved last position.
   await a.page.evaluate((id) => (window as any).__ringTest.markChatRead(id), chatB);

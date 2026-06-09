@@ -131,12 +131,16 @@ export function useChatFilters(search: Ref<string>): {
             : allChats.value.filter((c) => chatIsUnread(c) && chatMatchesFilter(c, id, listsMap.value)).length;
         return { id, label, unread };
       });
-    // "All" is pinned first. Among the rest, a chip with an unread badge bubbles up so
-    // it's seen (keeping its configured relative order); once its unread clears it
-    // drops back to its original place. Stable: both partitions keep the saved order.
+    // "All" is pinned first and the built-in chips (Unread/Favorites/Groups) keep their
+    // saved positions. Only a custom LIST chip bubbles: when it gains an unread badge it
+    // moves up to the front (after All) so it's seen, keeping list relative order, then
+    // drops back to its saved place once the unread clears. Stable: each group keeps the
+    // saved order.
     const all = objs.filter((c) => c.id === 'all');
     const rest = objs.filter((c) => c.id !== 'all');
-    return [...all, ...rest.filter((c) => c.unread > 0), ...rest.filter((c) => c.unread === 0)];
+    const bubbled = rest.filter((c) => isListFilter(c.id) && c.unread > 0);
+    const settled = rest.filter((c) => !(isListFilter(c.id) && c.unread > 0));
+    return [...all, ...bubbled, ...settled];
   });
 
   return { chats, activeFilter, setActive, chips, lists, allChats, tabFilters };
