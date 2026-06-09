@@ -31,7 +31,7 @@
                 <video
                   :ref="(el) => attach(el as HTMLVideoElement | null, t.stream)"
                   class="tile-video"
-                  :class="{ mirror: t.isSelf && cameraFacing === 'user' }"
+                  :class="{ mirror: t.isSelf && localMirror }"
                   :muted="t.isSelf"
                   autoplay
                   playsinline
@@ -44,6 +44,14 @@
                   <ion-icon v-else :icon="videocamOffOutline" />
                 </div>
                 <span v-if="t.name" class="tile-label">{{ t.name }}</span>
+                <button
+                  v-if="t.isSelf && canFlip && tileHasVideo(t)"
+                  class="flip-btn tile-flip"
+                  aria-label="Flip camera"
+                  @click.stop="switchCamera"
+                >
+                  <ion-icon :icon="cameraReverseOutline" />
+                </button>
               </template>
             </div>
           </div>
@@ -58,31 +66,56 @@
             v-show="mainHasVideo"
             ref="mainVideo"
             class="main-video"
-            :class="{ mirror: mainIsLocal && cameraFacing === 'user' }"
+            :class="{ mirror: mainIsLocal && localMirror }"
             muted
             autoplay
             playsinline
           />
+          <!-- Flip button when our own camera fills the screen (local is the stage). -->
+          <button
+            v-if="mainIsLocal && mainHasVideo && canFlip"
+            class="flip-btn main-flip"
+            aria-label="Flip camera"
+            @click="switchCamera"
+          >
+            <ion-icon :icon="cameraReverseOutline" />
+          </button>
           <div v-if="!mainHasVideo" class="audio-stage">
             <ion-avatar class="big-avatar">
               <img v-if="callMeta" :src="callMeta.avatar" :alt="callMeta.name" />
             </ion-avatar>
           </div>
 
-          <!-- Picture-in-picture (video only): tap = swap, drag = reposition. -->
-          <video
+          <!-- Picture-in-picture (video only): tap = swap, drag = reposition. The flip
+               button sits in the PiP corner (outside the mirror, so it isn't reversed)
+               and stops the gesture so a tap flips instead of swapping/dragging. -->
+          <div
             v-show="pipHasVideo"
-            ref="pipVideo"
-            class="pip-video"
+            class="pip-wrap"
             :style="pipStyle"
-            muted
-            autoplay
-            playsinline
             @pointerdown="onPipDown"
             @pointermove="onPipMove"
             @pointerup="onPipUp"
             @pointercancel="onPipCancel"
-          />
+          >
+            <video
+              ref="pipVideo"
+              class="pip-video"
+              :class="{ mirror: pipIsLocal && localMirror }"
+              muted
+              autoplay
+              playsinline
+            />
+            <button
+              v-if="pipIsLocal && canFlip"
+              class="flip-btn pip-flip"
+              aria-label="Flip camera"
+              @click.stop="switchCamera"
+              @pointerdown.stop
+            >
+              <ion-icon :icon="cameraReverseOutline" />
+            </button>
+          </div>
 
           <!-- Remote audio sink (1:1): a single hidden <audio> element. On Chromium
                setSinkId on it selects the output device; on iOS the OS owns the route
@@ -174,7 +207,7 @@ import {
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
-  switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare, minimizeCall,
+  switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare, minimizeCall, hasMultipleCameras,
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, supportsAudioOutput, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   type AudioRoute,
@@ -195,6 +228,10 @@ const stageEl = ref<HTMLElement | null>(null);
 // tapping the PiP flips it. Component-local, so it resets to default each new call.
 const mainIsLocal = ref(false);
 const pipIsLocal = computed(() => !mainIsLocal.value);
+// Mirror our OWN camera preview only for the front ('user') camera - a selfie view is
+// expected mirrored, but the back camera (and a shared screen) must read the right way
+// round. Applies to whichever slot shows our local video (tile / main / PiP).
+const localMirror = computed(() => cameraFacing.value === 'user' && !screenSharing.value);
 const mainStream = computed(() => (mainIsLocal.value ? localStream.value : remoteStream.value));
 const pipStream = computed(() => (mainIsLocal.value ? remoteStream.value : localStream.value));
 const isVideoCall = computed(() => callMeta.value?.kind === 'video' && !callMeta.value?.isGroup);
@@ -239,11 +276,16 @@ const pipStyle = computed(() => {
     top = '50%';
     ty = '-50%';
   }
-  // Mirror the local preview; bake it into the transform so it composes with the
-  // translate (an inline transform would otherwise override a .mirror class).
-  const mirror = pipIsLocal.value ? ' scaleX(-1)' : '';
-  return { left, top, transform: `translate(${tx}, ${ty})${mirror}` };
+  // Position only - the local-preview mirror lives on the inner <video> (.mirror) so it
+  // doesn't also flip the flip-camera button that rides in the PiP's corner.
+  return { left, top, transform: `translate(${tx}, ${ty})` };
 });
+
+// Whether to offer the flip-camera button on a local-video box: a video call, with a
+// live camera (not screen share, not camera-off) and a second camera to flip to.
+const canFlip = computed(
+  () => callMeta.value?.kind === 'video' && hasMultipleCameras.value && !screenSharing.value && !cameraOff.value,
+);
 
 // Drag-to-reposition with a movement threshold so a stationary tap = swap.
 let dragOrigin: { x: number; y: number } | null = null;
@@ -810,14 +852,14 @@ const diag = computed(() => {
   width: 140px;
   height: 140px;
 }
-.pip-video {
+/* The draggable PiP is now a wrapper (position/drag) holding the <video> + flip button,
+   so mirroring the video doesn't also flip the button. */
+.pip-wrap {
   position: absolute;
   width: var(--pip-w);
   height: var(--pip-h);
-  object-fit: cover;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.25);
-  background: #111;
   z-index: 3;
   cursor: grab;
   touch-action: none; /* claim the drag gesture (no page pan) */
@@ -826,6 +868,51 @@ const diag = computed(() => {
     top 0.18s ease,
     left 0.18s ease,
     transform 0.18s ease;
+}
+.pip-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #111;
+  display: block;
+}
+/* Flip-camera button overlaid on a local-video box (group self tile, 1:1 main, PiP). */
+.flip-btn {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  z-index: 4;
+}
+.flip-btn ion-icon {
+  pointer-events: none;
+}
+.tile-flip {
+  top: 6px;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  font-size: 16px;
+}
+.pip-flip {
+  right: 4px;
+  bottom: 4px;
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+}
+.main-flip {
+  top: max(16px, env(safe-area-inset-top));
+  right: 16px;
 }
 .overlay-top {
   position: absolute;

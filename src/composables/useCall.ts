@@ -48,6 +48,10 @@ export const cameraOff = ref(false);
 // (in which case the outgoing video track is the display, not the camera).
 export const cameraFacing = ref<'user' | 'environment'>('user');
 export const screenSharing = ref(false);
+// Whether this device has more than one camera, so the UI only offers the flip control
+// when it can actually do something. Resolved once the call connects (labels/devices
+// need the in-call media permission to enumerate).
+export const hasMultipleCameras = ref(false);
 // 1:1 audio->video upgrade consent: `upgradePending` = we asked and are waiting for
 // the peer's accept/reject; `upgradeRequest` = the peer asked us and a prompt shows.
 export const upgradePending = ref(false);
@@ -381,6 +385,18 @@ function onConnected(): void {
   startTimers();
   applyAudioSession('play-and-record'); // iOS: prefer the earpiece (voice category)
   void initAudioRoute(); // enumerate outputs + pick this call's starting route
+  void refreshCameraCount(); // decide whether to offer the flip-camera control
+}
+
+/** Count video input devices so the UI only shows the flip-camera button when there's
+ *  a second camera to flip to (almost always true on phones, false on most laptops). */
+async function refreshCameraCount(): Promise<void> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    hasMultipleCameras.value = devices.filter((d) => d.kind === 'videoinput').length > 1;
+  } catch {
+    hasMultipleCameras.value = false;
+  }
 }
 
 function clearDialTimer(): void {
@@ -536,6 +552,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   cameraOff.value = false;
   cameraFacing.value = 'user';
   screenSharing.value = false;
+  hasMultipleCameras.value = false;
   upgradePending.value = false;
   upgradeRequest.value = false;
   activeScreenTrack?.stop();
