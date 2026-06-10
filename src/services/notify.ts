@@ -18,6 +18,7 @@
  */
 import { ref } from 'vue';
 import { alertController } from '@ionic/vue';
+import { personAddOutline } from 'ionicons/icons';
 import router from '@/router';
 import { getSetting, isChatMuted, getChat } from '@/db/queries';
 import { subscribe } from '@/db/idb';
@@ -70,14 +71,23 @@ async function ensurePrefs(): Promise<NotifyPrefs> {
   return prefs;
 }
 
-export type IncomingKind = 'message' | 'request';
+// 'message' and 'request' are person-to-person; 'system' is an app event (e.g. an
+// invitee joining) — it has no chat/avatar, so it shows an ICON instead. All three
+// flow through the SAME banner (NotificationBanners.vue); only the payload differs.
+export type IncomingKind = 'message' | 'request' | 'system';
+
+// Default glyph for a system notice that doesn't name its own icon, so every system
+// banner shows an icon (parity with the avatar/chat-icon on person notifications).
+const DEFAULT_SYSTEM_ICON = personAddOutline;
 
 export interface IncomingNotice {
   kind: IncomingKind;
   chatId?: string; // for messages → deep-link target
-  name: string; // sender / requester display name
-  body: string; // preview text ("Hi!", "📷 Photo", "wants to connect")
+  name: string; // sender / requester display name (or the subject of a system notice)
+  body: string; // preview text ("Hi!", "📷 Photo", "wants to connect", "joined Ring")
   avatar?: string; // optional; messages resolve the chat avatar if omitted
+  icon?: string; // system notices: the ionicon shown in the banner (defaults applied)
+  url?: string; // system notices: optional deep-link target (default: Contacts tab)
 }
 
 /* ---- in-app notification banners (custom green overlay; see NotificationBanners.vue) ---- */
@@ -88,6 +98,7 @@ export interface NotifyBanner {
   name: string;
   body: string;
   avatar: string;
+  icon?: string; // system banners: shown in the avatar circle instead of an image
   url: string;
   chatId?: string; // message banners only: target for inline quick-reply
 }
@@ -178,7 +189,9 @@ export function isChatActive(chatId: string): boolean {
 }
 
 function targetUrl(n: IncomingNotice): string {
-  return n.kind === 'request' ? '/tabs/contacts' : `/chat/${n.chatId ?? ''}`;
+  if (n.kind === 'message') return `/chat/${n.chatId ?? ''}`;
+  if (n.kind === 'system') return n.url ?? '/tabs/contacts';
+  return '/tabs/contacts'; // request
 }
 
 async function inAppSoundAndHaptics(): Promise<void> {
@@ -197,10 +210,13 @@ async function inAppSoundAndHaptics(): Promise<void> {
 
 /** Decide and present the alerting for one incoming item. */
 export async function notifyIncoming(n: IncomingNotice): Promise<void> {
-  // Never surface decrypted content while the keystore is locked (behind the
-  // passcode gate), nor during the brief settle window right after landing in
-  // the app (avoids a banner burst as the gate dismisses / messages drain).
-  if (!isUnlockedNow() || Date.now() < settledUntil) return;
+  // Never surface anything while the keystore is locked (behind the passcode gate).
+  if (!isUnlockedNow()) return;
+  // The settle window suppresses the message/request banner BURST right after landing
+  // (as the gate dismisses / queued messages drain). A 'system' notice (e.g. "X joined
+  // Ring") is a single gated event, not part of that burst, and it fires exactly once —
+  // so don't let the settle window silently swallow it.
+  if (n.kind !== 'system' && Date.now() < settledUntil) return;
   // Per-chat mute suppresses all alerting for this chat (the message still arrives
   // and grows the unread badge). Requests have no chat to mute.
   if (n.chatId && (await isChatMuted(n.chatId))) return;
@@ -210,8 +226,18 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
   // message notifications respect "Show notifications".
   if (!appVisible()) {
     if (n.kind === 'message' && !p.showMessages) return;
-    const title = n.kind === 'request' ? 'Friend request' : n.name;
-    const body = p.showPreview ? `${n.kind === 'request' ? n.name + ' ' : ''}${n.body}` : 'New message';
+    let title: string;
+    let body: string;
+    if (n.kind === 'request') {
+      title = 'Friend request';
+      body = p.showPreview ? `${n.name} ${n.body}` : 'New request';
+    } else if (n.kind === 'system') {
+      title = 'Ring';
+      body = `${n.name} ${n.body}`; // e.g. "Ada joined Ring"
+    } else {
+      title = n.name;
+      body = p.showPreview ? n.body : 'New message';
+    }
     // Pass chatId so the page- and SW-shown notifications for one conversation
     // share a tag and collapse instead of duplicating.
     void notifyLocal(title, body, targetUrl(n), n.chatId);
@@ -244,12 +270,14 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
     return;
   }
 
-  // Default: a green banner at the top showing the chat avatar + name + preview,
-  // auto-dismissing, tap to open (see NotificationBanners.vue). Resolve the chat's
-  // avatar/name for a message; a request has no chat (the overlay shows a fallback).
+  // Default: a banner at the top showing the chat avatar (or an icon for requests /
+  // system notices) + name + preview, auto-dismissing, tap to open (see
+  // NotificationBanners.vue). Resolve the chat's avatar for a message; a request /
+  // system notice has no chat, so it falls back to an icon.
   let avatar = n.avatar ?? '';
   if (n.kind === 'message' && n.chatId && !avatar) {
     avatar = (await getChat(n.chatId))?.avatar ?? '';
   }
-  showBanner({ kind: n.kind, name: n.name, body: n.body, avatar, url, chatId: n.chatId });
+  const icon = n.icon ?? (n.kind === 'system' ? DEFAULT_SYSTEM_ICON : undefined);
+  showBanner({ kind: n.kind, name: n.name, body: n.body, avatar, icon, url, chatId: n.chatId });
 }

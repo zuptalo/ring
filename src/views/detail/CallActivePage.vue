@@ -1,7 +1,7 @@
 <template>
   <ion-page>
     <ion-content :fullscreen="true" class="call">
-      <div ref="stageEl" class="stage">
+      <div ref="stageEl" class="stage" :class="{ 'chrome-hidden': chromeHidden }" @click="onStageClick">
         <!-- Group call: every participant - each incoming feed AND our own outgoing
              feed - is an equally-sized floating tile. Tiles are centred and wrap;
              they grow when few are on the call and shrink as people join, never
@@ -163,36 +163,49 @@
           </div>
         </div>
 
-        <!-- Controls. -->
+        <!-- Controls. Flat - no overflow menu: camera-flip rides the self video, and
+             switching audio<->video is a single direct button. -->
         <div class="controls">
-          <button class="ctl" :class="{ active: muted }" aria-label="Mute" @click="toggleMute">
+          <button class="ctl" :class="{ active: muted }" aria-label="Mute" @click.stop="toggleMute">
             <ion-icon :icon="muted ? micOffOutline : micOutline" />
           </button>
+          <!-- Camera on/off (video calls only). -->
           <button
-            v-if="callMeta?.kind === 'video'"
+            v-if="isVideoMode"
             class="ctl"
             :class="{ active: cameraOff }"
             aria-label="Camera"
-            @click="toggleCamera"
+            @click.stop="toggleCamera"
           >
             <ion-icon :icon="cameraOff ? videocamOffOutline : videocamOutline" />
           </button>
-          <button v-if="canRoute" class="ctl" aria-label="Audio output" @click="chooseOutput">
+          <button v-if="canRoute" class="ctl" aria-label="Audio output" @click.stop="chooseOutput">
             <ion-icon :icon="routeIcon" />
           </button>
+          <!-- Outgoing-video quality tier (video calls only). -->
+          <button v-if="isVideoMode" class="ctl" aria-label="Video quality" @click.stop="chooseQuality">
+            <ion-icon :icon="cellularOutline" />
+          </button>
+          <!-- Share screen, only where the platform can capture it (desktop / Android). -->
           <button
-            v-if="callMeta?.kind === 'video' && pipSupported()"
+            v-if="canShareScreen"
             class="ctl"
-            :class="{ active: pipActive }"
-            aria-label="Picture in picture"
-            @click="toggleCallPip"
+            :class="{ active: screenSharing }"
+            aria-label="Share screen"
+            @click.stop="toggleScreenShare"
           >
-            <ion-icon :icon="tabletPortraitOutline" />
+            <ion-icon :icon="desktopOutline" />
           </button>
-          <button class="ctl" :class="{ active: screenSharing }" aria-label="More" @click="openMore">
-            <ion-icon :icon="ellipsisHorizontalOutline" />
+          <!-- Switch call mode: a video call drops to audio (record icon); an audio call
+               turns on video (videocam icon). Replaces the old "…" overflow. -->
+          <button
+            class="ctl"
+            :aria-label="isVideoMode ? 'Switch to audio only' : 'Turn on video'"
+            @click.stop="toggleVideoMode"
+          >
+            <ion-icon :icon="isVideoMode ? recordingOutline : videocamOutline" />
           </button>
-          <button class="ctl hangup" aria-label="Hang up" @click="hangup">
+          <button class="ctl hangup" aria-label="Hang up" @click.stop="hangup">
             <ion-icon :icon="callOutline" />
           </button>
         </div>
@@ -208,14 +221,14 @@ import Emoji from '@/components/Emoji.vue';
 import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
-  phonePortraitOutline, cameraReverseOutline, desktopOutline, ellipsisHorizontalOutline, chevronDownOutline,
-  tabletPortraitOutline,
+  phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
+  recordingOutline, cellularOutline,
 } from 'ionicons/icons';
-import { pipSupported, pipActive, toggleCallPip } from '@/composables/useCallPip';
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
   switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare, minimizeCall, hasMultipleCameras,
+  videoQuality, setVideoQuality, type VideoQuality,
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, supportsAudioOutput, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   type AudioRoute,
@@ -250,6 +263,41 @@ const mainHasVideo = computed(
 const pipHasVideo = computed(
   () => isVideoCall.value && !!pipStream.value && !(pipIsLocal.value && cameraOff.value),
 );
+
+// kind === 'video' for ANY video call (1:1 or group); distinct from isVideoCall, which
+// is 1:1-only. Drives the camera/quality controls and the immersive-tap behaviour.
+const isVideoMode = computed(() => callMeta.value?.kind === 'video');
+// Screen share is offered for 1:1 or a group VIDEO call, where the platform can capture
+// the screen (no getDisplayMedia on iOS). Mirrors the old overflow-menu gating.
+const canShareScreen = computed(
+  () => (!callMeta.value?.isGroup || isVideoMode.value) && canScreenShare(),
+);
+
+/* ---- immersive tap: hide the chrome (name + controls) on a video call ---- */
+const chromeHidden = ref(false);
+function onStageClick(e: MouseEvent): void {
+  if (!isVideoMode.value) return; // audio calls always show their controls
+  // Only a tap on the bare video/background toggles; ignore taps on any interactive
+  // chrome (controls, header, PiP, consent prompts, or any button).
+  if (
+    (e.target as HTMLElement).closest(
+      '.controls, .overlay-top, .pip-wrap, .upgrade-prompt, .upgrade-pending, button',
+    )
+  )
+    return;
+  chromeHidden.value = !chromeHidden.value;
+}
+// Never strand the user with hidden controls: restore the chrome when a consent prompt
+// appears, when the call leaves the connected state, or when it drops back to audio.
+watch([upgradeRequest, upgradePending], ([r, p]) => {
+  if (r || p) chromeHidden.value = false;
+});
+watch(callState, (s) => {
+  if (s !== 'connected') chromeHidden.value = false;
+});
+watch(isVideoMode, (v) => {
+  if (!v) chromeHidden.value = false;
+});
 
 function swapMain(): void {
   if (!isVideoCall.value) return;
@@ -532,33 +580,22 @@ onUnmounted(() => {
   window.removeEventListener('resize', measureStage);
 });
 
-/* ---- secondary controls (camera flip, screen share, video<->audio) in a sheet ---- */
-async function openMore(): Promise<void> {
-  const isGroup = !!callMeta.value?.isGroup;
-  const isVideo = callMeta.value?.kind === 'video';
-  const buttons: Parameters<typeof actionSheetController.create>[0]['buttons'] = [];
-  if (isVideo && !screenSharing.value) {
-    buttons.push({ text: 'Flip camera', icon: cameraReverseOutline, handler: () => void switchCamera() });
-  }
-  // Screen share needs a video sender to swap; on a group audio call there isn't one
-  // (turn on video first), so only offer it for 1:1 or a group video call. Also hide
-  // it where the platform can't capture the screen (iOS Safari has no getDisplayMedia).
-  if ((!isGroup || isVideo) && canScreenShare()) {
-    buttons.push({
-      text: screenSharing.value ? 'Stop screen share' : 'Share screen',
-      icon: desktopOutline,
-      handler: () => void toggleScreenShare(),
-    });
-  }
-  // Video<->audio now works for group calls too (the SFU re-offers the added/removed
-  // track), so it's always offered.
-  buttons.push({
-    text: isVideo ? 'Switch to audio only' : 'Turn on video',
-    icon: isVideo ? videocamOffOutline : videocamOutline,
-    handler: () => void toggleVideoMode(),
-  });
-  buttons.push({ text: 'Cancel', role: 'cancel' });
-  const sheet = await actionSheetController.create({ header: 'Call options', buttons });
+/* ---- outgoing-video quality picker ---- */
+const QUALITY_LABEL: Record<VideoQuality, string> = {
+  auto: 'Auto · best for your connection',
+  medium: 'Medium · less data',
+  low: 'Low · least data',
+};
+async function chooseQuality(): Promise<void> {
+  const buttons = [
+    ...(['auto', 'medium', 'low'] as VideoQuality[]).map((q) => ({
+      text: QUALITY_LABEL[q],
+      role: q === videoQuality.value ? ('selected' as const) : undefined,
+      handler: () => void setVideoQuality(q),
+    })),
+    { text: 'Cancel', role: 'cancel' as const },
+  ];
+  const sheet = await actionSheetController.create({ header: 'Video quality', buttons });
   await sheet.present();
 }
 
@@ -674,7 +711,10 @@ const diag = computed(() => {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* contain, not cover: show the producer's WHOLE frame at its real aspect ratio with
+     zero zoom/crop. A landscape (desktop) feed letterboxes top/bottom on a portrait
+     phone, a portrait feed pillarboxes - each side keeps its own shape, best-fit. */
+  object-fit: contain;
   background: #111;
 }
 .mirror {
@@ -853,7 +893,9 @@ const diag = computed(() => {
 .pip-video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* contain so the self/other feed keeps its true aspect ratio (no zoom/crop) inside
+     the PiP box, matching the main stage. */
+  object-fit: contain;
   border-radius: 12px;
   background: #111;
   display: block;
@@ -903,6 +945,17 @@ const diag = computed(() => {
   text-align: center;
   z-index: 1;
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+}
+/* Immersive view: tapping the video hides the header + controls so only the feeds show;
+   they fade back in on the next tap. pointer-events:none lets that tap reach the stage. */
+.overlay-top,
+.controls {
+  transition: opacity 0.25s ease;
+}
+.stage.chrome-hidden .overlay-top,
+.stage.chrome-hidden .controls {
+  opacity: 0;
+  pointer-events: none;
 }
 .minimize-btn {
   position: absolute;
