@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -32,6 +33,20 @@ type Signal struct {
 // SFU owns all rooms.
 type SFU struct {
 	send func(Signal)
+	// api builds PeerConnections from a media engine restricted to Opus + VP8.
+	// VP8-only video is a CORRECTNESS requirement, not a preference: clients
+	// E2EE-encrypt each whole encoded frame (insertable streams), and the
+	// browser's RTP packetizer then has to packetize that ciphertext. Opus and
+	// VP8 packetization treat the payload as an opaque blob, so the bytes
+	// survive the trip and decrypt cleanly. H.264 packetization PARSES the
+	// payload (it splits NAL units); ciphertext doesn't parse as NALUs, the
+	// packet stream gets restructured in transit, the receiver reassembles
+	// bytes that no longer match the AES-GCM tag, and EVERY video frame is
+	// dropped — black tiles with working audio. Safari prefers H.264 when
+	// offered, which is exactly how iPhone group calls hit this. Offering only
+	// VP8 forces every browser (Safari included, VP8 since iOS 12.2) onto the
+	// packetization-safe codec.
+	api *webrtc.API
 	// ice returns the ICE servers for a new PeerConnection. Called per-PC so the
 	// SFU always uses fresh (unexpired) TURN credentials. When it returns a
 	// non-empty list the SFU forces relay-only candidates (so it presents a
@@ -54,6 +69,39 @@ type peerState struct {
 	userID string
 }
 
+// newAPI builds the Opus + VP8-only WebRTC API (see the SFU.api comment for why
+// H.264 must never be offered), with pion's default interceptors (NACK, RTCP
+// reports, TWCC) so loss recovery still works.
+func newAPI() (*webrtc.API, error) {
+	m := &webrtc.MediaEngine{}
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+			SDPFmtpLine: "minptime=10;useinbandfec=1",
+		},
+		PayloadType: 111,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		return nil, err
+	}
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeVP8, ClockRate: 90000,
+			RTCPFeedback: []webrtc.RTCPFeedback{
+				{Type: "goog-remb"}, {Type: "ccm", Parameter: "fir"},
+				{Type: "nack"}, {Type: "nack", Parameter: "pli"},
+			},
+		},
+		PayloadType: 96,
+	}, webrtc.RTPCodecTypeVideo); err != nil {
+		return nil, err
+	}
+	reg := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(m, reg); err != nil {
+		return nil, err
+	}
+	return webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(reg)), nil
+}
+
 // New creates an SFU. send delivers sfu-offer/sfu-ice frames to a user. ice
 // returns ICE servers for each new PeerConnection (called per-PC so credentials
 // never go stale); pass nil for host-candidate-only (direct reachability).
@@ -61,8 +109,15 @@ func New(send func(Signal), ice func() []webrtc.ICEServer) *SFU {
 	if ice == nil {
 		ice = func() []webrtc.ICEServer { return nil }
 	}
+	api, err := newAPI()
+	if err != nil {
+		// Codec/interceptor registration only fails on programmer error (bad
+		// constants); surface it loudly rather than running without group calls.
+		panic(err)
+	}
 	s := &SFU{
 		send:  send,
+		api:   api,
 		ice:   ice,
 		rooms: map[string]*room{},
 	}
@@ -97,7 +152,7 @@ func (s *SFU) Join(roomID, userID string) error {
 		// (also relay-only under the 443 constraint) can reach the SFU.
 		conf.ICETransportPolicy = webrtc.ICETransportPolicyRelay
 	}
-	pc, err := webrtc.NewPeerConnection(conf)
+	pc, err := s.api.NewPeerConnection(conf)
 	if err != nil {
 		return err
 	}
