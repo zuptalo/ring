@@ -215,8 +215,10 @@
                   :active="audioCurId === m.id"
                   :playing="audioCurId === m.id && audioPlaying"
                   :progress="audioCurId === m.id ? audioProgress : 0"
+                  :rate="audioRate"
                   @toggle="toggleAudio(m.id)"
                   @seek="(f) => seekAudio(m.id, f)"
+                  @cycle-speed="cycleAudioRate"
                 />
                 <a
                   v-else-if="m.kind === 'file'"
@@ -504,7 +506,8 @@
         </div>
       </ion-toolbar>
       <ion-toolbar v-else>
-        <!-- Recording mode: delete · live waveform + timer · pause/resume · send -->
+        <!-- Recording mode. Capturing: delete · live waveform + timer · pause · send.
+             Paused (preview): delete · play-back + speed + waveform · resume (mic) · send. -->
         <template v-if="recording">
           <ion-buttons slot="start">
             <ion-button color="danger" aria-label="Delete recording" @click="cancelRecording">
@@ -512,7 +515,17 @@
             </ion-button>
           </ion-buttons>
           <div class="rec-status">
-            <span class="rec-dot" :class="{ paused: recPaused }"></span>
+            <!-- Paused → hear back what you recorded; capturing → live record dot. -->
+            <button
+              v-if="recPaused"
+              type="button"
+              class="rec-preview"
+              :aria-label="recPlaying ? 'Pause preview' : 'Play preview'"
+              @click="togglePreview"
+            >
+              <ion-icon :icon="recPlaying ? pause : play" />
+            </button>
+            <span v-else class="rec-dot"></span>
             <div class="rec-wave">
               <span
                 v-for="(h, i) in recBars"
@@ -521,10 +534,14 @@
                 :style="{ height: barH(h) }"
               />
             </div>
+            <speed-pill v-if="recPaused" :rate="recRate" @cycle="cycleRecRate" />
             <span class="rec-time">{{ recElapsed }}</span>
           </div>
           <ion-buttons slot="end">
-            <ion-button :aria-label="recPaused ? 'Resume' : 'Pause'" @click="togglePause">
+            <ion-button
+              :aria-label="recPaused ? 'Resume recording' : 'Pause'"
+              @click="togglePause"
+            >
               <ion-icon slot="icon-only" :icon="recPaused ? micOutline : pause" />
             </ion-button>
             <ion-button color="primary" aria-label="Send recording" @click="stopAndSendRecording">
@@ -667,7 +684,7 @@ import {
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
-  callOutline, videocamOutline, documentOutline, playCircle, sendOutline,
+  callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline,
   timeOutline, checkmark, checkmarkDone, addOutline, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
@@ -697,6 +714,8 @@ import PollComposer from '@/components/PollComposer.vue';
 import ContactPicker from '@/components/ContactPicker.vue';
 import LocationComposer from '@/components/LocationComposer.vue';
 import AudioCard from '@/components/AudioCard.vue';
+import SpeedPill from '@/components/SpeedPill.vue';
+import { nextRate, playWhenReady } from '@/utils/playback';
 import AudioReview from '@/components/AudioReview.vue';
 import Emoji from '@/components/Emoji.vue';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
@@ -2056,9 +2075,11 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
 
 /* ---- shared audio player: received/sent music files play as a playlist ---- */
 const audioEl = new Audio();
+audioEl.preload = 'auto'; // buffer eagerly so the first tap isn't silent
 const audioCurId = ref<string | null>(null);
 const audioPlaying = ref(false);
 const audioProgress = ref(0);
+const audioRate = ref(1);
 audioEl.addEventListener('timeupdate', () => {
   audioProgress.value = audioEl.duration ? audioEl.currentTime / audioEl.duration : 0;
 });
@@ -2087,20 +2108,25 @@ const audioUrlFor = (id: string): string | undefined => {
 };
 function toggleAudio(id: string): void {
   if (audioCurId.value === id) {
-    if (audioEl.paused) void audioEl.play();
+    if (audioEl.paused) void playWhenReady(audioEl);
     else audioEl.pause();
     return;
   }
   const url = audioUrlFor(id);
   if (!url) return;
   audioEl.src = url;
+  audioEl.playbackRate = audioRate.value;
   audioCurId.value = id;
   audioProgress.value = 0;
-  void audioEl.play();
+  void playWhenReady(audioEl);
 }
 function seekAudio(id: string, frac: number): void {
   if (audioCurId.value !== id || !audioEl.duration) return;
   audioEl.currentTime = frac * audioEl.duration;
+}
+function cycleAudioRate(): void {
+  audioRate.value = nextRate(audioRate.value);
+  audioEl.playbackRate = audioRate.value;
 }
 function playNextAudio(): void {
   const ids = audioOrder.value;
@@ -2164,9 +2190,11 @@ function onAudioReviewClose(): void {
 
 const REC_BARS = 42;
 const recording = ref(false);
-const recPaused = ref(false);
+const recPaused = ref(false); // paused = preview mode (hear it back before sending)
 const recElapsed = ref('0:00');
 const recBars = ref<number[]>([]); // live amplitude history, scrolling
+const recPlaying = ref(false); // preview playback state (while paused)
+const recRate = ref(1); // preview playback speed
 let recorder: MediaRecorder | null = null;
 let recChunks: BlobPart[] = [];
 let recTimer: number | undefined; // elapsed display
@@ -2175,6 +2203,9 @@ let recAudioCtx: AudioContext | null = null;
 let recAnalyser: AnalyserNode | null = null;
 let recAccumMs = 0; // active recording time across pauses
 let recSegStart = 0; // current segment start
+let recPreviewEl: HTMLAudioElement | null = null; // plays the recorded-so-far on pause
+let recPreviewUrl: string | null = null;
+let recWantPreview = false; // a requestData() flush is pending → (re)build the preview
 
 const fmtMs = (ms: number) => {
   const s = Math.floor(ms / 1000);
@@ -2210,10 +2241,48 @@ function stopSampler(): void {
   recSampler = undefined;
 }
 
+// Build (or rebuild) the preview player from the audio captured so far, so the user
+// can hear what they've recorded while paused. A partial webm/fragmented-mp4 stream
+// (the chunks emitted by the timeslice + requestData flush) is itself playable.
+function buildPreview(): void {
+  stopPreview();
+  const mime = recorder?.mimeType || 'audio/webm';
+  recPreviewUrl = URL.createObjectURL(new Blob(recChunks, { type: mime }));
+  if (!recPreviewEl) {
+    recPreviewEl = new Audio();
+    recPreviewEl.preload = 'auto';
+    recPreviewEl.addEventListener('play', () => (recPlaying.value = true));
+    recPreviewEl.addEventListener('pause', () => (recPlaying.value = false));
+    recPreviewEl.addEventListener('ended', () => (recPlaying.value = false));
+  }
+  recPreviewEl.src = recPreviewUrl;
+  recPreviewEl.playbackRate = recRate.value;
+}
+function stopPreview(): void {
+  recPreviewEl?.pause();
+  recPlaying.value = false;
+  if (recPreviewUrl) {
+    URL.revokeObjectURL(recPreviewUrl);
+    recPreviewUrl = null;
+  }
+}
+function togglePreview(): void {
+  if (!recPreviewEl) return;
+  if (recPlaying.value) recPreviewEl.pause();
+  else void playWhenReady(recPreviewEl);
+}
+function cycleRecRate(): void {
+  recRate.value = nextRate(recRate.value);
+  if (recPreviewEl) recPreviewEl.playbackRate = recRate.value;
+}
+
 function teardownRec(): void {
   if (recTimer) clearInterval(recTimer);
   recTimer = undefined;
   stopSampler();
+  stopPreview();
+  recPreviewEl = null;
+  recWantPreview = false;
   recorder?.stream.getTracks().forEach((t) => t.stop());
   void recAudioCtx?.close().catch(() => {});
   recAudioCtx = null;
@@ -2227,8 +2296,17 @@ async function startRecording() {
     const mimeType = types.find((t) => MediaRecorder.isTypeSupported?.(t));
     recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     recChunks = [];
-    recorder.ondataavailable = (ev) => ev.data.size && recChunks.push(ev.data);
-    recorder.start();
+    recorder.ondataavailable = (ev) => {
+      if (ev.data.size) recChunks.push(ev.data);
+      // A pause requested a flush so we could preview the recording-so-far.
+      if (recWantPreview) {
+        recWantPreview = false;
+        buildPreview();
+      }
+    };
+    // Timeslice so chunks land continuously — that's what lets us assemble a playable
+    // preview blob mid-recording (and keeps "continue from the end" one stream).
+    recorder.start(500);
     // Tap the mic stream for a live waveform.
     const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     recAudioCtx = new AC();
@@ -2237,6 +2315,9 @@ async function startRecording() {
     recAudioCtx.createMediaStreamSource(stream).connect(recAnalyser);
     recBars.value = [];
     recPaused.value = false;
+    recPlaying.value = false;
+    recRate.value = 1;
+    recWantPreview = false;
     recAccumMs = 0;
     recSegStart = Date.now();
     recording.value = true;
@@ -2252,15 +2333,32 @@ async function startRecording() {
 function togglePause(): void {
   if (!recorder) return;
   if (recPaused.value) {
+    // Resume = continue the SAME recording from where it left off (mic button).
+    stopPreview();
     recorder.resume();
     recPaused.value = false;
     recSegStart = Date.now();
     startSampler();
   } else {
-    recorder.pause();
-    recPaused.value = true;
+    // Pause = stop capturing and offer a preview (play button + speed). Flush the
+    // recorder first so the preview includes audio right up to the pause point.
     recAccumMs += Date.now() - recSegStart;
+    recPaused.value = true;
     stopSampler();
+    recWantPreview = true;
+    try {
+      recorder.requestData(); // → ondataavailable → buildPreview()
+    } catch {
+      recWantPreview = false;
+    }
+    recorder.pause();
+    // Fallback if requestData didn't deliver a chunk (older browsers): build anyway.
+    setTimeout(() => {
+      if (recWantPreview) {
+        recWantPreview = false;
+        buildPreview();
+      }
+    }, 150);
   }
 }
 
@@ -2269,6 +2367,7 @@ async function stopAndSendRecording() {
   const durationSec = Math.max(1, Math.round(recActiveMs() / 1000));
   const rec = recorder;
   const mime = rec.mimeType || 'audio/webm';
+  stopPreview();
   const blob: Blob = await new Promise((resolve) => {
     rec.onstop = () => resolve(new Blob(recChunks, { type: mime }));
     if (recPaused.value) rec.resume(); // some browsers won't finalize while paused
@@ -2389,6 +2488,21 @@ function cancelRecording() {
 }
 .rec-dot.paused {
   background: var(--app-text-muted);
+}
+/* Preview play/pause button shown while a recording is paused. */
+.rec-preview {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ion-color-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  cursor: pointer;
 }
 .pending-note {
   display: flex;

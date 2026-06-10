@@ -12,6 +12,8 @@
       @timeupdate="onTime"
       @ended="onEnd"
       @loadedmetadata="onMeta"
+      @play="playing = true"
+      @pause="playing = false"
     />
     <button v-if="!playing" class="vid-play" aria-label="Play" @click.stop="toggle">
       <ion-icon :icon="play" />
@@ -22,6 +24,7 @@
         <div class="vid-prog" :style="{ width: progress * 100 + '%' }"></div>
       </div>
       <span class="vid-time">{{ fmt(total) }}</span>
+      <speed-pill :rate="rate" @cycle="cycleRate" />
     </div>
   </div>
 </template>
@@ -30,6 +33,8 @@
 import { onBeforeUnmount, ref } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play } from 'ionicons/icons';
+import SpeedPill from '@/components/SpeedPill.vue';
+import { nextRate, playWhenReady } from '@/utils/playback';
 
 defineProps<{ src: string }>();
 
@@ -39,19 +44,19 @@ const playing = ref(false);
 const elapsed = ref(0);
 const total = ref(0);
 const progress = ref(0);
+const rate = ref(1);
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 function toggle(): void {
   const v = el.value;
   if (!v) return;
-  if (v.paused) {
-    void v.play();
-    playing.value = true;
-  } else {
-    v.pause();
-    playing.value = false;
-  }
+  if (v.paused) void playWhenReady(v); // @play syncs `playing`
+  else v.pause();
+}
+function cycleRate(): void {
+  rate.value = nextRate(rate.value);
+  if (el.value) el.value.playbackRate = rate.value;
 }
 function onMeta(): void {
   if (el.value && Number.isFinite(el.value.duration)) total.value = el.value.duration;
@@ -116,7 +121,7 @@ onBeforeUnmount(() => el.value?.pause());
   position: absolute;
   left: 12px;
   right: 12px;
-  bottom: 12px;
+  bottom: max(12px, env(safe-area-inset-bottom));
   display: flex;
   align-items: center;
   gap: 8px;

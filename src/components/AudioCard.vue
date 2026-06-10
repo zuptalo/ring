@@ -11,7 +11,10 @@
       <div class="audio-bar" @click.stop="onSeek">
         <span class="audio-fill" :style="{ width: pct + '%' }" />
       </div>
-      <span class="audio-time">{{ fmt(active ? elapsed : durationSec) }}<template v-if="active"> / {{ fmt(durationSec) }}</template></span>
+      <div class="audio-foot">
+        <span class="audio-time">{{ fmt(active ? elapsed : durationSec) }}<template v-if="active"> / {{ fmt(durationSec) }}</template></span>
+        <speed-pill v-if="active" :rate="rate" @cycle="$emit('cycle-speed')" />
+      </div>
     </div>
   </div>
 </template>
@@ -20,6 +23,7 @@
 import { computed } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, pause, musicalNotes } from 'ionicons/icons';
+import SpeedPill from '@/components/SpeedPill.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -30,10 +34,11 @@ const props = withDefaults(
     active?: boolean; // this card is the one loaded in the shared player
     playing?: boolean;
     progress?: number; // 0..1 (only meaningful when active)
+    rate?: number; // playback speed of the shared player (only meaningful when active)
   }>(),
-  { progress: 0 },
+  { progress: 0, rate: 1 },
 );
-const emit = defineEmits<{ (e: 'toggle'): void; (e: 'seek', frac: number): void }>();
+const emit = defineEmits<{ (e: 'toggle'): void; (e: 'seek', frac: number): void; (e: 'cycle-speed'): void }>();
 
 const pct = computed(() => Math.round((props.active ? props.progress : 0) * 100));
 const elapsed = computed(() => (props.durationSec ?? 0) * (props.progress ?? 0));
@@ -124,6 +129,12 @@ function onSeek(e: MouseEvent): void {
   height: 100%;
   border-radius: 2px;
   background: var(--ion-color-primary);
+}
+.audio-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .audio-time {
   font-size: 11px;

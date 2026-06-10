@@ -19,6 +19,8 @@
 
     <span class="vp-time">{{ timeLabel }}</span>
 
+    <speed-pill :rate="rate" @cycle="cycleRate" />
+
     <div v-if="avatar" class="vp-avatar">
       <img :src="avatar" alt="" />
       <span class="vp-mic"><ion-icon :icon="mic" /></span>
@@ -30,6 +32,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, pause, mic } from 'ionicons/icons';
+import SpeedPill from '@/components/SpeedPill.vue';
+import { nextRate, playWhenReady } from '@/utils/playback';
 
 const props = defineProps<{
   src: string;
@@ -45,9 +49,12 @@ const playing = ref(false);
 const progress = ref(0); // 0..1
 const total = ref(props.durationSec ?? 0);
 const elapsed = ref(0);
+const rate = ref(1);
 
 const audio = new Audio(props.src);
-audio.preload = 'metadata';
+// 'auto' (not 'metadata'): buffer the audio data eagerly so the FIRST tap isn't silent
+// — a metadata-only element starts the clock before any sound has decoded.
+audio.preload = 'auto';
 
 const barHeight = (h: number) => `${Math.round(3 + h * 17)}px`;
 
@@ -97,13 +104,12 @@ function onEnded(): void {
 }
 
 function toggle(): void {
-  if (playing.value) {
-    audio.pause();
-    playing.value = false;
-  } else {
-    void audio.play();
-    playing.value = true;
-  }
+  if (playing.value) audio.pause();
+  else void playWhenReady(audio); // 'play'/'pause' listeners sync `playing`
+}
+function cycleRate(): void {
+  rate.value = nextRate(rate.value);
+  audio.playbackRate = rate.value;
 }
 
 const waveEl = ref<HTMLElement>();
@@ -116,9 +122,17 @@ function seek(ev: MouseEvent): void {
   onTime();
 }
 
+const onPlay = (): void => {
+  playing.value = true;
+};
+const onPause = (): void => {
+  playing.value = false;
+};
 onMounted(() => {
   audio.addEventListener('timeupdate', onTime);
   audio.addEventListener('ended', onEnded);
+  audio.addEventListener('play', onPlay);
+  audio.addEventListener('pause', onPause);
   audio.addEventListener('loadedmetadata', () => {
     if (Number.isFinite(audio.duration) && audio.duration > 0) total.value = audio.duration;
   });
@@ -128,6 +142,8 @@ onBeforeUnmount(() => {
   audio.pause();
   audio.removeEventListener('timeupdate', onTime);
   audio.removeEventListener('ended', onEnded);
+  audio.removeEventListener('play', onPlay);
+  audio.removeEventListener('pause', onPause);
 });
 </script>
 

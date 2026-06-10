@@ -54,8 +54,11 @@
         </div>
       </div>
 
-      <!-- Bottom: reactions · caption · quick-react · actions · thumbnail strip -->
-      <div class="v-bottom" :class="{ hidden: chromeHidden }">
+      <!-- Bottom: reactions · caption · quick-react · actions · thumbnail strip.
+           For a video, lift the whole bar so the player's own scrubber row (anchored
+           to the very bottom) is uncovered and tappable instead of hiding behind the
+           thumbnail strip. -->
+      <div class="v-bottom" :class="{ hidden: chromeHidden, video: cur?.kind === 'video' }">
         <div v-if="cur?.reactions?.length" class="v-reactions">
           <span v-for="r in cur.reactions" :key="r.emoji" class="v-react-pill">
             {{ r.emoji }}<span v-if="r.count > 1" class="v-react-n">{{ r.count }}</span>
@@ -501,6 +504,12 @@ watch(() => props.start, (s) => {
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
   color: #fff;
   transition: opacity 0.2s ease;
+}
+/* A video draws its own scrubber/speed row pinned to the bottom; lift the chrome bar
+   above it (clearing that row + the home indicator) so the scrubber is reachable. */
+.v-bottom.video {
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 40px);
+  padding-bottom: 10px;
 }
 .v-reactions {
   display: flex;
