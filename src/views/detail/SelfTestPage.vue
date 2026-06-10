@@ -65,6 +65,7 @@ async function run(): Promise<void> {
     const t = await toastController.create({
       message: summary.value,
       duration: 2500,
+      position: 'top',
       color: pass === r.length ? 'success' : 'danger',
     });
     await t.present();

@@ -226,15 +226,11 @@ body.keyboard-open ion-footer {
   overflow: hidden;
 }
 
-/* The "update available" toast is anchored to the bottom (easier to reach than the
-   top), lifted clear of the bottom tab bar / chat composer. When the keyboard is up,
-   iOS keeps the toast pinned to the layout viewport (behind the keyboard), so we add
-   the published --keyboard-height to raise it above the keyboard + composer. The
-   transform shifts the whole overlay layer, taking the toast with it. */
+/* The "update available" toast surfaces at the top with the rest of the app's
+   notifications (Ionic's top toasts already clear the safe-area inset). Styled
+   like the in-app notification banners: neutral dark, white text reads in both
+   themes. */
 ion-toast.app-update-toast {
-  transform: translateY(calc(-1 * (var(--keyboard-height, 0px) + 60px)));
-  /* Neutral dark, matching the in-app notification banners; white text reads in
-     both themes. */
   --background: #2c2c30;
   --color: #fff;
   --border-radius: 14px;

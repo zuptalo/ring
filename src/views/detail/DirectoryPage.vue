@@ -124,7 +124,7 @@ async function connect(u: DirectoryUser): Promise<void> {
     });
     await t.present();
   } catch {
-    const t = await toastController.create({ message: 'Could not send request. Try again.', duration: 1500, color: 'danger' });
+    const t = await toastController.create({ message: 'Could not send request. Try again.', duration: 1500, position: 'top', color: 'danger' });
     await t.present();
   }
 }

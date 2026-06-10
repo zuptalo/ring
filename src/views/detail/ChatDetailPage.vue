@@ -816,7 +816,7 @@ async function onUnblock() {
   try {
     await unblockContact(pid);
   } catch {
-    const t = await toastController.create({ message: 'Could not unblock. Try again.', duration: 1500, color: 'danger' });
+    const t = await toastController.create({ message: 'Could not unblock. Try again.', duration: 1500, position: 'top', color: 'danger' });
     await t.present();
   }
 }
@@ -832,7 +832,7 @@ async function onPickDate(ev: CustomEvent): Promise<void> {
   day.setHours(0, 0, 0, 0);
   const id = await firstMessageOnOrAfter(chatId, day.getTime());
   if (!id) {
-    const t = await toastController.create({ message: 'No messages on or after that date', duration: 1500 });
+    const t = await toastController.create({ message: 'No messages on or after that date', duration: 1500, position: 'top' });
     await t.present();
     return;
   }
@@ -928,7 +928,7 @@ async function onReact(messageId: string, emoji: string): Promise<void> {
     const t = await toastController.create({
       message: 'You can add up to 3 reactions.',
       duration: 1600,
-      position: 'bottom',
+      position: 'top',
     });
     await t.present();
   }
@@ -1044,7 +1044,7 @@ async function saveMediaForMessages(ids: string[]): Promise<void> {
   const t = await toastController.create({
     message: msg,
     duration: 1500,
-    position: 'bottom',
+    position: 'top',
     color: result === 'empty' ? 'danger' : undefined,
   });
   await t.present();
@@ -1214,7 +1214,7 @@ async function onForwardSend(chatIds: string[]): Promise<void> {
   forwardOpen.value = false;
   if (forwardId.value && chatIds.length) await forwardMessage(forwardId.value, chatIds);
   forwardId.value = null;
-  const t = await toastController.create({ message: 'Forwarded', duration: 1200, position: 'bottom' });
+  const t = await toastController.create({ message: 'Forwarded', duration: 1200, position: 'top' });
   await t.present();
 }
 
@@ -1331,7 +1331,7 @@ function scrollToMessage(id: string): void {
   // before we joined this group. The quote bubble still renders from its embedded
   // snapshot; there's just nothing to scroll to.
   void toastController
-    .create({ message: 'Original message not available', duration: 1400, position: 'bottom' })
+    .create({ message: 'Original message not available', duration: 1400, position: 'top' })
     .then((t) => t.present());
 }
 
@@ -2401,7 +2401,7 @@ async function startRecording() {
     recTimer = window.setInterval(tickElapsed, 200);
     startSampler();
   } catch {
-    const t = await toastController.create({ message: 'Microphone unavailable', duration: 1500 });
+    const t = await toastController.create({ message: 'Microphone unavailable', duration: 1500, position: 'top' });
     await t.present();
   }
 }

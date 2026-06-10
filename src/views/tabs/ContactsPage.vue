@@ -320,7 +320,7 @@ function inviteStatus(code: string): string {
 }
 
 async function toast(message: string): Promise<void> {
-  const t = await toastController.create({ message, duration: 1800, position: 'bottom' });
+  const t = await toastController.create({ message, duration: 1800, position: 'top' });
   await t.present();
 }
 

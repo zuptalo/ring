@@ -57,7 +57,7 @@ export function useConnect() {
                 const label = (data?.label ?? '').toString().trim();
                 if (!label) {
                   void toastController
-                    .create({ message: 'Please add a nickname for this invite.', duration: 1600, position: 'bottom' })
+                    .create({ message: 'Please add a nickname for this invite.', duration: 1600, position: 'top' })
                     .then((t) => t.present());
                   return false; // keep the alert open until they enter one
                 }
@@ -100,7 +100,7 @@ export function useConnect() {
 
     const copy = (text: string, note: string): boolean => {
       void navigator.clipboard?.writeText(text);
-      void toastController.create({ message: note, duration: 1200 }).then((t) => t.present());
+      void toastController.create({ message: note, duration: 1200, position: 'top' }).then((t) => t.present());
       return false; // keep the alert open so multiple copies are possible
     };
 

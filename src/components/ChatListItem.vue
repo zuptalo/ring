@@ -115,7 +115,7 @@ async function togglePin(): Promise<void> {
     const t = await toastController.create({
       message: `You can only pin ${MAX_PINNED_CHATS} chats.`,
       duration: 2200,
-      position: 'bottom',
+      position: 'top',
     });
     await t.present();
   }

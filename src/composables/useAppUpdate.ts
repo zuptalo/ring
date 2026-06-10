@@ -75,9 +75,9 @@ export function useAppUpdate(): void {
       const toast = await toastController.create({
         header: 'Update available',
         message: label,
-        // Sit at the bottom, above the tab bar / chat composer (and above the
-        // keyboard when it's up); see the .app-update-toast rules in App.vue.
-        position: 'bottom',
+        // Top of the screen, where every other notification (banners, error
+        // toasts) surfaces; see the .app-update-toast rules in App.vue.
+        position: 'top',
         cssClass: 'app-update-toast',
         // No duration: stay until the user chooses.
         buttons: [

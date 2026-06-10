@@ -71,7 +71,7 @@ function copyHandle(): void {
   if (!username.value) return;
   void navigator.clipboard?.writeText(`@${username.value}`);
   copied.value = true;
-  void toastController.create({ message: 'Username copied', duration: 1200 }).then((t) => t.present());
+  void toastController.create({ message: 'Username copied', duration: 1200, position: 'top' }).then((t) => t.present());
 }
 
 onMounted(async () => {

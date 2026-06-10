@@ -253,7 +253,7 @@ async function block() {
               await blockContact(contactId);
             } catch {
               void toastController
-                .create({ message: 'Could not block. Try again.', duration: 1500, color: 'danger' })
+                .create({ message: 'Could not block. Try again.', duration: 1500, position: 'top', color: 'danger' })
                 .then((t) => t.present());
             }
           })();
@@ -269,7 +269,7 @@ async function unblock() {
     await unblockContact(contactId);
   } catch {
     void toastController
-      .create({ message: 'Could not unblock. Try again.', duration: 1500, color: 'danger' })
+      .create({ message: 'Could not unblock. Try again.', duration: 1500, position: 'top', color: 'danger' })
       .then((t) => t.present());
   }
 }
@@ -277,7 +277,7 @@ async function unblock() {
 function copyUsername() {
   if (!contact.value?.username) return;
   void navigator.clipboard?.writeText(`@${contact.value.username}`);
-  void toastController.create({ message: 'Username copied', duration: 1200 }).then((t) => t.present());
+  void toastController.create({ message: 'Username copied', duration: 1200, position: 'top' }).then((t) => t.present());
 }
 </script>
 

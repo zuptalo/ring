@@ -75,7 +75,7 @@ async function paste() {
 }
 
 async function toast(message: string, color?: string) {
-  const t = await toastController.create({ message, duration: 1500, color });
+  const t = await toastController.create({ message, duration: 1500, position: 'top', color });
   await t.present();
 }
 

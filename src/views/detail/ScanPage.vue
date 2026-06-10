@@ -55,7 +55,7 @@ async function onDecoded(text: string): Promise<void> {
   handled = true;
   stopCamera();
   await requestFriend(id);
-  void toastController.create({ message: 'Friend request sent', duration: 1400 }).then((t) => t.present());
+  void toastController.create({ message: 'Friend request sent', duration: 1400, position: 'top' }).then((t) => t.present());
   router.replace('/tabs/contacts');
 }
 
