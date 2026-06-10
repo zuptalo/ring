@@ -52,6 +52,11 @@ export const screenSharing = ref(false);
 // when it can actually do something. Resolved once the call connects (labels/devices
 // need the in-call media permission to enumerate).
 export const hasMultipleCameras = ref(false);
+// Outgoing-video quality tier the user picked for THIS call (resets per call). 'auto'
+// lets WebRTC's bandwidth estimator decide; the lower tiers cap the bitrate (and scale
+// the resolution/framerate down) to consume less data while still sending video.
+export type VideoQuality = 'auto' | 'medium' | 'low';
+export const videoQuality = ref<VideoQuality>('auto');
 // 1:1 audio->video upgrade consent: `upgradePending` = we asked and are waiting for
 // the peer's accept/reject; `upgradeRequest` = the peer asked us and a prompt shows.
 export const upgradePending = ref(false);
@@ -553,6 +558,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   cameraFacing.value = 'user';
   screenSharing.value = false;
   hasMultipleCameras.value = false;
+  videoQuality.value = 'auto';
   upgradePending.value = false;
   upgradeRequest.value = false;
   activeScreenTrack?.stop();
@@ -1115,6 +1121,48 @@ function videoSender(): RTCRtpSender | null {
   return tx?.sender ?? null;
 }
 
+/* ---- outgoing-video quality tiers ----
+ * The user can trade picture quality for data use mid-call. 'auto' removes any cap and
+ * lets the browser's bandwidth estimator pick; the lower tiers clamp the first encoding's
+ * bitrate (and scale resolution/framerate down) so the camera sends less. Applied via
+ * RTCRtpSender.setParameters, which leaves the track (and its E2EE transform) in place. */
+const QUALITY_ENCODING: Record<VideoQuality, { maxBitrate?: number; scaleResolutionDownBy: number; maxFramerate?: number }> = {
+  auto: { maxBitrate: undefined, scaleResolutionDownBy: 1 },
+  medium: { maxBitrate: 600_000, scaleResolutionDownBy: 1.5, maxFramerate: 24 },
+  low: { maxBitrate: 150_000, scaleResolutionDownBy: 3, maxFramerate: 15 },
+};
+
+/** The outgoing video sender on whichever connection is active (1:1 PC or the SFU). */
+function activeVideoSender(): RTCRtpSender | null {
+  return groupSession ? groupSession.videoSender() : videoSender();
+}
+
+/** Push the current quality tier onto a video sender's first encoding (best-effort:
+ *  not every browser honors every field, and there may be no sender yet on audio). */
+async function applyVideoQuality(sender: RTCRtpSender | null): Promise<void> {
+  if (!sender) return;
+  const params = sender.getParameters();
+  if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+  const tier = QUALITY_ENCODING[videoQuality.value];
+  const enc = params.encodings[0];
+  if (tier.maxBitrate == null) delete enc.maxBitrate;
+  else enc.maxBitrate = tier.maxBitrate;
+  enc.scaleResolutionDownBy = tier.scaleResolutionDownBy;
+  if (tier.maxFramerate == null) delete enc.maxFramerate;
+  else enc.maxFramerate = tier.maxFramerate;
+  try {
+    await sender.setParameters(params);
+  } catch (e) {
+    console.warn('[call] could not apply video quality', e);
+  }
+}
+
+/** Change the outgoing-video quality tier and apply it immediately to the live sender. */
+export async function setVideoQuality(q: VideoQuality): Promise<void> {
+  videoQuality.value = q;
+  await applyVideoQuality(activeVideoSender());
+}
+
 /** Test-only introspection: number of video transceivers on the 1:1 PC, matched by the
  *  receiver's media kind so a dormant sender whose track was nulled still counts. Used
  *  to prove a re-upgrade reuses the single video m-line instead of adding a duplicate. */
@@ -1176,10 +1224,15 @@ function setLocalVideoTrack(track: MediaStreamTrack | null, stopOld: boolean): v
 /** Replace the outgoing video track on whichever connection is active. Returns false
  *  if there's no video sender to replace (e.g. an audio-only group call). */
 async function replaceOutgoingVideo(track: MediaStreamTrack): Promise<boolean> {
-  if (groupSession) return groupSession.replaceVideoTrack(track);
+  if (groupSession) {
+    const ok = await groupSession.replaceVideoTrack(track);
+    if (ok) await applyVideoQuality(groupSession.videoSender());
+    return ok;
+  }
   const sender = videoSender();
   if (!sender) return false;
   await sender.replaceTrack(track);
+  await applyVideoQuality(sender);
   return true;
 }
 
@@ -1314,6 +1367,10 @@ async function addLocalVideo(renegotiateAfter: boolean): Promise<boolean> {
   setLocalVideoTrack(track, true);
   meta.kind = 'video';
   cameraOff.value = false;
+  await applyVideoQuality(activeVideoSender());
+  // The camera wasn't enumerated on an audio-only call, so re-check now that video is
+  // on - this is what makes the flip-camera button appear after an audio->video switch.
+  void refreshCameraCount();
   if (renegotiateAfter) await renegotiate();
   if (audioRoute.value !== 'bluetooth') await setRoute('speaker');
   return true;
@@ -1405,6 +1462,8 @@ export async function toggleVideoMode(): Promise<void> {
     setLocalVideoTrack(track, true);
     meta.kind = 'video';
     cameraOff.value = false;
+    await applyVideoQuality(groupSession!.videoSender());
+    void refreshCameraCount(); // surface the flip-camera button now that video is on
   } else {
     if (meta.isGroup) {
       screenSharing.value = false;
@@ -1659,6 +1718,8 @@ export function useCall() {
     switchCamera,
     toggleScreenShare,
     toggleVideoMode,
+    videoQuality,
+    setVideoQuality,
     acceptUpgrade,
     rejectUpgrade,
   };

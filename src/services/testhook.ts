@@ -104,6 +104,8 @@ import {
   rejectCall,
   hangupCall,
   toggleVideoMode,
+  setVideoQuality,
+  type VideoQuality,
   acceptUpgrade,
   upgradeRequest,
   callState,
@@ -425,6 +427,8 @@ export function installTestHook(): void {
     hangup: () => hangupCall(),
     /** Toggle video: 1:1 audio->video sends a consent request; group is immediate. */
     toggleVideo: () => toggleVideoMode(),
+    /** Set the outgoing-video quality tier (auto/medium/low). */
+    setVideoQuality: (q: VideoQuality) => setVideoQuality(q),
     /** Whether a 1:1 video-upgrade request is currently prompting us. */
     upgradeRequested: () => upgradeRequest.value,
     /** Accept an incoming 1:1 video-upgrade request. */

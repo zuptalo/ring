@@ -366,6 +366,12 @@ export class GroupSession {
     return !!this.pc?.getSenders().some((s) => s.track?.kind === 'video');
   }
 
+  /** The outgoing video sender (for applying quality/encoding params), or null when
+   *  this is an audio-only group call with nothing to publish yet. */
+  videoSender(): RTCRtpSender | null {
+    return this.pc?.getSenders().find((s) => s.track?.kind === 'video') ?? null;
+  }
+
   /** Add a video track mid-call (audio->video) and ask the SFU to re-offer so it's
    *  negotiated and forwarded. E2EE is attached to the new sender. */
   async addVideoTrack(track: MediaStreamTrack): Promise<void> {
