@@ -866,12 +866,25 @@ export async function addToGroup(chatId: string, memberId: string): Promise<void
   linkGroupMembers([memberId]); // connect to the new member so fan-out reaches them
   const ts = now();
   chat.participantIds = [...chat.participantIds, memberId];
+  // Clear any stale pending invitation for this member (e.g. invited under the old
+  // accept-first flow), so the "Invited" list doesn't keep a ghost entry.
+  chat.invitedIds = (chat.invitedIds ?? []).filter((id) => id !== memberId);
   const roster = await buildRoster([self, ...chat.participantIds]);
   applyAutoName(chat, roster, self);
   chat.rosterAt = ts;
   chat.updatedAt = ts;
   await put('chats', chat);
   await sendGroupCard(chat.participantIds, groupCard(chat, 'update', roster, ts));
+}
+
+/** Add a member to a group: a saved contact joins immediately (membership is a natural
+ *  extension of the contact relationship); a non-contact (e.g. a future "add from
+ *  directory" path) still gets the accept-first invite so they can consent. The group
+ *  member picker only offers contacts today, so this is immediate in practice. */
+export async function addMemberToGroup(chatId: string, memberId: string): Promise<void> {
+  const contact = await getContact(memberId);
+  if (contact && !contact.ghosted) await addToGroup(chatId, memberId);
+  else await inviteToGroup(chatId, memberId);
 }
 
 /**
