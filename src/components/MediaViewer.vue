@@ -133,7 +133,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, shallowRef, watch } from 'vue';
 import { IonModal, IonContent, IonIcon } from '@ionic/vue';
 import {
   chevronBack, pencil, ellipsisHorizontal, imagesOutline, chatbubbleOutline,
@@ -413,11 +413,17 @@ function onMediaClick(): void {
 }
 
 /* ---- video: host the scrubber/PiP in the chrome, tap toggles the immersive view ---- */
-const activeVideo = ref<VideoApi | null>(null);
-// Function ref on each mounted player; keep a handle to the CURRENT one so the hosted
-// control row drives it (and re-points as you swipe between items).
+// shallowRef (not ref): hold the raw component instance, never deep-proxy it.
+const activeVideo = shallowRef<VideoApi | null>(null);
+// Function ref on the mounted players; keep a handle to the CURRENT one so the hosted
+// control row drives it (and re-points as you swipe between items). Vue re-invokes an
+// inline ref callback every render (old→null, new→instance), so we MUST ignore the null
+// detach and skip same-value writes — otherwise the template reading `activeVideo` would
+// rewrite it every render → infinite re-render loop (the web process crashes).
 function bindVideo(c: unknown, i: number): void {
-  if (i === index.value) activeVideo.value = (c as VideoApi | null) ?? null;
+  if (i !== index.value) return;
+  const inst = (c as VideoApi | null) ?? null;
+  if (inst && activeVideo.value !== inst) activeVideo.value = inst;
 }
 const vfmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 // Tap on the video → hide all chrome for a video-only view; tap again → bring it back.
