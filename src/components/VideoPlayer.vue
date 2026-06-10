@@ -25,8 +25,18 @@
     </button>
     <div v-if="!embedded" class="vid-controls" @click.stop>
       <span class="vid-time">{{ fmt(elapsed) }}</span>
-      <div ref="bar" class="vid-bar" @click="onBarClick">
-        <div class="vid-prog" :style="{ width: progress * 100 + '%' }"></div>
+      <!-- Tap to jump, drag to scrub (useScrub). The track is a tall hitbox
+           around the thin visible rail so a finger can actually grab it. -->
+      <div
+        class="vid-bar"
+        @pointerdown="scrub.onPointerDown"
+        @pointermove="scrub.onPointerMove"
+        @pointerup="scrub.onPointerUp"
+        @pointercancel="scrub.onPointerUp"
+      >
+        <div class="vid-rail">
+          <div class="vid-prog" :style="{ width: progress * 100 + '%' }"></div>
+        </div>
       </div>
       <span class="vid-time">{{ fmt(total) }}</span>
       <speed-pill :rate="rate" @cycle="cycleRate" />
@@ -40,12 +50,12 @@ import { IonIcon } from '@ionic/vue';
 import { play } from 'ionicons/icons';
 import SpeedPill from '@/components/SpeedPill.vue';
 import { nextRate, playWhenReady } from '@/utils/playback';
+import { useScrub } from '@/composables/useScrub';
 
 const props = defineProps<{ src: string; embedded?: boolean; chromeHidden?: boolean }>();
 const emit = defineEmits<{ (e: 'tap'): void }>();
 
 const el = ref<HTMLVideoElement>();
-const bar = ref<HTMLElement>();
 const playing = ref(false);
 const elapsed = ref(0);
 const total = ref(0);
@@ -77,12 +87,7 @@ function seekTo(ratio: number): void {
   v.currentTime = Math.min(1, Math.max(0, ratio)) * total.value;
   onTime();
 }
-function onBarClick(ev: MouseEvent): void {
-  const b = bar.value;
-  if (!b) return;
-  const rect = b.getBoundingClientRect();
-  seekTo((ev.clientX - rect.left) / rect.width);
-}
+const scrub = useScrub(seekTo);
 
 /* ---- Picture-in-Picture (native), for the same float-while-you-browse behavior as
    calls. Standard API on Chromium/desktop; webkitSetPresentationMode on iOS Safari. */
@@ -202,10 +207,19 @@ defineExpose({ playing, elapsed, total, progress, rate, pipActive, toggle, seekT
 }
 .vid-bar {
   flex: 1;
+  /* Tall transparent hitbox so the thin rail is grabbable; touch-action:none
+     keeps the browser from claiming the drag for scrolling (see useScrub). */
+  height: 24px;
+  display: flex;
+  align-items: center;
+  touch-action: none;
+  cursor: pointer;
+}
+.vid-rail {
+  width: 100%;
   height: 4px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.3);
-  cursor: pointer;
 }
 .vid-prog {
   height: 100%;

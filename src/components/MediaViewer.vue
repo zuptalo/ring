@@ -74,8 +74,18 @@
             <ion-icon :icon="activeVideo.playing ? pause : play" />
           </button>
           <span class="v-vidtime">{{ vfmt(activeVideo.elapsed) }}</span>
-          <div class="v-vidtrack" @click="onVidSeek">
-            <div class="v-vidprog" :style="{ width: activeVideo.progress * 100 + '%' }"></div>
+          <!-- Tap to jump, drag to scrub (useScrub). The track is a tall hitbox
+               around the thin visible rail so a finger can actually grab it. -->
+          <div
+            class="v-vidtrack"
+            @pointerdown="vidScrub.onPointerDown"
+            @pointermove="vidScrub.onPointerMove"
+            @pointerup="vidScrub.onPointerUp"
+            @pointercancel="vidScrub.onPointerUp"
+          >
+            <div class="v-vidrail">
+              <div class="v-vidprog" :style="{ width: activeVideo.progress * 100 + '%' }"></div>
+            </div>
           </div>
           <span class="v-vidtime">{{ vfmt(activeVideo.total) }}</span>
           <speed-pill :rate="activeVideo.rate" @cycle="activeVideo.cycleRate()" />
@@ -142,6 +152,7 @@ import {
 } from 'ionicons/icons';
 import SpeedPill from './SpeedPill.vue';
 import VideoPlayer from './VideoPlayer.vue';
+import { useScrub } from '@/composables/useScrub';
 
 // The slice of VideoPlayer's exposed API the viewer drives for the hosted control row.
 interface VideoApi {
@@ -430,11 +441,9 @@ const vfmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).
 function onVideoTap(): void {
   chromeHidden.value = !chromeHidden.value;
 }
-function onVidSeek(e: MouseEvent): void {
-  const track = e.currentTarget as HTMLElement;
-  const r = track.getBoundingClientRect();
-  activeVideo.value?.seekTo((e.clientX - r.left) / r.width);
-}
+// Tap-to-jump AND drag-to-scrub on the hosted track (pointer capture keeps the
+// drag from being claimed by the slide-swipe gesture underneath).
+const vidScrub = useScrub((ratio) => activeVideo.value?.seekTo(ratio));
 function onMediaDblClick(): void {
   if (Date.now() - lastTouchAt < 500) return;
   if (cur.value?.kind === 'image') toggleZoom();
@@ -610,10 +619,19 @@ watch(() => props.start, (s) => {
 }
 .v-vidtrack {
   flex: 1;
+  /* Tall transparent hitbox so the thin rail is grabbable; touch-action:none
+     keeps the browser from claiming the drag for scrolling (see useScrub). */
+  height: 24px;
+  display: flex;
+  align-items: center;
+  touch-action: none;
+  cursor: pointer;
+}
+.v-vidrail {
+  width: 100%;
   height: 4px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.3);
-  cursor: pointer;
 }
 .v-vidprog {
   height: 100%;
