@@ -1,7 +1,25 @@
 <template>
   <ion-page>
     <ion-header :translucent="true">
-      <ion-toolbar>
+      <!-- Selection mode: the header becomes a bulk-action bar (count · forward ·
+           delete). Entered via "Select" in a message's menu; × leaves it. -->
+      <ion-toolbar v-if="selecting">
+        <ion-buttons slot="start">
+          <ion-button aria-label="Cancel selection" @click="exitSelect">
+            <ion-icon slot="icon-only" :icon="closeOutline" />
+          </ion-button>
+        </ion-buttons>
+        <ion-title>{{ selected.length }} selected</ion-title>
+        <ion-buttons slot="end">
+          <ion-button aria-label="Forward selected" :disabled="!selected.length" @click="forwardSelected">
+            <ion-icon slot="icon-only" :icon="arrowRedoOutline" />
+          </ion-button>
+          <ion-button aria-label="Delete selected" color="danger" :disabled="!selected.length" @click="confirmDeleteSelected">
+            <ion-icon slot="icon-only" :icon="trashOutline" />
+          </ion-button>
+        </ion-buttons>
+      </ion-toolbar>
+      <ion-toolbar v-else>
         <!-- Back button + avatar + name + last-seen all live in slot="start" so
              they form one left-aligned group, with a gap so the chevron can't be
              tapped by mistake. The avatar/name cluster stays hidden during the
@@ -98,7 +116,20 @@
             {{ m.callLog.participants.join(', ') }}
           </span>
         </div>
-        <div v-else class="bubble-row" :class="{ out: m.outgoing }">
+        <!-- Selection mode: the row grows a check circle at the left edge and the
+             whole row toggles on tap (bubble innards go inert via CSS, so media/
+             poll/menu taps can't fire mid-selection). -->
+        <div
+          v-else
+          class="bubble-row"
+          :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id) }"
+          @click="selecting && toggleSelect([m.id])"
+        >
+          <ion-icon
+            v-if="selecting"
+            class="sel-check"
+            :icon="isSelected(m.id) ? checkmarkCircle : ellipseOutline"
+          />
           <!-- Group chats: the sender's avatar next to their messages (shown once
                per consecutive run; a spacer keeps continuation bubbles aligned). -->
           <template v-if="chat?.isGroup && !m.outgoing">
@@ -315,6 +346,7 @@
                 </div>
               </div>
               <span class="time">
+                <span v-if="m.editedAt" class="edited">edited</span>
                 {{ formatClock(m.sentAt ?? m.timestamp) }}
                 <ion-icon
                   v-if="m.outgoing && m.status !== 'failed'"
@@ -359,8 +391,19 @@
         </template>
 
         <!-- An album: media sent together, shown as a grid (up to 4, +N more).
-             Tapping outside a cell reacts to the album as a whole. -->
-        <div v-else class="bubble-row" :class="{ out: item.messages[0].outgoing }">
+             Tapping outside a cell reacts to the album as a whole. Selection
+             treats the album as one unit (all of its messages toggle together). -->
+        <div
+          v-else
+          class="bubble-row"
+          :class="{ out: item.messages[0].outgoing, 'sel-mode': selecting, 'sel-on': isSelected(item.messages[0].id) }"
+          @click="selecting && toggleSelect(item.messages.map((mm) => mm.id))"
+        >
+          <ion-icon
+            v-if="selecting"
+            class="sel-check"
+            :icon="isSelected(item.messages[0].id) ? checkmarkCircle : ellipseOutline"
+          />
           <div class="bubble-col">
             <div class="swipe-wrap">
             <span class="swipe-ico reply" v-show="swipeId === item.messages[0].id && swipeDx > 4">
@@ -478,6 +521,20 @@
             </span>
           </div>
           <ion-button fill="clear" aria-label="Cancel reply" @click="replyingTo = null">
+            <ion-icon slot="icon-only" :icon="closeOutline" />
+          </ion-button>
+        </div>
+      </ion-toolbar>
+      <!-- Editing one of your own messages: the original is shown above the
+           composer (reply-bar styling), the textarea holds the editable text,
+           and Send applies the edit instead of sending a new message. -->
+      <ion-toolbar v-if="editingMsg && !chat?.pending" class="reply-bar">
+        <div class="reply-preview">
+          <div class="reply-quote">
+            <span class="reply-ref-author">Edit message</span>
+            <span class="reply-ref-text">{{ editingMsg.body }}</span>
+          </div>
+          <ion-button fill="clear" aria-label="Cancel edit" @click="cancelEdit">
             <ion-icon slot="icon-only" :icon="closeOutline" />
           </ion-button>
         </div>
@@ -692,7 +749,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
-  IonPage, IonHeader, IonToolbar, IonButtons, IonButton,
+  IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
   IonBackButton, IonIcon, IonSearchbar, IonContent, IonFooter, IonTextarea,
   IonAvatar, IonNote, IonModal, IonSpinner, IonDatetime, actionSheetController, alertController, popoverController, toastController,
   IonInfiniteScroll, IonInfiniteScrollContent,
@@ -704,11 +761,12 @@ import {
   timeOutline, checkmark, checkmarkDone, addOutline, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
-  imageOutline, musicalNotesOutline, calendarOutline,
+  imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, listMessages, markChatRead, sendMediaMessage, sendMessage,
-  reactToMessage, deleteMessage, softDeleteMessage, toggleFavorite, setCaption, forwardMessage,
+  reactToMessage, deleteMessage, softDeleteMessage, deleteMessageForEveryone, editMessage,
+  toggleFavorite, setCaption, forwardMessage,
   quickReactEmojis,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
@@ -1086,6 +1144,7 @@ async function openMenu(m: Message, ev: Event) {
     componentProps: {
       isOutgoing: m.outgoing,
       canCopy: !!m.body,
+      canEdit: m.outgoing && m.kind === 'text' && !m.deleted,
       canSave,
       canSaveAll,
       myEmojis: myEmojisFor(m),
@@ -1109,6 +1168,9 @@ async function openMenu(m: Message, ev: Event) {
   else if (data.action === 'saveAll') void saveMediaForMessages(albumMessageIds(m));
   else if (data.action === 'info') router.push(`/chat/${chatId}/info/${m.id}`);
   else if (data.action === 'copy') navigator.clipboard?.writeText(m.body).catch(() => {});
+  else if (data.action === 'edit') startEdit(m);
+  else if (data.action === 'select') enterSelect(m);
+  else if (data.action === 'delete') void confirmDelete(m);
 }
 
 /* ---- forwarding ---- */
@@ -1205,17 +1267,55 @@ const forwardable = (m: Message) =>
     (m.kind === 'text' && hasLink(m.body)));
 
 const forwardOpen = ref(false);
-const forwardId = ref<string | null>(null);
+const forwardIds = ref<string[]>([]); // one id from the menu, several from selection mode
 function openForward(id: string): void {
-  forwardId.value = id;
+  forwardIds.value = [id];
   forwardOpen.value = true;
 }
 async function onForwardSend(chatIds: string[]): Promise<void> {
   forwardOpen.value = false;
-  if (forwardId.value && chatIds.length) await forwardMessage(forwardId.value, chatIds);
-  forwardId.value = null;
+  if (chatIds.length) {
+    for (const id of forwardIds.value) await forwardMessage(id, chatIds);
+  }
+  forwardIds.value = [];
+  exitSelect();
   const t = await toastController.create({ message: 'Forwarded', duration: 1200, position: 'top' });
   await t.present();
+}
+
+/* ---- multi-select (bulk forward / delete) ----
+   Entered via "Select" in a message's menu. While selecting, the header becomes
+   a count + forward/delete bar, every bubble row toggles on tap (its innards go
+   pointer-inert in CSS), and swipe gestures are suspended. Albums toggle as one
+   unit, so a bulk action never splits an album. */
+const selecting = ref(false);
+const selected = ref<string[]>([]);
+const isSelected = (id: string) => selected.value.includes(id);
+function toggleSelect(ids: string[]): void {
+  if (isSelected(ids[0])) selected.value = selected.value.filter((x) => !ids.includes(x));
+  else selected.value = [...selected.value, ...ids.filter((x) => !selected.value.includes(x))];
+}
+function enterSelect(m: Message): void {
+  selecting.value = true;
+  selected.value = m.albumId ? albumMessageIds(m) : [m.id];
+}
+function exitSelect(): void {
+  selecting.value = false;
+  selected.value = [];
+}
+// The selected messages in conversation order, so bulk forwards arrive in order.
+const selectedMessages = computed(() =>
+  messages.value
+    .filter((m) => selected.value.includes(m.id))
+    .sort((a, b) => a.timestamp - b.timestamp),
+);
+function forwardSelected(): void {
+  if (!selected.value.length) return;
+  forwardIds.value = selectedMessages.value.filter((m) => !m.deleted).map((m) => m.id);
+  forwardOpen.value = true;
+}
+function confirmDeleteSelected(): void {
+  if (selected.value.length) void presentDeleteSheet(selectedMessages.value);
 }
 
 /* ---- reply ---- */
@@ -1276,6 +1376,22 @@ function groupRunStart(i: number): boolean {
   if (!prev) return true;
   const prevMsg = prev.kind === 'msg' ? prev.message : prev.messages[prev.messages.length - 1];
   return prevMsg.outgoing || prevMsg.senderId !== cur.message.senderId;
+}
+
+/* ---- edit one of your own messages ----
+   "Edit" in the message menu loads the text into the composer behind an
+   "Edit message" bar; Send then rewrites the message in place (both sides,
+   via the E2EE edit signal) instead of sending a new one. */
+const editingMsg = ref<Message | null>(null);
+function startEdit(m: Message): void {
+  replyingTo.value = null; // editing and replying are mutually exclusive
+  editingMsg.value = m;
+  draft.value = m.body;
+  void nextTick(() => (composerEl.value?.$el as HTMLIonTextareaElement | undefined)?.setFocus());
+}
+function cancelEdit(): void {
+  editingMsg.value = null;
+  draft.value = '';
 }
 
 async function startReply(m: Message): Promise<void> {
@@ -1356,7 +1472,7 @@ function swipeStyle(id: string): Record<string, string> | undefined {
   };
 }
 function onSwipeStart(e: TouchEvent, m: Message): void {
-  if (m.deleted) return;
+  if (m.deleted || selecting.value) return;
   swipeStartX = e.touches[0].clientX;
   swipeStartY = e.touches[0].clientY;
   swipeDir = null;
@@ -1406,24 +1522,50 @@ function onSwipeEnd(): void {
   }
 }
 async function confirmDelete(m: Message): Promise<void> {
-  const sheet = await actionSheetController.create({
-    header: 'Delete message?',
-    buttons: [
+  const targets = m.albumId ? messages.value.filter((x) => x.albumId === m.albumId) : [m];
+  await presentDeleteSheet(targets);
+}
+/* Delete options (single message, album, or a whole selection):
+   - own messages additionally offer "for everyone": traced (the default — both
+     sides keep a "This message was deleted" placeholder) or traceless (the
+     message vanishes outright from the conversation on both sides);
+   - "for me" variants are always available: traced placeholder, or remove the
+     row locally without leaving anything behind. */
+async function presentDeleteSheet(targets: Message[]): Promise<void> {
+  if (!targets.length) return;
+  const live = targets.filter((m) => !m.deleted);
+  const canEveryone = live.length > 0 && live.every((m) => m.outgoing);
+  const apply = (fn: (m: Message) => Promise<void>) => {
+    void (async () => {
+      for (const m of targets) await fn(m);
+    })();
+    exitSelect();
+  };
+  const buttons: Array<{ text: string; role?: 'destructive' | 'cancel'; handler?: () => void }> = [];
+  if (canEveryone) {
+    buttons.push(
       {
-        text: 'Delete',
+        text: 'Delete for everyone',
         role: 'destructive',
-        handler: () => {
-          if (m.albumId) void deleteAlbum(m.albumId);
-          else void softDeleteMessage(m.id);
-        },
+        handler: () => apply((m) => deleteMessageForEveryone(m.id, true)),
       },
-      { text: 'Cancel', role: 'cancel' as const },
-    ],
+      {
+        text: 'Delete for everyone, no trace',
+        role: 'destructive',
+        handler: () => apply((m) => deleteMessageForEveryone(m.id, false)),
+      },
+    );
+  }
+  buttons.push(
+    { text: 'Delete for me', role: 'destructive', handler: () => apply((m) => softDeleteMessage(m.id)) },
+    { text: 'Delete for me, no trace', role: 'destructive', handler: () => apply((m) => deleteMessage(m.id)) },
+    { text: 'Cancel', role: 'cancel' },
+  );
+  const sheet = await actionSheetController.create({
+    header: targets.length > 1 ? `Delete ${targets.length} messages?` : 'Delete message?',
+    buttons,
   });
   await sheet.present();
-}
-async function deleteAlbum(albumId: string): Promise<void> {
-  for (const x of messages.value.filter((m) => m.albumId === albumId)) await softDeleteMessage(x.id);
 }
 
 // Reactions detail (who reacted with what, and when), resolves reactor names
@@ -1906,6 +2048,15 @@ async function send() {
   const text = normalizeOutgoing(draft.value);
   if (!text && !pendingImages.value.length) return;
   if (peerGhosted.value || peerBlocked.value) return; // composer is hidden anyway; backstop
+
+  // Editing: Send rewrites the original message instead of creating a new one.
+  if (editingMsg.value && text) {
+    const target = editingMsg.value;
+    editingMsg.value = null;
+    draft.value = '';
+    await editMessage(target.id, text);
+    return;
+  }
 
   // Pasted images go out with the typed text as the caption (on the first image
   // when several were pasted — they share an album grid like the picker flow).
@@ -2694,6 +2845,38 @@ function cancelRecording() {
 }
 .bubble-row.out {
   justify-content: flex-end;
+}
+/* Selection mode: a check circle pinned to the row's LEFT edge for every row
+   (margin-right:auto pushes outgoing bubbles back to the right), the whole row
+   is the tap target, and everything inside the bubble goes pointer-inert so
+   media viewers / polls / the message menu can't fire mid-selection. */
+.bubble-row.sel-mode {
+  cursor: pointer;
+}
+.bubble-row.sel-mode .bubble-col,
+.bubble-row.sel-mode .fwd-float,
+.bubble-row.sel-mode .msg-avatar,
+.bubble-row.sel-mode .retry-btn {
+  pointer-events: none;
+}
+.sel-check {
+  flex: none;
+  align-self: center;
+  font-size: 22px;
+  color: var(--ion-color-primary);
+  margin-right: 4px;
+}
+.bubble-row.sel-mode.out .sel-check {
+  margin-right: auto;
+}
+.bubble-row.sel-on .bubble {
+  outline: 2px solid var(--ion-color-primary);
+}
+/* "edited" tag in the time row of a rewritten message (both sides). */
+.edited {
+  font-style: italic;
+  opacity: 0.85;
+  margin-right: 2px;
 }
 /* Column wrapper around a bubble + its reactions, so the pills can hang below
    the bubble in normal flow. */

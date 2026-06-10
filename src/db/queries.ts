@@ -22,6 +22,7 @@ import { readVideoMeta, readImageMeta, generateVideoPoster } from '@/utils/media
 import { notifyPreview } from '@/utils/notify-preview';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
+  EditSignal, EraseSignal,
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
@@ -651,12 +652,15 @@ async function handlePollVote(from: string, signal: PollVoteSignal): Promise<voi
 
 /* ---- single-message actions (delete / favorite / caption) ---- */
 
-/** Delete a message locally (and its media blob). */
+/** Delete a message locally (and its media blob), leaving no trace — the row
+ *  is gone outright. The chat preview is recomputed so a vanished last message
+ *  can't linger in the chats list. */
 export async function deleteMessage(messageId: string): Promise<void> {
   const m = await getMessage(messageId);
   if (!m) return;
   if (m.mediaId) await remove('media', m.mediaId);
   await remove('messages', messageId);
+  await refreshChatPreview(m.chatId);
 }
 
 /** Soft-delete: keep the row but replace its content with a "deleted" marker
@@ -673,6 +677,110 @@ export async function softDeleteMessage(messageId: string): Promise<void> {
   m.albumName = undefined;
   m.updatedAt = now();
   await put('messages', m);
+  await refreshChatPreview(m.chatId);
+}
+
+/** Recompute a chat's list preview from its newest remaining message — needed
+ *  after an edit or a deletion touches what WAS the latest message (a no-trace
+ *  delete especially must not leave the vanished text in the chats list). The
+ *  group "Name: " prefix is rebuilt for received messages. */
+async function refreshChatPreview(chatId: string): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  const msgs = (await getByIndex<Message>('messages', 'chatId', chatId)).sort(
+    (a, b) => b.timestamp - a.timestamp,
+  );
+  const newest = msgs[0];
+  if (!newest) {
+    chat.lastMessage = '';
+    chat.lastKind = 'text';
+  } else {
+    const text = newest.deleted
+      ? 'This message was deleted'
+      : newest.albumName || previewText(newest);
+    chat.lastMessage =
+      chat.isGroup && !newest.outgoing && !newest.deleted
+        ? `${newest.senderName.split(' ')[0]}: ${text}`
+        : text;
+    chat.lastKind = newest.deleted
+      ? 'text'
+      : previewKind(newest.kind, newest.albumName, newest.videoNote);
+    chat.lastMessageTime = newest.timestamp;
+  }
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
+/** Rewrite the text of one of the local user's own messages and propagate the
+ *  edit to the chat (the peer for 1:1, every member for a group). The receiving
+ *  side applies it only while its copy isn't deleted — so a message stays
+ *  editable just as long as neither side has deleted it. */
+export async function editMessage(messageId: string, body: string): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m || m.senderId !== 'me' || m.deleted || m.kind !== 'text') return;
+  const text = body.trim();
+  if (!text || text === m.body) return;
+  const at = now();
+  m.body = text;
+  m.editedAt = at;
+  m.updatedAt = at;
+  await put('messages', m);
+  await refreshChatPreview(m.chatId);
+  const chat = await getChat(m.chatId);
+  if (!chat) return;
+  const payload: MessagePayload = {
+    body: '',
+    kind: 'edit',
+    timestamp: at,
+    edit: { messageId, body: text, at },
+  };
+  if (chat.isGroup) await sealAndEnqueueGroup(chat, uid(), payload);
+  else await sealAndEnqueue(chat, uid(), payload);
+}
+
+/** Apply an inbound edit from `from` to the target message (side effect, never
+ *  a stored message). Dropped unless it comes from the message's author, and
+ *  dropped once we've deleted our copy (a deleted message can't be "un-deleted"
+ *  into new content by an edit). */
+async function handleEdit(from: string, signal: EditSignal): Promise<void> {
+  const m = await getMessage(signal.messageId);
+  if (!m || m.deleted || m.senderId !== from) return;
+  if (signal.at <= (m.editedAt ?? 0)) return; // stale / out-of-order edit
+  m.body = signal.body;
+  m.editedAt = signal.at;
+  m.updatedAt = now();
+  await put('messages', m);
+  await refreshChatPreview(m.chatId);
+}
+
+/** The author deleting their own message for everyone. `trace` (the default UX)
+ *  leaves the "This message was deleted" placeholder on both sides; without it
+ *  the message is removed outright everywhere — no trace in the conversation. */
+export async function deleteMessageForEveryone(messageId: string, trace = true): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m || m.senderId !== 'me') return;
+  const at = now();
+  const chat = await getChat(m.chatId);
+  if (trace) await softDeleteMessage(messageId);
+  else await deleteMessage(messageId);
+  if (!chat) return;
+  const payload: MessagePayload = {
+    body: '',
+    kind: 'erase',
+    timestamp: at,
+    erase: { messageId, trace, at },
+  };
+  if (chat.isGroup) await sealAndEnqueueGroup(chat, uid(), payload);
+  else await sealAndEnqueue(chat, uid(), payload);
+}
+
+/** Apply an inbound delete-for-everyone from `from` (side effect, never a
+ *  stored message). Only the message's author may erase it. */
+async function handleErase(from: string, signal: EraseSignal): Promise<void> {
+  const m = await getMessage(signal.messageId);
+  if (!m || m.senderId !== from) return;
+  if (signal.trace) await softDeleteMessage(m.id);
+  else await deleteMessage(m.id);
 }
 
 /** Toggle the local "starred/favorite" flag on a message; returns the new state. */
@@ -2850,6 +2958,18 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   // Poll votes → mutate the target poll, never a stored message.
   if (payload.pollVote) {
     await handlePollVote(from, payload.pollVote);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
+  // Edits → rewrite the target message's text, never a stored message.
+  if (payload.edit) {
+    await handleEdit(from, payload.edit);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
+  // Author delete-for-everyone → tombstone or remove the target, never stored.
+  if (payload.erase) {
+    await handleErase(from, payload.erase);
     if (remoteId) await markInboundSeen(remoteId);
     return;
   }

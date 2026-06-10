@@ -146,9 +146,9 @@ function noteForPayload(
       wasMessage: false,
     };
   }
-  // Reactions / poll votes, and the session re-key + disappearing-message TTL
-  // controls, are silent side effects with nothing to show.
-  if (payload.reaction || payload.pollVote || payload.rekey || payload.ttl !== undefined) {
+  // Reactions / poll votes / edits / delete-for-everyone, and the session re-key
+  // + disappearing-message TTL controls, are silent side effects with nothing to show.
+  if (payload.reaction || payload.pollVote || payload.edit || payload.erase || payload.rekey || payload.ttl !== undefined) {
     return { note: null, wasMessage: false };
   }
 

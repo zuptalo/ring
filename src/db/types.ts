@@ -249,6 +249,7 @@ export interface Message {
   // "Photo/Video/... removed to free space" placeholder (distinct from `deleted`,
   // the sender deleting the message, and `pendingMedia`, not-yet-downloaded)
   deleted?: boolean; // soft-deleted → shows a "deleted" placeholder
+  editedAt?: number; // text rewritten by its author after sending → "edited" tag
   expiresAt?: number; // disappearing messages: epoch ms when this self-destructs
   location?: GeoLocation; // kind === 'location'
   poll?: Poll; // kind === 'poll'

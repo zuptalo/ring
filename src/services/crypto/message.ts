@@ -122,6 +122,32 @@ export interface PollVoteSignal {
   at: number; // epoch ms, for last-write-wins
 }
 
+/**
+ * An edit to an existing message's text, carried E2EE inside a payload (like a
+ * reaction) and applied as a side effect: it rewrites the target message's body
+ * in place rather than appearing as its own chat message. Only honored when it
+ * comes from the message's author, and only while the receiver hasn't deleted
+ * their copy ("editable as long as it isn't deleted on either side").
+ */
+export interface EditSignal {
+  messageId: string;
+  body: string; // the full replacement text
+  at: number; // epoch ms → editedAt on both sides
+}
+
+/**
+ * The author deleting their message for everyone, carried E2EE inside a payload
+ * (like a reaction) and applied as a side effect. With `trace` (the default UX)
+ * the receiver keeps a "This message was deleted" placeholder; without it the
+ * row is removed outright, leaving no trace in the conversation. Only honored
+ * when it comes from the message's author.
+ */
+export interface EraseSignal {
+  messageId: string;
+  trace?: boolean;
+  at: number; // epoch ms
+}
+
 export interface MessagePayload {
   body: string;
   kind: string;
@@ -134,6 +160,8 @@ export interface MessagePayload {
   groupId?: string;
   group?: GroupCard;
   reaction?: ReactionSignal;
+  edit?: EditSignal; // rewrite of an earlier message's text (side effect)
+  erase?: EraseSignal; // author's delete-for-everyone of an earlier message (side effect)
   reply?: ReplyRef; // the quoted message (rendered above this one)
   albumId?: string; // media sent together → grouped as an album on receipt
   albumName?: string; // optional album title

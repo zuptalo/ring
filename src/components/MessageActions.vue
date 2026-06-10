@@ -28,6 +28,10 @@
         <ion-icon slot="start" :icon="arrowRedoOutline" />
         <ion-label>Forward</ion-label>
       </ion-item>
+      <ion-item v-if="canEdit" button :detail="false" @click="choose('edit')">
+        <ion-icon slot="start" :icon="createOutline" />
+        <ion-label>Edit</ion-label>
+      </ion-item>
       <ion-item v-if="canSave" button :detail="false" @click="choose('save')">
         <ion-icon slot="start" :icon="downloadOutline" />
         <ion-label>Save</ion-label>
@@ -48,6 +52,14 @@
         <ion-icon slot="start" :icon="copyOutline" />
         <ion-label>Copy</ion-label>
       </ion-item>
+      <ion-item button :detail="false" @click="choose('select')">
+        <ion-icon slot="start" :icon="checkmarkCircleOutline" />
+        <ion-label>Select</ion-label>
+      </ion-item>
+      <ion-item button :detail="false" @click="choose('delete')">
+        <ion-icon slot="start" :icon="trashOutline" color="danger" />
+        <ion-label color="danger">Delete</ion-label>
+      </ion-item>
     </ion-list>
   </div>
 </template>
@@ -56,6 +68,7 @@
 import { IonList, IonItem, IonLabel, IonIcon, popoverController } from '@ionic/vue';
 import {
   addOutline, informationCircleOutline, copyOutline, happyOutline, arrowUndoOutline, arrowRedoOutline, downloadOutline,
+  createOutline, checkmarkCircleOutline, trashOutline,
 } from 'ionicons/icons';
 import { computed } from 'vue';
 import Emoji from '@/components/Emoji.vue';
@@ -63,6 +76,7 @@ import Emoji from '@/components/Emoji.vue';
 const props = defineProps<{
   isOutgoing: boolean;
   canCopy: boolean;
+  canEdit?: boolean; // own, not-deleted text message: offer "Edit"
   canSave?: boolean; // single image/video/file/audio: offer "Save"
   canSaveAll?: boolean; // album bubble: offer "Save all"
   myEmojis?: string[]; // the user's current reactions on this message (up to 3)
