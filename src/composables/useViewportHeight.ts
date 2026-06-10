@@ -25,9 +25,26 @@ export function useViewportHeight() {
     // trips the keyboard signal. Comparing against this stable baseline does.
     let baselineHeight = 0;
 
+    // Is a text field focused (so the keyboard is, or is about to be, up)? Ionic
+    // renders a native <input>/<textarea>, so the active element is usually that or
+    // sits inside one of these wrappers.
+    const isTyping = (): boolean => {
+      const a = document.activeElement as HTMLElement | null;
+      if (!a) return false;
+      if (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable) return true;
+      return !!a.closest?.('ion-input, ion-textarea, ion-searchbar, ion-input-otp');
+    };
+
     const apply = () => {
-      document.documentElement.style.setProperty('--app-height', `${vv.height}px`);
-      baselineHeight = Math.max(baselineHeight, vv.height);
+      // With NO field focused the keyboard is closed, so the app must be full height.
+      // Use the layout viewport then, NOT visualViewport: after returning from the app
+      // switcher WebKit can leave vv.height frozen at the keyboard-up value for a beat,
+      // and trusting it repainted a keyboard-sized black band below the app. Only when a
+      // field is focused do we follow vv.height down to sit above the keyboard.
+      const typing = isTyping();
+      const h = typing ? vv.height : window.innerHeight;
+      document.documentElement.style.setProperty('--app-height', `${h}px`);
+      baselineHeight = Math.max(baselineHeight, vv.height, window.innerHeight);
       // Re-pin the window to the top so the keyboard can't scroll the header
       // away, EXCEPT when an OTP field is focused. The OTP row sits on a page
       // with no pinned header and lets the browser settle it above the keyboard;
@@ -35,12 +52,13 @@ export function useViewportHeight() {
       // internal <input> (light DOM), so match its ion-input-otp ancestor.
       const inOtp = !!document.activeElement?.closest?.('ion-input-otp');
       if (!inOtp && window.scrollY !== 0) window.scrollTo(0, 0);
-      // The visible viewport shrinking well below the keyboard-closed baseline is
-      // a reliable keyboard signal. Flag it on <body> so the bottom tab bar can
-      // hide while the keyboard is up (otherwise it floats above the keyboard),
-      // and so the chat footer can drop its home-indicator safe-area inset (which
-      // iOS still reports even though the keyboard now covers that area).
-      const keyboardOpen = baselineHeight - vv.height > 150;
+      // The visible viewport shrinking well below the keyboard-closed baseline, WHILE a
+      // field is focused, is the keyboard. Flag it on <body> so the bottom tab bar can
+      // hide while the keyboard is up (otherwise it floats above the keyboard), and so
+      // the chat footer can drop its home-indicator safe-area inset (which iOS still
+      // reports even though the keyboard now covers that area). Gating on `typing` keeps
+      // a stale shrunken vv.height (post-resume) from falsely flagging it.
+      const keyboardOpen = typing && baselineHeight - vv.height > 150;
       document.body.classList.toggle('keyboard-open', keyboardOpen);
       // Publish the keyboard's height so bottom-anchored overlays (e.g. the update
       // toast, which iOS positions against the layout viewport, behind the keyboard)
