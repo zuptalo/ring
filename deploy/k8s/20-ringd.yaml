@@ -1,7 +1,9 @@
 # ringd: the all-in-one Ring image (PWA + API + embedded TURN/SFU). Stateless, so
-# no volumes. SINGLE replica with the Recreate strategy: the WebSocket hub and the
-# in-process SFU are singletons, and only one instance should answer the ACME
-# TLS-ALPN-01 challenge / renew certs at a time.
+# no volumes. ONE steady-state replica - the WebSocket hub, the in-process SFU and
+# the TURN relay are singletons with no cross-pod backplane, and only one instance
+# should answer the ACME TLS-ALPN-01 challenge / renew certs at a time. We still
+# roll deploys with a brief 2-pod overlap rather than a hard stop-then-start, so
+# updates don't take the app down - see the strategy block below.
 #
 # Keel auto-updates this Deployment: it polls ghcr.io/zuptalo/ring:develop and,
 # when the tag's digest changes (a new develop build), forces a rolling redeploy.
@@ -63,7 +65,18 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate
+    # Roll updates with a short overlap instead of Recreate's stop-then-start:
+    # maxUnavailable:0 keeps the old pod serving until the new one passes /healthz
+    # (DB reachable + migrations done), so app/chat traffic sees ~no downtime. The
+    # two pods coexist only for the handoff window. ACME stays safe because a
+    # booting pod loads the DB-cached cert rather than starting a TLS-ALPN-01
+    # challenge; the only casualty is a call started mid-handoff (in-flight calls
+    # drop on any restart regardless). Do NOT raise replicas: the singletons above
+    # make 2 steady-state pods unsafe without a WS/SFU backplane + ACME leader election.
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: ringd

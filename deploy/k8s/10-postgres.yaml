@@ -71,7 +71,10 @@ spec:
               memory: 256Mi
             limits:
               cpu: "1"
-              memory: 1Gi
+              # 2Gi (up from 1Gi): pg_restore of the media-heavy `blobs` table
+              # spikes past 1Gi and the container was OOMKilled mid-restore. The
+              # node is small (~3.3Gi), so this is the safe ceiling, not generous.
+              memory: 2Gi
   volumeClaimTemplates:
     - metadata:
         name: data
