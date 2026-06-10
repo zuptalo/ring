@@ -715,6 +715,7 @@ export async function forwardMessage(messageId: string, chatIds: string[]): Prom
       if (media) {
         await sendMediaMessage(cid, m.kind, media.blob, media.name, m.durationSec, {
           videoNote: m.videoNote,
+          caption: m.body, // a forwarded photo keeps its caption, like WhatsApp
         });
       }
     } else if (m.kind === 'location' && m.location) {
@@ -729,11 +730,17 @@ export async function forwardMessage(messageId: string, chatIds: string[]): Prom
   }
 }
 
+/** Hard cap on media captions. Chosen so a caption renders in full under the
+ *  photo in the bubble and in the viewer's bottom overlay without burying the
+ *  picture or needing a "…" truncation — roughly a short paragraph. Enforced
+ *  everywhere a caption is written (composer paste-send, caption editor). */
+export const CAPTION_MAX = 300;
+
 /** Set/replace a media message's caption (its body). Local-only for now. */
 export async function setCaption(messageId: string, text: string): Promise<void> {
   const m = await getMessage(messageId);
   if (!m) return;
-  m.body = text;
+  m.body = text.slice(0, CAPTION_MAX);
   m.updatedAt = now();
   await put('messages', m);
 }
@@ -1113,9 +1120,13 @@ export async function sendMediaMessage(
     videoNote?: boolean;
     audio?: AudioMeta;
     quality?: 'sd' | 'hd' | 'original';
+    /** Caption typed alongside the media (the message body); receivers render it
+     *  under the photo/video. Clamped to CAPTION_MAX. */
+    caption?: string;
   },
 ): Promise<void> {
   const ts = now();
+  const caption = (opts?.caption ?? '').slice(0, CAPTION_MAX);
   await guardOutbound(await getChat(chatId)); // reject before storing media for a ghosted/blocked peer
   const mediaId = uid();
   // The original blob is stored; the (possibly compressed) blob is uploaded.
@@ -1138,7 +1149,7 @@ export async function sendMediaMessage(
     chatId,
     senderId: 'me',
     senderName: 'You',
-    body: '',
+    body: caption,
     kind,
     mediaId,
     durationSec,
@@ -1164,11 +1175,12 @@ export async function sendMediaMessage(
   await put('messages', message);
 
   if (chat) {
+    // Caption-first preview, mirroring how the receiving side previews it.
     chat.lastMessage = opts?.albumName
       ? opts.albumName
       : kind === 'audio'
         ? opts?.audio?.title || name
-        : mediaPreview(kind, durationSec, name, opts?.videoNote);
+        : caption || mediaPreview(kind, durationSec, name, opts?.videoNote);
     chat.lastKind = previewKind(kind, opts?.albumName, opts?.videoNote);
     chat.lastMessageTime = ts;
     chat.unread = 0;
@@ -1206,7 +1218,9 @@ async function sealMediaAndEnqueue(
     onUploadProgress,
   );
   const payload: MessagePayload = {
-    body: '',
+    // The caption rides in `body` — the receive path already stores payload.body
+    // on media messages and renders it under the photo/video.
+    body: message.body,
     kind: message.kind,
     timestamp: message.timestamp,
     mediaRef,

@@ -100,6 +100,7 @@ import {
   listChatMedia, listChatDocs, listChatLinks, getChat,
   reactToMessage, toggleFavorite, deleteMessage, setCaption, forwardMessage,
   deleteMediaByKind, deleteMediaLargerThan, mediaCleanupPreview,
+  CAPTION_MAX,
 } from '@/db/queries';
 import { formatBytes } from '@/utils/bytes';
 import { get } from '@/db/idb';
@@ -304,7 +305,7 @@ async function caption(id: string): Promise<void> {
   const m = media.value.find((x) => x.id === id);
   const alert = await alertController.create({
     header: 'Caption',
-    inputs: [{ name: 'cap', type: 'textarea', value: m?.body ?? '', placeholder: 'Add a caption' }],
+    inputs: [{ name: 'cap', type: 'textarea', value: m?.body ?? '', placeholder: 'Add a caption', attributes: { maxlength: CAPTION_MAX } }],
     buttons: [
       { text: 'Cancel', role: 'cancel' as const },
       { text: 'Save', handler: (d: { cap?: string }) => void setCaption(id, (d?.cap ?? '').trim()) },

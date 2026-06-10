@@ -482,6 +482,19 @@
           </ion-button>
         </div>
       </ion-toolbar>
+      <!-- Images pasted into the composer, waiting to be sent: thumbnails above
+           the textarea (each removable); whatever is typed below goes out as the
+           caption when Send is tapped. -->
+      <ion-toolbar v-if="pendingImages.length" class="paste-bar">
+        <div class="paste-row">
+          <div v-for="(p, i) in pendingImages" :key="p.url" class="paste-thumb">
+            <img :src="p.url" alt="Pasted image" />
+            <button type="button" class="paste-x" aria-label="Remove image" @click="removePendingImage(i)">
+              <ion-icon :icon="closeOutline" />
+            </button>
+          </div>
+        </div>
+      </ion-toolbar>
       <!-- A still-pending (un-accepted) friend request: lock the composer until
            the other side accepts. -->
       <ion-toolbar v-if="chat?.pending">
@@ -565,20 +578,23 @@
             ref="composerEl"
             class="composer"
             :value="draft"
-            placeholder="Message"
+            :placeholder="pendingImages.length ? 'Add a caption' : 'Message'"
             :auto-grow="true"
             :rows="1"
+            :maxlength="pendingImages.length ? CAPTION_MAX : undefined"
             autocapitalize="sentences"
             autocorrect="on"
             :spellcheck="true"
             enterkeyhint="enter"
             @ion-input="onComposerInput"
             @keydown.enter="onComposerEnter"
+            @paste="onComposerPaste"
           />
           <ion-buttons slot="end">
             <ion-button
-              v-if="draft.trim()"
+              v-if="draft.trim() || pendingImages.length"
               color="primary"
+              aria-label="Send"
               @click="send"
               @pointerdown.prevent
             >
@@ -697,6 +713,7 @@ import {
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
+  CAPTION_MAX,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
@@ -1036,7 +1053,7 @@ async function onViewerCaption(id: string): Promise<void> {
   const m = viewerMsg(id);
   const alert = await alertController.create({
     header: 'Caption',
-    inputs: [{ name: 'cap', type: 'textarea', value: m?.body ?? '', placeholder: 'Add a caption' }],
+    inputs: [{ name: 'cap', type: 'textarea', value: m?.body ?? '', placeholder: 'Add a caption', attributes: { maxlength: CAPTION_MAX } }],
     buttons: [
       { text: 'Cancel', role: 'cancel' as const },
       { text: 'Save', handler: (d: { cap?: string }) => void setCaption(id, (d?.cap ?? '').trim()) },
@@ -1486,8 +1503,38 @@ function onComposerInput(e: CustomEvent): void {
 // Block Return while the composer is empty (or only whitespace) so a message can't
 // start with blank lines / be opened with nothing typed.
 function onComposerEnter(e: KeyboardEvent): void {
-  if (!draft.value.trim()) e.preventDefault();
+  if (!draft.value.trim() && !pendingImages.value.length) e.preventDefault();
 }
+
+/* ---- pasted images ----
+   An image pasted into the composer (iOS long-press → Paste, or Ctrl/Cmd+V)
+   doesn't send immediately: it parks here and shows as a removable thumbnail
+   above the textarea, the placeholder flips to "Add a caption", and Send ships
+   image + typed caption together (see send()). Object URLs back the thumbnails
+   and are revoked on remove/send/unmount. */
+const pendingImages = ref<{ blob: File; url: string }[]>([]);
+
+function onComposerPaste(e: ClipboardEvent): void {
+  const images = Array.from(e.clipboardData?.items ?? [])
+    .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+    .map((it) => it.getAsFile())
+    .filter((f): f is File => !!f);
+  if (!images.length) return; // plain text paste → default textarea behavior
+  // Don't also insert the image's file name/uri as text.
+  e.preventDefault();
+  for (const f of images) pendingImages.value.push({ blob: f, url: URL.createObjectURL(f) });
+}
+
+function removePendingImage(i: number): void {
+  const [gone] = pendingImages.value.splice(i, 1);
+  if (gone) URL.revokeObjectURL(gone.url);
+}
+
+function clearPendingImages(): void {
+  for (const p of pendingImages.value) URL.revokeObjectURL(p.url);
+  pendingImages.value = [];
+}
+onUnmounted(clearPendingImages);
 
 const cameraInput = ref<HTMLInputElement | null>(null);
 const photoInput = ref<HTMLInputElement | null>(null);
@@ -1857,8 +1904,37 @@ function onContentScroll(): void {
 
 async function send() {
   const text = normalizeOutgoing(draft.value);
-  if (!text) return;
+  if (!text && !pendingImages.value.length) return;
   if (peerGhosted.value || peerBlocked.value) return; // composer is hidden anyway; backstop
+
+  // Pasted images go out with the typed text as the caption (on the first image
+  // when several were pasted — they share an album grid like the picker flow).
+  if (pendingImages.value.length) {
+    const quality = await pickQuality();
+    if (quality === null) return; // cancelled: keep the images and the draft
+    const images = pendingImages.value.slice();
+    pendingImages.value = [];
+    draft.value = '';
+    // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
+    let reply = replyingTo.value ? { ...replyingTo.value } : undefined;
+    replyingTo.value = null;
+    const albumId = images.length > 1 ? crypto.randomUUID() : undefined;
+    let caption: string | undefined = text;
+    for (const p of images) {
+      await sendMediaMessage(chatId, 'image', p.blob, p.blob.name || 'photo', undefined, {
+        replyTo: reply,
+        caption,
+        albumId,
+        quality,
+      });
+      reply = undefined; // quote + caption attach to the first item only
+      caption = undefined;
+      URL.revokeObjectURL(p.url);
+    }
+    await scrollToNewest();
+    return;
+  }
+
   draft.value = '';
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
@@ -2536,6 +2612,47 @@ function cancelRecording() {
   display: block;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+/* Pasted-image staging row above the textarea: small square thumbnails (the
+   picture itself is reviewed full-size after sending / in the viewer), each
+   with a corner × to drop it before sending. Scrolls sideways if several. */
+.paste-bar {
+  --min-height: 0;
+}
+.paste-row {
+  display: flex;
+  gap: 8px;
+  padding: 6px 12px 2px;
+  overflow-x: auto;
+}
+.paste-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  /* breathing room so the overhanging × isn't clipped by the scroll row */
+  padding: 6px 6px 0 0;
+}
+.paste-thumb img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+}
+.paste-x {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ion-color-medium);
+  color: var(--ion-color-medium-contrast);
+  font-size: 16px;
 }
 .rec-dot {
   width: 10px;

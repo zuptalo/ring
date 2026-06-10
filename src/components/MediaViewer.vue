@@ -638,6 +638,10 @@ watch(() => props.start, (s) => {
 .v-caption {
   font-size: 14px;
   margin-bottom: 10px;
+  /* Captions are capped at CAPTION_MAX on write, but a longer one (older data,
+     other clients) must never bury the picture: clamp the overlay and scroll. */
+  max-height: 25vh;
+  overflow-y: auto;
 }
 .v-emojis {
   display: flex;
