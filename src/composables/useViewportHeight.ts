@@ -74,9 +74,32 @@ export function useViewportHeight() {
       if (window.scrollY !== 0) window.scrollTo(0, 0);
     };
     vv.addEventListener('scroll', onFooterScroll);
+
+    // App-switcher resume (iOS PWA): leaving the app while the keyboard is up (or just
+    // dismissed) makes WebKit snapshot + freeze the page with the visual viewport still
+    // shrunk; the keyboard goes away while the page is suspended, and on resume the
+    // missed 'resize' is never replayed. --app-height then stays at the keyboard-up
+    // value and everything below ion-app paints as a keyboard-sized black band. Two
+    // halves to the fix: blur the focused input when the app hides (dismiss the
+    // keyboard BEFORE the snapshot, so the frozen state is full-height), and re-apply
+    // on every return to visible — a few times, because right at resume vv.height can
+    // still report the stale shrunken value until WebKit settles.
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        return;
+      }
+      apply();
+      for (const ms of [100, 300, 600]) setTimeout(apply, ms);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    // bfcache restores fire pageshow without a visibilitychange; re-measure there too.
+    window.addEventListener('pageshow', onVisibility);
     onScopeDispose(() => {
       vv.removeEventListener('resize', apply);
       vv.removeEventListener('scroll', onFooterScroll);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onVisibility);
     });
   });
 }
