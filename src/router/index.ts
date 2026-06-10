@@ -161,4 +161,21 @@ router.beforeEach((to) => {
   return true;
 });
 
+// The iOS PWA back-swipe walks the browser history (Ionic's own swipe-back is off —
+// see main.ts), so tab switches must not pile up entries: every navigation INTO a tab
+// root replaces the current entry instead of pushing. History stays
+// [current tab root, ...drill-down pages] — a back-swipe from a main list leaves the
+// app (tabs are terminal, like WhatsApp), while detail pages still swipe back to their
+// list. The History API can't delete past entries, so this is done at navigation time,
+// for every caller (tab-bar hrefs, back-button default-hrefs, notification routing);
+// `redirectedFrom` breaks the redirect loop (and skips the '/'→'/tabs/chats' and
+// '/auth'→chats redirects, which already land correctly).
+const TAB_ROOTS = new Set(['/tabs/chats', '/tabs/calls', '/tabs/contacts', '/tabs/settings']);
+router.beforeEach((to) => {
+  if (TAB_ROOTS.has(to.path) && !to.redirectedFrom) {
+    return { path: to.path, query: to.query, replace: true };
+  }
+  return true;
+});
+
 export default router;
