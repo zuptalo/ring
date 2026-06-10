@@ -25,8 +25,11 @@ data:
   ACME_EMAIL: "${ACME_EMAIL}"
   # Neutral SNI host for the TURNS listener; also gets its own ACME cert.
   TURN_HOST: "${TURN_HOST}"
-  # First time, point ACME at staging to avoid LE rate limits, then remove + redeploy:
-  # ACME_DIRECTORY_URL: "https://acme-staging-v02.api.letsencrypt.org/directory"
+  # ACME directory override. Empty => Let's Encrypt production. install.sh fills this
+  # with the LE staging URL when ACME_STAGING=true (validate the passthrough/ALPN
+  # chain without burning prod rate limits), then a re-run blanks it and ringd sweeps
+  # the stale staging account on the next boot, issuing real certs.
+  ACME_DIRECTORY_URL: "${ACME_DIRECTORY_URL}"
 ---
 apiVersion: v1
 kind: Service

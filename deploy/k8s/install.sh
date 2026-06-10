@@ -5,15 +5,36 @@
 #
 #   APP_HOST=ring.example.com ACME_EMAIL=you@example.com ./install.sh
 #
-# Optional: TURN_HOST (defaults to turn.$APP_HOST), KUBECTL (defaults to kubectl).
+# Optional env:
+#   TURN_HOST   TURNS/call-media SNI host (default turn.$APP_HOST). The app host
+#               and the TURN host must each SNI-route to the cluster's :443. They
+#               need NOT be subdomains of each other: e.g. APP_HOST=ring-dev.x.com
+#               with TURN_HOST=m-dev.x.com is fine - pass TURN_HOST explicitly when
+#               your TURN host is a sibling domain rather than turn.$APP_HOST.
+#   ACME_STAGING=true        use Let's Encrypt staging (untrusted certs, generous
+#               rate limits) - run once to validate the SNI-passthrough/ALPN chain,
+#               then re-run without it to swap in real certs (ringd sweeps the
+#               staging account on the next boot). Ignored if ACME_DIRECTORY_URL set.
+#   ACME_DIRECTORY_URL       full ACME directory URL override (any CA).
+#   KUBECTL     kubectl binary (default kubectl).
+#
+# This installer manages only the k3s side. If an upstream L4 proxy (e.g. a
+# Synology/Traefik box) fronts the cluster, it must SNI-passthrough both hosts to
+# the k3s node's :443 - it must NOT terminate TLS (ringd holds the certs).
 set -euo pipefail
 
 : "${APP_HOST:?set APP_HOST, e.g. APP_HOST=ring.example.com}"
 : "${ACME_EMAIL:?set ACME_EMAIL, e.g. ACME_EMAIL=you@example.com}"
 : "${TURN_HOST:=turn.${APP_HOST}}"
+# ACME directory: explicit URL wins; else ACME_STAGING=true picks LE staging; else
+# empty => ringd defaults to Let's Encrypt production.
+ACME_DIRECTORY_URL="${ACME_DIRECTORY_URL:-}"
+if [ -z "$ACME_DIRECTORY_URL" ] && [ "${ACME_STAGING:-}" = "true" ]; then
+  ACME_DIRECTORY_URL="https://acme-staging-v02.api.letsencrypt.org/directory"
+fi
 KUBECTL="${KUBECTL:-kubectl}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
-export APP_HOST TURN_HOST ACME_EMAIL
+export APP_HOST TURN_HOST ACME_EMAIL ACME_DIRECTORY_URL
 
 command -v envsubst >/dev/null || { echo "need 'envsubst' (gettext). install it and re-run." >&2; exit 1; }
 
@@ -35,27 +56,21 @@ else
     --from-literal=DATABASE_URL="$DBURL"
 fi
 
-echo "==> applying manifests for APP_HOST=$APP_HOST TURN_HOST=$TURN_HOST"
-for f in 00-namespace 10-postgres 20-ringd 30-ingressroute-tcp; do
-  envsubst '${APP_HOST} ${TURN_HOST} ${ACME_EMAIL}' < "$DIR/${f}.yaml" | "$KUBECTL" apply -f -
+echo "==> applying manifests for APP_HOST=$APP_HOST TURN_HOST=$TURN_HOST ACME=${ACME_DIRECTORY_URL:-letsencrypt-production}"
+for f in 00-namespace 10-postgres 20-ringd 30-ingressroute-tcp 40-keel; do
+  envsubst '${APP_HOST} ${TURN_HOST} ${ACME_EMAIL} ${ACME_DIRECTORY_URL}' < "$DIR/${f}.yaml" | "$KUBECTL" apply -f -
 done
 
-# Keel (cluster-wide image auto-updater). Installed via Helm if available; the
-# Deployment is annotated either way, so you can also install Keel later.
-if ! "$KUBECTL" get ns keel >/dev/null 2>&1; then
-  if command -v helm >/dev/null; then
-    echo "==> installing Keel via Helm"
-    helm repo add keel https://charts.keel.sh >/dev/null 2>&1 || true
-    helm repo update >/dev/null
-    helm upgrade --install keel keel/keel --namespace keel --create-namespace
-  else
-    echo "!!  Helm not found - install Keel yourself so auto-updates work:"
-    echo "      helm repo add keel https://charts.keel.sh && helm repo update"
-    echo "      helm upgrade --install keel keel/keel -n keel --create-namespace"
-  fi
-else
-  echo "==> Keel already installed"
-fi
+# A ConfigMap change does not restart the pod on its own (envFrom is read at boot).
+# Roll the Deployment so a re-run that changes hosts / ACME env takes effect now.
+"$KUBECTL" -n ring rollout restart deploy/ringd >/dev/null 2>&1 || true
+
+# Keel (cluster-wide image auto-updater) is applied as plain manifests above
+# (40-keel.yaml) - no Helm required. Wait for it so a fresh install reports a
+# working updater rather than leaving it pending in the background.
+echo "==> waiting for Keel"
+"$KUBECTL" -n keel rollout status deploy/keel --timeout=120s || \
+  echo "!!  Keel not ready yet; check: $KUBECTL -n keel logs deploy/keel"
 
 cat <<EOF
 
