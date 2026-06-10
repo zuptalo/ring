@@ -77,11 +77,18 @@ export const connectionWarning = ref<string | null>(null);
 /* ---- audio output routing (earpiece / loudspeaker / Bluetooth) ---- */
 // We model three logical routes the user understands, EARPIECE (held to the ear),
 // SPEAKER (loudspeaker) and BLUETOOTH, on top of the one web primitive available:
-// HTMLMediaElement.setSinkId + enumerateDevices('audiooutput'). That works on
-// Chromium (Android/desktop); iOS has no output-selection API at all (the OS owns
-// the route). Even on Android the inner earpiece is often not a distinct sink, so
-// earpiece/speaker is best-effort there, but a connected Bluetooth device DOES
-// enumerate as its own sink, which is what makes the auto-pick reliable.
+// HTMLMediaElement.setSinkId + enumerateDevices('audiooutput'). That genuinely works
+// on Chromium (desktop) and macOS Safari 18.4+, which enumerate real output sinks.
+//
+// CAPABILITY IS PROVEN BY ENUMERATED DEVICES, NOT BY THE setSinkId PROPERTY. iOS 18.4
+// started exposing the setSinkId *property* on iPhones even though it only functions on
+// macOS, so a property-presence check (supportsAudioOutput) reports "supported" on iOS
+// and showed a route button that flipped its icon while changing nothing. availableRoutes
+// therefore gates on a real enumerated audiooutput device and never offers a picker on
+// iOS — where the OS owns the route (proximity + Control Center + auto-Bluetooth) and the
+// only web lever is the audio-session category bias (see setIosSpeakerphone). On Android
+// Chrome there is no output API at all and only a 'default' sink enumerates, so no picker
+// appears there either.
 export type AudioRoute = 'earpiece' | 'speaker' | 'bluetooth';
 
 export const audioOutputs = ref<MediaDeviceInfo[]>([]);
@@ -144,9 +151,14 @@ function devicesByRoute(): Partial<Record<AudioRoute, MediaDeviceInfo>> {
  *  output selection is supported (the OS may or may not honor the split, but the
  *  user still gets the toggle); Bluetooth appears only while a BT sink exists. */
 export const availableRoutes = computed<AudioRoute[]>(() => {
-  // No output-selection API (iOS) -> no manual route toggle at all; the OS owns the
-  // route (proximity sensor, Control Center, automatic Bluetooth).
-  if (!supportsAudioOutput()) return [];
+  // Gate on PROOF, not the API's presence: iOS 18.4 exposes setSinkId (macOS-only in
+  // practice) yet enumerates NO audiooutput device, so a property check falsely passed
+  // and produced a do-nothing button. Offer a picker only where setSinkId works AND at
+  // least one real output sink enumerated, and never on iOS (the OS owns the route there;
+  // its speaker toggle goes through setIosSpeakerphone instead).
+  if (isIOS() || !supportsAudioOutput()) return [];
+  const hasRealSink = audioOutputs.value.some((d) => d.deviceId && d.deviceId !== 'default');
+  if (!hasRealSink) return [];
   const routes: AudioRoute[] = ['earpiece', 'speaker'];
   if (devicesByRoute().bluetooth) routes.unshift('bluetooth');
   return routes;
@@ -365,17 +377,33 @@ function addLocalTracks(conn: RTCPeerConnection, stream: MediaStream): void {
   for (const track of stream.getTracks()) conn.addTrack(track, stream);
 }
 
-/** Tell iOS (WebKit 16.4+) which audio session category to use. 'play-and-record'
- *  is the voice-call category, which routes to the EARPIECE (receiver) by default
- *  instead of the loudspeaker; 'auto' restores normal media behaviour after a call.
+/** Tell iOS (WebKit 16.4+) which audio session category to use.
+ *  - 'play-and-record' is the voice-call category, which routes to the EARPIECE
+ *    (receiver) by default instead of the loudspeaker (held-to-the-ear, like a
+ *    phone call);
+ *  - 'playback' biases toward the LOUDSPEAKER (our only web lever for an iOS
+ *    speakerphone toggle — iOS exposes no output-device picker; see setIosSpeakerphone);
+ *  - 'auto' restores normal media behaviour after a call.
  *  No-op where the API is absent (Chromium, older iOS). */
-function applyAudioSession(type: 'play-and-record' | 'auto'): void {
+function applyAudioSession(type: 'play-and-record' | 'playback' | 'auto'): void {
   try {
     const as = (navigator as unknown as { audioSession?: { type?: string } }).audioSession;
     if (as) as.type = type;
   } catch {
     /* unsupported */
   }
+}
+
+/** iOS-only speakerphone state. iOS has no output-device API, so the only lever
+ *  for earpiece-vs-loudspeaker from the web is the audio-session CATEGORY (above):
+ *  'playback' → loudspeaker, 'play-and-record' → earpiece. This is a documented
+ *  best-effort bias, not a hard route switch — a connected Bluetooth headset still
+ *  takes OS priority over it. Exposed so the iOS audio-call UI can offer an honest
+ *  speaker toggle (no toggle is shown on platforms where it would do nothing). */
+export const iosSpeaker = ref(false);
+export function setIosSpeakerphone(on: boolean): void {
+  iosSpeaker.value = on;
+  applyAudioSession(on ? 'playback' : 'play-and-record');
 }
 
 function onConnected(): void {
@@ -566,6 +594,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   screenAddedVideo = false;
   routeInitialized = false; // next call re-applies its kind/BT default route
   lastManualRouteAt = 0; // don't carry a manual-override window into the next call
+  iosSpeaker.value = false; // next call starts on the earpiece category again
   applyAudioSession('auto'); // iOS: release the voice audio category
 
   // Persist the outcome to local call history (Calls tab) AND a local-only

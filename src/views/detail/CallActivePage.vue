@@ -182,6 +182,17 @@
           <button v-if="canRoute" class="ctl" aria-label="Audio output" @click.stop="chooseOutput">
             <ion-icon :icon="routeIcon" />
           </button>
+          <!-- iOS audio calls: honest earpiece<->speakerphone toggle (audio-session
+               category flip). active = on loudspeaker. -->
+          <button
+            v-if="canIosSpeaker"
+            class="ctl"
+            :class="{ active: iosSpeaker }"
+            aria-label="Speaker"
+            @click.stop="setIosSpeakerphone(!iosSpeaker)"
+          >
+            <ion-icon :icon="iosSpeaker ? volumeHighOutline : phonePortraitOutline" />
+          </button>
           <!-- Outgoing-video quality tier (video calls only). -->
           <button v-if="isVideoMode" class="ctl" aria-label="Video quality" @click.stop="chooseQuality">
             <ion-icon :icon="cellularOutline" />
@@ -230,7 +241,8 @@ import {
   switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare, minimizeCall, hasMultipleCameras,
   videoQuality, setVideoQuality, type VideoQuality,
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
-  audioOutputId, supportsAudioOutput, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
+  audioOutputId, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
+  iosSpeaker, setIosSpeakerphone,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useLiveQuery } from '@/composables/useLiveQuery';
@@ -503,10 +515,15 @@ const routeIcon = computed(() =>
       ? volumeHighOutline
       : phonePortraitOutline,
 );
-// Only offer the earpiece/speaker/BT toggle where it actually works: Chromium via
-// setSinkId (`supportsAudioOutput`). iOS has no such API, so we show no toggle there
-// and let the OS own the route (proximity + Control Center + auto-Bluetooth).
-const canRoute = computed(() => supportsAudioOutput() && availableRoutes.value.length > 1);
+// Only offer the earpiece/speaker/BT picker where it actually works (a real output
+// sink enumerated — Chromium desktop / macOS Safari 18.4+). availableRoutes already
+// excludes iOS and the iOS-18.4 phantom-setSinkId case, so this stays empty there.
+const canRoute = computed(() => availableRoutes.value.length > 1);
+
+// iOS gets an honest speakerphone toggle instead of the (impossible) device picker:
+// it flips the audio-session category (earpiece <-> loudspeaker). Audio calls only —
+// video already routes to the loudspeaker naturally. See setIosSpeakerphone.
+const canIosSpeaker = computed(() => isIOS() && !isVideoMode.value);
 
 /** Point a media element's audio at the chosen output device (best-effort). */
 function applySinkTo(el: HTMLMediaElement | null): void {
@@ -669,7 +686,9 @@ const diag = computed(() => {
       ? remoteStream.value.getTracks().map((t) => t.kind).join(' ') || '-'
       : '-';
   const sink = callMeta.value?.isGroup ? 'tiles' : '<audio>';
-  const routeStr = isIOS() ? 'OS-controlled (no web toggle)' : audioRoute.value;
+  const routeStr = isIOS()
+    ? `OS-controlled · ios-speaker:${iosSpeaker.value ? 'on' : 'off'}`
+    : audioRoute.value;
   return [
     `platform: ${isIOS() ? 'iOS' : 'other'}`,
     `call: ${callMeta.value?.kind}${callMeta.value?.isGroup ? ' group' : ' 1:1'}`,
