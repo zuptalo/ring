@@ -49,16 +49,46 @@
         <div v-for="(it, i) in items" :key="it.id" class="viewer-slide">
           <div class="zoom-layer" :style="i === index ? zoomStyle : undefined">
             <img v-if="it.kind === 'image'" :src="it.url" alt="" @click="onMediaClick" @dblclick="onMediaDblClick" />
-            <video-player v-else-if="i === index || nearby(i)" :src="it.url" />
+            <video-player
+              v-else-if="i === index || nearby(i)"
+              :ref="(c) => bindVideo(c, i)"
+              :src="it.url"
+              :embedded="true"
+              :chrome-hidden="chromeHidden"
+              @tap="onVideoTap"
+            />
           </div>
         </div>
       </div>
 
-      <!-- Bottom: reactions · caption · quick-react · actions · thumbnail strip.
-           For a video, lift the whole bar so the player's own scrubber row (anchored
-           to the very bottom) is uncovered and tappable instead of hiding behind the
-           thumbnail strip. -->
-      <div class="v-bottom" :class="{ hidden: chromeHidden, video: cur?.kind === 'video' }">
+      <!-- Bottom: video scrubber (if a video) · reactions · caption · quick-react ·
+           actions · thumbnail strip. The video's scrubber/speed/PiP row is hosted HERE,
+           above the action buttons, so it's never covered by them or the thumbnails. -->
+      <div class="v-bottom" :class="{ hidden: chromeHidden }">
+        <div v-if="cur?.kind === 'video' && activeVideo" class="v-vidbar">
+          <button
+            class="v-vidbtn"
+            :aria-label="activeVideo.playing ? 'Pause' : 'Play'"
+            @click="activeVideo.toggle()"
+          >
+            <ion-icon :icon="activeVideo.playing ? pause : play" />
+          </button>
+          <span class="v-vidtime">{{ vfmt(activeVideo.elapsed) }}</span>
+          <div class="v-vidtrack" @click="onVidSeek">
+            <div class="v-vidprog" :style="{ width: activeVideo.progress * 100 + '%' }"></div>
+          </div>
+          <span class="v-vidtime">{{ vfmt(activeVideo.total) }}</span>
+          <speed-pill :rate="activeVideo.rate" @cycle="activeVideo.cycleRate()" />
+          <button
+            v-if="activeVideo.pipSupported"
+            class="v-vidbtn"
+            :class="{ on: activeVideo.pipActive }"
+            aria-label="Picture in picture"
+            @click="activeVideo.togglePip()"
+          >
+            <ion-icon :icon="browsersOutline" />
+          </button>
+        </div>
         <div v-if="cur?.reactions?.length" class="v-reactions">
           <span v-for="r in cur.reactions" :key="r.emoji" class="v-react-pill">
             {{ r.emoji }}<span v-if="r.count > 1" class="v-react-n">{{ r.count }}</span>
@@ -108,8 +138,25 @@ import { IonModal, IonContent, IonIcon } from '@ionic/vue';
 import {
   chevronBack, pencil, ellipsisHorizontal, imagesOutline, chatbubbleOutline,
   happyOutline, arrowUndoOutline, shareOutline, downloadOutline, star, starOutline, trashOutline,
+  play, pause, browsersOutline,
 } from 'ionicons/icons';
+import SpeedPill from './SpeedPill.vue';
 import VideoPlayer from './VideoPlayer.vue';
+
+// The slice of VideoPlayer's exposed API the viewer drives for the hosted control row.
+interface VideoApi {
+  playing: boolean;
+  elapsed: number;
+  total: number;
+  progress: number;
+  rate: number;
+  pipActive: boolean;
+  pipSupported: boolean;
+  toggle: () => void;
+  seekTo: (r: number) => void;
+  cycleRate: () => void;
+  togglePip: () => void;
+}
 
 interface ViewerItem {
   id: string;
@@ -364,6 +411,24 @@ function onMediaClick(): void {
   if (Date.now() - lastTouchAt < 500) return;
   if (cur.value?.kind === 'image') chromeHidden.value = !chromeHidden.value;
 }
+
+/* ---- video: host the scrubber/PiP in the chrome, tap toggles the immersive view ---- */
+const activeVideo = ref<VideoApi | null>(null);
+// Function ref on each mounted player; keep a handle to the CURRENT one so the hosted
+// control row drives it (and re-points as you swipe between items).
+function bindVideo(c: unknown, i: number): void {
+  if (i === index.value) activeVideo.value = (c as VideoApi | null) ?? null;
+}
+const vfmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+// Tap on the video → hide all chrome for a video-only view; tap again → bring it back.
+function onVideoTap(): void {
+  chromeHidden.value = !chromeHidden.value;
+}
+function onVidSeek(e: MouseEvent): void {
+  const track = e.currentTarget as HTMLElement;
+  const r = track.getBoundingClientRect();
+  activeVideo.value?.seekTo((e.clientX - r.left) / r.width);
+}
 function onMediaDblClick(): void {
   if (Date.now() - lastTouchAt < 500) return;
   if (cur.value?.kind === 'image') toggleZoom();
@@ -505,11 +570,49 @@ watch(() => props.start, (s) => {
   color: #fff;
   transition: opacity 0.2s ease;
 }
-/* A video draws its own scrubber/speed row pinned to the bottom; lift the chrome bar
-   above it (clearing that row + the home indicator) so the scrubber is reachable. */
-.v-bottom.video {
-  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 40px);
-  padding-bottom: 10px;
+/* Video scrubber row, hosted in the chrome above the action buttons. */
+.v-vidbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px 8px;
+  color: #fff;
+}
+.v-vidbtn {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.v-vidbtn.on {
+  background: var(--ion-color-primary);
+}
+.v-vidtime {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: center;
+}
+.v-vidtrack {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+}
+.v-vidprog {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--ion-color-primary);
 }
 .v-reactions {
   display: flex;
