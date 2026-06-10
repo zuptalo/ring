@@ -13,9 +13,9 @@
     >
       <!-- Header: tap anywhere here to open the full chat. -->
       <div class="nb-main" role="button" tabindex="0" @click="open(b)" @keydown.enter="open(b)">
-        <div class="nb-avatar">
+        <div class="nb-avatar" :class="{ 'nb-system': b.kind === 'system' && !b.avatar }">
           <img v-if="b.avatar" :src="b.avatar" :alt="b.name" />
-          <ion-icon v-else :icon="b.kind === 'request' ? personAddOutline : chatbubbleEllipsesOutline" />
+          <ion-icon v-else :icon="bannerIcon(b)" />
         </div>
         <div class="nb-text">
           <div class="nb-name">{{ b.name }}</div>
@@ -86,6 +86,12 @@ import { sendMessage } from '@/db/queries';
 import { normalizeOutgoing } from '@/utils/text';
 
 const banners = notifyBanners;
+
+// The glyph for a banner with no avatar: a system notice carries its own icon; a
+// request shows the add-person icon; a message falls back to the chat bubble.
+function bannerIcon(b: NotifyBanner): string {
+  return b.icon || (b.kind === 'request' ? personAddOutline : chatbubbleEllipsesOutline);
+}
 
 // Reply state is keyed by the banner's URL (its dedup identity), so a follow-up
 // message in the same chat that REPLACES the banner keeps the quick-reply open
@@ -311,6 +317,10 @@ watch(
 .nb-avatar ion-icon {
   font-size: 20px;
   color: #fff;
+}
+/* System notices get a tinted circle so they read as an app event, not a person. */
+.nb-avatar.nb-system {
+  background: var(--ion-color-primary, #10b981);
 }
 .nb-text {
   flex: 1;

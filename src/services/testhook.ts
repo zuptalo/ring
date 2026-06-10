@@ -90,6 +90,7 @@ import {
   connectLink as apiConnectLink,
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
+import { notifyBanners } from '@/services/notify';
 import { syncContactEdges } from '@/services/directory';
 import { subscribePresence } from '@/composables/useSync';
 import { peerPresence } from '@/composables/usePresence';
@@ -189,6 +190,9 @@ export function installTestHook(): void {
     },
     /** Force an invitation auto-connect sweep (poll redemptions / connect inviter). */
     syncInvites: () => runInviteSync(),
+    /** Current in-app notification banners (kind/name/body) for asserting alerting. */
+    notices: (): { kind: string; name: string; body: string }[] =>
+      notifyBanners.value.map((b) => ({ kind: b.kind, name: b.name, body: b.body })),
     /** Ids of current (non-pending) contacts. */
     contactIds: async (): Promise<string[]> => (await listContacts()).map((c) => c.id),
     /** Set a known contact's display name (the name you'd have saved locally). */

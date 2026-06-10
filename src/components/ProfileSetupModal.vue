@@ -58,19 +58,25 @@
         </ion-item>
       </ion-list>
 
+    </ion-content>
+
+    <!-- The action lives in a footer so it's ALWAYS visible (iOS bug fix): in scrolling
+         content it could sit below the fold / under the home indicator, so on iPhone the
+         "Start messaging" button appeared to be missing once the profile was complete. -->
+    <ion-footer class="ps-footer ion-no-border">
       <div class="ps-actions ion-padding">
         <ion-button expand="block" shape="round" :disabled="!canFinish" @click="finish">
           Start messaging
         </ion-button>
       </div>
-    </ion-content>
+    </ion-footer>
   </ion-page>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import {
-  IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonIcon,
+  IonPage, IonHeader, IonFooter, IonToolbar, IonTitle, IonButtons, IonButton, IonIcon,
   IonContent, IonAvatar, IonList, IonItem, IonInput, actionSheetController, modalController,
 } from '@ionic/vue';
 import type { ActionSheetButton } from '@ionic/vue';
@@ -199,7 +205,11 @@ function cancel(): void {
   font-size: 13px;
   margin: 2px 0 0;
 }
+.ps-footer {
+  background: var(--ion-background-color, #fff);
+}
 .ps-actions {
-  margin-top: 8px;
+  /* Clear the iOS home indicator so the button is never tucked under it. */
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
 }
 </style>

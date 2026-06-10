@@ -55,3 +55,55 @@ test('an invite code auto-connects inviter and invitee', async ({ browser }) => 
   await ctxA.close();
   await ctxB.close();
 });
+
+/**
+ * The inviter is notified "X joined Ring" only AFTER the invitee finishes their
+ * profile (name + photo) and introduces themselves — not the instant they pick a
+ * username. The notification uses the unified top banner as a 'system' notice.
+ */
+test('inviter is notified only after the invitee completes their profile', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const AVATAR = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>';
+
+  const a = await createAccount(ctxA, 'RINGDEV7');
+  await a.page.evaluate((av) => (window as any).__ringTest.setProfile('Alice', av), AVATAR);
+  const code = await a.page.evaluate(() => (window as any).__ringTest.createInvite('Mom'));
+
+  // B registers with the code but does NOT set up a profile yet.
+  const b = await createAccount(ctxB, code as string, { mintOnConsumed: false });
+
+  // A polls: it sees the code was redeemed (username picked), but must NOT announce a
+  // join — B hasn't finished a profile yet (no published photo). Poll a few times to be
+  // sure it stays silent.
+  for (let i = 0; i < 3; i++) {
+    await a.page.evaluate(() => (window as any).__ringTest.syncInvites());
+    await a.page.waitForTimeout(300);
+  }
+  const joinedEarly = await a.page.evaluate(() =>
+    (window as any).__ringTest.notices().some((n: any) => /joined/i.test(n.body)),
+  );
+  expect(joinedEarly).toBe(false);
+
+  // B completes their profile (publishes a photo to the directory).
+  await b.page.evaluate((av) => (window as any).__ringTest.setProfile('Bob', av), AVATAR);
+
+  // On A's next sweep it sees B's now-complete profile and shows the unified 'system'
+  // banner, labelled with A's note ("Mom"). (Prod polls on a timer; drive it here.)
+  await expect
+    .poll(
+      async () => {
+        await a.page.evaluate(() => (window as any).__ringTest.syncInvites());
+        return a.page.evaluate(() =>
+          (window as any).__ringTest
+            .notices()
+            .some((n: any) => n.kind === 'system' && n.name === 'Mom' && /joined/i.test(n.body)),
+        );
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+
+  await ctxA.close();
+  await ctxB.close();
+});

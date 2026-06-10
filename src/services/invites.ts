@@ -11,7 +11,7 @@
  * so there is no new crypto handshake.
  */
 import { ref } from 'vue';
-import { listInvitations } from '@/services/api';
+import { listInvitations, fetchDirectoryUser } from '@/services/api';
 import { getPendingInviter, clearPendingInviter } from '@/services/auth';
 import {
   requestFriend,
@@ -77,17 +77,32 @@ async function processSentInvitations(): Promise<void> {
     if (!inv.usedBy) continue;
     if (await isInviteHandled(inv.code)) continue; // already connected + notified
 
-    // Read the label before we clear the placeholder, for the notification.
-    const pending = await getPendingInvite(inv.code);
+    // The server marks a code "used" the instant the invitee picks a username — long
+    // before they finish setting up. Arm the auto-accept + connection now (idempotent),
+    // but hold the "X joined Ring" announcement until the invitee has actually FINISHED
+    // their profile: a photo is required to finish, and they publish it to the directory
+    // on completion, so a non-empty directory avatar is our "they tapped Start messaging"
+    // signal. Until then, leave the code unhandled and re-check on the next sweep.
+    await markAutoAccept(inv.usedBy); // auto-accept their request if/when it arrives
+    await acceptRequest(inv.usedBy); // accept now if their card already arrived (else no-op)
 
-    await markAutoAccept(inv.usedBy); // auto-accept when their request arrives
-    await acceptRequest(inv.usedBy); // accept now if it already arrived (no-op otherwise)
+    let profile;
+    try {
+      profile = await fetchDirectoryUser(inv.usedBy);
+    } catch {
+      continue; // transient: re-check next sweep
+    }
+    if (!profile?.avatar) continue; // profile not finished yet → don't announce
+
+    const pending = await getPendingInvite(inv.code); // our label, before we clear it
     await removePendingInvite(inv.code); // the placeholder becomes a real contact
-    await markInviteHandled(inv.code); // fire the notification only once
+    await markInviteHandled(inv.code); // announce exactly once
 
-    // "Mom joined Ring": prefer the label, fall back to their synced profile.
-    const name = pending?.label || (await getContact(inv.usedBy))?.name || 'Someone';
-    void notifyIncoming({ kind: 'request', name, body: 'joined Ring' });
+    // "Mom joined Ring": prefer our label, then their published/synced name. Shown as a
+    // unified top banner ('system' kind) with an icon — same component as chat alerts.
+    const name =
+      pending?.label || profile.displayName || (await getContact(inv.usedBy))?.name || 'Someone';
+    void notifyIncoming({ kind: 'system', name, body: 'joined Ring' });
   }
 }
 
