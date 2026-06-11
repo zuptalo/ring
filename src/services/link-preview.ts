@@ -25,10 +25,12 @@ export function firstLink(body: string): string | undefined {
   return body.match(LINK_RE)?.[0];
 }
 
-// Bounds that keep a preview from bloating the E2EE ratchet packet.
-const THUMB_MAX_EDGE = 320; // px, longest side of the downscaled thumbnail
-const THUMB_QUALITY = 0.6; // JPEG quality, matching video posters
-const MAX_IMAGE_DATAURL = 60_000; // chars (~45 KiB) - drop the image past this
+// Bounds that keep a preview from bloating the E2EE ratchet packet. The card
+// renders up to ~260px CSS-wide, so 640px (≈2x) stays sharp on retina displays
+// without letting the inline image grow unbounded.
+const THUMB_MAX_EDGE = 640; // px, longest side of the downscaled thumbnail
+const THUMB_QUALITY = 0.72; // JPEG quality (fewer artifacts than the old 0.6)
+const MAX_IMAGE_DATAURL = 120_000; // chars (~90 KiB) - drop the image past this
 const MAX_TITLE = 200;
 const MAX_DESCRIPTION = 300;
 const OVERALL_TIMEOUT = 12_000; // ms ceiling for the whole build
