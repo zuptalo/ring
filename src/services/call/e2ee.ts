@@ -112,7 +112,11 @@ function encryptTransform(keyring: Keyring) {
 
 /** Decrypt transform: select the key by epoch and AES-GCM-open the frame. Calls
  *  onMissingKey(epoch) (so the session can request a resend) when we lack the key. */
-function decryptTransform(keyring: Keyring, onMissingKey?: (epoch: number) => void) {
+function decryptTransform(
+  keyring: Keyring,
+  onMissingKey?: (epoch: number) => void,
+  onDecrypt?: (ok: boolean) => void, // DIAG(call-video): per-frame ok/fail tally
+) {
   return async (chunk: any, controller: TransformStreamDefaultController): Promise<void> => {
     const data = new Uint8Array(chunk.data);
     if (data.length < HEADER) return; // too short to be a valid frame
@@ -128,8 +132,10 @@ function decryptTransform(keyring: Keyring, onMissingKey?: (epoch: number) => vo
       const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
       chunk.data = pt;
       controller.enqueue(chunk);
+      onDecrypt?.(true);
     } catch {
-      /* undecryptable (wrong/rotated key), drop */
+      /* undecryptable (wrong/rotated key, or corrupted ciphertext), drop */
+      onDecrypt?.(false);
     }
   };
 }
@@ -147,9 +153,13 @@ export function attachReceiverE2EE(
   receiver: RTCRtpReceiver,
   keyring: Keyring,
   onMissingKey?: (epoch: number) => void,
+  onDecrypt?: (kind: string, ok: boolean) => void, // DIAG(call-video)
 ): void {
   const streams = (receiver as any).createEncodedStreams();
+  const kind = receiver.track?.kind ?? '?';
   streams.readable
-    .pipeThrough(new TransformStream({ transform: decryptTransform(keyring, onMissingKey) }))
+    .pipeThrough(
+      new TransformStream({ transform: decryptTransform(keyring, onMissingKey, (ok) => onDecrypt?.(kind, ok)) }),
+    )
     .pipeTo(streams.writable);
 }

@@ -234,8 +234,11 @@
             <button class="call-diag-btn" @click.stop="callDiagOpen = false">hide</button>
           </div>
           <div class="call-diag-body">
-            <div v-if="callDiagLines.length === 0" class="call-diag-line">collecting…</div>
-            <div v-for="(l, i) in callDiagLines" :key="i" class="call-diag-line">{{ l }}</div>
+            <!-- Live snapshot: codec, in/out video RTP, and the decisive decrypt tally. -->
+            <div v-if="callDiagSnapshot.length === 0" class="call-diag-line">collecting…</div>
+            <div v-for="(l, i) in callDiagSnapshot" :key="'s' + i" class="call-diag-line snap">{{ l }}</div>
+            <!-- Recent events (ontrack / missing key). -->
+            <div v-for="(l, i) in callDiagLines" :key="'e' + i" class="call-diag-line ev">{{ l }}</div>
           </div>
         </div>
         <button v-else class="call-diag-reopen" @click.stop="callDiagOpen = true">diag</button>
@@ -265,7 +268,7 @@ import {
   type AudioRoute,
 } from '@/composables/useCall';
 import { useLiveQuery } from '@/composables/useLiveQuery';
-import { callDiagLines, callDiagOpen, clearDiag } from '@/services/call/diag';
+import { callDiagLines, callDiagSnapshot, callDiagOpen, clearDiag } from '@/services/call/diag';
 import { listContacts } from '@/db/queries';
 import { useSelfProfile } from '@/composables/useSelfProfile';
 import { initialsAvatar } from '@/db/avatars';
@@ -731,7 +734,7 @@ const diag = computed(() => {
   left: 8px;
   right: 8px;
   z-index: 50;
-  max-height: 38vh;
+  max-height: 46vh;
   display: flex;
   flex-direction: column;
   background: rgba(0, 0, 0, 0.78);
@@ -770,7 +773,14 @@ const diag = computed(() => {
 .call-diag-line {
   white-space: pre-wrap;
   word-break: break-all;
-  line-height: 1.35;
+  line-height: 1.4;
+}
+.call-diag-line.snap {
+  color: #fff;
+}
+.call-diag-line.ev {
+  color: #8fb7ff;
+  opacity: 0.75;
 }
 .call-diag-reopen {
   position: fixed;

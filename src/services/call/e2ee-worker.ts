@@ -18,6 +18,12 @@ import { EPOCH_BYTES, HEADER, writeEpoch, readEpoch } from './e2ee-format';
 const keys = new Map<number, CryptoKey>();
 let current = -1;
 
+// DIAG(call-video): per-frame decrypt tallies split by media kind, posted to the
+// main thread every second. Video FAILs climbing while audio is clean means the
+// encrypted video payload is being corrupted in transit (not a key problem).
+const decCount = { audOk: 0, audFail: 0, vidOk: 0, vidFail: 0 };
+setInterval(() => (self as any).postMessage({ type: 'decstats', ...decCount }), 1000);
+
 async function setKey(epoch: number, raw: Uint8Array): Promise<void> {
   const key = await crypto.subtle.importKey('raw', raw as unknown as BufferSource, { name: 'AES-GCM' }, false, [
     'encrypt',
@@ -40,7 +46,7 @@ async function encrypt(chunk: any, controller: TransformStreamDefaultController)
   controller.enqueue(chunk);
 }
 
-async function decrypt(chunk: any, controller: TransformStreamDefaultController): Promise<void> {
+async function decrypt(chunk: any, controller: TransformStreamDefaultController, kind: string): Promise<void> {
   const data = new Uint8Array(chunk.data);
   if (data.length < HEADER) return;
   const epoch = readEpoch(data);
@@ -55,8 +61,12 @@ async function decrypt(chunk: any, controller: TransformStreamDefaultController)
     const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
     chunk.data = pt;
     controller.enqueue(chunk);
+    if (kind === 'video') decCount.vidOk++;
+    else decCount.audOk++; // DIAG
   } catch {
-    /* wrong/rotated key → drop */
+    /* wrong/rotated key, or corrupted ciphertext → drop */
+    if (kind === 'video') decCount.vidFail++;
+    else decCount.audFail++; // DIAG
   }
 }
 
@@ -72,6 +82,10 @@ self.onmessage = (e: MessageEvent): void => {
 // chosen by the `operation` we passed when constructing the RTCRtpScriptTransform.
 (self as any).onrtctransform = (event: any): void => {
   const t = event.transformer;
-  const fn = t.options?.operation === 'encrypt' ? encrypt : decrypt;
+  const kind = t.options?.kind ?? '?'; // DIAG: passed from the main thread
+  const fn =
+    t.options?.operation === 'encrypt'
+      ? encrypt
+      : (chunk: any, controller: TransformStreamDefaultController) => decrypt(chunk, controller, kind);
   void t.readable.pipeThrough(new TransformStream({ transform: fn })).pipeTo(t.writable);
 };

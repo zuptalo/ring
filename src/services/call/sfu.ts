@@ -21,7 +21,7 @@ import {
   keyFromB64,
 } from '@/services/call/e2ee';
 import { sendSealedKey, sendSealedStreamId } from '@/services/call/signalling';
-import { pushDiag } from '@/services/call/diag';
+import { pushDiag, setDiagSnapshot, noteDecrypt, setWorkerDecrypt, decryptTotals } from '@/services/call/diag';
 import type { CallKind } from '@/services/call/types';
 
 export interface GroupCallbacks {
@@ -137,6 +137,8 @@ export class GroupSession {
       this.worker = new Worker(new URL('./e2ee-worker.ts', import.meta.url), { type: 'module' });
       this.worker.onmessage = (e: MessageEvent) => {
         if (e.data?.type === 'missing' && typeof e.data.epoch === 'number') this.onMissingKey(e.data.epoch);
+        // DIAG(call-video): per-kind decrypt tallies from the worker (Safari path).
+        else if (e.data?.type === 'decstats') setWorkerDecrypt(e.data);
       };
       // Seed any keys we already hold (e.g. on an ICE-recovery rebuild).
       for (const [epoch, raw] of this.rawKeys) this.worker.postMessage({ type: 'key', epoch, raw: raw.slice() });
@@ -149,11 +151,20 @@ export class GroupSession {
   private attachE2EE(rtp: RTCRtpSender | RTCRtpReceiver, op: 'encrypt' | 'decrypt'): void {
     if (this.transformApi === 'script') {
       const w = this.ensureWorker();
-      if (w) (rtp as any).transform = new (globalThis as any).RTCRtpScriptTransform(w, { operation: op });
+      // DIAG(call-video): pass the track kind so the worker can split decrypt
+      // tallies by audio vs video.
+      const kind = (rtp as any).track?.kind ?? '?';
+      if (w) (rtp as any).transform = new (globalThis as any).RTCRtpScriptTransform(w, { operation: op, kind });
       return;
     }
     if (op === 'encrypt') attachSenderE2EE(rtp as RTCRtpSender, this.keyring);
-    else attachReceiverE2EE(rtp as RTCRtpReceiver, this.keyring, (epoch) => this.onMissingKey(epoch));
+    else
+      attachReceiverE2EE(
+        rtp as RTCRtpReceiver,
+        this.keyring,
+        (epoch) => this.onMissingKey(epoch),
+        (kind, ok) => noteDecrypt(kind, ok), // DIAG(call-video)
+      );
   }
 
   /** Set a group key both locally (insertable path / epoch tracking) and in the
@@ -462,25 +473,54 @@ export class GroupSession {
    *  Temporary; remove once the root cause is confirmed. */
   private startDiag(): void {
     if (this.diagTimer != null) return;
+    const fmt = (n: number) =>
+      n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
     this.diagTimer = setInterval(async () => {
       if (!this.pc) return;
-      let out = '';
-      let inb = '';
+      const lines: string[] = [];
       try {
         const report = await this.pc.getStats();
+        // Resolve codecId → short mime ("VP8", "H264", "opus") so the snapshot shows
+        // the NEGOTIATED codec — if inbound video is H264, Safari sneaked past VP8-only.
+        const codecs = new Map<string, string>();
+        report.forEach((st: any) => {
+          if (st.type === 'codec') codecs.set(st.id, String(st.mimeType || '').replace(/^(video|audio)\//, ''));
+        });
+        const codecOf = (id?: string) => (id && codecs.get(id)) || '?';
+
+        lines.push(
+          `xform=${this.transformApi} epoch=${this.keyring.current} keys=${this.rawKeys.size} streams=${this.remote.size}`,
+        );
+        let haveOut = false;
+        let haveIn = false;
         report.forEach((st: any) => {
           if (st.type === 'outbound-rtp' && st.kind === 'video') {
-            out += ` out[bytes=${st.bytesSent} enc=${st.framesEncoded} sent=${st.framesSent}]`;
-          }
-          if (st.type === 'inbound-rtp' && st.kind === 'video') {
-            inb += ` in[ssrc=${st.ssrc} recv=${st.packetsReceived} dec=${st.framesDecoded} drop=${st.framesDropped}]`;
+            haveOut = true;
+            lines.push(
+              `out vid ${codecOf(st.codecId)} bytes=${fmt(st.bytesSent || 0)} enc=${st.framesEncoded ?? 0} sent=${st.framesSent ?? 0}`,
+            );
           }
         });
+        if (!haveOut) lines.push('out vid: none (camera off?)');
+        report.forEach((st: any) => {
+          if (st.type === 'inbound-rtp' && st.kind === 'video') {
+            haveIn = true;
+            lines.push(
+              `in vid ${codecOf(st.codecId)} recv=${st.packetsReceived ?? 0} dec=${st.framesDecoded ?? 0} drop=${st.framesDropped ?? 0} bytes=${fmt(st.bytesReceived || 0)}`,
+            );
+          }
+        });
+        if (!haveIn) lines.push('in vid: none forwarded');
+
+        // The decisive line: video decrypt FAILs while audio is clean ⇒ the encrypted
+        // video payload is being corrupted in packetization (not a key problem).
+        const d = decryptTotals();
+        lines.push(`decrypt vid ok=${d.vidOk} FAIL=${d.vidFail} | aud ok=${d.audOk} fail=${d.audFail}`);
       } catch {
-        return;
+        lines.push('stats error');
       }
-      pushDiag(`video${out || ' out[none]'}${inb || ' in[none]'}`);
-    }, 3000);
+      setDiagSnapshot(lines);
+    }, 2000);
   }
 
   private stopDiag(): void {
