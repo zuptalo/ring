@@ -220,6 +220,25 @@
             <ion-icon :icon="callOutline" />
           </button>
         </div>
+
+        <!-- DIAG(call-video): temporary on-screen diagnostics. A production deploy
+             hides server logs and an iPhone's Safari console isn't readable, so the
+             call stats are printed here. The key line is "video … in[recv=… dec=…]":
+             recv>0 with dec=0 means a peer's frames ARRIVE but never decode (E2EE /
+             codec), as opposed to in[none] (not forwarded). Remove with the rest of
+             the call-diag instrumentation once the cause is confirmed. -->
+        <div v-if="callDiagOpen" class="call-diag">
+          <div class="call-diag-head">
+            <span class="call-diag-title">call-diag</span>
+            <button class="call-diag-btn" @click.stop="clearDiag">clear</button>
+            <button class="call-diag-btn" @click.stop="callDiagOpen = false">hide</button>
+          </div>
+          <div class="call-diag-body">
+            <div v-if="callDiagLines.length === 0" class="call-diag-line">collecting…</div>
+            <div v-for="(l, i) in callDiagLines" :key="i" class="call-diag-line">{{ l }}</div>
+          </div>
+        </div>
+        <button v-else class="call-diag-reopen" @click.stop="callDiagOpen = true">diag</button>
       </div>
     </ion-content>
   </ion-page>
@@ -246,6 +265,7 @@ import {
   type AudioRoute,
 } from '@/composables/useCall';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { callDiagLines, callDiagOpen, clearDiag } from '@/services/call/diag';
 import { listContacts } from '@/db/queries';
 import { useSelfProfile } from '@/composables/useSelfProfile';
 import { initialsAvatar } from '@/db/avatars';
@@ -703,6 +723,66 @@ const diag = computed(() => {
 <style scoped>
 .call {
   --background: #000;
+}
+/* DIAG(call-video): temporary on-screen diagnostics overlay. */
+.call-diag {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 90px);
+  left: 8px;
+  right: 8px;
+  z-index: 50;
+  max-height: 38vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: #9fe8a0;
+  pointer-events: auto;
+}
+.call-diag-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+.call-diag-title {
+  flex: 1;
+  color: #fff;
+  font-weight: 600;
+}
+.call-diag-btn {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+}
+.call-diag-body {
+  overflow-y: auto;
+  padding: 4px 8px;
+  -webkit-overflow-scrolling: touch;
+}
+.call-diag-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.35;
+}
+.call-diag-reopen {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 90px);
+  left: 8px;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.7);
+  color: #9fe8a0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
 }
 .stage {
   position: relative;

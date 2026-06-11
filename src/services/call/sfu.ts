@@ -21,6 +21,7 @@ import {
   keyFromB64,
 } from '@/services/call/e2ee';
 import { sendSealedKey, sendSealedStreamId } from '@/services/call/signalling';
+import { pushDiag } from '@/services/call/diag';
 import type { CallKind } from '@/services/call/types';
 
 export interface GroupCallbacks {
@@ -186,7 +187,7 @@ export class GroupSession {
     this.pc.ontrack = (e) => {
       // DIAG(call-video): a remote track arrived from the SFU. If we never see a
       // 'video' track here on a Safari subscriber, the SFU isn't forwarding video.
-      console.info('[call-diag] ontrack', e.track.kind, 'stream', e.streams[0]?.id);
+      pushDiag(`ontrack ${e.track.kind} stream=${e.streams[0]?.id ?? '-'}`);
       this.attachE2EE(e.receiver, 'decrypt');
       const stream = e.streams[0];
       if (stream) {
@@ -314,7 +315,7 @@ export class GroupSession {
   private onMissingKey(_epoch: number): void {
     // DIAG(call-video): inbound frames arrived for an epoch we have no key for, so
     // they're being dropped at decrypt (a key-distribution race, not a codec issue).
-    console.info('[call-diag] missing E2EE key for epoch', _epoch);
+    pushDiag(`missing E2EE key epoch ${_epoch}`);
     const now = Date.now();
     if (now - this.lastKeyReqAt < 2000) return; // throttle
     const master = this.roster.slice().sort()[0];
@@ -478,7 +479,7 @@ export class GroupSession {
       } catch {
         return;
       }
-      console.info(`[call-diag] video${out || ' out[none]'}${inb || ' in[none]'}`);
+      pushDiag(`video${out || ' out[none]'}${inb || ' in[none]'}`);
     }, 3000);
   }
 
