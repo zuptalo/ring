@@ -192,6 +192,12 @@ func (s *SFU) Join(roomID, userID string) error {
 	})
 
 	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		// DIAG(call-video): what each publisher actually sends. If an iPhone
+		// publisher's audio track appears here but never its video, that confirms
+		// the client isn't encoding/sending VP8 (the suspected group-call regression).
+		slog.Info("call-diag sfu ontrack",
+			"room", roomID, "publisher", userID,
+			"kind", t.Kind().String(), "codec", t.Codec().MimeType, "pt", uint8(t.PayloadType()))
 		local := s.addTrack(r, t)
 		if local == nil {
 			return
@@ -358,6 +364,8 @@ func (s *SFU) signalPeers(r *room) {
 					if _, err := pc.AddTrack(local); err != nil {
 						return true
 					}
+					// DIAG(call-video): a track the SFU is now forwarding to this peer.
+					slog.Info("call-diag sfu forward", "to", userID, "track", id, "codec", local.Codec().MimeType)
 				}
 			}
 

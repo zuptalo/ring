@@ -83,6 +83,9 @@ export class GroupSession {
   private speaking = new Set<string>(); // keys currently considered speaking
   private lastLoud = new Map<string, number>(); // key → last time above threshold (hold)
   private levelTimer: ReturnType<typeof setInterval> | null = null;
+  // DIAG(call-video): periodic getStats dump (temporary, while diagnosing why
+  // group video doesn't flow on iPhone/Safari). Removed once the cause is pinned.
+  private diagTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(roomId: string, kind: CallKind, cb: GroupCallbacks, members: string[] = []) {
     this.roomId = roomId;
@@ -111,6 +114,7 @@ export class GroupSession {
     this.syncAudioMonitors(); // start metering our own mic for the speaking highlight
 
     await this.buildPeerConnection();
+    this.startDiag();
     // Send the member list ONLY on this initial join, so the server rings the group
     // exactly once (the initiator); later joiners / ICE-recovery re-joins omit it.
     await sendLive({
@@ -180,6 +184,9 @@ export class GroupSession {
     }
 
     this.pc.ontrack = (e) => {
+      // DIAG(call-video): a remote track arrived from the SFU. If we never see a
+      // 'video' track here on a Safari subscriber, the SFU isn't forwarding video.
+      console.info('[call-diag] ontrack', e.track.kind, 'stream', e.streams[0]?.id);
       this.attachE2EE(e.receiver, 'decrypt');
       const stream = e.streams[0];
       if (stream) {
@@ -305,6 +312,9 @@ export class GroupSession {
    *  (throttled). The call-key frame is live-only and never queued, so a momentary
    *  blip when the key was fanned out would otherwise leave us medialess forever. */
   private onMissingKey(_epoch: number): void {
+    // DIAG(call-video): inbound frames arrived for an epoch we have no key for, so
+    // they're being dropped at decrypt (a key-distribution race, not a codec issue).
+    console.info('[call-diag] missing E2EE key for epoch', _epoch);
     const now = Date.now();
     if (now - this.lastKeyReqAt < 2000) return; // throttle
     const master = this.roster.slice().sort()[0];
@@ -409,6 +419,7 @@ export class GroupSession {
   /** Leave the room and tear down. */
   leave(): void {
     void sendLive({ t: 'call-leave', roomId: this.roomId });
+    this.stopDiag();
     this.local?.getTracks().forEach((t) => t.stop());
     if (this.pc) {
       this.pc.ontrack = null;
@@ -440,6 +451,42 @@ export class GroupSession {
   private emitRemote(): void {
     this.cb.onRemoteStreams([...this.remote.values()]);
     this.syncAudioMonitors(); // (re)wire analysers as participants come and go
+  }
+
+  /** DIAG(call-video): every 3s, log outbound + inbound VIDEO RTP stats so we can
+   *  see, on each device, whether it is ENCODING/SENDING its own video
+   *  (outbound bytesSent/framesEncoded > 0) and whether it is RECEIVING + DECODING
+   *  others' video (inbound packetsReceived vs framesDecoded). This separates
+   *  "not sending" from "sent but not forwarded" from "received but not decoded".
+   *  Temporary; remove once the root cause is confirmed. */
+  private startDiag(): void {
+    if (this.diagTimer != null) return;
+    this.diagTimer = setInterval(async () => {
+      if (!this.pc) return;
+      let out = '';
+      let inb = '';
+      try {
+        const report = await this.pc.getStats();
+        report.forEach((st: any) => {
+          if (st.type === 'outbound-rtp' && st.kind === 'video') {
+            out += ` out[bytes=${st.bytesSent} enc=${st.framesEncoded} sent=${st.framesSent}]`;
+          }
+          if (st.type === 'inbound-rtp' && st.kind === 'video') {
+            inb += ` in[ssrc=${st.ssrc} recv=${st.packetsReceived} dec=${st.framesDecoded} drop=${st.framesDropped}]`;
+          }
+        });
+      } catch {
+        return;
+      }
+      console.info(`[call-diag] video${out || ' out[none]'}${inb || ' in[none]'}`);
+    }, 3000);
+  }
+
+  private stopDiag(): void {
+    if (this.diagTimer != null) {
+      clearInterval(this.diagTimer);
+      this.diagTimer = null;
+    }
   }
 
   /** Latest measured RMS per tile key (for tests/diagnostics). */
