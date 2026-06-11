@@ -236,6 +236,15 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	mux.Handle("POST /v1/blobs", authMW(http.HandlerFunc(h.uploadBlob)))
 	mux.Handle("GET /v1/blobs/{id}", authMW(http.HandlerFunc(h.downloadBlob)))
 
+	// Link-preview relay: fetches a user-supplied URL's raw bytes so the sender can
+	// unfurl it client-side (CORS blocks a direct fetch). It makes outbound requests
+	// on the user's behalf, so it gets its own tighter per-IP bucket to bound abuse.
+	unfurlRL := httpx.NewLimiter(30) // 30 requests / minute / IP
+	if h.DevMode {
+		unfurlRL = httpx.NewLimiter(100000)
+	}
+	mux.Handle("POST /v1/unfurl", authMW(unfurlRL.Middleware(http.HandlerFunc(h.unfurl))))
+
 	// Encrypted own-data sync + recovery-wrap storage (7e).
 	mux.Handle("POST /v1/sync/push", authMW(http.HandlerFunc(h.pushSync)))
 	mux.Handle("GET /v1/sync/pull", authMW(http.HandlerFunc(h.pullSync)))

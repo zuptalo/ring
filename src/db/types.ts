@@ -256,6 +256,10 @@ export interface Message {
   contact?: SharedContact; // kind === 'contact'
   audio?: AudioMeta; // kind === 'audio' (shared music file: title/artist)
   callLog?: CallLog; // kind === 'call' (call-outcome informational row)
+  // kind === 'text' with a URL: a generated preview card (built sender-side,
+  // delivered E2EE). Absent until the deferred attach lands; the UI falls back to
+  // a fetch-free domain-only card in the meantime.
+  linkPreview?: import('@/services/crypto/message').LinkPreview;
   updatedAt: number;
 }
 

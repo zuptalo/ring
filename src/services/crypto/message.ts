@@ -24,6 +24,38 @@ export interface MediaRef {
 }
 
 /**
+ * A link preview (title/description/thumbnail) for a URL shared in a text
+ * message. The SENDER's device builds it once - it fetches the page bytes via
+ * the server relay (POST /v1/unfurl, since CORS blocks a direct cross-origin
+ * fetch), parses them locally, and downscales the og:image to a tiny inline JPEG
+ * data URL (like MediaRef.poster). It then travels E2EE and is rendered by the
+ * recipient WITHOUT any further fetch, so the recipient never touches the URL.
+ */
+export interface LinkPreview {
+  url: string; // the previewed link (the first URL in the message body)
+  domain: string; // hostname without a leading www.
+  title?: string;
+  description?: string;
+  image?: string; // small JPEG thumbnail as a data URL (inline, no media blob)
+  imageWidth?: number;
+  imageHeight?: number;
+}
+
+/**
+ * A deferred link-preview attach, carried E2EE inside a payload (like a reaction)
+ * and applied as a side effect: it sets the target message's `linkPreview` in
+ * place rather than appearing as its own chat message. The text message is sent
+ * immediately; the preview (which takes a round-trip to generate) follows once
+ * ready, so the recipient sees the bare link first, then the card pops in. Only
+ * honored when it comes from the message's author (`senderId` match).
+ */
+export interface LinkPreviewSignal {
+  messageId: string;
+  preview: LinkPreview;
+  at: number; // epoch ms, for last-write-wins
+}
+
+/**
  * A shared contact card (iMessage "Share Name & Photo"-style). Travels E2EE in
  * a payload but is handled as a side effect (update contact / create request /
  * unhide chat), never stored as a visible message.
@@ -171,6 +203,8 @@ export interface MessagePayload {
   pollVote?: PollVoteSignal; // a vote on an existing poll message (side effect)
   contact?: SharedContact; // kind === 'contact' (a shared Ring contact)
   audio?: AudioMeta; // kind === 'audio' (shared music file: title/artist)
+  linkPreview?: LinkPreview; // inline preview on first send (rare: only if fast enough)
+  linkPreviewSig?: LinkPreviewSignal; // deferred preview attach for a sent text (side effect)
   // Session-reset control (like `card`): sent when the peer received a message it
   // could not decrypt (e.g. we deleted the chat, tearing down our ratchet). It rides
   // in a fresh X3DH prekey packet so the peer re-establishes the session, and on

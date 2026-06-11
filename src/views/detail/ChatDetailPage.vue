@@ -301,9 +301,27 @@
                 @message="openSharedContact(m.contact)"
               />
 
-              <!-- Link card (privacy-safe: domain + icon, no remote fetch). -->
+              <!-- Rich link preview (generated sender-side, delivered E2EE — no
+                   recipient-side fetch). Falls back to the domain-only card below
+                   until the deferred preview lands (or if it couldn't be built). -->
               <a
-                v-if="m.kind === 'text' && hasLink(m.body)"
+                v-if="m.kind === 'text' && m.linkPreview"
+                class="link-card rich"
+                :href="m.linkPreview.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                @click.stop.prevent="openExternal(m.linkPreview.url)"
+              >
+                <img v-if="m.linkPreview.image" class="lp-thumb" :src="m.linkPreview.image" alt="" />
+                <span class="lp-meta">
+                  <span v-if="m.linkPreview.title" class="lp-title">{{ m.linkPreview.title }}</span>
+                  <span v-if="m.linkPreview.description" class="lp-desc">{{ m.linkPreview.description }}</span>
+                  <span class="lp-domain">{{ m.linkPreview.domain }}</span>
+                </span>
+              </a>
+              <!-- Domain-only card (privacy-safe: domain + icon, no remote fetch). -->
+              <a
+                v-else-if="m.kind === 'text' && hasLink(m.body)"
                 class="link-card"
                 :href="linkOf(m.body)"
                 target="_blank"
@@ -3233,6 +3251,49 @@ function cancelRecording() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Rich preview: vertical card with a top image, title, description, and domain. */
+.link-card.rich {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 0;
+  overflow: hidden;
+}
+.lp-thumb {
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  display: block;
+}
+.lp-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+}
+.lp-title {
+  font-size: 14px;
+  font-weight: 600;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lp-desc {
+  font-size: 12px;
+  color: var(--app-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lp-domain {
+  font-size: 11px;
+  color: var(--app-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 .msg-link {
   color: var(--ion-color-primary);

@@ -20,9 +20,10 @@ import { compressImage, compressVideo } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster } from '@/utils/media-meta';
 import { notifyPreview } from '@/utils/notify-preview';
+import { firstLink, buildLinkPreview } from '@/services/link-preview';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
-  EditSignal, EraseSignal,
+  EditSignal, EraseSignal, LinkPreviewSignal,
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
@@ -271,6 +272,14 @@ export async function sendMessage(chatId: string, body: string, replyTo?: ReplyR
   const payload: MessagePayload = { body, kind: 'text', timestamp: ts, reply: replyTo };
   if (chat?.isGroup) await sealAndEnqueueGroup(chat, message.id, payload);
   else await sealAndEnqueue(chat, message.id, payload);
+
+  // Link preview: build it in the background (a relay round-trip + downscale) and
+  // patch it in once ready, so the text isn't held up. Best-effort and gated by
+  // the privacy toggle. Fire-and-forget — never awaited, never blocks the send.
+  const link = firstLink(body);
+  if (link && !(await getSetting<boolean>('privacy.disableLinkPreviews', false))) {
+    void attachLinkPreview(message.id, link);
+  }
 }
 
 /** If the chat has disappearing messages on, stamp the (real, stored) message and
@@ -751,6 +760,43 @@ async function handleEdit(from: string, signal: EditSignal): Promise<void> {
   m.updatedAt = now();
   await put('messages', m);
   await refreshChatPreview(m.chatId);
+}
+
+/** Generate a link preview for an already-sent text message and, if successful,
+ *  patch it onto our copy and propagate it to the peer/group (a side effect, like
+ *  an edit — never a new message). Best-effort: a failed/empty build leaves the
+ *  message with its fetch-free domain-only card. */
+async function attachLinkPreview(messageId: string, url: string): Promise<void> {
+  const preview = await buildLinkPreview(url);
+  if (!preview) return;
+  // Re-load: the user may have edited (changing the URL) or deleted the message
+  // while we were generating. Only attach if the link is still present.
+  const m = await getMessage(messageId);
+  if (!m || m.deleted || m.kind !== 'text' || !m.body.includes(url)) return;
+  const at = now();
+  m.linkPreview = preview;
+  m.updatedAt = at;
+  await put('messages', m);
+  const chat = await getChat(m.chatId);
+  if (!chat) return;
+  const payload: MessagePayload = {
+    body: '',
+    kind: 'link-preview',
+    timestamp: at,
+    linkPreviewSig: { messageId, preview, at },
+  };
+  if (chat.isGroup) await sealAndEnqueueGroup(chat, uid(), payload);
+  else await sealAndEnqueue(chat, uid(), payload);
+}
+
+/** Apply an inbound link-preview attach from `from` (side effect, never a stored
+ *  message). Only the message's author may attach one, and not onto a deleted copy. */
+async function handleLinkPreview(from: string, signal: LinkPreviewSignal): Promise<void> {
+  const m = await getMessage(signal.messageId);
+  if (!m || m.deleted || m.senderId !== from) return;
+  m.linkPreview = signal.preview;
+  m.updatedAt = now();
+  await put('messages', m);
 }
 
 /** The author deleting their own message for everyone. `trace` (the default UX)
@@ -2973,6 +3019,12 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     if (remoteId) await markInboundSeen(remoteId);
     return;
   }
+  // Deferred link preview → attach to the target text message, never stored.
+  if (payload.linkPreviewSig) {
+    await handleLinkPreview(from, payload.linkPreviewSig);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
 
   // A group message arrives over a 1:1 session but belongs to the group chat.
   const isGroupMsg = !!payload.groupId;
@@ -3040,6 +3092,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     poll: payload.poll,
     contact: payload.contact,
     audio: payload.audio,
+    linkPreview: payload.linkPreview, // present only on the rare fast-enough inline send
     expiresAt: payload.expiresAt, // disappearing messages: same expiry as the sender's copy
     mediaWidth: payload.mediaRef?.width,
     mediaHeight: payload.mediaRef?.height,

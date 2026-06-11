@@ -447,6 +447,23 @@ export async function cancelInvitation(code: string): Promise<void> {
   if (!res.ok && res.status !== 404) throw new Error(`cancel invitation failed: ${res.status}`);
 }
 
+/**
+ * Fetch the raw bytes of a third-party URL through the server relay (POST
+ * /v1/unfurl) for link-preview generation. A PWA can't read a cross-origin page
+ * directly (CORS), so the server fetches on our behalf and streams bytes back
+ * UNPARSED - we parse them client-side. With `asImage` the relay enforces an
+ * image content-type (used for the resolved og:image's second fetch). Returns
+ * null on any non-OK status so callers degrade to a domain-only card.
+ */
+export async function fetchUnfurl(url: string, asImage = false): Promise<Response | null> {
+  const qs = `url=${encodeURIComponent(url)}${asImage ? '&as=image' : ''}`;
+  const res = await fetch(`${apiBaseUrl()}/v1/unfurl?${qs}`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  return res.ok ? res : null;
+}
+
 /** Remove a push subscription from the backend. */
 export async function unsubscribePushServer(endpoint: string): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/v1/push/unsubscribe`, {
