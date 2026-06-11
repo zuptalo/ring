@@ -156,13 +156,12 @@ test('background ringing: an offline callee rings after reconnecting', async ({ 
 });
 
 /**
- * Group-call (SFU) verification: three participants join one room; each should
- * receive the other two's media, forwarded by the SFU. The media is E2EE via
- * insertable streams (the SFU only sees opaque RTP), keyed by a group key
- * distributed peer-to-peer over each pair's 1:1 ratchet - so all three are
- * paired first.
+ * Group-call (mesh) verification: three participants join one room; each opens a
+ * direct peer connection to the other two (no SFU), so each should receive the
+ * other two's media. Every leg is natively E2EE via DTLS-SRTP, and the per-pair
+ * SDP/ICE is sealed over that pair's 1:1 ratchet - so all three are paired first.
  */
-test('group call: three participants exchange media via the SFU', async ({ browser }) => {
+test('group call: three participants exchange media over the mesh', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const ctxC = await browser.newContext();
@@ -171,7 +170,7 @@ test('group call: three participants exchange media via the SFU', async ({ brows
   const b = await createAccount(ctxB, 'RINGDEV4');
   const c = await createAccount(ctxC, 'RINGDEV5');
 
-  // Pair every pair so the group media key can be distributed to all members.
+  // Pair every pair so each mesh leg can seal its SDP/ICE over that pair's ratchet.
   await pair(a, b);
   await pair(a, c);
   await pair(b, c);
@@ -190,9 +189,9 @@ test('group call: three participants exchange media via the SFU', async ({ brows
     );
   }
 
-  // Mid-call audio->video: A turns on video. The SFU must re-offer (it was an
-  // audio-only call) so B and C start receiving A's new video track. This proves the
-  // group video toggle + sfu-renegotiate path end-to-end.
+  // Mid-call audio->video: A turns on video. Each mesh leg renegotiates (perfect
+  // negotiation) so B and C start receiving A's new video track. This proves the
+  // group video toggle + per-pair renegotiation path end-to-end.
   await a.page.evaluate(() => (window as any).__ringTest.toggleVideo());
   for (const p of [b, c]) {
     await p.page.waitForFunction(
@@ -202,7 +201,7 @@ test('group call: three participants exchange media via the SFU', async ({ brows
     );
   }
 
-  // And back to audio-only: A's video track is removed and the SFU re-offers, so B
+  // And back to audio-only: A's video track is removed and each leg renegotiates, so B
   // and C stop receiving video.
   await a.page.evaluate(() => (window as any).__ringTest.toggleVideo());
   for (const p of [b, c]) {
@@ -228,14 +227,11 @@ test('group call: three participants exchange media via the SFU', async ({ brows
  * others (sealed, peer-to-peer), so every client can map an otherwise-anonymous
  * incoming MediaStream to its owner and show that contact's name/avatar on the tile.
  *
- * This guards the load-bearing assumption behind the labels: that the publisher's
- * stream id survives forwarding through the SFU, so the announced id (the owner's
- * localStream.id) matches the stream.id the subscriber actually receives. If it
- * didn't, the announcements would still arrive but under keys that match NO remote
- * stream, and the waitForFunction below would time out - failing loudly rather than
- * silently shipping mislabelled tiles. We assert the mapping at the data layer (the
- * same groupStreamOwners map the tile computed reads); the template then just binds
- * contactsMap.get(userId).name, so a correct owner id means a correct label.
+ * In the mesh each remote stream arrives over a direct connection to a KNOWN peer, so
+ * the owner map ({ stream.id -> userId }) is derived locally from which leg delivered
+ * the stream - no announcement to get lost. We assert the mapping at the data layer
+ * (the same groupStreamOwners map the tile computed reads); the template then just
+ * binds contactsMap.get(userId).name, so a correct owner id means a correct label.
  */
 test('group call: each remote stream is mapped to its owner for tile labels', async ({ browser }) => {
   const ctxA = await browser.newContext();

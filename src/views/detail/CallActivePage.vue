@@ -241,7 +241,15 @@
             <div v-for="(l, i) in callDiagLines" :key="'e' + i" class="call-diag-line ev">{{ l }}</div>
           </div>
         </div>
-        <button v-else class="call-diag-reopen" @click.stop="callDiagOpen = true">diag</button>
+        <!-- Tucked behind an ⓘ at the top-left of the video; tap to reveal the panel. -->
+        <button
+          v-else
+          class="call-diag-info"
+          aria-label="Call diagnostics"
+          @click.stop="callDiagOpen = true"
+        >
+          <ion-icon :icon="informationCircleOutline" />
+        </button>
       </div>
     </ion-content>
   </ion-page>
@@ -255,7 +263,7 @@ import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
-  recordingOutline, cellularOutline,
+  recordingOutline, cellularOutline, informationCircleOutline,
 } from 'ionicons/icons';
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, callStats,
@@ -782,17 +790,21 @@ const diag = computed(() => {
   color: #8fb7ff;
   opacity: 0.75;
 }
-.call-diag-reopen {
+.call-diag-info {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 90px);
-  left: 8px;
+  left: 10px;
   z-index: 50;
-  background: rgba(0, 0, 0, 0.7);
-  color: #9fe8a0;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  padding: 3px 10px;
-  font-size: 11px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.75);
+  border: none;
+  border-radius: 50%;
+  font-size: 20px;
 }
 .stage {
   position: relative;

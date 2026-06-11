@@ -75,6 +75,7 @@ export async function sendSealedSignal(
   peerUserId: string,
   callId: string,
   signal: CallSignal,
+  roomId?: string, // set for a mesh group-call leg; omit for 1:1 (unchanged behavior)
 ): Promise<boolean> {
   const sealed = await sealForChat(chatId, peerUserId, false, {
     body: '',
@@ -85,8 +86,8 @@ export async function sendSealedSignal(
   if (!sealed) return false;
   const frame: CallOfferFrame | CallAnswerFrame | CallIceFrame =
     frameType === 'call-offer'
-      ? { t: 'call-offer', to: sealed.to, callId, kind: signal.kind, ciphertext: sealed.packet }
-      : { t: frameType, to: sealed.to, callId, ciphertext: sealed.packet };
+      ? { t: 'call-offer', to: sealed.to, callId, kind: signal.kind, roomId, ciphertext: sealed.packet }
+      : { t: frameType, to: sealed.to, callId, roomId, ciphertext: sealed.packet };
   return sendLive(frame);
 }
 

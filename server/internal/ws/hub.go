@@ -660,9 +660,6 @@ func (c *Client) cleanup() {
 		for _, roomID := range c.hub.rooms.RoomsForUser(c.userID) {
 			roster, _ := c.hub.rooms.Leave(roomID, c.userID)
 			c.hub.broadcastRoster(roomID, roster)
-			if c.hub.sfu != nil {
-				c.hub.sfu.Leave(roomID, c.userID)
-			}
 		}
 	}
 	_ = c.conn.Close()
@@ -978,6 +975,13 @@ func (c *Client) handleFrame(data []byte) {
 		c.hub.broadcastPresence(ctx, c.store, c.userID)
 
 	case "call-offer":
+		// A mesh group-call leg (roomId set) is pure peer-to-peer signalling: relay it to
+		// the addressed peer WITHOUT the 1:1 ring/push/buffer machinery (the group was
+		// already rung once via call-join → ringGroup). Real 1:1 offers have no roomId.
+		if f.RoomID != "" {
+			c.relayCall(f)
+			return
+		}
 		// Start of a 1:1 call. Fan out to all the callee's devices (first to
 		// accept wins, arbitrated client-side).
 		if f.To == "" || f.CallID == "" {
@@ -1038,18 +1042,14 @@ func (c *Client) handleFrame(data []byte) {
 		c.relayCall(f)
 
 	case "call-join":
-		// Join a group-call room: update membership, tell everyone the roster,
-		// and bring the participant into the SFU (which then offers).
+		// Join a group-call room: update membership and tell everyone the roster. The
+		// roster broadcast is what drives mesh: each member opens a direct peer connection
+		// to every other member (no SFU; media is native DTLS-SRTP, end-to-end encrypted).
 		if f.RoomID == "" {
 			return
 		}
 		roster := c.hub.rooms.Join(f.RoomID, c.userID)
 		c.hub.broadcastRoster(f.RoomID, roster)
-		if c.hub.sfu != nil {
-			if err := c.hub.sfu.Join(f.RoomID, c.userID); err != nil {
-				slog.Error("sfu join", "room", f.RoomID, "err", err)
-			}
-		}
 		// The initiator (first into the room) supplies the group member list → ring
 		// the rest of the group. Later joiners and ICE-recovery re-joins omit Members,
 		// and a non-initiator (roster already has others) never re-rings. Fanned out
@@ -1064,9 +1064,6 @@ func (c *Client) handleFrame(data []byte) {
 		}
 		roster, _ := c.hub.rooms.Leave(f.RoomID, c.userID)
 		c.hub.broadcastRoster(f.RoomID, roster)
-		if c.hub.sfu != nil {
-			c.hub.sfu.Leave(f.RoomID, c.userID)
-		}
 
 	case "sfu-answer":
 		if c.hub.sfu == nil || f.RoomID == "" || len(f.SDP) == 0 {

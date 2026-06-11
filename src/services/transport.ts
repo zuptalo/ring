@@ -96,12 +96,16 @@ export type CallKind = 'audio' | 'video';
  * `-accept`, `-reject`, `-cancel`, `-busy`, `-end` carry no payload; they're
  * liveness/control only. The server stamps `from` on delivery.
  */
+// `roomId` is set ONLY for a mesh group-call leg (each pair is a direct,
+// 1:1-style peer connection); its presence routes the frame to the MeshSession
+// for that room instead of the singleton 1:1 path. Absent for real 1:1 calls.
 export interface CallOfferFrame {
   t: 'call-offer';
   to?: string;
   from?: string;
   callId: string;
   kind?: CallKind;
+  roomId?: string; // mesh group-call leg discriminator
   ciphertext?: unknown; // sealed SDP offer
 }
 export interface CallAnswerFrame {
@@ -109,6 +113,7 @@ export interface CallAnswerFrame {
   to?: string;
   from?: string;
   callId: string;
+  roomId?: string; // mesh group-call leg discriminator
   ciphertext?: unknown; // sealed SDP answer
 }
 export interface CallIceFrame {
@@ -116,6 +121,7 @@ export interface CallIceFrame {
   to?: string;
   from?: string;
   callId: string;
+  roomId?: string; // mesh group-call leg discriminator
   ciphertext?: unknown; // sealed ICE candidate
 }
 export interface CallControlFrame {

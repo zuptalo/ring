@@ -25,13 +25,13 @@ import {
   recordGroupCall,
   logCallToChat,
   sendMessage,
+  getSetting,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import { sendSealedSignal, openSealedSignal, sendControl, chatIdForPeer } from '@/services/call/signalling';
-import { GroupSession } from '@/services/call/sfu';
-import { supportsMediaE2EE } from '@/services/call/e2ee';
+import { MeshSession } from '@/services/call/mesh';
 import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
 import type { CallFrame } from '@/services/transport';
@@ -238,7 +238,7 @@ async function initAudioRoute(): Promise<void> {
 /* ---- non-reactive engine state ---- */
 
 let pc: RTCPeerConnection | null = null;
-let groupSession: GroupSession | null = null;
+let groupSession: MeshSession | null = null;
 
 /** Latest per-tile audio RMS for the active group call (tile key → level). Empty when
  *  not in a group call. Exposed for the e2e test hook to verify metering end-to-end. */
@@ -587,6 +587,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   screenSharing.value = false;
   hasMultipleCameras.value = false;
   videoQuality.value = 'auto';
+  lessDataCalls = false;
   upgradePending.value = false;
   upgradeRequest.value = false;
   activeScreenTrack?.stop();
@@ -774,11 +775,6 @@ async function enterGroupCall(
   direction: 'incoming' | 'outgoing',
   members: string[] = [],
 ): Promise<void> {
-  if (!supportsMediaE2EE()) {
-    await toast('Encrypted group calls aren’t supported in this browser');
-    await teardown('failed', { silent: true });
-    return;
-  }
   callMeta.value = {
     callId: roomId,
     isGroup: true,
@@ -790,13 +786,19 @@ async function enterGroupCall(
     avatar,
   };
   setState('connecting');
+  // Read the "use less data" floor once for this call (used by the adaptive tier).
+  lessDataCalls = await getSetting<boolean>('storage.lessDataCalls', false);
 
-  groupSession = new GroupSession(
+  groupSession = new MeshSession(
     roomId,
     kind,
     {
       onLocalStream: (s) => (localStream.value = s),
-      onRemoteStreams: (s) => (remoteStreams.value = s),
+      onRemoteStreams: (s) => {
+        remoteStreams.value = s;
+        // More/fewer video publishers → re-pick the adaptive outbound tier.
+        void applyOutgoingQuality();
+      },
       onStreamMap: (m) => (groupStreamOwners.value = m),
       onActiveSpeakers: (keys) => (activeSpeakers.value = keys),
       onConnectionState: (st) => {
@@ -836,8 +838,7 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
   // Already ringing/connected for this room → ignore duplicate invites.
   if (callMeta.value?.roomId === roomId) return;
   if (callState.value !== 'idle') return; // busy with another call, can't join two
-  if (!supportsMediaE2EE()) return; // can't run encrypted group calls in this browser
-  if (!isUnlockedNow()) return; // locked → can't decrypt the group key; skip the ring
+  if (!isUnlockedNow()) return; // locked → can't decrypt the sealed signalling; skip the ring
 
   // The server is group-graph-less, so resolve the group's name/avatar locally.
   const chat = await getChat(roomId);
@@ -1161,18 +1162,38 @@ const QUALITY_ENCODING: Record<VideoQuality, { maxBitrate?: number; scaleResolut
   low: { maxBitrate: 150_000, scaleResolutionDownBy: 3, maxFramerate: 15 },
 };
 
-/** The outgoing video sender on whichever connection is active (1:1 PC or the SFU). */
+// Adaptive outbound quality (group/mesh): as more participants publish video, step the
+// tier DOWN so the O(N) mesh uplink doesn't overwhelm the connection. A manual pick
+// (anything but 'auto') always wins. `lessDataCalls` (the "Use less data for calls"
+// setting, read once at group-call start) is a floor: never full 'auto'.
+let lessDataCalls = false;
+
+/** How many remote participants are currently publishing video. */
+function videoPublisherCount(): number {
+  return remoteStreams.value.filter((s) => s.getVideoTracks().some((t) => t.readyState === 'live')).length;
+}
+
+/** The tier to actually apply: a manual pin wins; otherwise scale by publisher count. */
+function effectiveTier(): VideoQuality {
+  if (videoQuality.value !== 'auto') return videoQuality.value;
+  const n = videoPublisherCount();
+  let tier: VideoQuality = n <= 1 ? 'auto' : n <= 3 ? 'medium' : 'low';
+  if (lessDataCalls && tier === 'auto') tier = 'medium';
+  return tier;
+}
+
+/** The outgoing video sender on the 1:1 PC (group fan-out goes through MeshSession). */
 function activeVideoSender(): RTCRtpSender | null {
   return groupSession ? groupSession.videoSender() : videoSender();
 }
 
-/** Push the current quality tier onto a video sender's first encoding (best-effort:
+/** Push the effective quality tier onto a 1:1 video sender's first encoding (best-effort:
  *  not every browser honors every field, and there may be no sender yet on audio). */
 async function applyVideoQuality(sender: RTCRtpSender | null): Promise<void> {
   if (!sender) return;
   const params = sender.getParameters();
   if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-  const tier = QUALITY_ENCODING[videoQuality.value];
+  const tier = QUALITY_ENCODING[effectiveTier()];
   const enc = params.encodings[0];
   if (tier.maxBitrate == null) delete enc.maxBitrate;
   else enc.maxBitrate = tier.maxBitrate;
@@ -1186,10 +1207,17 @@ async function applyVideoQuality(sender: RTCRtpSender | null): Promise<void> {
   }
 }
 
-/** Change the outgoing-video quality tier and apply it immediately to the live sender. */
+/** Apply the effective tier to the active outgoing video — fanned across every mesh leg
+ *  for a group call, or the single sender for 1:1. */
+async function applyOutgoingQuality(): Promise<void> {
+  if (groupSession) await groupSession.applyVideoQuality(QUALITY_ENCODING[effectiveTier()]);
+  else await applyVideoQuality(videoSender());
+}
+
+/** Change the outgoing-video quality tier and apply it immediately. */
 export async function setVideoQuality(q: VideoQuality): Promise<void> {
   videoQuality.value = q;
-  await applyVideoQuality(activeVideoSender());
+  await applyOutgoingQuality();
 }
 
 /** Test-only introspection: number of video transceivers on the 1:1 PC, matched by the
@@ -1255,7 +1283,7 @@ function setLocalVideoTrack(track: MediaStreamTrack | null, stopOld: boolean): v
 async function replaceOutgoingVideo(track: MediaStreamTrack): Promise<boolean> {
   if (groupSession) {
     const ok = await groupSession.replaceVideoTrack(track);
-    if (ok) await applyVideoQuality(groupSession.videoSender());
+    if (ok) await applyOutgoingQuality();
     return ok;
   }
   const sender = videoSender();
@@ -1491,7 +1519,7 @@ export async function toggleVideoMode(): Promise<void> {
     setLocalVideoTrack(track, true);
     meta.kind = 'video';
     cameraOff.value = false;
-    await applyVideoQuality(groupSession!.videoSender());
+    await applyOutgoingQuality();
     void refreshCameraCount(); // surface the flip-camera button now that video is on
   } else {
     if (meta.isGroup) {
@@ -1510,9 +1538,30 @@ export async function toggleVideoMode(): Promise<void> {
 
 /* ---- inbound frame dispatch (called from sync.ts) ---- */
 
+/** Route a mesh group-call leg signal (an offer/answer/ice frame carrying a roomId) to
+ *  the MeshSession, decrypted per-pair over the sender's 1:1 ratchet. Returns true when
+ *  the frame belonged to the active mesh (so the 1:1 path is skipped); false when it's a
+ *  real 1:1 frame (no roomId) and should fall through to the untouched 1:1 handling. */
+async function handleMeshSignal(
+  type: 'offer' | 'answer' | 'ice',
+  frame: { roomId?: string; from?: string; ciphertext?: unknown },
+): Promise<boolean> {
+  const gs = groupSession;
+  if (!frame.roomId || !gs || gs.roomId !== frame.roomId || !frame.from) return false;
+  const chatId = await chatIdForPeer(frame.from);
+  if (!chatId) return true; // ours, but no session to decrypt with → swallow
+  const signal = await openSealedSignal(chatId, frame.ciphertext);
+  if (groupSession !== gs || !signal) return true;
+  if (type === 'offer') await gs.onPeerOffer(frame.from, signal);
+  else if (type === 'answer') await gs.onPeerAnswer(frame.from, signal);
+  else await gs.onPeerIce(frame.from, signal);
+  return true;
+}
+
 export async function handleCallFrame(frame: CallFrame): Promise<void> {
   switch (frame.t) {
     case 'call-offer':
+      if (await handleMeshSignal('offer', frame)) return;
       await handleOffer(frame);
       return;
 
@@ -1561,6 +1610,7 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
     }
 
     case 'call-answer': {
+      if (await handleMeshSignal('answer', frame)) return;
       const meta = callMeta.value;
       if (!pc || !meta || meta.callId !== frame.callId || !meta.chatId) return;
       const signal = await openSealedSignal(meta.chatId, frame.ciphertext);
@@ -1585,6 +1635,7 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
     }
 
     case 'call-ice': {
+      if (await handleMeshSignal('ice', frame)) return;
       const meta = callMeta.value;
       if (!meta || meta.callId !== frame.callId || !meta.chatId) return;
       const signal = await openSealedSignal(meta.chatId, frame.ciphertext);
@@ -1660,60 +1711,19 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       return;
     }
 
-    case 'call-key': {
-      const gs = groupSession;
-      if (!gs || frame.roomId !== gs.roomId || !frame.from) return;
-      const chatId = await chatIdForPeer(frame.from);
-      if (!chatId) return;
-      const signal = await openSealedSignal(chatId, frame.ciphertext);
-      // The session may have been torn down while we decrypted, re-check.
-      if (groupSession === gs && signal?.type === 'key' && typeof signal.epoch === 'number' && signal.key) {
-        await gs.onKey(signal.epoch, signal.key);
-      }
-      return;
-    }
-
-    case 'call-key-request': {
-      // A member is missing the current group key → if we're the master, resend it.
-      const gs = groupSession;
-      if (!gs || frame.roomId !== gs.roomId || !frame.from) return;
-      await gs.resendKeyTo(frame.from);
-      return;
-    }
-
-    case 'call-streamid': {
-      // A peer announced which stream id is theirs → record it so we can label their
-      // tile with their name/avatar. Sealed peer-to-peer, opened like a call-key.
-      const gs = groupSession;
-      if (!gs || frame.roomId !== gs.roomId || !frame.from) return;
-      const chatId = await chatIdForPeer(frame.from);
-      if (!chatId) return;
-      const signal = await openSealedSignal(chatId, frame.ciphertext);
-      if (groupSession === gs && signal?.type === 'streamid' && signal.streamId) {
-        gs.onStreamId(frame.from, signal.streamId);
-      }
-      return;
-    }
-
     case 'call-group-invite':
       // Server fan-out of an incoming group call → ring locally so we can join.
       await handleGroupInvite(frame);
       return;
 
-    case 'sfu-offer': {
-      const gs = groupSession;
-      if (!gs || frame.roomId !== gs.roomId) return;
-      await gs.onSfuOffer(frame.sdp as RTCSessionDescriptionInit);
-      return;
-    }
-
-    case 'sfu-ice': {
-      const gs = groupSession;
-      if (!gs || frame.roomId !== gs.roomId) return;
-      await gs.onSfuIce(frame.ciphertext as RTCIceCandidateInit);
-      return;
-    }
-
+    // SFU-era frames, dormant under the mesh: the server no longer drives an SFU and
+    // mesh never sends keys/stream-ids (each leg is a known peer over native DTLS-SRTP).
+    // Left as no-ops so an in-flight frame from a mid-deploy peer is harmlessly ignored.
+    case 'call-key':
+    case 'call-key-request':
+    case 'call-streamid':
+    case 'sfu-offer':
+    case 'sfu-ice':
     // The client never receives call-join/leave or sfu-answer (server-bound).
     case 'call-join':
     case 'call-leave':

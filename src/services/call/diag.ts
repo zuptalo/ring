@@ -20,7 +20,8 @@ import { ref } from 'vue';
 
 const MAX_LINES = 24;
 
-export const callDiagOpen = ref(true); // visible by default: this build exists to collect evidence
+// Hidden by default; revealed via the ⓘ button on the call's main video.
+export const callDiagOpen = ref(false);
 export const callDiagLines = ref<string[]>([]); // event log (most recent last)
 export const callDiagSnapshot = ref<string[]>([]); // refreshed status block
 
