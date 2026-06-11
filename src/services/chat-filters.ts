@@ -91,6 +91,7 @@ export function useChatFilters(search: Ref<string>): {
   chips: ComputedRef<Chip[]>;
   lists: Ref<ChatList[]>;
   allChats: Ref<Chat[]>;
+  loaded: Ref<boolean>;
   tabFilters: Ref<FilterId[]>;
 } {
   const allChats = useLiveQuery(
@@ -143,5 +144,5 @@ export function useChatFilters(search: Ref<string>): {
     return [...all, ...bubbled, ...settled];
   });
 
-  return { chats, activeFilter, setActive, chips, lists, allChats, tabFilters };
+  return { chats, activeFilter, setActive, chips, lists, allChats, loaded: allChats.loaded, tabFilters };
 }

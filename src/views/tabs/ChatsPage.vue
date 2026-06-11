@@ -53,7 +53,7 @@
       <!-- Empty states. The "Browse the directory" CTA is only for a brand-new user
            with no chats at all; a filtered view that happens to be empty just says so
            (the directory is reachable from the Contacts tab). -->
-      <div v-if="chats.length === 0" class="empty">
+      <div v-if="loaded && chats.length === 0" class="empty">
         <template v-if="activeFilter === 'all' && allChats.length === 0">
           <ion-note>No chats yet</ion-note>
           <ion-button class="browse-btn" fill="solid" size="small" @click="router.push('/directory')">
@@ -171,7 +171,7 @@ const actions = ref<InstanceType<typeof ChatActionsHost> | null>(null);
 const { connect, requireProfile } = useConnect();
 
 // Filtered chat list + chips (All / Unread / Favorites / Groups + lists).
-const { chats, activeFilter, setActive, chips, lists, tabFilters, allChats } = useChatFilters(search);
+const { chats, activeFilter, setActive, chips, lists, tabFilters, allChats, loaded } = useChatFilters(search);
 const listsSheetOpen = ref(false);
 const editTabsOpen = ref(false);
 const newListOpen = ref(false);
