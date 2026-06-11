@@ -505,8 +505,11 @@ export class GroupSession {
         report.forEach((st: any) => {
           if (st.type === 'inbound-rtp' && st.kind === 'video') {
             haveIn = true;
+            // framesReceived vs framesDecoded vs keyFramesDecoded distinguishes a
+            // codec the decoder can't handle (key=0, frm grows, dec=0) from keyframe
+            // starvation; pt is the negotiated payload type the decoder expects.
             lines.push(
-              `in vid ${codecOf(st.codecId)} recv=${st.packetsReceived ?? 0} dec=${st.framesDecoded ?? 0} drop=${st.framesDropped ?? 0} bytes=${fmt(st.bytesReceived || 0)}`,
+              `in vid ${codecOf(st.codecId)} pt=${st.payloadType ?? '?'} recv=${st.packetsReceived ?? 0} frm=${st.framesReceived ?? 0} dec=${st.framesDecoded ?? 0} key=${st.keyFramesDecoded ?? 0} drop=${st.framesDropped ?? 0} bytes=${fmt(st.bytesReceived || 0)}`,
             );
           }
         });
