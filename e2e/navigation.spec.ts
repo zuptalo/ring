@@ -44,3 +44,47 @@ test('tab switches replace history; drill-downs still push', async ({ browser })
 
   await ctx.close();
 });
+
+/**
+ * Regression: switching tabs must actually transition the page, even when the tab you
+ * came from has leftover FORWARD history from a drill-down you backed out of. The old
+ * bare-`replace` router guard desynced the nested tabs outlet here — the tapped tab
+ * highlighted but its page never swapped in until you visited another tab first. Tab
+ * switches now go through Ionic's router with a 'root' direction, which transitions
+ * cleanly. We assert the destination page is genuinely VISIBLE, not merely that the URL
+ * changed (the bug left the URL right but the page wrong).
+ */
+test('switching tabs transitions the page after a drill-down + back', async ({ browser }) => {
+  const ctx = await browser.newContext();
+  const a = await createAccount(ctx, 'NAVTERM2');
+  const AVATAR = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>';
+  await a.page.evaluate((av) => (window as any).__ringTest.setProfile('Nav', av), AVATAR);
+
+  const tabBtn = (label: string) => a.page.locator('ion-tab-button', { hasText: label });
+  // Unique, page-specific controls: visible only when that tab's page is the active
+  // (non-hidden) ion-page. A backgrounded tab page is display:none, so these go invisible.
+  const chatsMarker = a.page.getByRole('button', { name: 'New chat' });
+  const contactsMarker = a.page.getByRole('button', { name: 'Add contact' });
+
+  // Land on Contacts and confirm its page is the visible one.
+  await a.page.goto('/tabs/contacts');
+  await a.page.waitForURL('**/tabs/contacts');
+  await tabBtn('Chats').waitFor({ state: 'visible', timeout: 30_000 });
+  await expect(contactsMarker).toBeVisible();
+
+  // Drill down into the directory (a real push), then back out to Contacts. This leaves
+  // /directory in forward history — the exact state that used to wedge the tab outlet.
+  await a.page.getByRole('button', { name: /browse user directory/i }).click();
+  await a.page.waitForURL('**/directory');
+  await a.page.goBack();
+  await a.page.waitForURL('**/tabs/contacts');
+
+  // Now switch to Chats: the page must actually become visible (not just the URL change),
+  // on the FIRST tap, with no need to bounce through another tab.
+  await tabBtn('Chats').click();
+  await a.page.waitForURL('**/tabs/chats');
+  await expect(chatsMarker).toBeVisible();
+  await expect(contactsMarker).toBeHidden();
+
+  await ctx.close();
+});

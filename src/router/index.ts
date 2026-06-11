@@ -161,21 +161,18 @@ router.beforeEach((to) => {
   return true;
 });
 
-// The iOS PWA back-swipe walks the browser history (Ionic's own swipe-back is off —
-// see main.ts), so tab switches must not pile up entries: every navigation INTO a tab
-// root replaces the current entry instead of pushing. History stays
-// [current tab root, ...drill-down pages] — a back-swipe from a main list leaves the
-// app (tabs are terminal, like WhatsApp), while detail pages still swipe back to their
-// list. The History API can't delete past entries, so this is done at navigation time,
-// for every caller (tab-bar hrefs, back-button default-hrefs, notification routing);
-// `redirectedFrom` breaks the redirect loop (and skips the '/'→'/tabs/chats' and
-// '/auth'→chats redirects, which already land correctly).
-const TAB_ROOTS = new Set(['/tabs/chats', '/tabs/calls', '/tabs/contacts', '/tabs/settings']);
-router.beforeEach((to) => {
-  if (TAB_ROOTS.has(to.path) && !to.redirectedFrom) {
-    return { path: to.path, query: to.query, replace: true };
-  }
-  return true;
-});
-
+// Tabs are terminal (WhatsApp-style): the iOS PWA back-swipe walks the browser
+// history (Ionic's own swipe-back is off — see main.ts), so switching tabs must not
+// pile up entries. This used to be enforced here by a beforeEach guard that re-issued
+// every navigation INTO a tab root as a plain Vue-Router `replace`. That bare replace
+// stripped the per-tab metadata Ionic's native tab switch (`changeTab`) attaches and
+// left the nested tabs outlet's transition direction ambiguous: once you'd drilled
+// into a detail page (e.g. Contacts → a contact → a chat) and backed out, the leftover
+// forward history desynced the outlet from the tab bar — the tapped tab highlighted but
+// its page never transitioned in until you visited another tab first.
+//
+// The flattening now lives where the tab is actually tapped (TabsPage switchTab), which
+// routes through Ionic's own router with an explicit 'root' direction + 'replace' action
+// (the same call AuthPage uses to enter the app). That keeps the history flat AND gives
+// the outlet an unambiguous root transition, so highlight and page stay in lockstep.
 export default router;
