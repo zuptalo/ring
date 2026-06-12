@@ -30,7 +30,7 @@ import {
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
-import { sendSealedSignal, openSealedSignal, sendControl, chatIdForPeer } from '@/services/call/signalling';
+import { sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
 import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
@@ -848,7 +848,11 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
     kind: frame.kind ?? 'audio',
     direction: 'incoming',
     roomId,
-    roster: frame.members ?? [],
+    // Everyone the initiator named, plus the initiator themselves (members already includes
+    // us). Drives the ring's participant line so joining is informed consent — you can see
+    // whom you'll be exposed to, including anyone you don't yet know. Replaced by the live
+    // roster once we join.
+    roster: [...new Set([frame.from, ...(frame.members ?? [])])],
     name: chat?.name || 'Group call',
     avatar: chat?.avatar || '',
   };
@@ -1548,8 +1552,9 @@ async function handleMeshSignal(
 ): Promise<boolean> {
   const gs = groupSession;
   if (!frame.roomId || !gs || gs.roomId !== frame.roomId || !frame.from) return false;
-  const chatId = await chatIdForPeer(frame.from);
-  if (!chatId) return true; // ours, but no session to decrypt with → swallow
+  // Same container the sender sealed over: a real contact's 1:1 ratchet, or the ephemeral
+  // call-scoped one for a co-participant who isn't a contact (ad-hoc group call).
+  const chatId = await meshSessionChatId(frame.from);
   const signal = await openSealedSignal(chatId, frame.ciphertext);
   if (groupSession !== gs || !signal) return true;
   if (type === 'offer') await gs.onPeerOffer(frame.from, signal);

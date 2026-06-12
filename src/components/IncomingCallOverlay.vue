@@ -11,6 +11,10 @@
       <div class="ring-kind">
         {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
       </div>
+      <!-- Group calls mesh between everyone, so joining exposes you to the other
+           participants — name them (and flag any you don't know) so accepting is
+           informed consent. -->
+      <div v-if="participantsLine" class="ring-with">{{ participantsLine }}</div>
     </div>
     <!-- Decline with a quick message (1:1 only): pick a canned reply, sent into the
          chat as we decline. Customizable under Settings > Calls. -->
@@ -32,10 +36,43 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref, watch } from 'vue';
 import { IonAvatar, IonIcon, actionSheetController } from '@ionic/vue';
 import { callOutline, videocamOutline, chatbubbleEllipsesOutline } from 'ionicons/icons';
 import { callState, callMeta, acceptCall, rejectCall, declineWithMessage } from '@/composables/useCall';
 import { getQuickDeclines } from '@/services/quick-declines';
+import { getContact } from '@/db/queries';
+import { getSelfUserId } from '@/services/auth';
+
+// Resolve the other participants' names for the consent line. Re-runs whenever the ringing
+// call changes; a co-participant who isn't a contact has no name and is counted as someone
+// "you don't know" — the privacy-relevant case for an ad-hoc mesh call.
+const others = ref<{ name: string }[]>([]);
+watch(
+  () => (callState.value === 'incoming' && callMeta.value?.isGroup ? callMeta.value?.roster : null),
+  async (roster) => {
+    const self = getSelfUserId() ?? '';
+    const ids = (roster ?? []).filter((id) => id && id !== self);
+    others.value = await Promise.all(ids.map(async (id) => ({ name: (await getContact(id))?.name ?? '' })));
+  },
+  { immediate: true },
+);
+
+function joinNames(parts: string[]): string {
+  if (parts.length <= 1) return parts.join('');
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+const participantsLine = computed(() => {
+  const list = others.value;
+  if (!list.length) return '';
+  const known = list.filter((o) => o.name).map((o) => o.name);
+  const unknown = list.length - known.length;
+  const parts = [...known];
+  if (unknown > 0) parts.push(unknown === 1 ? 'someone you don’t know' : `${unknown} people you don’t know`);
+  return `With ${joinNames(parts)}`;
+});
 
 function accept(): void {
   void acceptCall();
@@ -107,6 +144,13 @@ async function declineMenu(): Promise<void> {
 .ring-kind {
   font-size: 13px;
   opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ring-with {
+  font-size: 12px;
+  opacity: 0.85;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -15,7 +15,7 @@
  *   - The initiator keeps sending the preamble until it hears back from the
  *     peer (proof the session is established), to tolerate a lost first message.
  */
-import { get, put } from '@/db/idb';
+import { get, put, remove } from '@/db/idb';
 import { verify } from './crypto/primitives';
 import { bytesToB64url, b64urlToBytes } from './crypto/envelope';
 import {
@@ -71,6 +71,14 @@ async function getSessionMeta(chatId: string): Promise<SessionMeta | null> {
 
 async function setSessionMeta(chatId: string, meta: SessionMeta): Promise<void> {
   await put<SettingRow<SessionMeta>>('settings', { key: `smeta:${chatId}`, value: meta });
+}
+
+/** Drop a 1:1 ratchet session and its X3DH metadata. Used to tear down the ephemeral,
+ *  call-scoped session containers a mesh call opens to non-contact co-participants once
+ *  the call ends (a later call simply re-runs X3DH). A no-op if nothing is stored. */
+export async function clearSession(chatId: string): Promise<void> {
+  await remove('sessions', chatId);
+  await remove('settings', `smeta:${chatId}`);
 }
 
 /* ---- outgoing ---- */

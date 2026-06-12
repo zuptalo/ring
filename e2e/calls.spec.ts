@@ -326,6 +326,60 @@ test('group call: each remote stream is mapped to its owner for tile labels', as
 });
 
 /**
+ * Ad-hoc mesh between members who AREN'T mutual contacts. The initiator (a) knows both b
+ * and c, but b and c have never connected — so their leg has no pre-existing 1:1 ratchet
+ * and, under the connect gate, neither could normally fetch the other's prekey bundle. The
+ * call must still mesh fully: each non-contact pair opens an EPHEMERAL, call-scoped session
+ * (the server lets co-members of a live call room fetch each other's bundles for the
+ * duration of the call), so all three receive everyone's media — and crucially nobody lands
+ * in anyone's contacts, and the session is torn down when the call ends.
+ */
+test('group call: members who are not mutual contacts still mesh', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'CALLINTRO1');
+  const b = await createAccount(ctxB, 'CALLINTRO2');
+  const c = await createAccount(ctxC, 'CALLINTRO3');
+
+  // a is the common contact; b and c are deliberately NOT paired with each other.
+  await pair(a, b);
+  await pair(a, c);
+
+  const knows = (p: typeof a, id: string) =>
+    p.page.evaluate((x) => (window as any).__ringTest.contactName(x), id);
+  // Before the call, b and c are strangers to each other.
+  expect(await knows(b, c.id)).toBe('');
+  expect(await knows(c, b.id)).toBe('');
+
+  const room = 'e2e-group-intro';
+  for (const p of [a, b, c]) {
+    await p.page.evaluate((r) => (window as any).__ringTest.startGroup(r, 'audio'), room);
+  }
+
+  // Every participant — including the non-contact b<->c leg — receives the other two.
+  for (const p of [a, b, c]) {
+    await p.page.waitForFunction(
+      () => (window as any).__ringTest.remoteStreamCount() >= 2,
+      null,
+      { timeout: 60_000 },
+    );
+  }
+
+  for (const p of [a, b, c]) {
+    await p.page.evaluate(() => (window as any).__ringTest.hangup());
+  }
+
+  // Ephemeral: meshing with a stranger for one call never deposits them in your contacts.
+  expect(await knows(b, c.id)).toBe('');
+  expect(await knows(c, b.id)).toBe('');
+
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});
+
+/**
  * Active-speaker highlight: each tile is metered (Web Audio RMS of the DECODED audio),
  * and a tile whose level crosses the threshold is flagged as speaking for the UI ring.
  *

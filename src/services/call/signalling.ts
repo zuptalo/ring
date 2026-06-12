@@ -4,7 +4,7 @@
  * openPacket), then sent live over the WebSocket, never through the durable
  * outbox, since real-time signalling that can't be delivered now is useless.
  */
-import { sealForChat, openPacket } from '@/services/messaging';
+import { sealForChat, openPacket, clearSession } from '@/services/messaging';
 import { getContact, startDirectChat } from '@/db/queries';
 import type { CallSignal } from '@/services/crypto/message';
 import { sendLive } from '@/composables/useSync';
@@ -17,6 +17,31 @@ export async function chatIdForPeer(peerUserId: string): Promise<string | null> 
   const contact = await getContact(peerUserId);
   if (!contact) return null;
   return startDirectChat(contact);
+}
+
+// An ad-hoc group call meshes between EVERY pair of participants, but the initiator's
+// co-invitees aren't necessarily each other's contacts, so two of them may share no 1:1
+// ratchet to seal their leg's SDP/ICE over. The prefix below namespaces an EPHEMERAL,
+// call-scoped Double-Ratchet container for such a pair: no contact row, no chat-list
+// entry, and torn down when the call ends (clearCallSession). It bootstraps X3DH like any
+// 1:1 session — the only thing it relies on is being able to fetch the peer's prekey
+// bundle, which the server permits for the duration of a shared call room (same-room gate
+// on GET /v1/keys), so no persistent connection is created. The act of joining the call is
+// the consent; nobody silently lands in anyone's contacts.
+const CALL_SESSION_PREFIX = 'callsess:';
+
+/** The ratchet container used to seal mesh signalling to a call peer: a real contact's
+ *  established 1:1 session, or an ephemeral call-scoped one for a non-contact co-member. */
+export async function meshSessionChatId(peerUserId: string): Promise<string> {
+  const contact = await getContact(peerUserId);
+  if (contact) return startDirectChat(contact);
+  return CALL_SESSION_PREFIX + peerUserId;
+}
+
+/** Tear down the ephemeral call-scoped session for a peer (no-op for a real contact, whose
+ *  id never carries the prefix). Called as each mesh leg closes so nothing outlives the call. */
+export async function clearCallSession(peerUserId: string): Promise<void> {
+  await clearSession(CALL_SESSION_PREFIX + peerUserId);
 }
 
 /**

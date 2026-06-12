@@ -18,7 +18,7 @@
 import { sendLive } from '@/composables/useSync';
 import { getSelfUserId } from '@/services/auth';
 import { getTurnConfig, rtcConfig, type TurnConfig } from '@/services/call/turn';
-import { sendSealedSignal, chatIdForPeer } from '@/services/call/signalling';
+import { sendSealedSignal, meshSessionChatId, clearCallSession } from '@/services/call/signalling';
 import type { CallKind } from '@/services/call/types';
 import type { CallSignal } from '@/services/crypto/message';
 
@@ -209,7 +209,11 @@ export class MeshSession {
       void this.audioCtx.close().catch(() => {});
       this.audioCtx = null;
     }
-    for (const peerId of [...this.legs.keys()]) this.closeLeg(peerId);
+    const peers = [...this.legs.keys()];
+    for (const peerId of peers) this.closeLeg(peerId);
+    // Drop any ephemeral call-scoped sessions opened to non-contact co-participants, so an
+    // ad-hoc call leaves no ratchet (or contact) behind. No-op for real contacts.
+    for (const peerId of peers) void clearCallSession(peerId);
     this.local?.getTracks().forEach((t) => t.stop());
     this.local = null;
     this.remote.clear();
@@ -480,8 +484,7 @@ export class MeshSession {
     peerId: string,
     signal: CallSignal,
   ): Promise<void> {
-    const chatId = await chatIdForPeer(peerId);
-    if (!chatId) return;
+    const chatId = await meshSessionChatId(peerId);
     await sendSealedSignal(frameType, chatId, peerId, this.roomId, signal, this.roomId);
   }
 

@@ -162,8 +162,16 @@ func (h *Handlers) fetchKeys(w http.ResponseWriter, r *http.Request) {
 		// existing chats + connected group members are unaffected.
 		if h.RequireConnection {
 			if connected, err := h.Connections.Connected(r.Context(), requester, target); err == nil && !connected {
-				httpx.Error(w, http.StatusNotFound, "no key bundle for user")
-				return
+				// Live exception to the gate: co-participants of the same active call room
+				// may fetch each other's bundles for the duration of the call, so an ad-hoc
+				// group call can mesh between members who aren't contacts. Access ends when
+				// the room empties — no persistent connection is created (joining the call is
+				// the consent). 1:1 callers are already contacts, so this only matters for
+				// group rooms.
+				if h.Hub == nil || !h.Hub.SharesCallRoom(requester, target) {
+					httpx.Error(w, http.StatusNotFound, "no key bundle for user")
+					return
+				}
 			}
 		}
 	}

@@ -54,6 +54,24 @@ func (r *Registry) Roster(roomID string) []string {
 	return keys(r.rooms[roomID])
 }
 
+// SharesRoom reports whether a and b are currently in at least one common room. It lets
+// co-participants of a live call fetch each other's prekey bundles for the duration of the
+// call (mesh signalling is sealed per-pair over a 1:1 session), without creating any
+// persistent connection: access ends the moment either leaves and the room empties.
+func (r *Registry) SharesRoom(a, b string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, m := range r.rooms {
+		if _, inA := m[a]; !inA {
+			continue
+		}
+		if _, inB := m[b]; inB {
+			return true
+		}
+	}
+	return false
+}
+
 // RoomsForUser returns every room userID is currently in (for disconnect cleanup).
 func (r *Registry) RoomsForUser(userID string) []string {
 	r.mu.RLock()

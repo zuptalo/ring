@@ -345,6 +345,12 @@ func (h *Hub) takeBufferedCalls(userID string) [][]byte {
 // SetSFU wires the embedded SFU (called once at startup when calls are enabled).
 func (h *Hub) SetSFU(s CallSFU) { h.sfu = s }
 
+// SharesCallRoom reports whether a and b are currently in a common call room. Used by the
+// key-bundle handler to let co-participants of a live call fetch each other's bundles
+// (so an ad-hoc group call can mesh between members who aren't contacts) for the duration
+// of the call only — no persistent connection is created.
+func (h *Hub) SharesCallRoom(a, b string) bool { return h.rooms.SharesRoom(a, b) }
+
 // SendCallSignal delivers an SFU→client signalling frame (sfu-offer/sfu-ice).
 // The SFU invokes this via a callback so it needn't know the frame shape.
 func (h *Hub) SendCallSignal(userID, t, roomID string, data json.RawMessage) {
