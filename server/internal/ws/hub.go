@@ -153,6 +153,11 @@ type Hub struct {
 	// answered/declined/cancelled/ended.
 	callRingMu sync.Mutex
 	callRings  map[string]*callRing
+	// Per group-call invitee: a goroutine that re-sends the invite + push every few
+	// seconds until they JOIN the room (or the reminders run out), so a member who hasn't
+	// answered keeps getting reminders regardless of who else joined. Keyed roomID → member.
+	groupRingMu sync.Mutex
+	groupRings  map[string]map[string]context.CancelFunc
 }
 
 type callRing struct {
@@ -167,6 +172,14 @@ const (
 	// (count*interval) sits within the dial timeout.
 	callRingCount    = 5
 	callRingInterval = 5 * time.Second
+)
+
+const (
+	// A group-call invitee who hasn't joined is reminded this many times, this far apart
+	// (≈30s total), and stops the moment they join. Less pushy than the 1:1 cadence; after
+	// these run out the caller's UI offers a recall (re-ring) or remove for that member.
+	groupRingCount    = 4
+	groupRingInterval = 7 * time.Second
 )
 
 const (
@@ -203,8 +216,9 @@ func NewHub() *Hub {
 		watchers: make(map[string]map[*Client]struct{}),
 		rooms:    call.NewRegistry(),
 		callBuf:   make(map[string][]bufferedCall),
-		ringHist:  make(map[string][]time.Time),
-		callRings: make(map[string]*callRing),
+		ringHist:   make(map[string][]time.Time),
+		callRings:  make(map[string]*callRing),
+		groupRings: make(map[string]map[string]context.CancelFunc),
 	}
 }
 
@@ -281,6 +295,94 @@ func (h *Hub) AckCallReachable(callee string) {
 			h.Send(t.caller, payload)
 		}
 	}
+}
+
+// ringMember rings ONE group-call invitee: the initial invite (live + buffered for a
+// push-woken reconnect) and a push, then schedules the follow-up reminders. The initial
+// push respects foreground (an active member already sees the in-app ring); the reminders
+// (startGroupMemberRing) push unconditionally — the whole point is to keep nudging a
+// non-joiner. Used for the first ring and for a recall.
+func (c *Client) ringMember(roomID, member string, invite []byte) {
+	delivered := c.hub.Send(member, invite)
+	if !c.hub.isActiveFresh(member) || !delivered {
+		c.notifyAsync(member, true)
+	}
+	if !delivered {
+		c.hub.bufferCall(member, invite) // a push-woken reconnect still finds the invite
+	}
+	c.hub.startGroupMemberRing(c.notifier, roomID, member, invite)
+}
+
+// startGroupMemberRing schedules the REMINDER rounds after the initial ring: re-send the
+// invite + re-push every groupRingInterval, up to groupRingCount-1 more times (≈30s total
+// including the initial), until the member JOINS the room (or the call ends). Idempotent
+// per (room, member): a recall cancels any in-flight loop and starts fresh. Independent per
+// member, so a non-joiner keeps being reminded regardless of who else has joined.
+func (h *Hub) startGroupMemberRing(notifier Notifier, roomID, member string, invite []byte) {
+	if notifier == nil || roomID == "" || member == "" {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.groupRingMu.Lock()
+	if h.groupRings[roomID] == nil {
+		h.groupRings[roomID] = map[string]context.CancelFunc{}
+	}
+	if old := h.groupRings[roomID][member]; old != nil {
+		old() // recall: replace any in-flight loop
+	}
+	h.groupRings[roomID][member] = cancel
+	h.groupRingMu.Unlock()
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("group ring goroutine panicked", "recover", r, "stack", string(debug.Stack()))
+			}
+		}()
+		defer h.stopGroupMemberRing(roomID, member)
+		for i := 1; i < groupRingCount; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(groupRingInterval):
+			}
+			if ctx.Err() != nil || h.rooms.InRoom(roomID, member) {
+				return // cancelled, or they joined → stop reminding them
+			}
+			h.Send(member, invite) // a live socket re-rings; a dismissed one re-shows
+			func() {
+				nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer ncancel()
+				notifier.NotifyCall(nctx, member)
+			}()
+		}
+	}()
+}
+
+// stopGroupMemberRing cancels the reminder loop for one invitee (they joined, were
+// recalled-and-replaced, or the caller removed them).
+func (h *Hub) stopGroupMemberRing(roomID, member string) {
+	h.groupRingMu.Lock()
+	if m := h.groupRings[roomID]; m != nil {
+		if cancel := m[member]; cancel != nil {
+			cancel()
+			delete(m, member)
+		}
+		if len(m) == 0 {
+			delete(h.groupRings, roomID)
+		}
+	}
+	h.groupRingMu.Unlock()
+}
+
+// stopRoomRings cancels every invitee reminder loop for a room (the call ended / emptied).
+func (h *Hub) stopRoomRings(roomID string) {
+	h.groupRingMu.Lock()
+	for _, cancel := range h.groupRings[roomID] {
+		cancel()
+	}
+	delete(h.groupRings, roomID)
+	h.groupRingMu.Unlock()
 }
 
 // allowRing rate-limits group-call ring events per user (ringBurst per ringWindow).
@@ -674,8 +776,11 @@ func (c *Client) cleanup() {
 	// other live devices stays in the room via those).
 	if c.hub.rooms != nil {
 		for _, roomID := range c.hub.rooms.RoomsForUser(c.userID) {
-			roster, _ := c.hub.rooms.Leave(roomID, c.userID)
+			roster, empty := c.hub.rooms.Leave(roomID, c.userID)
 			c.hub.broadcastRoster(roomID, roster)
+			if empty {
+				c.hub.stopRoomRings(roomID) // last one out → stop reminding any non-joiners
+			}
 		}
 	}
 	_ = c.conn.Close()
@@ -811,13 +916,9 @@ func (c *Client) ringGroup(f frame) {
 		if blocked, err := c.store.IsBlocked(ctx, to, c.userID); err == nil && blocked {
 			continue
 		}
-		delivered := c.hub.Send(to, payload)
-		if !c.hub.isActiveFresh(to) || !delivered {
-			c.notifyAsync(to, true)
-		}
-		if !delivered {
-			c.hub.bufferCall(to, payload)
-		}
+		// Ring them now, then keep reminding (every groupRingInterval, up to groupRingCount
+		// total) until they join — independent of who else joined.
+		c.ringMember(f.RoomID, to, payload)
 	}
 }
 
@@ -1062,6 +1163,11 @@ func (c *Client) handleFrame(data []byte) {
 		case "call-ringing", "call-answer", "call-accept", "call-reject", "call-cancel", "call-busy", "call-end":
 			c.hub.stopCallRing(f.CallID)
 		}
+		// A group-call recall "remove" (call-cancel carrying a roomId + target) → stop
+		// reminding that invitee; the relay above also tells their device to stop ringing.
+		if f.T == "call-cancel" && f.RoomID != "" && f.To != "" {
+			c.hub.stopGroupMemberRing(f.RoomID, f.To)
+		}
 
 	case "call-key":
 		// Group media key, sealed peer-to-peer; relayed live, never inspected.
@@ -1086,6 +1192,7 @@ func (c *Client) handleFrame(data []byte) {
 		}
 		roster := c.hub.rooms.Join(f.RoomID, c.userID)
 		c.hub.broadcastRoster(f.RoomID, roster)
+		c.hub.stopGroupMemberRing(f.RoomID, c.userID) // they're in now → stop reminding them
 		// The initiator (first into the room) supplies the group member list → ring
 		// the rest of the group. Later joiners and ICE-recovery re-joins omit Members,
 		// and a non-initiator (roster already has others) never re-rings. Fanned out
@@ -1098,8 +1205,28 @@ func (c *Client) handleFrame(data []byte) {
 		if f.RoomID == "" {
 			return
 		}
-		roster, _ := c.hub.rooms.Leave(f.RoomID, c.userID)
+		roster, empty := c.hub.rooms.Leave(f.RoomID, c.userID)
 		c.hub.broadcastRoster(f.RoomID, roster)
+		if empty {
+			c.hub.stopRoomRings(f.RoomID) // call's over → stop reminding any non-joiners
+		}
+
+	case "call-ring":
+		// Recall: the caller re-rings ONE group invitee who hasn't joined (the per-tile
+		// recall button). Only a participant of the room may ring, and we re-ring just f.To.
+		if f.RoomID == "" || f.To == "" || !c.hub.rooms.InRoom(f.RoomID, c.userID) {
+			return
+		}
+		if !c.hub.allowRing(c.userID) {
+			return
+		}
+		if blocked, err := c.store.IsBlocked(ctx, f.To, c.userID); err == nil && blocked {
+			return
+		}
+		invite := frame{T: "call-group-invite", From: c.userID, RoomID: f.RoomID, Kind: f.Kind, Members: f.Members}
+		if payload, err := json.Marshal(invite); err == nil {
+			c.ringMember(f.RoomID, f.To, payload)
+		}
 
 	case "sfu-answer":
 		if c.hub.sfu == nil || f.RoomID == "" || len(f.SDP) == 0 {

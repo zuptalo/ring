@@ -176,6 +176,66 @@ func TestGroupCallJoinRingsMembers(t *testing.T) {
 	}
 }
 
+// Recall: a caller already in the room can re-ring ONE invitee who hasn't joined (the
+// per-tile "ring again" button) via a call-ring frame, which re-sends the invite.
+func TestGroupCallRecallRingsMember(t *testing.T) {
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	defer b.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// A starts a group call in g2 ringing B; A is now in the room, B gets the initial ring.
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-join", "roomId": "g2", "kind": "audio", "members": []string{"user-b"},
+	}); err != nil {
+		t.Fatalf("A call-join: %v", err)
+	}
+	if gotA := readFrame(t, a); gotA["t"] != "call-roster" {
+		t.Fatalf("A expected call-roster, got: %v", gotA)
+	}
+	if gotB := readFrame(t, b); gotB["t"] != "call-group-invite" {
+		t.Fatalf("B expected the initial call-group-invite, got: %v", gotB)
+	}
+
+	// B still hasn't joined → A taps recall, re-ringing just B.
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-ring", "roomId": "g2", "to": "user-b", "kind": "audio", "members": []string{"user-b"},
+	}); err != nil {
+		t.Fatalf("A call-ring (recall): %v", err)
+	}
+	gotB := readFrame(t, b)
+	if gotB["t"] != "call-group-invite" || gotB["roomId"] != "g2" || gotB["from"] != "user-a" {
+		t.Fatalf("B expected a re-ring call-group-invite for g2, got: %v", gotB)
+	}
+}
+
+// A non-participant cannot recall-ring into a room they aren't in (no unsolicited rings).
+func TestGroupCallRecallRequiresMembership(t *testing.T) {
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	defer b.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// A is NOT in room g3; a recall must be ignored (B receives nothing).
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-ring", "roomId": "g3", "to": "user-b", "kind": "audio", "members": []string{"user-b"},
+	}); err != nil {
+		t.Fatalf("A call-ring: %v", err)
+	}
+	_ = b.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, _, err := b.ReadMessage(); err == nil {
+		t.Fatal("B should receive nothing from a non-participant's recall")
+	}
+}
+
 // A later joiner (no member list) must NOT re-ring the group: only the first join
 // carrying members rings, so accepting an invite never re-notifies everyone.
 func TestGroupCallSecondJoinDoesNotRering(t *testing.T) {

@@ -72,6 +72,18 @@ func (r *Registry) SharesRoom(a, b string) bool {
 	return false
 }
 
+// InRoom reports whether userID is currently a member of roomID.
+func (r *Registry) InRoom(roomID, userID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	m := r.rooms[roomID]
+	if m == nil {
+		return false
+	}
+	_, ok := m[userID]
+	return ok
+}
+
 // RoomsForUser returns every room userID is currently in (for disconnect cleanup).
 func (r *Registry) RoomsForUser(userID string) []string {
 	r.mu.RLock()

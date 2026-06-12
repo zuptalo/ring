@@ -32,7 +32,9 @@ import { capitalizeFirst } from '@/utils/text';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
-import { sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId } from '@/services/call/signalling';
+import {
+  sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
+} from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
 import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
@@ -270,6 +272,46 @@ const GRACE_MS = 12_000; // mid-call: tolerate a blip before ending
 // Group calls: the set of OTHER participants that actually joined during the call
 // (accumulated from call-roster frames), for the call log + Calls-tab record.
 const groupJoined = new Set<string>();
+
+// Group calls (caller side): invitees we've stopped ringing — the ~30s reminder window
+// elapsed without them joining. Their tile then offers recall (ring again) / remove. A
+// per-member timer arms when we start ringing them and re-arms on a recall; it's cleared
+// the moment they join. Caller-only (callees don't ring anyone).
+export const notJoining = ref<Set<string>>(new Set());
+const memberRingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const MEMBER_RING_WINDOW_MS = 30_000; // matches the server's reminder window (groupRing*)
+
+function markNotJoining(memberId: string, on: boolean): void {
+  if (on === notJoining.value.has(memberId)) return;
+  const next = new Set(notJoining.value);
+  if (on) next.add(memberId);
+  else next.delete(memberId);
+  notJoining.value = next;
+}
+function armMemberRingTimer(memberId: string): void {
+  clearMemberRingTimer(memberId);
+  memberRingTimers.set(
+    memberId,
+    setTimeout(() => {
+      memberRingTimers.delete(memberId);
+      const meta = callMeta.value;
+      // Still invited and still not in the room → they're a non-joiner now.
+      if (meta?.isGroup && (meta.invited ?? []).includes(memberId) && !meta.roster.includes(memberId)) {
+        markNotJoining(memberId, true);
+      }
+    }, MEMBER_RING_WINDOW_MS),
+  );
+}
+function clearMemberRingTimer(memberId: string): void {
+  const t = memberRingTimers.get(memberId);
+  if (t) clearTimeout(t);
+  memberRingTimers.delete(memberId);
+}
+function clearAllMemberRingTimers(): void {
+  for (const t of memberRingTimers.values()) clearTimeout(t);
+  memberRingTimers.clear();
+  if (notJoining.value.size) notJoining.value = new Set();
+}
 
 
 /* ---- helpers ---- */
@@ -653,6 +695,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
     meta.endedReason = reason;
   }
   groupJoined.clear();
+  clearAllMemberRingTimers();
 
   setState('ended');
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
@@ -807,6 +850,9 @@ async function enterGroupCall(
     avatar,
   };
   setState('connecting');
+  // Caller side: start the per-invitee give-up timers so a member who never joins flips to
+  // the recall/remove tile after the reminder window. Callees ring no one.
+  if (direction === 'outgoing') for (const m of members) armMemberRingTimer(m);
   // Read the "use less data" floor once for this call (used by the adaptive tier).
   lessDataCalls = await getSetting<boolean>('storage.lessDataCalls', false);
 
@@ -916,6 +962,27 @@ export async function acceptGroupCall(): Promise<void> {
   clearRingTimeout();
   stopLoopTone();
   await enterGroupCall(meta.roomId, meta.kind, meta.name, meta.avatar, 'incoming');
+}
+
+/** Caller taps "Ring again" on a non-joiner's tile → re-ring them and put the tile back to
+ *  "ringing" (re-arm the give-up timer). Caller-only. */
+export async function recallMember(memberId: string): Promise<void> {
+  const meta = callMeta.value;
+  if (!meta?.isGroup || meta.direction !== 'outgoing' || !meta.roomId) return;
+  markNotJoining(memberId, false);
+  armMemberRingTimer(memberId);
+  await sendRecall(memberId, meta.roomId, meta.kind, meta.invited ?? []);
+}
+
+/** Caller taps "Remove from call" on a non-joiner's tile → stop ringing them, drop them
+ *  from the invited set (their tile disappears), and tell their device to stop. Caller-only. */
+export async function cancelInvite(memberId: string): Promise<void> {
+  const meta = callMeta.value;
+  if (!meta?.isGroup || meta.direction !== 'outgoing' || !meta.roomId) return;
+  clearMemberRingTimer(memberId);
+  markNotJoining(memberId, false);
+  meta.invited = (meta.invited ?? []).filter((id) => id !== memberId);
+  await sendGroupInviteeCancel(memberId, meta.roomId);
 }
 
 // ICE failed for the group PC: start the grace countdown and rebuild the SFU
@@ -1777,9 +1844,15 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
     }
 
     case 'call-cancel': {
-      // The caller withdrew, or we answered on another device → stop ringing.
+      // The caller withdrew, or we answered on another device → stop ringing. A group-call
+      // recall "remove" carries the roomId (no callId): dismiss the ring if it's for the
+      // group we're being rung for. Also forget any held (locked) frames for it.
       const meta = callMeta.value;
-      if (meta && meta.callId === frame.callId && callState.value === 'incoming') {
+      dropHeldCall(frame.callId);
+      dropHeldCall(frame.roomId);
+      const matchesCall = !!frame.callId && meta?.callId === frame.callId;
+      const matchesRoom = !!frame.roomId && meta?.roomId === frame.roomId;
+      if (meta && (matchesCall || matchesRoom) && callState.value === 'incoming') {
         await teardown(frame.reason === 'answered-elsewhere' ? 'answered-elsewhere' : 'remote', {
           silent: true,
         });
@@ -1804,6 +1877,12 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       const before = new Set((callMeta.value?.roster ?? []).filter((id) => id !== self));
       const after = frame.members.filter((id) => id !== self);
       after.forEach((id) => groupJoined.add(id)); // remember everyone who joined, for the call log
+      // Anyone now in the room has answered → stop their give-up timer and clear any
+      // recall/remove state (their tile goes ringing/connecting → live).
+      for (const id of after) {
+        clearMemberRingTimer(id);
+        markNotJoining(id, false);
+      }
       const afterSet = new Set(after);
       const someoneLeft = [...before].some((id) => !afterSet.has(id));
       if (callMeta.value) callMeta.value.roster = frame.members;

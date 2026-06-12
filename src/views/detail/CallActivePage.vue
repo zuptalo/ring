@@ -44,8 +44,21 @@
                 <div v-if="!tileHasVideo(t)" class="tile-camoff" :class="{ pending: t.state !== 'live' }">
                   <img v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
                   <ion-icon v-else :icon="t.state === 'live' ? videocamOffOutline : personOutline" />
-                  <ion-spinner v-if="t.state !== 'live'" name="crescent" class="tile-spinner" />
+                  <ion-spinner
+                    v-if="t.state === 'ringing' || t.state === 'connecting'"
+                    name="crescent"
+                    class="tile-spinner"
+                  />
                 </div>
+                <!-- Non-joiner (caller only): tap to ring again or remove from the call. -->
+                <button
+                  v-if="t.state === 'not-joining'"
+                  class="recall-btn"
+                  aria-label="Ring again or remove"
+                  @click.stop="openRecall(t)"
+                >
+                  <ion-icon :icon="refreshOutline" />
+                </button>
                 <span v-if="tileLabel(t)" class="tile-label">{{ tileLabel(t) }}</span>
                 <button
                   v-if="t.isSelf && canFlip && tileHasVideo(t)"
@@ -266,7 +279,7 @@ import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
-  recordingOutline, cellularOutline, informationCircleOutline, personOutline,
+  recordingOutline, cellularOutline, informationCircleOutline, personOutline, refreshOutline,
 } from 'ionicons/icons';
 import { getSelfUserId } from '@/services/auth';
 import {
@@ -277,6 +290,7 @@ import {
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   iosSpeaker, setIosSpeakerphone,
+  notJoining, recallMember, cancelInvite,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useLiveQuery } from '@/composables/useLiveQuery';
@@ -440,9 +454,10 @@ interface Tile {
   isSelf: boolean;
   leaving: boolean;
   // 'live' = a present participant (their video, or their avatar when camera-off); 'ringing'
-  // = invited, not yet in the room; 'connecting' = joined but their media hasn't landed yet.
-  // ringing/connecting render an avatar card with a spinner instead of a black tile.
-  state: 'live' | 'ringing' | 'connecting';
+  // = invited, not yet in the room; 'connecting' = joined but their media hasn't landed yet;
+  // 'not-joining' = rang out the reminder window without joining (caller sees recall/remove).
+  // ringing/connecting render an avatar card with a spinner; not-joining a recall button.
+  state: 'live' | 'ringing' | 'connecting' | 'not-joining';
   name: string; // '' → no name label (an as-yet-unidentified participant)
   avatar: string; // '' → fall back to a person icon
 }
@@ -488,11 +503,14 @@ const tiles = computed<Tile[]>(() => {
     list.push({ key: id, stream: null, isSelf: false, leaving: false, state: 'connecting', name, avatar });
   }
   // Invited people who haven't joined the room yet → a "ringing" card, so the initiator
-  // sees everyone they're calling from the moment the call starts, not only once they pick up.
+  // sees everyone they're calling from the moment the call starts, not only once they pick
+  // up. Once the reminder window elapses without them joining, the caller's tile becomes a
+  // "not-joining" card with a recall/remove button.
   for (const id of callMeta.value?.invited ?? []) {
     if (!id || id === self || streamed.has(id) || roster.has(id)) continue;
     const { name, avatar } = identity(id);
-    list.push({ key: id, stream: null, isSelf: false, leaving: false, state: 'ringing', name, avatar });
+    const state = isInitiator.value && notJoining.value.has(id) ? 'not-joining' : 'ringing';
+    list.push({ key: id, stream: null, isSelf: false, leaving: false, state, name, avatar });
   }
   if (localStream.value) {
     list.push({
@@ -517,7 +535,24 @@ function tileLabel(t: Tile): string {
   if (t.leaving) return '';
   if (t.state === 'ringing') return 'Ringing…';
   if (t.state === 'connecting') return 'Connecting…';
+  if (t.state === 'not-joining') return t.name || 'Not joined';
   return t.name;
+}
+
+// Only the caller can recall/remove a non-joiner.
+const isInitiator = computed(() => callMeta.value?.direction === 'outgoing');
+
+// Recall/remove menu for a non-joining invitee's tile (caller-only).
+async function openRecall(t: Tile): Promise<void> {
+  const sheet = await actionSheetController.create({
+    header: t.name || 'Not joined yet',
+    buttons: [
+      { text: 'Ring again', handler: () => void recallMember(t.key) },
+      { text: 'Remove from call', role: 'destructive', handler: () => void cancelInvite(t.key) },
+      { text: 'Cancel', role: 'cancel' },
+    ],
+  });
+  await sheet.present();
 }
 
 /** Whether a tile is showing live video. When not, we overlay a camera-off icon but
@@ -1101,6 +1136,29 @@ const diag = computed(() => {
   width: 30px;
   height: 30px;
   font-size: 16px;
+}
+/* Recall/remove control on a non-joiner's tile (caller only): centred over the avatar. */
+.recall-btn {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: var(--ion-color-primary, #10b981);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  z-index: 4;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.recall-btn ion-icon {
+  pointer-events: none;
 }
 .pip-flip {
   right: 4px;

@@ -8,7 +8,7 @@ import { sealForChat, openPacket, clearSession } from '@/services/messaging';
 import { getContact, startDirectChat } from '@/db/queries';
 import type { CallSignal } from '@/services/crypto/message';
 import { sendLive } from '@/composables/useSync';
-import type { CallAnswerFrame, CallIceFrame, CallOfferFrame } from '@/services/transport';
+import type { CallAnswerFrame, CallIceFrame, CallOfferFrame, CallKind } from '@/services/transport';
 
 export type { CallSignal };
 
@@ -129,6 +129,23 @@ export async function openSealedSignal(
     console.warn('[call] failed to open signal', e);
     return null;
   }
+}
+
+/** Caller → server: re-ring (recall) one group invitee who hasn't joined yet. The server
+ *  re-sends the invite and restarts that member's reminder rounds. */
+export function sendRecall(
+  memberId: string,
+  roomId: string,
+  kind: CallKind,
+  members: string[],
+): Promise<boolean> {
+  return sendLive({ t: 'call-ring', to: memberId, roomId, kind, members });
+}
+
+/** Caller → server: stop ringing AND remove one not-yet-joined group invitee. The server
+ *  halts their reminders and relays the cancel so their ringing device dismisses it. */
+export function sendGroupInviteeCancel(memberId: string, roomId: string): Promise<boolean> {
+  return sendLive({ t: 'call-cancel', to: memberId, roomId, reason: 'declined' });
 }
 
 /** Send a payload-free 1:1 control frame (ringing/accept/reject/cancel/busy/end, and

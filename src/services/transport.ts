@@ -128,9 +128,20 @@ export interface CallControlFrame {
   t: 'call-ringing' | 'call-accept' | 'call-reject' | 'call-cancel' | 'call-busy' | 'call-end';
   to?: string;
   from?: string;
-  callId: string;
+  callId?: string; // 1:1 call id; omitted for a group-invitee cancel, which uses roomId
+  roomId?: string; // set when the caller cancels (removes) a not-yet-joined group invitee
   reason?: string; // declined|busy|timeout|hangup|unavailable|answered-elsewhere
   duration?: number; // seconds (informational, on call-end)
+}
+
+/** Caller → server: re-ring (recall) ONE group invitee who hasn't joined yet — the
+ *  per-tile "ring again" button. The server re-sends the invite + restarts the reminders. */
+export interface CallRingFrame {
+  t: 'call-ring';
+  to: string;
+  roomId: string;
+  kind?: CallKind;
+  members?: string[]; // the full invited set (for the invite's participant list)
 }
 
 /* ---- group calls (SFU) ---- */
@@ -238,6 +249,7 @@ export type CallFrame =
   | CallStreamIdFrame
   | CallGroupInviteFrame
   | CallKeyRequestFrame
+  | CallRingFrame
   | SfuOfferFrame
   | SfuAnswerFrame
   | SfuIceFrame
