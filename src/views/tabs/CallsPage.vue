@@ -4,6 +4,11 @@
       <ion-toolbar>
         <ion-title>Calls</ion-title>
         <ion-buttons slot="end">
+          <!-- Start a group call without first making a group chat: pick several
+               contacts and ring them on a fresh room. -->
+          <ion-button aria-label="New group call" @click="router.push('/new-group-call')">
+            <ion-icon slot="icon-only" :icon="peopleOutline" />
+          </ion-button>
           <ion-button aria-label="New call" @click="newOpen = true">
             <ion-icon slot="icon-only" :icon="addOutline" />
           </ion-button>
@@ -134,7 +139,7 @@ import {
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
   addOutline, callOutline, videocamOutline, arrowUpOutline, arrowDownOutline,
-  informationCircleOutline, trashOutline,
+  informationCircleOutline, trashOutline, peopleOutline,
 } from 'ionicons/icons';
 import { deleteCalls, listCallGroups, markCallsSeen, listContacts } from '@/db/queries';
 import type { CallGroup } from '@/db/queries';

@@ -73,6 +73,8 @@ export class MeshSession {
   private turn: TurnConfig | null = null;
   private legs = new Map<string, PeerLeg>(); // peerUserId → leg
   private remote = new Map<string, MediaStream>(); // peerUserId → their stream
+  // Roster updates apply one at a time (see onRoster): a burst of joins must not interleave.
+  private rosterChain: Promise<void> = Promise.resolve();
   private currentEnc: VideoEncoding | null = null; // applied to every leg's video sender
   // Aggregate connection-state tracking (so a single leg blip doesn't end the call).
   private everConnected = false;
@@ -118,8 +120,17 @@ export class MeshSession {
     });
   }
 
-  /** Roster update → open a leg to each new peer, close legs to departed peers. */
-  async onRoster(members: string[]): Promise<void> {
+  /** Roster update → open a leg to each new peer, close legs to departed peers. Serialized
+   *  through a promise chain so a burst of roster frames (several people accepting at once)
+   *  applies strictly in order and two updates never interleave their open/close passes. */
+  onRoster(members: string[]): Promise<void> {
+    this.rosterChain = this.rosterChain
+      .then(() => this.applyRoster(members))
+      .catch((e) => console.warn('[mesh] roster apply failed', e));
+    return this.rosterChain;
+  }
+
+  private async applyRoster(members: string[]): Promise<void> {
     const others = members.filter((m) => m && m !== this.selfId);
     const present = new Set(others);
     for (const peerId of [...this.legs.keys()]) {
@@ -319,7 +330,13 @@ export class MeshSession {
   private async buildLeg(peerId: string): Promise<PeerLeg> {
     const existing = this.legs.get(peerId);
     if (existing) return existing;
+    // Fetching the TURN config is the only await before the leg is reserved below, so two
+    // roster updates racing to open the SAME leg could both get past the check above. Once
+    // the config is in hand, re-check and hand back the winner — building two peer
+    // connections to one peer would glare against itself and wedge the leg.
     const turn = this.turn ?? (this.turn = await getTurnConfig());
+    const raced = this.legs.get(peerId);
+    if (raced) return raced;
     const pc = new RTCPeerConnection(rtcConfig(turn));
     const leg: PeerLeg = {
       pc,

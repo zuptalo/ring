@@ -36,14 +36,17 @@
                   autoplay
                   playsinline
                 />
-                <!-- Camera off / audio-only: show the participant's avatar (their
-                     name's initials avatar when we have no contact) instead of a bare
-                     icon. The <video> above stays mounted so their audio keeps playing. -->
-                <div v-if="!tileHasVideo(t)" class="tile-camoff">
+                <!-- No live video (camera off, audio-only, or a feed that hasn't landed
+                     yet): show the participant's avatar — their initials avatar when we
+                     have no contact card — instead of a black tile. A "connecting" tile
+                     adds a spinner so a joining participant reads as on-the-way, not off.
+                     The <video> above stays mounted so their audio keeps playing. -->
+                <div v-if="!tileHasVideo(t)" class="tile-camoff" :class="{ connecting: t.connecting }">
                   <img v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
-                  <ion-icon v-else :icon="videocamOffOutline" />
+                  <ion-icon v-else :icon="t.connecting ? personOutline : videocamOffOutline" />
+                  <ion-spinner v-if="t.connecting" name="crescent" class="tile-spinner" />
                 </div>
-                <span v-if="t.name" class="tile-label">{{ t.name }}</span>
+                <span v-if="t.name || t.connecting" class="tile-label">{{ t.name || 'Connecting…' }}</span>
                 <button
                   v-if="t.isSelf && canFlip && tileHasVideo(t)"
                   class="flip-btn tile-flip"
@@ -263,8 +266,9 @@ import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
-  recordingOutline, cellularOutline, informationCircleOutline,
+  recordingOutline, cellularOutline, informationCircleOutline, personOutline,
 } from 'ionicons/icons';
+import { getSelfUserId } from '@/services/auth';
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
@@ -423,8 +427,10 @@ function onPipCancel(): void {
 /* ---- group stage: every participant is a floating, auto-sized tile ---- */
 const SELF = '__self__';
 
-// A participant who just left lingers as a brief waving-hand placeholder so the
-// layout stays steady for a beat before the remaining tiles reflow and grow.
+// A participant who just left lingers as a waving-hand placeholder so the layout stays
+// steady — and the goodbye reads — before the remaining tiles reflow and grow. Kept in
+// sync with the `tile-leave` CSS animation duration below.
+const LEAVE_MS = 4000;
 const leaving = ref<{ id: string }[]>([]);
 let prevStreamIds: string[] = [];
 
@@ -433,6 +439,7 @@ interface Tile {
   stream: MediaStream | null;
   isSelf: boolean;
   leaving: boolean;
+  connecting: boolean; // a joined participant whose media hasn't arrived yet
   name: string; // '' → no name label (an as-yet-unidentified participant)
   avatar: string; // '' → fall back to the camera-off icon
 }
@@ -446,35 +453,49 @@ const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c]))
 // propagates, and shared with the rest of the app via useSelfProfile.
 const { name: selfName, avatar: selfAvatar } = useSelfProfile();
 
-// Tiles = every remote feed + our own outgoing feed + any leaving placeholders.
-// Incoming and outgoing are treated identically: equally-sized floating units. Each
-// remote stream's owner is resolved via the peer-announced streamId→userId map
-// (groupStreamOwners); until that announcement lands a tile is just unlabeled.
+// Resolve a known contact (or our own profile) to a tile's name + avatar.
+function identity(userId: string | undefined): { name: string; avatar: string } {
+  const contact = userId ? contactsMap.value.get(userId) : undefined;
+  if (!contact) return { name: '', avatar: '' };
+  return { name: contact.name, avatar: contact.avatar || initialsAvatar(contact.name) };
+}
+
+// Tiles = every landed remote feed + a placeholder for each joined participant whose feed
+// hasn't arrived yet + our own outgoing feed + any leaving placeholders. Incoming and
+// outgoing are equally-sized floating units. A remote stream's owner is resolved via the
+// streamId→userId map (groupStreamOwners, derived locally in the mesh as each leg's track
+// arrives); tiles are keyed by user id so a "connecting" placeholder becomes the live feed
+// in place — no remount, no black flash — the instant their media lands.
 const tiles = computed<Tile[]>(() => {
+  const owners = groupStreamOwners.value;
+  const self = getSelfUserId() ?? '';
+  const streamed = new Set<string>(); // user ids whose feed has landed
   const list: Tile[] = remoteStreams.value.map((s) => {
-    const userId = groupStreamOwners.value[s.id];
-    const contact = userId ? contactsMap.value.get(userId) : undefined;
-    return {
-      key: s.id,
-      stream: s,
-      isSelf: false,
-      leaving: false,
-      name: contact?.name ?? '',
-      avatar: contact ? contact.avatar || initialsAvatar(contact.name) : '',
-    };
+    const userId = owners[s.id];
+    if (userId) streamed.add(userId);
+    const { name, avatar } = identity(userId);
+    return { key: userId || s.id, stream: s, isSelf: false, leaving: false, connecting: false, name, avatar };
   });
+  // Joined-but-not-yet-streaming members: show their name + avatar (a "connecting" card)
+  // instead of an empty slot, so nobody ever stares at a black tile waiting for a feed.
+  for (const id of callMeta.value?.roster ?? []) {
+    if (!id || id === self || streamed.has(id)) continue;
+    const { name, avatar } = identity(id);
+    list.push({ key: id, stream: null, isSelf: false, leaving: false, connecting: true, name, avatar });
+  }
   if (localStream.value) {
     list.push({
       key: SELF,
       stream: localStream.value,
       isSelf: true,
       leaving: false,
+      connecting: false,
       name: selfName.value,
       avatar: selfAvatar.value,
     });
   }
   for (const l of leaving.value) {
-    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, name: '', avatar: '' });
+    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, connecting: false, name: '', avatar: '' });
   }
   return list;
 });
@@ -600,7 +621,7 @@ watch(remoteStreams, (streams) => {
       leaving.value = [...leaving.value, { id: gone }];
       setTimeout(() => {
         leaving.value = leaving.value.filter((l) => l.id !== gone);
-      }, 1800);
+      }, LEAVE_MS);
     }
   }
   prevStreamIds = ids;
@@ -929,6 +950,19 @@ const diag = computed(() => {
   border-radius: 50%;
   object-fit: cover;
 }
+/* A joining participant: dim the avatar a touch and float a spinner in the corner so the
+   tile reads as "on the way" rather than camera-off. */
+.tile-camoff.connecting .tile-avatar {
+  opacity: 0.85;
+}
+.tile-spinner {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 18px;
+  height: 18px;
+  color: rgba(255, 255, 255, 0.85);
+}
 .tile-label {
   position: absolute;
   left: 8px;
@@ -938,12 +972,13 @@ const diag = computed(() => {
   background: rgba(0, 0, 0, 0.5);
   font-size: 11px;
 }
-/* A departed participant's placeholder: a waving hand that fades out. */
+/* A departed participant's placeholder: a waving hand that lingers, then fades out.
+   Duration must match LEAVE_MS in the script. */
 .float-tile.leaving {
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: tile-leave 1.8s ease forwards;
+  animation: tile-leave 4s ease forwards;
 }
 @keyframes tile-in {
   from {

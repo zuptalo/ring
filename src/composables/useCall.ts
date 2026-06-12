@@ -27,6 +27,7 @@ import {
   sendMessage,
   getSetting,
 } from '@/db/queries';
+import { groupAvatar } from '@/db/avatars';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
@@ -763,6 +764,21 @@ export async function startGroupCall(
     return;
   }
   await enterGroupCall(roomId, kind, name, avatar, 'outgoing', members);
+}
+
+/** Start a group call that isn't backed by a group chat: mint a fresh room and ring the
+ *  chosen contacts directly. The room has no chat, so the callees' ring falls back to a
+ *  generic "Group call" (handleGroupInvite) and nothing is logged to a chat — only the
+ *  Calls-tab record. Members who aren't each other's contacts are introduced for the
+ *  duration of the call (mesh + same-room key gate); the mesh fills in as each one joins. */
+export async function startAdHocGroupCall(
+  members: string[],
+  kind: CallKind,
+  name: string,
+): Promise<void> {
+  if (!members.length) return;
+  const roomId = uid(); // a fresh room, deliberately NOT a chat id
+  await startGroupCall(roomId, kind, name || 'Group call', groupAvatar(roomId), members);
 }
 
 /** Shared group-call entry: build + start the SFU session and wire its callbacks.

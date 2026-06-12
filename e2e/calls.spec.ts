@@ -380,6 +380,54 @@ test('group call: members who are not mutual contacts still mesh', async ({ brow
 });
 
 /**
+ * Late joiner: someone arriving after the call is underway must mesh with EVERYONE already
+ * in it — they get all the existing feeds and each existing member gets theirs. Driven
+ * purely by the roster broadcast: each side opens a fresh leg to the newcomer (and the
+ * newcomer to each of them) when the roster grows.
+ */
+test('group call: a late joiner meshes with everyone already in the call', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'CALLLATE1');
+  const b = await createAccount(ctxB, 'CALLLATE2');
+  const c = await createAccount(ctxC, 'CALLLATE3');
+  await pair(a, b);
+  await pair(a, c);
+  await pair(b, c);
+
+  const room = 'e2e-group-late';
+  // A and B start first and connect to each other.
+  for (const p of [a, b]) {
+    await p.page.evaluate((r) => (window as any).__ringTest.startGroup(r, 'audio'), room);
+  }
+  for (const p of [a, b]) {
+    await p.page.waitForFunction(
+      () => (window as any).__ringTest.remoteStreamCount() >= 1,
+      null,
+      { timeout: 60_000 },
+    );
+  }
+
+  // C joins late — now everyone (including C) should end up with both others' feeds.
+  await c.page.evaluate((r) => (window as any).__ringTest.startGroup(r, 'audio'), room);
+  for (const p of [a, b, c]) {
+    await p.page.waitForFunction(
+      () => (window as any).__ringTest.remoteStreamCount() >= 2,
+      null,
+      { timeout: 60_000 },
+    );
+  }
+
+  for (const p of [a, b, c]) {
+    await p.page.evaluate(() => (window as any).__ringTest.hangup());
+  }
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});
+
+/**
  * Active-speaker highlight: each tile is metered (Web Audio RMS of the DECODED audio),
  * and a tile whose level crosses the threshold is flagged as speaking for the UI ring.
  *

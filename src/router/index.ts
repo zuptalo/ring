@@ -65,6 +65,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/detail/NewGroupPage.vue'),
   },
   {
+    path: '/new-group-call',
+    component: () => import('@/views/detail/NewGroupCallPage.vue'),
+  },
+  {
     path: '/chats/archived',
     component: () => import('@/views/detail/ArchivedChatsPage.vue'),
   },
