@@ -56,7 +56,8 @@ interface PeerLeg {
   polite: boolean; // larger user id is polite: it rolls back on offer collision
   makingOffer: boolean;
   ignoreOffer: boolean;
-  pendingIce: RTCIceCandidateInit[];
+  pendingIce: RTCIceCandidateInit[]; // inbound, buffered until we have a remote description
+  pendingLocalIce: RTCIceCandidateInit[]; // outbound, buffered until the leg has negotiated
   // Has this leg exchanged its first offer/answer yet? Until it has, only ONE side
   // (the impolite peer) sends the initial offer — see the negotiation guard in buildLeg.
   negotiated: boolean;
@@ -150,6 +151,7 @@ export class MeshSession {
         sdpType: leg.pc.localDescription?.type,
         roomId: this.roomId,
       });
+      this.flushLocalIce(leg); // session is paired now — release any held candidates
     } catch (e) {
       console.warn('[mesh] offer handling failed', e);
     }
@@ -163,6 +165,7 @@ export class MeshSession {
       await leg.pc.setRemoteDescription({ type: signal.sdpType ?? 'answer', sdp: signal.sdp });
       leg.negotiated = true; // first offer/answer done; renegotiation glare is now safe
       await this.drainIce(leg);
+      this.flushLocalIce(leg); // release the candidates buffered while the offer was in flight
     } catch (e) {
       console.warn('[mesh] answer handling failed', e);
     }
@@ -321,6 +324,7 @@ export class MeshSession {
       makingOffer: false,
       ignoreOffer: false,
       pendingIce: [],
+      pendingLocalIce: [],
       negotiated: false,
     };
     this.legs.set(peerId, leg);
@@ -359,12 +363,20 @@ export class MeshSession {
     };
     pc.onicecandidate = (e) => {
       if (!e.candidate) return;
-      void this.send('call-ice', peerId, {
-        callId: this.roomId,
-        type: 'ice',
-        candidate: e.candidate.toJSON(),
-        roomId: this.roomId,
-      });
+      const candidate = e.candidate.toJSON();
+      // Hold local ICE until this leg's first offer/answer has been exchanged. Each frame
+      // is sealed over the pair's 1:1 ratchet, and until the session is confirmed the
+      // initiator stamps EVERY outgoing frame with the X3DH prekey preamble. Trickling a
+      // flood of preamble-stamped candidates (a video offer yields many) races the offer
+      // through the responder's "a prekey packet means (re)establish the session" path and
+      // diverges the ratchet, so subsequent frames fail to decrypt. Buffering until the leg
+      // has negotiated keeps the offer the ONLY preamble packet — exactly like the 1:1 path
+      // — and the candidates then follow as ordinary ratchet messages.
+      if (!leg.negotiated) {
+        leg.pendingLocalIce.push(candidate);
+        return;
+      }
+      void this.send('call-ice', peerId, { callId: this.roomId, type: 'ice', candidate, roomId: this.roomId });
     };
     pc.ontrack = (e) => {
       const stream = e.streams[0];
@@ -411,6 +423,19 @@ export class MeshSession {
       } catch {
         /* stale/duplicate */
       }
+    }
+  }
+
+  /** Send any local ICE candidates that were held until the leg's session was paired. */
+  private flushLocalIce(leg: PeerLeg): void {
+    if (!leg.negotiated) return;
+    for (const candidate of leg.pendingLocalIce.splice(0)) {
+      void this.send('call-ice', leg.peerId, {
+        callId: this.roomId,
+        type: 'ice',
+        candidate,
+        roomId: this.roomId,
+      });
     }
   }
 
