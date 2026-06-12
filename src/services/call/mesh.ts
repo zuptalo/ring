@@ -57,6 +57,9 @@ interface PeerLeg {
   makingOffer: boolean;
   ignoreOffer: boolean;
   pendingIce: RTCIceCandidateInit[];
+  // Has this leg exchanged its first offer/answer yet? Until it has, only ONE side
+  // (the impolite peer) sends the initial offer — see the negotiation guard in buildLeg.
+  negotiated: boolean;
 }
 
 export class MeshSession {
@@ -137,6 +140,7 @@ export class MeshSession {
     try {
       // Modern browsers implicitly roll back the polite peer on collision here.
       await leg.pc.setRemoteDescription(desc);
+      leg.negotiated = true; // a paired session now exists; this side may renegotiate too
       await this.drainIce(leg);
       await leg.pc.setLocalDescription(); // implicit answer
       await this.send('call-answer', from, {
@@ -157,6 +161,7 @@ export class MeshSession {
     if (!leg || !signal.sdp) return;
     try {
       await leg.pc.setRemoteDescription({ type: signal.sdpType ?? 'answer', sdp: signal.sdp });
+      leg.negotiated = true; // first offer/answer done; renegotiation glare is now safe
       await this.drainIce(leg);
     } catch (e) {
       console.warn('[mesh] answer handling failed', e);
@@ -316,6 +321,7 @@ export class MeshSession {
       makingOffer: false,
       ignoreOffer: false,
       pendingIce: [],
+      negotiated: false,
     };
     this.legs.set(peerId, leg);
 
@@ -324,6 +330,16 @@ export class MeshSession {
 
     // Perfect negotiation: either side may (re)offer; collisions resolve by polite/impolite.
     pc.onnegotiationneeded = async () => {
+      // First negotiation only: just ONE side offers (the impolite peer). The mesh seals
+      // each leg's SDP over that pair's 1:1 ratchet, and if BOTH sides offer at once on a
+      // never-messaged pair they both run X3DH as initiator simultaneously, producing two
+      // divergent, unpaired sessions — every later sealed answer/ICE then fails to decrypt
+      // and the leg deadlocks. Letting only the impolite peer open the leg means the polite
+      // peer first *receives* a packet (establishing a paired responder session) before it
+      // ever seals one, and its local tracks ride out in the answer. Once the leg has
+      // negotiated once, both sides may renegotiate freely (camera toggle) — a session now
+      // exists, so there's no X3DH race and ordinary perfect negotiation applies.
+      if (!leg.negotiated && leg.polite) return;
       try {
         leg.makingOffer = true;
         await pc.setLocalDescription(); // implicit offer
