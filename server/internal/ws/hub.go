@@ -193,6 +193,10 @@ type bufferedCall struct {
 // from the notification and its WebSocket reconnects.
 const callBufferTTL = 60 * time.Second
 
+// maxBufferedCallFrames caps the per-callee hold (one offer + its trickled ICE) so an
+// offline callee's buffer can't be grown without bound. A normal call setup is far under it.
+const maxBufferedCallFrames = 64
+
 func NewHub() *Hub {
 	return &Hub{
 		conns:    make(map[string]map[*Client]struct{}),
@@ -323,7 +327,13 @@ func (h *Hub) bufferCall(to string, payload []byte) {
 			kept = append(kept, b)
 		}
 	}
-	h.callBuf[to] = append(kept, bufferedCall{payload: payload, exp: now.Add(callBufferTTL)})
+	buf := append(kept, bufferedCall{payload: payload, exp: now.Add(callBufferTTL)})
+	// Bound the hold (offer + trickled ICE) so a chatty/abusive caller can't grow it without
+	// limit; a normal call setup is well under this. Dropping the oldest first is acceptable.
+	if len(buf) > maxBufferedCallFrames {
+		buf = buf[len(buf)-maxBufferedCallFrames:]
+	}
+	h.callBuf[to] = buf
 }
 
 // takeBufferedCalls returns and clears the non-expired buffered offers for a user.
@@ -1002,6 +1012,15 @@ func (c *Client) handleFrame(data []byte) {
 			return
 		}
 		delivered := c.hub.Send(f.To, payload)
+		if delivered {
+			// The callee has a live socket and just received the offer → it's reachable.
+			// Tell the caller so its UI flips "Calling" → "Ringing" without depending on the
+			// callee's app echoing call-ringing (which a foregrounded-but-throttled page can
+			// miss — the background path already flips via the push /v1/call/ack).
+			if rp, err := json.Marshal(frame{T: "call-ringing", CallID: f.CallID, From: f.To}); err == nil {
+				c.hub.Send(c.userID, rp)
+			}
+		}
 		// Push whenever the callee isn't foregrounded-and-responsive, so a
 		// backgrounded, locked, or frozen device gets the OS ring even if a socket
 		// is live but the in-app ringtone is autoplay-blocked. NotifyCall sends the
@@ -1025,7 +1044,18 @@ func (c *Client) handleFrame(data []byte) {
 		"call-upgrade-request", "call-upgrade-accept", "call-upgrade-reject":
 		// Pure live relay of the remaining 1:1 signalling (incl. the consent-gated
 		// audio<->video upgrade). The sender is authoritative; SDP/ICE stay E2EE'd.
-		c.relayCall(f)
+		delivered := c.relayCall(f)
+		// A 1:1 caller trickles its ICE candidates right after the offer. If the callee is
+		// briefly offline (backgrounded long enough — ~30s — that iOS suspended its socket),
+		// those candidates would be lost while only the offer is buffered, so an answered
+		// call could never connect. Buffer undelivered 1:1 ICE too, flushed (after the offer,
+		// in arrival order) when the device reconnects. Mesh ICE (roomId) is group signalling
+		// between already-present peers and stays live-only.
+		if !delivered && f.T == "call-ice" && f.RoomID == "" && f.To != "" {
+			if rp := c.forwardedCallPayload(f); rp != nil {
+				c.hub.bufferCall(f.To, rp)
+			}
+		}
 		// Once the callee engages (ringing/answered) or the call resolves, stop the
 		// re-push ring loop so it can't keep buzzing a settled call.
 		switch f.T {

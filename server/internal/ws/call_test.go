@@ -34,6 +34,13 @@ func TestCallOfferRelayedLiveToOnlinePeer(t *testing.T) {
 		t.Fatalf("B expected opaque ciphertext relayed verbatim, got: %v", got["ciphertext"])
 	}
 
+	// The offer reached a live callee socket → the server tells the caller it's reachable so
+	// its UI flips "Calling" → "Ringing" without waiting on the callee's app to echo it.
+	gotR := readFrame(t, a)
+	if gotR["t"] != "call-ringing" || gotR["from"] != "user-b" || gotR["callId"] != "c1" {
+		t.Fatalf("A expected server-issued call-ringing (callee reachable), got: %v", gotR)
+	}
+
 	// B answers → A receives it.
 	if err := b.WriteJSON(map[string]any{
 		"t": "call-answer", "to": "user-a", "callId": "c1", "ciphertext": "SDP_B",
@@ -86,6 +93,50 @@ func TestCallOfferBuffersAndPushesWhenOffline(t *testing.T) {
 	got := readFrame(t, b)
 	if got["t"] != "call-offer" || got["callId"] != "c2" || got["from"] != "user-a" {
 		t.Fatalf("B expected the buffered call-offer on reconnect, got: %v", got)
+	}
+}
+
+// A 1:1 caller trickles ICE right after the offer. If the callee is offline, those
+// candidates must be BUFFERED alongside the offer (not dropped on a live-only relay) and
+// delivered, after the offer, when the device reconnects - otherwise an answered call can
+// never connect (the ">30s backgrounded" stuck-connecting bug).
+func TestCallIceBufferedAndFlushedForOfflineCallee(t *testing.T) {
+	relay := newMemRelay()
+	notif := &fakeNotifier{ch: make(chan string, 4)}
+	srv := httptest.NewServer(ws.Handler(ws.NewHub(), relay, notif, testAuth, nil))
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// B is offline → A sends the offer, then trickles two ICE candidates.
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-offer", "to": "user-b", "callId": "c3", "kind": "audio", "ciphertext": "SDP_A",
+	}); err != nil {
+		t.Fatalf("A call-offer: %v", err)
+	}
+	for _, cand := range []string{"ICE_1", "ICE_2"} {
+		if err := a.WriteJSON(map[string]any{
+			"t": "call-ice", "to": "user-b", "callId": "c3", "ciphertext": cand,
+		}); err != nil {
+			t.Fatalf("A call-ice: %v", err)
+		}
+	}
+	// Let the server process + buffer them before B reconnects.
+	time.Sleep(100 * time.Millisecond)
+
+	// B reconnects → receives the offer first, then both candidates in order.
+	b := dial(t, srv, "tokB")
+	defer b.Close()
+	if got := readFrame(t, b); got["t"] != "call-offer" || got["callId"] != "c3" {
+		t.Fatalf("B expected the buffered call-offer first, got: %v", got)
+	}
+	for _, want := range []string{"ICE_1", "ICE_2"} {
+		got := readFrame(t, b)
+		if got["t"] != "call-ice" || got["from"] != "user-a" || got["ciphertext"] != want {
+			t.Fatalf("B expected buffered call-ice %q in order, got: %v", want, got)
+		}
 	}
 }
 

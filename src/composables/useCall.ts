@@ -10,7 +10,7 @@
  * Group calls (SFU) are layered on separately (services/call/sfu.ts); this file
  * owns the 1:1 path and the shared reactive state/UI surface.
  */
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { toastController } from '@ionic/vue';
 import router from '@/router';
 import { uid } from '@/utils/uid';
@@ -30,7 +30,7 @@ import {
 import { groupAvatar } from '@/db/avatars';
 import { capitalizeFirst } from '@/utils/text';
 import { getSelfUserId } from '@/services/auth';
-import { isUnlockedNow } from '@/services/crypto/identity';
+import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import { sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
@@ -1610,7 +1610,70 @@ async function handleMeshSignal(
   return true;
 }
 
+// Cold start from a call push can deliver the sealed setup frames (the 1:1 offer + the
+// caller's trickled ICE, or a group invite) BEFORE device-key auto-unlock finishes — we
+// can't decrypt them yet. Dropping them was the bug: a dropped offer auto-replied "busy"
+// and killed the call, and dropped ICE left an answered call stuck connecting. Instead,
+// hold the sealed frames and replay them the instant we unlock. Bounded + expired so a
+// PIN-locked device whose owner never answers doesn't hoard them (and never rings a call
+// the caller already withdrew while we were locked — see the cancel/end handling below).
+let lockedCallFrames: CallFrame[] = [];
+let lockedCallTimer: ReturnType<typeof setTimeout> | null = null;
+const LOCKED_CALL_TTL_MS = 60_000; // matches the server's call-buffer / answer window
+
+function clearLockedCallFrames(): void {
+  lockedCallFrames = [];
+  if (lockedCallTimer) {
+    clearTimeout(lockedCallTimer);
+    lockedCallTimer = null;
+  }
+}
+
+function holdCallFrameWhileLocked(frame: CallFrame): void {
+  lockedCallFrames.push(frame);
+  if (lockedCallFrames.length > 128) lockedCallFrames.shift();
+  if (!lockedCallTimer) lockedCallTimer = setTimeout(clearLockedCallFrames, LOCKED_CALL_TTL_MS);
+}
+
+// A withdrawal (call-cancel / call-end) for a call we're still holding locked → forget its
+// setup frames so we don't ring a dead call once we unlock.
+function dropHeldCall(id: string | undefined): void {
+  if (!id) return;
+  lockedCallFrames = lockedCallFrames.filter((f) => {
+    const cid = 'callId' in f ? f.callId : undefined;
+    const rid = 'roomId' in f ? f.roomId : undefined;
+    return cid !== id && rid !== id;
+  });
+}
+
+// Replay held setup frames in arrival order (an offer before its ICE) once unlocked.
+watch(isUnlocked, (unlocked) => {
+  if (!unlocked || lockedCallFrames.length === 0) return;
+  const queued = lockedCallFrames;
+  clearLockedCallFrames();
+  void (async () => {
+    for (const f of queued) await handleCallFrame(f);
+  })();
+});
+
 export async function handleCallFrame(frame: CallFrame): Promise<void> {
+  // While the keystore is still locked we can't open sealed signalling. Hold the
+  // decryption-dependent SETUP frames (replayed on unlock) rather than dropping them; let
+  // plaintext control frames through, and use a withdrawal to forget a held call.
+  if (!isUnlockedNow()) {
+    const roomId = 'roomId' in frame ? frame.roomId : undefined;
+    const isSetup =
+      ((frame.t === 'call-offer' || frame.t === 'call-ice') && !roomId) ||
+      frame.t === 'call-group-invite';
+    if (isSetup) {
+      holdCallFrameWhileLocked(frame);
+      return;
+    }
+    if (frame.t === 'call-cancel' || frame.t === 'call-end') {
+      dropHeldCall('callId' in frame ? frame.callId : undefined);
+    }
+  }
+
   switch (frame.t) {
     case 'call-offer':
       if (await handleMeshSignal('offer', frame)) return;

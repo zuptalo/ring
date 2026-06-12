@@ -141,7 +141,13 @@ test('background ringing: an offline callee rings after reconnecting', async ({ 
   await a.page.waitForTimeout(1500); // let the server observe B's disconnect
   await startCall(a, b.id, 'audio');
 
-  // B comes back → reconnects, receives the buffered offer, and rings.
+  // Let A finish gathering + trickling its ICE candidates while B is still offline. These
+  // arrive at the server AFTER the offer, so they only reach B if the server buffers
+  // undelivered 1:1 ICE alongside the offer — otherwise B answers with no candidates from A
+  // and the call is stuck connecting (the real-device ">30s backgrounded" bug).
+  await a.page.waitForTimeout(3000);
+
+  // B comes back → reconnects, receives the buffered offer + ICE, and rings.
   await ctxB.setOffline(false);
   await waitCallState(b, ['incoming'], 40_000);
 
