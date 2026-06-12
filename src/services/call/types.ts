@@ -39,6 +39,11 @@ export interface CallMeta {
   // group
   roomId?: string;
   roster: string[];
+  // Everyone this call was started with (initiator) or that we were told about (callee),
+  // INCLUDING those who haven't joined the room yet. Drives the "ringing" placeholder tiles
+  // for people still being rung. Distinct from `roster`, which is only those actually in
+  // the room (and what the mesh opens legs to).
+  invited?: string[];
   // display
   name: string;
   avatar: string;

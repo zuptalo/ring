@@ -36,17 +36,17 @@
                   autoplay
                   playsinline
                 />
-                <!-- No live video (camera off, audio-only, or a feed that hasn't landed
-                     yet): show the participant's avatar — their initials avatar when we
-                     have no contact card — instead of a black tile. A "connecting" tile
-                     adds a spinner so a joining participant reads as on-the-way, not off.
-                     The <video> above stays mounted so their audio keeps playing. -->
-                <div v-if="!tileHasVideo(t)" class="tile-camoff" :class="{ connecting: t.connecting }">
+                <!-- No live video (camera off, audio-only, still ringing, or a feed that
+                     hasn't landed yet): show the participant's avatar — their initials
+                     avatar when we have no contact card — instead of a black tile. A
+                     pending tile (ringing/connecting) adds a spinner so they read as
+                     on-the-way, not camera-off. The <video> stays mounted so audio plays. -->
+                <div v-if="!tileHasVideo(t)" class="tile-camoff" :class="{ pending: t.state !== 'live' }">
                   <img v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
-                  <ion-icon v-else :icon="t.connecting ? personOutline : videocamOffOutline" />
-                  <ion-spinner v-if="t.connecting" name="crescent" class="tile-spinner" />
+                  <ion-icon v-else :icon="t.state === 'live' ? videocamOffOutline : personOutline" />
+                  <ion-spinner v-if="t.state !== 'live'" name="crescent" class="tile-spinner" />
                 </div>
-                <span v-if="t.name || t.connecting" class="tile-label">{{ t.name || 'Connecting…' }}</span>
+                <span v-if="tileLabel(t)" class="tile-label">{{ tileLabel(t) }}</span>
                 <button
                   v-if="t.isSelf && canFlip && tileHasVideo(t)"
                   class="flip-btn tile-flip"
@@ -439,9 +439,12 @@ interface Tile {
   stream: MediaStream | null;
   isSelf: boolean;
   leaving: boolean;
-  connecting: boolean; // a joined participant whose media hasn't arrived yet
+  // 'live' = a present participant (their video, or their avatar when camera-off); 'ringing'
+  // = invited, not yet in the room; 'connecting' = joined but their media hasn't landed yet.
+  // ringing/connecting render an avatar card with a spinner instead of a black tile.
+  state: 'live' | 'ringing' | 'connecting';
   name: string; // '' → no name label (an as-yet-unidentified participant)
-  avatar: string; // '' → fall back to the camera-off icon
+  avatar: string; // '' → fall back to a person icon
 }
 
 // Reactive contacts, keyed by userId, so a tile can resolve its owner's name + avatar
@@ -474,14 +477,22 @@ const tiles = computed<Tile[]>(() => {
     const userId = owners[s.id];
     if (userId) streamed.add(userId);
     const { name, avatar } = identity(userId);
-    return { key: userId || s.id, stream: s, isSelf: false, leaving: false, connecting: false, name, avatar };
+    return { key: userId || s.id, stream: s, isSelf: false, leaving: false, state: 'live' as const, name, avatar };
   });
   // Joined-but-not-yet-streaming members: show their name + avatar (a "connecting" card)
   // instead of an empty slot, so nobody ever stares at a black tile waiting for a feed.
-  for (const id of callMeta.value?.roster ?? []) {
+  const roster = new Set(callMeta.value?.roster ?? []);
+  for (const id of roster) {
     if (!id || id === self || streamed.has(id)) continue;
     const { name, avatar } = identity(id);
-    list.push({ key: id, stream: null, isSelf: false, leaving: false, connecting: true, name, avatar });
+    list.push({ key: id, stream: null, isSelf: false, leaving: false, state: 'connecting', name, avatar });
+  }
+  // Invited people who haven't joined the room yet → a "ringing" card, so the initiator
+  // sees everyone they're calling from the moment the call starts, not only once they pick up.
+  for (const id of callMeta.value?.invited ?? []) {
+    if (!id || id === self || streamed.has(id) || roster.has(id)) continue;
+    const { name, avatar } = identity(id);
+    list.push({ key: id, stream: null, isSelf: false, leaving: false, state: 'ringing', name, avatar });
   }
   if (localStream.value) {
     list.push({
@@ -489,16 +500,25 @@ const tiles = computed<Tile[]>(() => {
       stream: localStream.value,
       isSelf: true,
       leaving: false,
-      connecting: false,
+      state: 'live',
       name: selfName.value,
       avatar: selfAvatar.value,
     });
   }
   for (const l of leaving.value) {
-    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, connecting: false, name: '', avatar: '' });
+    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, state: 'live', name: '', avatar: '' });
   }
   return list;
 });
+
+// The label under a tile: a present participant shows their name; a pending one shows its
+// status (the avatar already conveys WHO, the spinner that they're on the way).
+function tileLabel(t: Tile): string {
+  if (t.leaving) return '';
+  if (t.state === 'ringing') return 'Ringing…';
+  if (t.state === 'connecting') return 'Connecting…';
+  return t.name;
+}
 
 /** Whether a tile is showing live video. When not, we overlay a camera-off icon but
  *  keep the <video> mounted so the participant's AUDIO keeps playing. (A peer's video
@@ -950,9 +970,9 @@ const diag = computed(() => {
   border-radius: 50%;
   object-fit: cover;
 }
-/* A joining participant: dim the avatar a touch and float a spinner in the corner so the
-   tile reads as "on the way" rather than camera-off. */
-.tile-camoff.connecting .tile-avatar {
+/* A pending participant (ringing / connecting): dim the avatar a touch and float a spinner
+   in the corner so the tile reads as "on the way" rather than camera-off. */
+.tile-camoff.pending .tile-avatar {
   opacity: 0.85;
 }
 .tile-spinner {

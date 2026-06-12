@@ -28,6 +28,7 @@ import {
   getSetting,
 } from '@/db/queries';
 import { groupAvatar } from '@/db/avatars';
+import { capitalizeFirst } from '@/utils/text';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
@@ -798,6 +799,10 @@ async function enterGroupCall(
     direction,
     roomId,
     roster: [],
+    // The initiator supplies the members it's ringing; they show as "ringing" tiles until
+    // they join. A callee passes none here (it learns the set at invite time — see
+    // handleGroupInvite), so its invited list is seeded there.
+    invited: members.length ? [...members] : callMeta.value?.invited,
     name,
     avatar,
   };
@@ -847,6 +852,26 @@ async function enterGroupCall(
   navigateToCall();
 }
 
+/** A friendly title for a group call from its participant ids: the contact names we know,
+ *  with "& N other(s)" for any we don't (an ad-hoc call may include non-contacts). Falls
+ *  back to "Group call" when we recognise nobody. Derived locally from ids — the server
+ *  never sees a title, so no profile data leaks (zero-knowledge). */
+async function deriveGroupCallTitle(ids: string[]): Promise<string> {
+  const names: string[] = [];
+  let unknown = 0;
+  for (const id of ids) {
+    const c = await getContact(id);
+    if (c?.name) names.push(capitalizeFirst(c.name));
+    else unknown++;
+  }
+  if (names.length === 0) return 'Group call';
+  const parts = [...names];
+  if (unknown > 0) parts.push(unknown === 1 ? '1 other' : `${unknown} others`);
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} & ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`;
+}
+
 /** An incoming group-call invite (server fan-out) → ring locally so the user can join. */
 async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invite' }>): Promise<void> {
   const roomId = frame.roomId;
@@ -856,7 +881,14 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
   if (callState.value !== 'idle') return; // busy with another call, can't join two
   if (!isUnlockedNow()) return; // locked → can't decrypt the sealed signalling; skip the ring
 
-  // The server is group-graph-less, so resolve the group's name/avatar locally.
+  // Everyone we were told about: the initiator plus their named members (which already
+  // includes us), minus ourselves. Drives both the friendly title and the "ringing" tiles
+  // for people still being rung.
+  const self = getSelfUserId() ?? '';
+  const participants = [...new Set([frame.from, ...(frame.members ?? [])])].filter((id) => id && id !== self);
+
+  // A real group chat lends its name/avatar; an ad-hoc room has none, so derive a title
+  // from the people involved (server stays blind to it).
   const chat = await getChat(roomId);
   callMeta.value = {
     callId: roomId,
@@ -864,13 +896,12 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
     kind: frame.kind ?? 'audio',
     direction: 'incoming',
     roomId,
-    // Everyone the initiator named, plus the initiator themselves (members already includes
-    // us). Drives the ring's participant line so joining is informed consent — you can see
-    // whom you'll be exposed to, including anyone you don't yet know. Replaced by the live
+    // The invite-time set (incl. self) drives the ring's consent line; replaced by the live
     // roster once we join.
     roster: [...new Set([frame.from, ...(frame.members ?? [])])],
-    name: chat?.name || 'Group call',
-    avatar: chat?.avatar || '',
+    invited: participants,
+    name: chat?.name || (await deriveGroupCallTitle(participants)),
+    avatar: chat?.avatar || groupAvatar(roomId),
   };
   setState('incoming');
   startLoopTone('beacon', 2000);

@@ -75,6 +75,8 @@ export class MeshSession {
   private remote = new Map<string, MediaStream>(); // peerUserId → their stream
   // Roster updates apply one at a time (see onRoster): a burst of joins must not interleave.
   private rosterChain: Promise<void> = Promise.resolve();
+  // Video-quality changes apply one at a time too (see applyVideoQuality).
+  private qualityChain: Promise<void> = Promise.resolve();
   private currentEnc: VideoEncoding | null = null; // applied to every leg's video sender
   // Aggregate connection-state tracking (so a single leg blip doesn't end the call).
   private everConnected = false;
@@ -283,14 +285,25 @@ export class MeshSession {
     return null;
   }
 
-  /** Apply an encoding tier to EVERY leg's video sender (the adaptive/manual path). */
-  async applyVideoQuality(enc: VideoEncoding): Promise<void> {
+  /** Apply an encoding tier to EVERY leg's video sender (the adaptive/manual path).
+   *  Serialized: the adaptive tier, a remote camera toggle and a manual change can all fire
+   *  at once, and interleaving getParameters/setParameters on the SAME sender trips
+   *  "getParameters() has never been called" (the per-sender params slot is shared). */
+  applyVideoQuality(enc: VideoEncoding): Promise<void> {
     this.currentEnc = enc;
+    this.qualityChain = this.qualityChain.then(() => this.applyVideoQualityNow(enc)).catch(() => {});
+    return this.qualityChain;
+  }
+
+  private async applyVideoQualityNow(enc: VideoEncoding): Promise<void> {
     for (const leg of this.legs.values()) {
       const sender = this.videoSenderOf(leg);
       if (!sender) continue;
       const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      // A sender whose transceiver hasn't negotiated yet reports no encodings, and
+      // setParameters can't add them — skip it; the apply that runs after the offer/answer
+      // (onRemoteStreams → applyOutgoingQuality, or buildLeg's own re-apply) catches it.
+      if (!params.encodings || params.encodings.length === 0) continue;
       const e = params.encodings[0];
       if (enc.maxBitrate == null) delete e.maxBitrate;
       else e.maxBitrate = enc.maxBitrate;
