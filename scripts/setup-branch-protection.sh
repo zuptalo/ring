@@ -36,11 +36,9 @@ BRANCHES=(develop main)
 # Required status check contexts. These are "<caller-job> / <job name>" where the
 # caller job is `verify` (in ci.yml / release.yml) and the names come from the jobs
 # in .github/workflows/build-test.yml. If you rename a job, update it here too.
-#
-# Once the frontend Vitest job is added to build-test.yml, add its context here, e.g.
-#   "verify / Client (unit tests)"
 REQUIRED_CHECKS=(
   "verify / Client (typecheck + build)"
+  "verify / Client (unit tests)"
   "verify / Server (build + vet + test)"
   "verify / End-to-end (Playwright)"
 )
