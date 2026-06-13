@@ -27,7 +27,9 @@ export interface MsgFrame {
 export interface ReceiptFrame {
   t: 'receipt';
   messageId: string;
-  status: 'sent' | 'delivered' | 'read';
+  // 'downloaded' is recipient-originated like 'read', but signals the media bytes are on
+  // their device (not a UI tick) so the sender can delete the server blob.
+  status: 'sent' | 'delivered' | 'read' | 'downloaded';
   at: number;
   to?: string; // recipient (for client-originated read receipts; routed by the server)
   from?: string; // server 'sent'/'delivered' receipts: WHICH recipient confirmed it

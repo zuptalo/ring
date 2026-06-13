@@ -283,6 +283,48 @@ func TestRelayRoutesReadReceipt(t *testing.T) {
 	}
 }
 
+func TestRelayRoutesDownloadedReceipt(t *testing.T) {
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	defer b.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// B (recipient) reports it downloaded m1's media → routed to A (the sender) so A can
+	// free the blob. From is stamped to the authenticated recipient.
+	if err := b.WriteJSON(map[string]any{"t": "receipt", "messageId": "m1", "status": "downloaded", "to": "user-a"}); err != nil {
+		t.Fatalf("B send downloaded receipt: %v", err)
+	}
+	got := readFrame(t, a)
+	if got["t"] != "receipt" || got["messageId"] != "m1" || got["status"] != "downloaded" || got["from"] != "user-b" {
+		t.Fatalf("A expected downloaded receipt from user-b, got: %v", got)
+	}
+}
+
+// A client may NOT forge 'delivered'/'sent' (server-authoritative); such a receipt is
+// dropped so a peer can't evict a sender's still-unsent group copies.
+func TestRelayDropsClientForgedDeliveredReceipt(t *testing.T) {
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	defer b.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	if err := b.WriteJSON(map[string]any{"t": "receipt", "messageId": "m1", "status": "delivered", "to": "user-a"}); err != nil {
+		t.Fatalf("B send forged delivered: %v", err)
+	}
+	_ = a.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, _, err := a.ReadMessage(); err == nil {
+		t.Fatal("A must receive nothing for a client-forged 'delivered' receipt")
+	}
+}
+
 func TestRelayDropsBlockedSender(t *testing.T) {
 	srv, relay := newRelayServer()
 	defer srv.Close()

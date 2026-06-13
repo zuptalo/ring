@@ -825,7 +825,7 @@ import { get, put } from '@/db/idb';
 import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
-import { sendReadReceipts } from '@/composables/useSync';
+import { sendReadReceipts, sendDownloadedReceipts } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
 import { startDirectCall, startGroupCall } from '@/composables/useCall';
 import { ensureProfile } from '@/composables/useProfileGate';
@@ -1793,7 +1793,10 @@ onUnmounted(() => {
 // so the sender would see a false "seen". The receipt is sent instead when the user
 // returns to the foregrounded chat (onVisibilityChange) or opens it.
 function markChatSeenIfVisible(): void {
-  if (viewActive.value && document.visibilityState === 'visible') void sendReadReceipts(chatId);
+  if (viewActive.value && document.visibilityState === 'visible') {
+    void sendReadReceipts(chatId);
+    void sendDownloadedReceipts(chatId); // free server blobs once we hold the media
+  }
 }
 
 onIonViewDidEnter(() => {

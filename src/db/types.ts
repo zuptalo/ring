@@ -186,6 +186,7 @@ export interface Receipt {
   contactId: string;
   deliveredAt?: number;
   readAt?: number;
+  downloadedAt?: number; // when this member confirmed it has the media bytes (blob cleanup)
 }
 
 /** A single user's emoji reaction to a message. One reaction per user (a new
@@ -245,6 +246,11 @@ export interface Message {
   // Set on a received media message that hasn't been downloaded yet (auto-download
   // off / deferred): the encrypted reference used to fetch it on demand.
   pendingMedia?: import('@/services/crypto/message').MediaRef;
+  // Sender side: the server blob id we uploaded for this message's media, kept so we can
+  // DELETE it once every recipient has downloaded the bytes (and on chat delete). Cleared
+  // to undefined once the blob is deleted, so we never try twice.
+  sentBlobId?: string;
+  downloadedBy?: string[]; // 1:1: set once the peer confirms the media is downloaded
   mediaCleared?: boolean; // media blob removed locally to free space → shows a
   // "Photo/Video/... removed to free space" placeholder (distinct from `deleted`,
   // the sender deleting the message, and `pendingMedia`, not-yet-downloaded)

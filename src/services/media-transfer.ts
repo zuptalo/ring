@@ -126,6 +126,17 @@ export async function downloadBlob(blobId: string): Promise<Blob | null> {
   return res.blob();
 }
 
+/** Delete a blob we uploaded (owner-authed server-side). Called once every recipient has
+ *  downloaded the media, and on chat delete. Throws on a real failure so the caller can
+ *  retry; a missing/not-owned blob returns 204 (idempotent no-op). */
+export async function deleteBlob(blobId: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/blobs/${encodeURIComponent(blobId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`delete blob failed: ${res.status}`);
+}
+
 /* ---- high-level pipeline ---- */
 
 /** Encrypt + upload a blob; returns the reference to embed in the (sealed) message. */

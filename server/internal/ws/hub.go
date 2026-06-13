@@ -1020,14 +1020,16 @@ func (c *Client) handleFrame(data []byte) {
 
 	case "receipt":
 		// Client-originated receipt addressed to another user. Clients may ONLY
-		// originate 'read'; 'sent'/'delivered' are server-authoritative, so a client
-		// claiming them is dropped (otherwise a peer could forge a 'delivered' for a
-		// victim's group message id and make the sender evict its other unsent copies).
-		// Stamp From = the authenticated sender so the recipient can scope it.
-		if f.To == "" || f.Status != "read" {
+		// originate 'read' and 'downloaded' (the recipient confirming it has the media
+		// bytes, so the sender can delete the blob); 'sent'/'delivered' are
+		// server-authoritative, so a client claiming them is dropped (otherwise a peer
+		// could forge a 'delivered' for a victim's group message id and make the sender
+		// evict its other unsent copies). Stamp From = the authenticated sender so the
+		// recipient can scope it.
+		if f.To == "" || (f.Status != "read" && f.Status != "downloaded") {
 			return
 		}
-		out := frame{T: "receipt", MessageID: f.MessageID, Status: "read", At: f.At, From: c.userID}
+		out := frame{T: "receipt", MessageID: f.MessageID, Status: f.Status, At: f.At, From: c.userID}
 		if payload, err := json.Marshal(out); err == nil {
 			c.hub.Send(f.To, payload)
 		}

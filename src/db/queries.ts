@@ -11,7 +11,7 @@ import { capitalizeFirst } from '@/utils/text';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
-import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError } from '@/services/media-transfer';
+import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob } from '@/services/media-transfer';
 import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
@@ -1386,6 +1386,15 @@ async function sealMediaAndEnqueue(
   };
   if (chat.isGroup) await sealAndEnqueueGroup(chat, message.id, payload);
   else await sealAndEnqueue(chat, message.id, payload);
+  // Remember the uploaded blob id so we can DELETE it from the server once every recipient
+  // has downloaded the bytes (and on chat delete). Re-read the row to avoid clobbering a
+  // concurrent status update from the send we just enqueued.
+  const fresh = await getMessage(message.id);
+  if (fresh) {
+    fresh.sentBlobId = mediaRef.blobId;
+    fresh.updatedAt = now();
+    await put('messages', fresh);
+  }
 }
 
 /* ---- background media jobs (compress → upload), with retry + resume ---- */
@@ -1671,6 +1680,18 @@ export async function deleteCalls(ids: string[]): Promise<void> {
  *  itself (tombstoned so a sync pull can't resurrect it). */
 export async function deleteChat(chatId: string): Promise<void> {
   const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
+  // Before wiping, free any media blobs WE uploaded that every recipient has already
+  // downloaded (best-effort, fire-and-forget). Conservative: blobs still in flight to a
+  // recipient are left to the server's age-based sweep rather than yanked out from under
+  // them. (The eager per-message delete already handles the online case; this re-attempts
+  // for any that failed while we were offline.)
+  for (const m of msgs) {
+    if (!m.outgoing || !m.sentBlobId) continue;
+    const allDownloaded = m.receipts?.length
+      ? m.receipts.every((r) => r.downloadedAt)
+      : (m.downloadedBy?.length ?? 0) > 0;
+    if (allDownloaded) void deleteBlob(m.sentBlobId).catch(() => {});
+  }
   for (const m of msgs) await remove('messages', m.id);
   await remove('sessions', chatId);
   const deletedAt = now();

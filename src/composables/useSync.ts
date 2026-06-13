@@ -13,7 +13,7 @@ import { subscribe } from '@/db/idb';
 import { isAuthenticated, getToken, verifySessionOrReset, getPendingInviter } from '@/services/auth';
 import { WebSocketTransport, type Frame, type Transport, type TransportState } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing } from '@/db/queries';
+import { getChat, listChats, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing } from '@/db/queries';
 import { checkDeliveries } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -174,6 +174,7 @@ function start(): void {
       cancelSessionCheck(); // the WS auth passed → our token is valid
       void drainOutbox(transport); // flush what queued offline
       void reconcileDeliveries(); // recover any 'delivered' receipt dropped while we were offline
+      void sendDownloadedReceipts(); // confirm media we hold so senders can free the blobs
       void resumePendingMediaJobs(); // re-attempt any interrupted/failed-but-retryable media
       // Publish our bundle (so peers can start sessions), then top up the
       // one-time prekey pool if it's low. Chained so the count check sees the
@@ -280,6 +281,9 @@ function start(): void {
   // vanish on both sides shortly after their timer elapses even mid-session.
   void sweepExpiredMessages();
   setInterval(() => void sweepExpiredMessages(), 30_000);
+  // Periodically confirm downloaded media to senders (catches background auto-downloads in
+  // chats we haven't opened), so they can free the blobs without waiting for a reconnect.
+  setInterval(() => void sendDownloadedReceipts(), 30_000);
   // A profile edit (settings change) by a freshly-invited user → try to connect
   // to their inviter now that their name/photo may be complete.
   subscribe(['settings'], () => {
@@ -415,6 +419,39 @@ export async function sendReadReceipts(chatId: string): Promise<void> {
       await transport.send({ t: 'receipt', messageId: m.id, status: 'read', at: Date.now(), to });
     } catch {
       readReceiptsSent.delete(m.id); // retry next time if the send failed
+    }
+  }
+}
+
+// Message ids we've sent a 'downloaded' receipt for (so we don't resend each scan).
+const downloadedReceiptsSent = new Set<string>();
+
+/**
+ * Tell the SENDER we now hold an incoming media message's bytes (status 'downloaded'), so
+ * they can delete the server blob once every recipient has it. Distinct from 'read': it's
+ * about having the file on-device, not having opened it, and never affects the UI ticks.
+ * Scans incoming messages whose media we've downloaded (mediaId set). Best-effort and
+ * idempotent; cleanup falls back to the server's age sweep if these never arrive.
+ */
+export async function sendDownloadedReceipts(chatId?: string): Promise<void> {
+  if (!transport || transport.state !== 'online') return;
+  const chats = chatId ? [await getChat(chatId)] : await listChats();
+  for (const chat of chats) {
+    if (!chat) continue;
+    const peerUserId = chat.isGroup ? null : chat.participantIds[0];
+    if (!chat.isGroup && !peerUserId) continue;
+    const msgs = await listMessages(chat.id, '');
+    for (const m of msgs) {
+      // Incoming message whose media bytes are on this device, not yet acked as downloaded.
+      if (m.outgoing || !m.mediaId || downloadedReceiptsSent.has(m.id)) continue;
+      const to = chat.isGroup ? m.senderId : peerUserId; // group: the media's author
+      if (!to || to === 'me') continue;
+      downloadedReceiptsSent.add(m.id);
+      try {
+        await transport.send({ t: 'receipt', messageId: m.id, status: 'downloaded', at: Date.now(), to });
+      } catch {
+        downloadedReceiptsSent.delete(m.id); // retry next scan
+      }
     }
   }
 }

@@ -14,6 +14,7 @@ import { recordTombstone, isTombstoned } from '@/db/tombstones';
 import type { Frame, Transport } from '@/services/transport';
 import type { Message } from '@/db/types';
 import { applyPresenceFrame } from '@/composables/usePresence';
+import { deleteBlob } from '@/services/media-transfer';
 
 const CURSOR_KEY = 'syncCursor';
 
@@ -143,10 +144,17 @@ export async function handleIncomingFrame(frame: Frame): Promise<void> {
 
 async function applyReceipt(
   messageId: string,
-  status: Message['status'],
+  status: Message['status'] | 'downloaded',
   at: number,
   recipient?: string,
 ): Promise<void> {
+  // 'downloaded' is a media-cleanup signal, not a UI status: a recipient confirming it
+  // holds the bytes. Handle it separately (it never touches the message's displayed
+  // status) and return.
+  if (status === 'downloaded') {
+    await applyDownloaded(messageId, recipient ?? '', at);
+    return;
+  }
   // Any server-originated status confirms the relay durably has the message for THIS
   // recipient, so its outbox retry copy can be dropped (at-least-once satisfied).
   // Scoped to `recipient` so one group member's receipt never evicts the still-unsent
@@ -213,6 +221,37 @@ async function applyReceipt(
     m.readAt = at;
   }
   await bulkPut('messages', [m]); // notifies 'messages' → UI updates
+}
+
+/** A recipient confirmed they hold our media's bytes. Once EVERY recipient has, delete the
+ *  server blob (we own it) — instant cleanup the moment the media is fully downloaded,
+ *  with the server's age sweep only as a backstop. 1:1 = the single peer; group = all
+ *  members (m.receipts). Never changes the message's displayed status. */
+async function applyDownloaded(messageId: string, recipient: string, at: number): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m || !m.outgoing || !m.sentBlobId) return; // not ours, or blob already gone
+  let allDownloaded: boolean;
+  if (m.receipts && m.receipts.length) {
+    // Group: stamp this member, then check the whole roster.
+    const r = m.receipts.find((x) => x.contactId === recipient);
+    if (r) r.downloadedAt ??= at;
+    allDownloaded = m.receipts.every((x) => x.downloadedAt);
+  } else {
+    // 1:1: the sole recipient confirming is enough.
+    m.downloadedBy = [...new Set([...(m.downloadedBy ?? []), recipient])];
+    allDownloaded = true;
+  }
+  m.updatedAt = Date.now();
+  await bulkPut('messages', [m]);
+  if (!allDownloaded) return;
+  try {
+    await deleteBlob(m.sentBlobId);
+    m.sentBlobId = undefined; // done — never try again
+    m.updatedAt = Date.now();
+    await bulkPut('messages', [m]);
+  } catch {
+    // Leave sentBlobId set: retried on the next 'downloaded' / on chat delete; TTL backstops.
+  }
 }
 
 interface MergeRow {
