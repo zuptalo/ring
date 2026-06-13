@@ -28,6 +28,20 @@ jobs:
           path: dist
           retention-days: 7
 
+  client-test:
+    name: Client (unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Vitest unit tests for the crypto core + pure logic, with the coverage floor
+      # enforced (vitest.config.ts thresholds). No browser/DB needed (Node env).
+      - run: npm run test:unit:coverage
+
   server:
     name: Server (build + vet + test)
     runs-on: ubuntu-latest
@@ -43,6 +57,21 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
+      # Coverage floor on the pure, security-critical packages. The DB/TURN/SFU
+      # packages need a live backend and stay covered by the e2e suite, so they are
+      # intentionally not gated here. Ratchet these floors up as coverage grows.
+      - name: Coverage floor (critical packages)
+        run: |
+          set -euo pipefail
+          declare -A floors=( [auth]=90 [config]=85 [secrets]=70 )
+          for pkg in "${!floors[@]}"; do
+            go test "./internal/$pkg/" -covermode=set -coverprofile=/tmp/cover.out >/dev/null
+            pct=$(go tool cover -func=/tmp/cover.out | awk '/^total:/ {print substr($3, 1, length($3)-1)}')
+            floor=${floors[$pkg]}
+            echo "internal/$pkg: ${pct}% (floor ${floor}%)"
+            awk -v p="$pct" -v f="$floor" 'BEGIN { exit (p+0 >= f+0) ? 0 : 1 }' || {
+              echo "::error::internal/$pkg coverage ${pct}% is below the ${floor}% floor"; exit 1; }
+          done
 
   e2e:
     name: End-to-end (Playwright)
