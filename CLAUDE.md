@@ -14,6 +14,9 @@ opaque ciphertext. It never sees message bodies, contacts, profiles, or media.
 When you touch anything that crosses the client/server boundary, assume the
 server must remain blind to plaintext — encrypt on the client, send ciphertext.
 
+Ring is licensed **AGPL-3.0-only** (see `LICENSE`); the network-copyleft clause
+is part of why the zero-knowledge boundary above is non-negotiable.
+
 ## Monorepo layout
 
 One repo, two parts, shipped as a single container.
@@ -160,6 +163,11 @@ GitFlow. **`develop`** is the integration branch; **`main`** is production.
   if green and the `vX.Y.Z` tag doesn't already exist, tags `main`, publishes the
   production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub release. A merge
   without a version bump re-runs CI but does not re-release.
+- Release candidates are cut by pushing a `vX.Y.Z-rc.N` tag (off `develop`):
+  `release-candidate.yml` runs the full suite and, if green, publishes a single
+  immutable `:X.Y.Z-rc.N` image + a GitHub pre-release. RCs never move `:latest`
+  or `:X.Y`; the RC version comes from the tag, not `package.json`. Operator
+  upgrade/rollback runbook: `docs/UPGRADING.md`.
 
 **Commit messages** follow Conventional Commits with a scope, e.g.
 `feat(call): ...`, `fix(media): ...`, `feat(server): ...`, `test(e2e): ...`,

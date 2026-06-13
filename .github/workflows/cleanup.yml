@@ -39,10 +39,12 @@ jobs:
         with:
           package: ring
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Never delete a release: latest, vX.Y.Z, X.Y.Z, X.Y, or X. The develop
-          # builds (develop, develop-<sha>, X.Y.Z-dev.N) do NOT match this, so they
-          # remain subject to keep-n-tagged below.
-          exclude-tags: '/^(latest|v?[0-9]+\.[0-9]+\.[0-9]+|[0-9]+\.[0-9]+|[0-9]+)$/'
+          # Never delete a release: latest, vX.Y.Z, X.Y.Z, X.Y, X, or a published
+          # release candidate (X.Y.Z-rc.N - a tester may be pinned to it, so it must
+          # not be GC'd out from under them). The develop builds (develop,
+          # develop-<sha>, X.Y.Z-dev.N) do NOT match this, so they remain subject to
+          # keep-n-tagged below.
+          exclude-tags: '/^(latest|v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?|[0-9]+\.[0-9]+|[0-9]+)$/'
           # Keep the newest 3 of the remaining tagged images (the develop builds).
           keep-n-tagged: 3
           # Remove orphaned untagged manifests.

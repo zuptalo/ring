@@ -115,9 +115,11 @@ Traefik config: **[`server/docs/CALLING.md`](server/docs/CALLING.md)**.
 
 `:latest` (and `:X.Y.Z`) is published when you cut a release (merge `develop` ->
 `main`). Before your first release, or to deploy a specific build, pin a tag:
-`:1.2.3` for a release, or `:develop` / `:develop-<sha>` for the rolling dev
-build. Leaving `:latest` floating means a redeploy picks up whatever is newest;
-pin if you want redeploys to be deliberate.
+`:1.2.3` for a release, `:1.2.3-rc.1` for a release candidate, or `:develop` /
+`:develop-<sha>` for the rolling dev build. Leaving `:latest` floating means a
+redeploy picks up whatever is newest; pin if you want redeploys to be deliberate.
+For the full upgrade/rollback runbook, see
+[`docs/UPGRADING.md`](docs/UPGRADING.md).
 
 ### Backups
 
@@ -163,11 +165,25 @@ The repo follows a simple GitFlow:
   tags `main` with the `package.json` version (`vX.Y.Z`), publishes the
   production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub release with
   auto-generated notes.
+- **Release candidates** are cut out-of-band by pushing a `vX.Y.Z-rc.N` tag
+  (typically off `develop`). That runs the full build + test suite and, if green,
+  publishes a single immutable `:X.Y.Z-rc.N` image plus a GitHub pre-release. An
+  RC **never** moves `:latest` or `:X.Y`, so production deploys tracking those
+  tags are unaffected - testers opt in by pinning the RC tag.
 
 To ship a release, bump `"version"` in `package.json` on `develop` and open a PR
 into `main`. A merge without a version bump re-runs CI but does not re-release.
 
+Operators upgrading an existing instance: see **[`docs/UPGRADING.md`](docs/UPGRADING.md)**.
+
 ## License
 
-Not yet licensed (all rights reserved by default). A license can be added here
-when chosen.
+Ring is licensed under the **GNU Affero General Public License v3.0** (AGPL-3.0-only).
+See [`LICENSE`](LICENSE) for the full text.
+
+In plain terms: you are free to use, study, modify, and self-host Ring. The catch
+that matters for a network service - if you run a **modified** Ring server and let
+others use it over a network, you must offer those users the complete corresponding
+source of your modified version (AGPL §13). There is no warranty.
+
+Copyright (C) 2026 Zuptalo
