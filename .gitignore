@@ -17,6 +17,9 @@ test-results
 playwright-report
 /playwright/.cache
 
+# Unit-test coverage output (vitest)
+coverage
+
 # Scratch / tooling state (local only)
 .audit_tmp
 .tmp-review
