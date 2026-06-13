@@ -19,6 +19,7 @@ import { sendLive } from '@/composables/useSync';
 import { getSelfUserId } from '@/services/auth';
 import { getTurnConfig, rtcConfig, type TurnConfig } from '@/services/call/turn';
 import { sendSealedSignal, meshSessionChatId, clearCallSession } from '@/services/call/signalling';
+import { pushDiag, setDiagSnapshot } from '@/services/call/diag';
 import type { CallKind } from '@/services/call/types';
 import type { CallSignal } from '@/services/crypto/message';
 
@@ -92,6 +93,9 @@ export class MeshSession {
   private speaking = new Set<string>();
   private lastLoud = new Map<string, number>();
   private levelTimer: ReturnType<typeof setInterval> | null = null;
+  // DIAG(call-video): per-leg RTP snapshot, so the on-screen ⓘ panel works for mesh calls
+  // (it used to read only the SFU path). Temporary, paired with diag.ts.
+  private diagTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(roomId: string, kind: CallKind, cb: MeshCallbacks, members: string[] = []) {
     this.roomId = roomId;
@@ -112,6 +116,7 @@ export class MeshSession {
     this.cb.onLocalStream(this.local);
     this.turn = await getTurnConfig();
     this.syncAudioMonitors();
+    this.startDiag();
     // Initiator sends the member list so the server rings the group exactly once;
     // later joiners / recovery re-joins omit it.
     await sendLive({
@@ -217,6 +222,7 @@ export class MeshSession {
 
   /** Tear down every leg and stop metering. */
   leave(): void {
+    this.stopDiag();
     this.stopAudioMonitor();
     if (this.audioCtx) {
       void this.audioCtx.close().catch(() => {});
@@ -327,6 +333,58 @@ export class MeshSession {
     return first ? first.pc.getStats() : null;
   }
 
+  /** DIAG(call-video): every 2s, snapshot each leg's video RTP so the on-screen ⓘ panel
+   *  works for mesh calls. The decisive figures are the negotiated codec and, per peer,
+   *  `dec=` (frames decoded): on iOS this should be H264 with dec climbing — proof the
+   *  hardware decoder accepts the feed (which the SFU+VP8 path could not). Mesh media is
+   *  native DTLS-SRTP, so there is no per-frame E2EE xform / decrypt tally to report.
+   *  Temporary; paired with diag.ts, remove once confirmed on-device. */
+  private startDiag(): void {
+    if (this.diagTimer != null) return;
+    const fmt = (n: number): string =>
+      n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+    this.diagTimer = setInterval(() => {
+      void (async () => {
+        const lines: string[] = [`mesh peers=${this.legs.size} · native DTLS-SRTP (no xform/keys)`];
+        for (const leg of this.legs.values()) {
+          const short = leg.peerId.slice(0, 8);
+          try {
+            const report = await leg.pc.getStats();
+            const codecs = new Map<string, string>();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            report.forEach((st: any) => {
+              if (st.type === 'codec') codecs.set(st.id, String(st.mimeType || '').replace(/^(video|audio)\//, ''));
+            });
+            const codecOf = (id?: string): string => (id && codecs.get(id)) || '?';
+            let out = 'out -';
+            let inl = 'in -';
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            report.forEach((st: any) => {
+              if (st.type === 'outbound-rtp' && st.kind === 'video') {
+                out = `out ${codecOf(st.codecId)} b=${fmt(st.bytesSent || 0)} enc=${st.framesEncoded ?? 0}`;
+              }
+              if (st.type === 'inbound-rtp' && st.kind === 'video') {
+                inl = `in ${codecOf(st.codecId)} pt=${st.payloadType ?? '?'} recv=${st.packetsReceived ?? 0} frm=${st.framesReceived ?? 0} dec=${st.framesDecoded ?? 0} key=${st.keyFramesDecoded ?? 0} drop=${st.framesDropped ?? 0} b=${fmt(st.bytesReceived || 0)}`;
+              }
+            });
+            lines.push(`[${short}] ${leg.pc.connectionState} | ${out} | ${inl}`);
+          } catch {
+            lines.push(`[${short}] stats error`);
+          }
+        }
+        if (this.legs.size === 0) lines.push('(waiting for peers to join…)');
+        setDiagSnapshot(lines);
+      })();
+    }, 2000);
+  }
+
+  private stopDiag(): void {
+    if (this.diagTimer != null) {
+      clearInterval(this.diagTimer);
+      this.diagTimer = null;
+    }
+  }
+
   /** Latest measured RMS per tile key (for tests/diagnostics). */
   audioLevels(): Record<string, number> {
     return Object.fromEntries(this.levels);
@@ -415,6 +473,7 @@ export class MeshSession {
     pc.ontrack = (e) => {
       const stream = e.streams[0];
       if (!stream) return;
+      pushDiag(`ontrack ${e.track.kind} from ${peerId.slice(0, 8)}`);
       this.remote.set(peerId, stream);
       // A track being added/removed within the stream (camera on/off) must re-emit so
       // the tiles recompute (and show video vs avatar).
