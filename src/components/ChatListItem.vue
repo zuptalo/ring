@@ -196,6 +196,13 @@ ion-item-option ion-icon {
   overflow: hidden;
   white-space: normal;
   line-height: 1.3;
+  /* RTL names/previews (Persian/Arabic/Hebrew) read correctly and hug the start edge. */
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+ion-label h2 {
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 .avatar-wrap {
   position: relative;

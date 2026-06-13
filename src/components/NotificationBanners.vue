@@ -106,8 +106,16 @@ const sentId = ref<string | null>(null); // brief "Sent" confirmation, keyed by 
 type Composer = { $el: HTMLIonTextareaElement };
 const composers = new Map<string, Composer>();
 function setComposer(url: string, el: unknown): void {
-  if (el) composers.set(url, el as Composer);
-  else composers.delete(url);
+  if (el) {
+    composers.set(url, el as Composer);
+    // Bidi-aware like the main chat composer: dir="auto" on the native <textarea> so a
+    // quick reply typed in Persian/Arabic/Hebrew flows right-to-left (Ionic doesn't forward
+    // the host's dir, so set it on the inner element).
+    const ta = (el as { $el?: HTMLIonTextareaElement & { getInputElement?: () => Promise<HTMLTextAreaElement> } }).$el;
+    void ta?.getInputElement?.().then((native) => native?.setAttribute('dir', 'auto')).catch(() => {});
+  } else {
+    composers.delete(url);
+  }
 }
 
 function open(b: NotifyBanner): void {
@@ -332,6 +340,8 @@ watch(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 .nb-body {
   font-size: 14px;
@@ -339,6 +349,8 @@ watch(
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 .nb-sent {
   flex: none;

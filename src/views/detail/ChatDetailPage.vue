@@ -334,7 +334,7 @@
                   <span class="link-url">{{ linkOf(m.body) }}</span>
                 </span>
               </a>
-              <span v-if="m.body" class="text" :class="{ 'emoji-only': emojiBig(m.body) }"><template
+              <span v-if="m.body" class="text" dir="auto" :class="{ 'emoji-only': emojiBig(m.body) }"><template
                 v-for="(p, pi) in bodyParts(m.body)"
                 :key="pi"
               ><a
@@ -550,7 +550,7 @@
         <div class="reply-preview">
           <div class="reply-quote">
             <span class="reply-ref-author">Edit message</span>
-            <span class="reply-ref-text">{{ editingMsg.body }}</span>
+            <span class="reply-ref-text" dir="auto">{{ editingMsg.body }}</span>
           </div>
           <ion-button fill="clear" aria-label="Cancel edit" @click="cancelEdit">
             <ion-icon slot="icon-only" :icon="closeOutline" />
@@ -1341,6 +1341,17 @@ const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[
 const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c])));
 const replyingTo = ref<ReplyRef | null>(null);
 const composerEl = ref<{ $el: HTMLIonTextareaElement } | null>(null);
+
+// Make the composer bidi-aware: dir="auto" on the NATIVE <textarea> (Ionic doesn't forward
+// it from the host) so the editor flips per content — a Persian/Arabic/Hebrew message flows
+// right-to-left with the caret on the right, an English one left-to-right, and a mix takes
+// its base direction from the first strong character. The browser re-evaluates live as you
+// type. Watched (not one-shot) so it re-applies if the composer remounts (e.g. a pending
+// chat being accepted). getInputElement exists on ion-textarea but isn't in our minimal type.
+watch(composerEl, (el) => {
+  const ta = el?.$el as (HTMLIonTextareaElement & { getInputElement?: () => Promise<HTMLTextAreaElement> }) | undefined;
+  void ta?.getInputElement?.().then((native) => native?.setAttribute('dir', 'auto')).catch(() => {});
+});
 
 // A short text snapshot of a message for the quote (the media icon is rendered
 // separately from `replyTo.kind`, so these labels carry no emoji).
@@ -3086,11 +3097,27 @@ function cancelRecording() {
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
+  /* Bidi: dir="auto" on the element resolves RTL/LTR from the content; `start` then hugs
+     the matching edge, so a Persian/Arabic/Hebrew message right-aligns and an English one
+     left-aligns within the bubble. plaintext isolates a mixed message's runs so an embedded
+     opposite-direction word/URL can't reorder the rest. */
+  text-align: start;
+  unicode-bidi: plaintext;
 }
 /* An all-emoji message (≤3) renders larger and roomier. */
 .text.emoji-only {
   line-height: 1.15;
   padding: 2px 0;
+}
+/* Bidi for the quote previews (reply bar, edit bar, in-bubble reply) and the header /
+   in-bubble sender names: detect each one's direction from its own content and hug the
+   matching edge, so RTL names and RTL quoted text read correctly. */
+.reply-ref-text,
+.reply-ref-author,
+.chat-header-name,
+.sender {
+  unicode-bidi: plaintext;
+  text-align: start;
 }
 /* Floating quick-forward button beside incoming media/files/links. */
 .fwd-float {
