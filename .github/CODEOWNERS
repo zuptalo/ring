@@ -1,0 +1,7 @@
+# Code owners for Ring. A matching owner is auto-requested for review on PRs that
+# touch the path. With required reviews currently set to 0 (solo maintainer) this is
+# informational; raise the review count in the branch-protection ruleset once there
+# are additional maintainers and these requests become enforced.
+
+# Default owner for everything in the repo.
+* @zuptalo
