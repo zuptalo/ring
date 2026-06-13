@@ -156,3 +156,9 @@ Milestones 7a-7f are implemented and tested (accounts, prekeys, relay, blobs,
 encrypted sync + recovery, Web Push). Possible follow-ups: production
 TLS/deployment, group messaging over the relay, multi-device restore UI, admin
 issuance of invitation codes, and migrating blob storage to object storage.
+
+## License
+Part of Ring, licensed under the **GNU Affero General Public License v3.0**
+(AGPL-3.0-only). See the root [`LICENSE`](../LICENSE) for the full text.
+
+Copyright (C) 2026 Zuptalo

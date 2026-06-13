@@ -2,6 +2,12 @@
   "name": "ring-client",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
+  "author": "Zuptalo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zuptalo/ring.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
