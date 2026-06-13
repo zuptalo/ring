@@ -10,7 +10,7 @@
 import { register, getSelfUserId, getSelfUsername } from '@/services/auth';
 import { syncDirectory, importDirectoryUser, searchDirectory, publishOwnProfile } from '@/services/directory';
 import { previewPending } from '@/services/sw-inbox';
-import { disconnectTransport, nudgeReconnect } from '@/composables/useSync';
+import { disconnectTransport, nudgeReconnect, sendDownloadedReceipts } from '@/composables/useSync';
 import {
   ensureIdentity,
   isUnlocked,
@@ -80,7 +80,9 @@ import {
   listChatLists,
   listLockedChats,
   getSetting,
+  downloadMessageMedia as dbDownloadMessageMedia,
 } from '@/db/queries';
+import { downloadBlob } from '@/services/media-transfer';
 import {
   chatMatchesFilter,
   type FilterId,
@@ -273,6 +275,25 @@ export function installTestHook(): void {
         contact: m.contact ?? null,
         audio: m.audio ?? null,
       })),
+    /* ---- media blob lifecycle (server cleanup tests) ---- */
+    /** A message's media state: whether the bytes are on-device (mediaId), still pending,
+     *  and the server blob id the SENDER kept for cleanup (undefined once it deletes it). */
+    mediaInfo: async (messageId: string) => {
+      const m = await dbGetMessage(messageId);
+      return {
+        hasMedia: !!m?.mediaId,
+        pending: !!m?.pendingMedia,
+        sentBlobId: m?.sentBlobId ?? null,
+      };
+    },
+    /** Download an incoming message's media (as the UI does on tap / auto-download). */
+    downloadMedia: (messageId: string): Promise<void> => dbDownloadMessageMedia(messageId),
+    /** Whether a blob still exists on the server (200 vs 404). */
+    blobExists: async (blobId: string): Promise<boolean> => (await downloadBlob(blobId)) !== null,
+    /** Confirm to senders that this chat's downloaded media is on-device (the 'downloaded'
+     *  receipt the UI sends on view), so they delete the server blob now rather than at the tick. */
+    confirmDownloads: (chatId: string): Promise<void> => sendDownloadedReceipts(chatId),
+
     /** Send `body` as a reply quoting the message `quotedId`. */
     sendReply: async (chatId: string, body: string, quotedId: string): Promise<void> => {
       const m = await dbGetMessage(quotedId);
