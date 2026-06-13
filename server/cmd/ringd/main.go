@@ -372,6 +372,13 @@ func run() error {
 	const (
 		relaySweepInterval = time.Hour
 		relayRetention     = 35 * 24 * time.Hour
+		// Media blobs are normally deleted by the sender the moment every recipient has
+		// downloaded them (precise path); this is the BACKSTOP for media nobody ever
+		// downloads. Kept at the relay retention so the invariant "a still-deliverable
+		// envelope has a fetchable blob" holds. Also reclaims the entire pre-feature
+		// backlog on first run. Swept in batches so a large backlog never table-locks.
+		blobRetention = relayRetention
+		blobSweepBatch = 500
 	)
 	go func() {
 		ticker := time.NewTicker(relaySweepInterval)
@@ -391,11 +398,29 @@ func run() error {
 				// Delivery records (sender-reconcile state) age out on the same
 				// schedule/retention as the relay queue they shadow.
 				dn, derr := st.SweepDeliveriesOlderThan(sctx, relayRetention)
-				cancel()
 				if derr != nil {
 					slog.Error("deliveries sweep", "err", derr)
 				} else if dn > 0 {
 					slog.Info("deliveries sweep", "removed", dn)
+				}
+				// Backstop blob sweep, batched: keep removing the oldest aged-out blobs
+				// until a batch comes back short (so the first run grinds through any
+				// historical backlog without one giant transaction).
+				var bn int64
+				for {
+					removed, berr := st.SweepBlobsOlderThan(sctx, blobRetention, blobSweepBatch)
+					if berr != nil {
+						slog.Error("blob sweep", "err", berr)
+						break
+					}
+					bn += removed
+					if removed < blobSweepBatch {
+						break
+					}
+				}
+				cancel()
+				if bn > 0 {
+					slog.Info("blob sweep", "removed", bn)
 				}
 			}
 		}

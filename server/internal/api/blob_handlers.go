@@ -77,3 +77,19 @@ func (h *Handlers) downloadBlob(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(bytes)
 }
+
+// deleteBlob (DELETE /v1/blobs/{id}) removes a blob the caller uploaded. Only the owner
+// may delete (a leaked capability id can't be used to wipe someone else's media). The
+// sender calls this once every recipient has confirmed the media is downloaded, and on
+// chat delete — reclaiming big media from the server the moment it's no longer needed,
+// rather than waiting for the age-based backstop sweep. Idempotent: a missing or
+// not-owned blob returns 204 too (nothing to do, and the owner can't tell them apart).
+func (h *Handlers) deleteBlob(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	id := r.PathValue("id")
+	if _, err := h.Blobs.DeleteBlobOwnedBy(r.Context(), id, uid); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not delete blob")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

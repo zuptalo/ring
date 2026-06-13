@@ -74,6 +74,7 @@ type KeysStore interface {
 type BlobStore interface {
 	PutBlob(ctx context.Context, id, owner string, bytes []byte) error
 	GetBlob(ctx context.Context, id string) ([]byte, bool, error)
+	DeleteBlobOwnedBy(ctx context.Context, id, owner string) (bool, error)
 }
 
 // SyncStore is the encrypted own-data sync + recovery persistence.
@@ -235,6 +236,7 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	// Encrypted media blobs (7d).
 	mux.Handle("POST /v1/blobs", authMW(http.HandlerFunc(h.uploadBlob)))
 	mux.Handle("GET /v1/blobs/{id}", authMW(http.HandlerFunc(h.downloadBlob)))
+	mux.Handle("DELETE /v1/blobs/{id}", authMW(http.HandlerFunc(h.deleteBlob)))
 
 	// Link-preview relay: fetches a user-supplied URL's raw bytes so the sender can
 	// unfurl it client-side (CORS blocks a direct fetch). It makes outbound requests

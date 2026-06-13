@@ -19,14 +19,18 @@ import (
 type fakeBlobStore struct {
 	mu    sync.Mutex
 	blobs map[string][]byte
+	owner map[string]string
 }
 
-func newFakeBlobStore() *fakeBlobStore { return &fakeBlobStore{blobs: map[string][]byte{}} }
+func newFakeBlobStore() *fakeBlobStore {
+	return &fakeBlobStore{blobs: map[string][]byte{}, owner: map[string]string{}}
+}
 
-func (f *fakeBlobStore) PutBlob(_ context.Context, id, _ string, bytes []byte) error {
+func (f *fakeBlobStore) PutBlob(_ context.Context, id, owner string, bytes []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.blobs[id] = append([]byte(nil), bytes...)
+	f.owner[id] = owner
 	return nil
 }
 func (f *fakeBlobStore) GetBlob(_ context.Context, id string) ([]byte, bool, error) {
@@ -34,6 +38,16 @@ func (f *fakeBlobStore) GetBlob(_ context.Context, id string) ([]byte, bool, err
 	defer f.mu.Unlock()
 	b, ok := f.blobs[id]
 	return b, ok, nil
+}
+func (f *fakeBlobStore) DeleteBlobOwnedBy(_ context.Context, id, owner string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.owner[id] != owner {
+		return false, nil
+	}
+	delete(f.blobs, id)
+	delete(f.owner, id)
+	return true, nil
 }
 
 type fakeSyncStore struct {
@@ -141,6 +155,39 @@ func TestBlobUploadDownload(t *testing.T) {
 	}
 	if rr := do(t, srv, http.MethodPost, "/v1/blobs", "", "x"); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated upload status = %d, want 401", rr.Code)
+	}
+}
+
+// A blob can be deleted only by the user who uploaded it: a holder of the (capability)
+// id who isn't the owner gets a no-op, and the bytes stay; the owner's delete removes them.
+func TestBlobDeleteOwnerOnly(t *testing.T) {
+	srv := newTestServer()
+	owner, _ := registerUser(t, srv)
+	other, _ := registerUser(t, srv)
+
+	rr := do(t, srv, http.MethodPost, "/v1/blobs", owner, "ENCRYPTED-BYTES")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("upload status = %d", rr.Code)
+	}
+	var up struct {
+		BlobID string `json:"blobId"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &up)
+
+	// A non-owner "delete" is a no-op (204, idempotent) and must NOT remove the blob.
+	if rr := do(t, srv, http.MethodDelete, "/v1/blobs/"+up.BlobID, other, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("non-owner delete status = %d, want 204", rr.Code)
+	}
+	if rr := do(t, srv, http.MethodGet, "/v1/blobs/"+up.BlobID, owner, ""); rr.Code != http.StatusOK {
+		t.Fatal("blob must survive a non-owner delete")
+	}
+
+	// The owner's delete removes it; the blob is then gone for everyone.
+	if rr := do(t, srv, http.MethodDelete, "/v1/blobs/"+up.BlobID, owner, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("owner delete status = %d, want 204", rr.Code)
+	}
+	if rr := do(t, srv, http.MethodGet, "/v1/blobs/"+up.BlobID, owner, ""); rr.Code != http.StatusNotFound {
+		t.Fatalf("blob should be gone after owner delete, status = %d", rr.Code)
 	}
 }
 
