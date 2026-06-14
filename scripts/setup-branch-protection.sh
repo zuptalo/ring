@@ -36,11 +36,16 @@ BRANCHES=(develop main)
 # Required status check contexts. These are "<caller-job> / <job name>" where the
 # caller job is `verify` (in ci.yml / release.yml) and the names come from the jobs
 # in .github/workflows/build-test.yml. If you rename a job, update it here too.
+#
+# "Release guard (version bump)" is a top-level job in ci.yml (not under `verify`),
+# so it has no caller prefix. It reports green on PRs into develop and only enforces
+# a version bump on PRs into main — safe to require on both branches.
 REQUIRED_CHECKS=(
   "verify / Client (typecheck + build)"
   "verify / Client (unit tests)"
   "verify / Server (build + vet + test)"
   "verify / End-to-end (Playwright)"
+  "Release guard (version bump)"
 )
 
 if ! command -v gh >/dev/null 2>&1; then

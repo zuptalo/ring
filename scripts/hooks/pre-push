@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#
+# Advisory pre-push hook for Ring — opt-in via `make hooks`.
+#
+# It never blocks a push (always exits 0). CI's "Release guard (version bump)"
+# job + branch protection are the authoritative gate; this hook just gives you a
+# heads-up locally so you don't open a release PR that the guard will reject.
+#
+# What it warns about: when you push `develop`, if the current package.json
+# version already has a published tag (v<version>), then a develop -> main PR
+# opened now would no-op the release. The fix is to bump on develop first:
+#   npm run release:patch   # or :minor / :major
+#
+# A pre-push hook can't know the eventual PR base, so it can't (and shouldn't)
+# block — it only nudges. Disable with: git config --unset core.hooksPath
+set -euo pipefail
+
+# Only nudge when this push includes the develop branch.
+pushing_develop=false
+while read -r local_ref _local_sha _remote_ref _remote_sha; do
+  if [ "$local_ref" = "refs/heads/develop" ]; then
+    pushing_develop=true
+  fi
+done
+
+[ "$pushing_develop" = true ] || exit 0
+
+# Read the version without requiring node (the hook runs on every push).
+version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n1)
+[ -n "$version" ] || exit 0
+
+if git rev-parse "refs/tags/v$version" >/dev/null 2>&1; then
+  cat >&2 <<EOF
+
+  ⚠ Ring release reminder
+  package.json is at v$version, which is already tagged/shipped.
+  A develop → main PR opened now would no-op the release (CI's release guard
+  will block it). Bump before opening the release PR:
+
+      npm run release:patch   # or :minor / :major
+
+  (advisory only — your push is proceeding)
+
+EOF
+fi
+
+exit 0
