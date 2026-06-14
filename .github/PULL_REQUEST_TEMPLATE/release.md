@@ -17,6 +17,10 @@ The "## Changes" bullets below are what reviewers see is shipping. The GitHub
 release notes are generated automatically from the Conventional-Commit subjects
 between the last tag and this merge, so keeping commit subjects clean keeps the
 release notes clean.
+
+Auto-merge is enabled on this PR automatically: once the guard and the full CI
+suite are green, GitHub merges it (merge commit) on its own. No need to click
+merge; disable auto-merge on the PR if you want to hold it.
 -->
 
 ## Release vX.Y.Z

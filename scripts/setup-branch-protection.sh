@@ -13,6 +13,9 @@
 #   - enforce_admins: rules apply to admins too (no bypass).
 #   - Linear history NOT required (so develop -> main keeps its merge commit).
 #
+# It also flips two REPO-LEVEL settings the release flow needs: allow_auto_merge
+# (so the Auto-merge workflow can schedule the release PR) and allow_merge_commit.
+#
 # PREREQUISITES:
 #   - An authenticated GitHub CLI: `gh auth status` must succeed, with a token that
 #     has admin rights on the repo.
@@ -89,6 +92,26 @@ for branch in "${BRANCHES[@]}"; do
     --input - >/dev/null
   echo "    protection applied."
 done
+
+# Repo-level merge settings the release flow depends on:
+#   - allow_auto_merge: lets the Auto-merge workflow schedule the develop -> main
+#     PR to merge itself once required checks pass.
+#   - allow_merge_commit: the release PR must land as a MERGE COMMIT (release.yml
+#     verifies it; develop's history stays joined into main).
+# We deliberately do NOT touch delete_branch_on_merge: deleting the head of a
+# develop -> main PR would mean deleting develop. (Branch protection's
+# allow_deletions:false is a backstop, but we don't enable the setting either.)
+echo "==> ${REPO} repo settings (auto-merge + merge commits)"
+if [[ "${DRY_RUN:-}" == "1" ]]; then
+  echo '  { "allow_auto_merge": true, "allow_merge_commit": true }'
+else
+  gh api --method PATCH \
+    -H "Accept: application/vnd.github+json" \
+    "repos/${REPO}" \
+    -F allow_auto_merge=true \
+    -F allow_merge_commit=true >/dev/null
+  echo "    auto-merge enabled."
+fi
 
 echo "Done. Verify in Settings -> Branches, or:"
 echo "  gh api repos/${REPO}/branches/develop/protection | jq ."

@@ -105,6 +105,13 @@ Releases are driven by `package.json` `version`:
   the release (the tag already exists). The guard is green on every PR into
   `develop`, so it only matters for the `develop → main` PR.
 
+  You don't merge the release PR by hand. The `Auto-merge release PRs` workflow
+  turns on GitHub auto-merge for any PR into `main`, so GitHub merges it (as a
+  merge commit) the moment the guard and the full suite are green — and not
+  before. Open it and walk away; to cancel, just disable auto-merge on the PR.
+  (This needs the repo-level "Allow auto-merge" setting, which
+  `scripts/setup-branch-protection.sh` turns on.)
+
 - **Release candidate:** push a `vX.Y.Z-rc.N` tag (off `develop`). It runs the full
   suite and publishes a single immutable `:X.Y.Z-rc.N` image + a GitHub pre-release.
   An RC never moves `:latest`/`:X.Y`.
