@@ -53,7 +53,8 @@ Direct pushes are rejected.
 3. Run the gates locally (below). Add or update tests.
 4. Open a PR into `develop`. Fill in the PR template, including the zero-knowledge
    confirmation for anything touching the wire.
-5. Once CI is green, the PR can be merged.
+5. Once CI is green, the PR can be merged. Your feature branch is deleted
+   automatically on merge (the protected `develop`/`main` are never auto-deleted).
 
 ### Commit messages
 

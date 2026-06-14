@@ -13,8 +13,10 @@
 #   - enforce_admins: rules apply to admins too (no bypass).
 #   - Linear history NOT required (so develop -> main keeps its merge commit).
 #
-# It also flips two REPO-LEVEL settings the release flow needs: allow_auto_merge
-# (so the Auto-merge workflow can schedule the release PR) and allow_merge_commit.
+# It also flips three REPO-LEVEL settings: allow_auto_merge (so the Auto-merge
+# workflow can schedule the release PR), allow_merge_commit, and
+# delete_branch_on_merge (auto-delete merged feature branches; protected develop/
+# main are exempt via allow_deletions:false, so they're never auto-deleted).
 #
 # PREREQUISITES:
 #   - An authenticated GitHub CLI: `gh auth status` must succeed, with a token that
@@ -93,24 +95,26 @@ for branch in "${BRANCHES[@]}"; do
   echo "    protection applied."
 done
 
-# Repo-level merge settings the release flow depends on:
+# Repo-level merge settings the release flow + housekeeping depend on:
 #   - allow_auto_merge: lets the Auto-merge workflow schedule the develop -> main
 #     PR to merge itself once required checks pass.
 #   - allow_merge_commit: the release PR must land as a MERGE COMMIT (release.yml
 #     verifies it; develop's history stays joined into main).
-# We deliberately do NOT touch delete_branch_on_merge: deleting the head of a
-# develop -> main PR would mean deleting develop. (Branch protection's
-# allow_deletions:false is a backstop, but we don't enable the setting either.)
-echo "==> ${REPO} repo settings (auto-merge + merge commits)"
+#   - delete_branch_on_merge: auto-delete a PR's head branch once it merges, so
+#     stale feature branches don't pile up. SAFE here: develop and main are
+#     protected with allow_deletions:false, so a develop -> main merge can never
+#     delete develop — only unprotected feature -> develop branches get cleaned up.
+echo "==> ${REPO} repo settings (auto-merge, merge commits, branch cleanup)"
 if [[ "${DRY_RUN:-}" == "1" ]]; then
-  echo '  { "allow_auto_merge": true, "allow_merge_commit": true }'
+  echo '  { "allow_auto_merge": true, "allow_merge_commit": true, "delete_branch_on_merge": true }'
 else
   gh api --method PATCH \
     -H "Accept: application/vnd.github+json" \
     "repos/${REPO}" \
     -F allow_auto_merge=true \
-    -F allow_merge_commit=true >/dev/null
-  echo "    auto-merge enabled."
+    -F allow_merge_commit=true \
+    -F delete_branch_on_merge=true >/dev/null
+  echo "    auto-merge + auto branch cleanup enabled."
 fi
 
 echo "Done. Verify in Settings -> Branches, or:"
