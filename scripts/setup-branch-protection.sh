@@ -13,6 +13,11 @@
 #   - enforce_admins: rules apply to admins too (no bypass).
 #   - Linear history NOT required (so develop -> main keeps its merge commit).
 #
+# It also flips three REPO-LEVEL settings: allow_auto_merge (so the Auto-merge
+# workflow can schedule the release PR), allow_merge_commit, and
+# delete_branch_on_merge (auto-delete merged feature branches; protected develop/
+# main are exempt via allow_deletions:false, so they're never auto-deleted).
+#
 # PREREQUISITES:
 #   - An authenticated GitHub CLI: `gh auth status` must succeed, with a token that
 #     has admin rights on the repo.
@@ -36,11 +41,16 @@ BRANCHES=(develop main)
 # Required status check contexts. These are "<caller-job> / <job name>" where the
 # caller job is `verify` (in ci.yml / release.yml) and the names come from the jobs
 # in .github/workflows/build-test.yml. If you rename a job, update it here too.
+#
+# "Release guard (version bump)" is a top-level job in ci.yml (not under `verify`),
+# so it has no caller prefix. It reports green on PRs into develop and only enforces
+# a version bump on PRs into main — safe to require on both branches.
 REQUIRED_CHECKS=(
   "verify / Client (typecheck + build)"
   "verify / Client (unit tests)"
   "verify / Server (build + vet + test)"
   "verify / End-to-end (Playwright)"
+  "Release guard (version bump)"
 )
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -84,6 +94,28 @@ for branch in "${BRANCHES[@]}"; do
     --input - >/dev/null
   echo "    protection applied."
 done
+
+# Repo-level merge settings the release flow + housekeeping depend on:
+#   - allow_auto_merge: lets the Auto-merge workflow schedule the develop -> main
+#     PR to merge itself once required checks pass.
+#   - allow_merge_commit: the release PR must land as a MERGE COMMIT (release.yml
+#     verifies it; develop's history stays joined into main).
+#   - delete_branch_on_merge: auto-delete a PR's head branch once it merges, so
+#     stale feature branches don't pile up. SAFE here: develop and main are
+#     protected with allow_deletions:false, so a develop -> main merge can never
+#     delete develop — only unprotected feature -> develop branches get cleaned up.
+echo "==> ${REPO} repo settings (auto-merge, merge commits, branch cleanup)"
+if [[ "${DRY_RUN:-}" == "1" ]]; then
+  echo '  { "allow_auto_merge": true, "allow_merge_commit": true, "delete_branch_on_merge": true }'
+else
+  gh api --method PATCH \
+    -H "Accept: application/vnd.github+json" \
+    "repos/${REPO}" \
+    -F allow_auto_merge=true \
+    -F allow_merge_commit=true \
+    -F delete_branch_on_merge=true >/dev/null
+  echo "    auto-merge + auto branch cleanup enabled."
+fi
 
 echo "Done. Verify in Settings -> Branches, or:"
 echo "  gh api repos/${REPO}/branches/develop/protection | jq ."

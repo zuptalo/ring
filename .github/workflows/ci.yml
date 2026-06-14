@@ -22,6 +22,59 @@ jobs:
   verify:
     uses: ./.github/workflows/build-test.yml
 
+  # Gate the one merge that actually ships: a PR into main must carry a version
+  # bump. Without this, a develop -> main merge that forgot to bump silently
+  # no-ops in release.yml (the tag already exists) — green CI, no image, no
+  # release, no signal. This makes that mistake un-mergeable instead.
+  #
+  # Runs on every PR but is a no-op (green) unless the base is main, so it's safe
+  # to require uniformly on both protected branches: feature -> develop PRs always
+  # pass it; only develop -> main PRs are held to a bump.
+  release-guard:
+    name: Release guard (version bump)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need main's history + tags to compare against
+      - name: Require a version bump for release PRs
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          if [ "$BASE_REF" != "main" ]; then
+            echo "Base is '$BASE_REF', not a release PR — no version bump required."
+            exit 0
+          fi
+
+          head_ver=$(node -p "require('./package.json').version")
+          git fetch --quiet origin main
+          base_ver=$(git show origin/main:package.json | node -p "JSON.parse(require('fs').readFileSync(0)).version")
+          echo "head (this PR) version: $head_ver"
+          echo "base (main) version:    $base_ver"
+
+          fail() { echo "::error::$1"; exit 1; }
+
+          if [ "$head_ver" = "$base_ver" ]; then
+            fail "package.json version is still $base_ver — merging this PR would no-op the release. Bump it on develop with 'npm run release:patch' (or :minor / :major) and push."
+          fi
+
+          # Strictly greater than main (catches an accidental downgrade too).
+          greater=$(printf '%s\n%s\n' "$base_ver" "$head_ver" | sort -V | tail -n1)
+          if [ "$greater" != "$head_ver" ] || [ "$head_ver" = "$base_ver" ]; then
+            fail "package.json version $head_ver is not greater than main's $base_ver. Bump it forward with 'npm run release:patch' (or :minor / :major)."
+          fi
+
+          # The tag for this version must not already exist (already-shipped).
+          git fetch --quiet --tags origin
+          if git rev-parse "refs/tags/v$head_ver" >/dev/null 2>&1; then
+            fail "Tag v$head_ver already exists — version $head_ver has already shipped. Bump to a new version with 'npm run release:patch' (or :minor / :major)."
+          fi
+
+          echo "✓ Version bumped $base_ver → $head_ver and v$head_ver is unreleased. Release PR is good to merge."
+
   develop-image:
     name: Publish develop image
     needs: verify

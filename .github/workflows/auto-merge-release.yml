@@ -1,0 +1,40 @@
+# Auto-merge release PRs: the develop -> main PR that cuts a release shouldn't need
+# babysitting. This enables GitHub's native auto-merge on it, so GitHub merges the
+# PR by itself the moment every required check is green — the "Release guard
+# (version bump)" check plus the full build+test suite — and not a second before.
+#
+# Scope is deliberately narrow: only PRs whose BASE is main (i.e. release PRs from
+# develop). Feature -> develop PRs are untouched; you still merge those yourself.
+#
+# Merge method is a MERGE COMMIT on purpose: release.yml verifies the merge commit,
+# and we keep develop's history joined into main (linear history is intentionally
+# NOT required). Auto-merge only schedules the merge; required checks + branch
+# protection still fully gate it, so a failing guard or red CI blocks the merge.
+name: Auto-merge release PRs
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+    branches: [main] # base branch == main
+
+permissions:
+  contents: write # github-actions[bot] performs the eventual merge
+  pull-requests: write # enable auto-merge on the PR
+
+jobs:
+  enable-auto-merge:
+    name: Enable auto-merge
+    # Same-repo PRs only (a fork's token is read-only and couldn't enable it anyway),
+    # and never on drafts.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge (merge commit)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --auto --merge
