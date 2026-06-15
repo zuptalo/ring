@@ -28,4 +28,4 @@ Specs are grouped by category band; status moves
 | Spec | Title | Status |
 |------|-------|--------|
 | [2001](specs/2001-stabilize-message-status/spec.md) | Stabilize message status reporting around downloaded-blob receipts | 🟢 shipped |
-| [2002](specs/2002-media-thumbnails-stay/spec.md) | Media Thumbnails Stay Thumbnails (no autoplay storm) | 🟡 in-progress |
+| [2002](specs/2002-media-thumbnails-stay/spec.md) | Media Thumbnails Stay Thumbnails (no autoplay storm) | 🔵 in-review |
