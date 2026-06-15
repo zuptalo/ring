@@ -32,15 +32,31 @@ try {
 // :8080; the e2e harness overrides it to its isolated test backend.
 const proxyTarget = process.env.RING_PROXY_TARGET || 'http://localhost:8080';
 
+// HMR-over-public-URL mode (`make deploy-dev`): ringd reverse-proxies us behind
+// https://ring-dev.zuptalo.com. A precaching service worker and HMR are mutually
+// exclusive — the SW serves a cached shell and HMR never reaches the page — so in
+// this mode we DON'T register a dev SW, and the client actively unregisters any
+// stale one (__HMR_NO_SW__) so an already-installed PWA self-heals.
+const hmrProxy = !!process.env.DEV_HMR_PUBLIC_PORT;
+
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     __RELEASE_NOTES__: JSON.stringify(releaseNotes),
+    __HMR_NO_SW__: JSON.stringify(hmrProxy),
   },
   server: {
     host: true, // listen on 0.0.0.0 so 10.0.1.50:5173 is reachable on the LAN
     port: 5173,
     allowedHosts: ['ring-dev.zuptalo.com'],
+    // Hot reload over the public dev URL: when ringd reverse-proxies us behind
+    // https://ring-dev.zuptalo.com (make deploy-dev), the page is on :443, so the
+    // HMR client must connect to wss://<host>:443 — not the internal :5173. The
+    // host falls back to the page's location, so only the port/protocol need
+    // overriding. Unset for plain `make start` (localhost HMR works as before).
+    hmr: process.env.DEV_HMR_PUBLIC_PORT
+      ? { clientPort: Number(process.env.DEV_HMR_PUBLIC_PORT), protocol: 'wss' }
+      : undefined,
     // Only watch app source. Without this, Vite watches the whole repo and a full
     // page reload fires whenever the Go backend writes runtime state (server/data:
     // secrets, uploaded blobs, the emoji cache), e2e artifacts change, etc.
@@ -96,7 +112,9 @@ export default defineConfig({
       // to the home screen from the dev server behaves like the real PWA
       // (proper scope/start_url - no breaking out to Safari on navigation).
       // type: 'module' lets the dev SW use ES imports (workbox-precaching).
-      devOptions: { enabled: true, type: 'module' },
+      // EXCEPT in HMR-proxy mode (make deploy-dev): a precaching SW would cache
+      // the shell and block HMR, so disable it there.
+      devOptions: { enabled: !hmrProxy, type: 'module' },
       manifest: {
         name: 'Ring',
         short_name: 'Ring',

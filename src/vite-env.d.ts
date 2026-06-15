@@ -17,3 +17,8 @@ declare const __APP_VERSION__: string;
  *  build time from git (see vite.config.ts / scripts/release-notes.sh). Used as the
  *  "running" side of the What's-new delta. Empty array when none / unstamped. */
 declare const __RELEASE_NOTES__: import('@/services/release-notes').ReleaseNote[];
+
+/** True only in HMR-proxy dev mode (`make deploy-dev`): no service worker is
+ *  registered, and the app unregisters any stale SW + clears caches on load so an
+ *  already-installed PWA self-heals and HMR works. False in normal dev and prod. */
+declare const __HMR_NO_SW__: boolean;

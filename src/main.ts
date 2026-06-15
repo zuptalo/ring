@@ -88,6 +88,20 @@ function ensureClonedTransitionElements(): void {
   }
 }
 
+// HMR-proxy dev mode (`make deploy-dev`): no service worker should be active, or a
+// previously-installed PWA's precaching SW would serve a cached shell and block hot
+// reload. Best-effort unregister any stale SW + clear its caches so the app
+// self-heals on load. (A SW already controlling the page only fully releases on the
+// next navigation, so a one-time hard refresh may still be needed the first time.)
+if (__HMR_NO_SW__ && 'serviceWorker' in navigator) {
+  void navigator.serviceWorker.getRegistrations().then((regs) => {
+    for (const reg of regs) void reg.unregister();
+  });
+  if ('caches' in window) {
+    void caches.keys().then((keys) => keys.forEach((k) => void caches.delete(k)));
+  }
+}
+
 // Populate the on-device database with dummy data on first launch, then mount.
 seedIfEmpty().finally(() => {
   router.isReady().then(() => {

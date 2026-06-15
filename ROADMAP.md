@@ -20,6 +20,7 @@ Specs are grouped by category band; status moves
 | Spec | Title | Status |
 |------|-------|--------|
 | [1001](specs/1001-smooth-tab-transitions/spec.md) | Smooth Tab Transitions | 🔵 in-review |
+| [1002](specs/1002-local-dev-deployment/spec.md) | Local Dev Deployment Tooling + Hot Reload | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
