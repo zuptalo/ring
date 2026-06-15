@@ -6,8 +6,11 @@
 #   - Pull request required before merging (0 required approvals — we're a solo
 #     maintainer and GitHub won't let you approve your own PR; raise this once there
 #     are other maintainers).
-#   - Required status checks, strict (branch must be up to date before merge):
-#     the three jobs produced by the `verify` caller running build-test.yml.
+#   - Required status checks (non-strict): the aggregate "CI gate" plus the always-on
+#     roadmap + release guards (see REQUIRED_CHECKS). NON-strict on purpose: with an
+#     active develop, requiring "up to date before merge" makes every merge invalidate
+#     other in-flight PRs and forces a full re-run for an unrelated change. The CI gate
+#     + test coverage make that tax not worth it; a PR merges on its own green checks.
 #   - Conversation resolution required.
 #   - Force-pushes and branch deletion blocked.
 #   - enforce_admins: rules apply to admins too (no bypass).
@@ -74,7 +77,7 @@ checks_json=$(printf '%s\n' "${REQUIRED_CHECKS[@]}" \
   | jq -R '{context: .}' | jq -s '.')
 
 payload=$(jq -n --argjson checks "$checks_json" '{
-  required_status_checks: { strict: true, checks: $checks },
+  required_status_checks: { strict: false, checks: $checks },
   enforce_admins: true,
   required_pull_request_reviews: {
     required_approving_review_count: 0,
