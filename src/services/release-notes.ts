@@ -24,6 +24,13 @@ export function computeDelta(incoming: ReleaseNote[], running: ReleaseNote[]): R
   return incoming.filter((n) => !have.has(n.sha));
 }
 
+/** A version for display: drop semver build metadata (the `+<sha>` the develop image
+ *  stamps, e.g. `0.1.0-dev.127+3ddacbf…`), which is a long unbreakable token that
+ *  wrecks toast/sheet layout. Keeps the pre-release part (`-dev.127`, `-rc.1`). */
+export function displayVersion(v: string): string {
+  return v.split('+')[0];
+}
+
 // Conventional-Commit prefix: type, optional (scope), optional `!`, then `: `.
 const CC_PREFIX = /^[a-z]+(\([^)]*\))?!?:\s*/i;
 

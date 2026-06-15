@@ -1,7 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { computeDelta, prettify, type ReleaseNote } from './release-notes';
+import { computeDelta, prettify, displayVersion, type ReleaseNote } from './release-notes';
 
 const note = (sha: string, subject = 'feat: x'): ReleaseNote => ({ sha, subject });
+
+describe('displayVersion', () => {
+  it('drops the +<sha> build metadata that the develop image stamps', () => {
+    expect(displayVersion('0.1.0-dev.127+3ddacbf1750c4e1b75ca0b869f7985b26c24a595')).toBe('0.1.0-dev.127');
+  });
+  it('leaves a clean release or rc version untouched', () => {
+    expect(displayVersion('0.2.0')).toBe('0.2.0');
+    expect(displayVersion('0.2.0-rc.1')).toBe('0.2.0-rc.1');
+  });
+});
 
 describe('computeDelta', () => {
   it('returns the incoming notes the running build did not have (by sha)', () => {

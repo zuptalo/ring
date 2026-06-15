@@ -235,6 +235,11 @@ ion-toast.app-update-toast {
   --color: #fff;
   --border-radius: 14px;
 }
+/* Defensive: never let a long unbreakable token (e.g. a version with a git sha)
+   wrap one character per line and blow up the toast. */
+ion-toast.app-update-toast::part(message) {
+  overflow-wrap: anywhere;
+}
 ion-toast.app-update-toast::part(button) {
   color: #fff;
 }
