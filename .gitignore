@@ -17,6 +17,9 @@ test-results
 playwright-report
 /playwright/.cache
 
+# Showcase screenshot output (generated marketing assets)
+showcase/output
+
 # Unit-test coverage output (vitest)
 coverage
 
