@@ -101,6 +101,7 @@ import { peerPresence } from '@/composables/usePresence';
 import { setSecret } from '@/db/secrets';
 import { getAll, put } from '@/db/idb';
 import { uid } from '@/utils/uid';
+import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
 import type { FriendRequest, Media, Message } from '@/db/types';
 import {
   startDirectCall,
@@ -435,6 +436,10 @@ export function installTestHook(): void {
         updatedAt: Date.now(),
       });
     },
+
+    /** Inject the curated showcase demo dataset (contacts, chats, messages, media,
+     *  call log) for the screenshot harness. See services/showcase-seed.ts. */
+    seedShowcase: (): Promise<void> => runSeedShowcase(),
     /** Total on-device media bytes by kind. */
     storageByType: () => dbStorageByType(),
     deleteMediaByKind: (kinds: Media['kind'][], chatId?: string) => dbDeleteMediaByKind(kinds, chatId),
