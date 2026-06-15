@@ -87,6 +87,9 @@ export default async function globalSetup(): Promise<void> {
       TURN_LISTEN: ':3479',
       RELAY_IP: '127.0.0.1',
       SECRETS_KEY: 'e2e-secrets-key',
+      // Seed the fixed per-spec invite codes (e.g. DIRTST01 → username u_dirtst01)
+      // the specs assert on. A normal dev deployment only seeds INVITE01-10.
+      SEED_E2E_CODES: 'true',
     },
   });
   ringd.unref();

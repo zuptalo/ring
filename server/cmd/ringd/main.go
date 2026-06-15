@@ -216,8 +216,6 @@ func run() error {
 	if cfg.IsDev() {
 		// 8-char codes - the register UI requires exactly 8 chars ([A-Z0-9]{8}).
 		// A simple, memorable pool for signing up test accounts manually.
-		// e2e specs don't depend on these: createAccount() falls back to the
-		// dev-only freshCode() mint when a given code isn't seeded.
 		codes := []string{
 			"INVITE01", "INVITE02", "INVITE03", "INVITE04", "INVITE05",
 			"INVITE06", "INVITE07", "INVITE08", "INVITE09", "INVITE10",
@@ -226,6 +224,40 @@ func run() error {
 			return err
 		}
 		slog.Info("seeded dev invitation codes", "count", len(codes))
+
+		// Fixed per-spec codes for the e2e harness: some specs derive a
+		// deterministic username (u_<code>) from a known code and assert on it
+		// (e.g. directory.spec expects u_dirtst01), so those codes MUST be seeded.
+		// Gated behind SEED_E2E_CODES (set by e2e/global-setup) so they don't
+		// clutter a normal dev deployment - which only wants INVITE01-10 above.
+		if os.Getenv("SEED_E2E_CODES") == "true" {
+			e2eCodes := []string{
+				"RINGDEV1", "RINGDEV2", "RINGDEV3", "RINGDEV4", "RINGDEV5",
+				"RINGDEV6", "RINGDEV7", "RINGDEV8", "RINGDEV9", "TESTCODE",
+				"RINGTST1", "RINGTST2", "RINGTST3", "RINGTST4", "RINGTST5",
+				"RINGTST6", "RINGTST7", "RINGTST8", "RINGTST9", "TESTCOD2",
+				"SHARETST", "SHARETS2",
+				"REKEYTS1", "REKEYTS2",
+				"GHOSTTS1", "GHOSTTS2",
+				"BLOCKTS1", "BLOCKTS2",
+				"DIRTST01", "DIRTST02",
+				"GRPINV01", "GRPINV02", "GRPINV03",
+				"GRPADD01", "GRPADD02", "GRPADD03",
+				"AUTOLCK1", "AUTOLCK2",
+				"SWDECR01", "SWDECR02",
+				"CURATED1", "CURATED2",
+				"PRESTIR1", "PRESTIR2", "PRESTIR3",
+				"MEDIACLN",
+				"CALLLBL1", "CALLLBL2", "CALLLBL3",
+				"CALLSPK1", "CALLSPK2",
+				"CHATFLT1", "CHATFLT2", "CHATFLT3",
+				"NAVTERM1", "PASTECP1", "PASTECP2", "EDITDEL1", "EDITDEL2",
+			}
+			if err := st.SeedDevInvites(ctx, e2eCodes); err != nil {
+				return err
+			}
+			slog.Info("seeded e2e invitation codes", "count", len(e2eCodes))
+		}
 	}
 
 	// Bootstrap: an empty system has no way to register the first account

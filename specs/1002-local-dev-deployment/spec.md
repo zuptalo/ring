@@ -111,8 +111,12 @@ state preserved where applicable), and the HMR websocket connects over the publi
   (Postgres + ringd with TLS/TURN, serving the app), reading `server/.env`.
 - **FR-002**: In dev mode on a fresh database, the server MUST seed exactly
   `INVITE01`–`INVITE10` (8-char, register-UI-valid) and no other codes.
-- **FR-003**: Removing the per-spec seed codes MUST NOT break e2e: specs that use
-  unseeded codes MUST continue to succeed via the existing dev-only fresh-code mint.
+- **FR-003**: A normal dev deployment MUST seed only `INVITE01`–`INVITE10`. The
+  fixed per-spec codes the e2e harness depends on (some specs derive and assert a
+  deterministic `u_<code>` username, e.g. `directory.spec` → `u_dirtst01`) MUST be
+  seeded too, but only under the e2e run (`SEED_E2E_CODES`, set by the harness), so
+  they don't clutter the dev deployment. Specs that don't assert a username keep
+  working via the dev-only fresh-code mint.
 - **FR-004**: ringd MUST support a dev-only reverse-proxy mode (`DEV_PROXY=<url>`)
   that forwards all non-API requests — including the HMR websocket upgrade — to the
   given dev server, instead of serving static assets.
@@ -158,7 +162,8 @@ state preserved where applicable), and the HMR websocket connects over the publi
 - The dev server is Vite; ringd reverse-proxying to it (incl. the HMR ws) is the
   chosen route over having Vite terminate TLS, because ringd already owns the cert,
   the API, and TURN.
-- e2e relies on the dev-only fresh-code mint as a fallback, so the seed list is free
-  to change.
+- The dev deployment wants only `INVITE01`–`INVITE10`; the e2e harness seeds its
+  fixed per-spec codes separately (`SEED_E2E_CODES`) because some specs assert a
+  username derived from a known code. Other specs use the dev-only fresh-code mint.
 - Hot-reload mode is opt-in (a distinct make target / `DEV_PROXY`); plain local dev
   (`make start` → `localhost:5173`) and production are unaffected.
