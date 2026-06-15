@@ -50,18 +50,20 @@
         />
       </ion-list>
 
-      <!-- Empty states. The "Browse the directory" CTA is only for a brand-new user
-           with no chats at all; a filtered view that happens to be empty just says so
-           (the directory is reachable from the Contacts tab). -->
-      <div v-if="loaded && chats.length === 0" class="empty">
-        <template v-if="activeFilter === 'all' && allChats.length === 0">
-          <ion-note>No chats yet</ion-note>
-          <ion-button class="browse-btn" fill="solid" size="small" @click="router.push('/directory')">
-            <ion-icon slot="start" :icon="compassOutline" />
-            Browse the directory
-          </ion-button>
-        </template>
-        <ion-note v-else>{{ emptyMessage }}</ion-note>
+      <!-- Empty states. With no chats at all, a hint row points to Contacts to
+           start a conversation (mirrors the Contacts "Browse user directory" row);
+           a filtered view that happens to be empty just says so. -->
+      <ion-list v-if="loaded && activeFilter === 'all' && allChats.length === 0" class="hint-list">
+        <ion-item button :detail="true" lines="full" @click="router.push('/tabs/contacts')">
+          <ion-icon slot="start" :icon="peopleOutline" color="primary" />
+          <ion-label>
+            <h2>Start a conversation</h2>
+            <p>Pick a contact to chat with</p>
+          </ion-label>
+        </ion-item>
+      </ion-list>
+      <div v-else-if="loaded && chats.length === 0" class="empty">
+        <ion-note>{{ emptyMessage }}</ion-note>
       </div>
 
       <ChatActionsHost ref="actions" />
@@ -151,7 +153,7 @@ import {
   IonLabel, IonNote, IonModal,
 } from '@ionic/vue';
 import {
-  createOutline, personAddOutline, peopleOutline, compassOutline, archiveOutline, lockClosedOutline,
+  createOutline, personAddOutline, peopleOutline, archiveOutline, lockClosedOutline,
 } from 'ionicons/icons';
 import ChatListItem from '@/components/ChatListItem.vue';
 import ChatActionsHost from '@/components/ChatActionsHost.vue';
@@ -255,8 +257,7 @@ async function newGroup() {
 </script>
 
 <style scoped>
-/* Empty state: the label sits near the top, while the "Browse the directory" CTA is
-   centred horizontally and pushed down toward the middle of the content area. */
+/* Empty state: a filtered-but-empty view just shows a short label near the top. */
 .empty {
   display: flex;
   flex-direction: column;
@@ -264,7 +265,11 @@ async function newGroup() {
   text-align: center;
   margin-top: 40px;
 }
-.browse-btn {
-  margin-top: 30vh;
+/* "Start a conversation" hint row, flush at the top like the Contacts browse row. */
+.hint-list {
+  padding-top: 0;
+}
+.hint-list ion-icon {
+  font-size: 24px;
 }
 </style>
