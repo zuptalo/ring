@@ -6,7 +6,11 @@
  * When that happens we surface a toast that NAMES the new version (read from
  * /v1/config, since the SW update event itself carries no version string) and let
  * the user pull it immediately (skipWaiting + reload) or defer. Deferring keeps the
- * current version running; the prompt reappears on the next launch until accepted.
+ * current version running; the prompt REAPPEARS every time the app returns to the
+ * foreground (and on next launch) until accepted, so a user who taps "Later" and
+ * never fully closes the app is reminded again instead of having to hunt for a
+ * manual reload. (A full close lets the waiting worker activate on its own, so
+ * there's nothing left to prompt.)
  *
  * Update checks are EVENT-DRIVEN (no polling): on app open (registerSW's own initial
  * check), on foreground, and on a transport disconnect (useSync calls checkForUpdate,
@@ -67,75 +71,83 @@ export function useAppUpdate(): void {
       swReg = reg; // registerSW already does the initial (app-open) check
       if (typeof document !== 'undefined') {
         document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') checkForUpdate();
+          if (document.visibilityState !== 'visible') return;
+          checkForUpdate(); // look for a newer build
+          void maybePrompt(); // re-surface a waiting update the user deferred earlier
         });
       }
     },
   });
 
   let prompting = false;
-  watch(
-    needRefresh,
-    async (need) => {
-      if (!need || prompting) return;
-      prompting = true;
-      // The waiting SW IS the new build; ask the (already-deployed) server which
-      // version that is AND its release notes, so the toast can name the version and
-      // offer a per-user "What's new". A miss just drops both (generic message).
-      let version = '';
-      let incoming: ReleaseNote[] = [];
-      try {
-        const cfg = await fetchServerConfig();
-        version = cfg.version ?? '';
-        incoming = cfg.notes ?? [];
-      } catch {
-        /* generic message + no notes when config can't be fetched */
-      }
-      const running = __APP_VERSION__;
-      // Display version strips the long +<sha> build metadata (it's an unbreakable
-      // token that otherwise wraps one char per line and wrecks the toast).
-      const shown = displayVersion(version);
-      const label = version && version !== running ? `Ring ${shown} is ready to install.` : 'A new version of Ring is ready.';
 
-      // Per-user delta: the changes the incoming build adds that this one didn't have.
-      const delta = computeDelta(incoming, __RELEASE_NOTES__ ?? []);
+  // Build + present the update toast. Idempotent while one is already showing
+  // (prompting) and a no-op when nothing is waiting (needRefresh false). Driven by
+  // BOTH the needRefresh watch (a new worker just appeared) and every return to the
+  // foreground, so tapping "Later" doesn't bury the update forever for someone who
+  // never fully closes the app — it comes back next time they reopen it.
+  async function maybePrompt(): Promise<void> {
+    if (!needRefresh.value || prompting) return;
+    prompting = true;
+    // The waiting SW IS the new build; ask the (already-deployed) server which
+    // version that is AND its release notes, so the toast can name the version and
+    // offer a per-user "What's new". A miss just drops both (generic message).
+    let version = '';
+    let incoming: ReleaseNote[] = [];
+    try {
+      const cfg = await fetchServerConfig();
+      version = cfg.version ?? '';
+      incoming = cfg.notes ?? [];
+    } catch {
+      /* generic message + no notes when config can't be fetched */
+    }
+    const running = __APP_VERSION__;
+    // Display version strips the long +<sha> build metadata (it's an unbreakable
+    // token that otherwise wraps one char per line and wrecks the toast).
+    const shown = displayVersion(version);
+    const label = version && version !== running ? `Ring ${shown} is ready to install.` : 'A new version of Ring is ready.';
 
-      const buttons: { text: string; role?: 'cancel'; handler?: () => boolean | void }[] = [];
-      if (delta.length) {
-        buttons.push({
-          text: `What's new (${delta.length})`,
-          // No `return false`: tapping this dismisses the toast and opens the sheet,
-          // which carries its own Update / Later actions.
-          handler: () => {
-            void presentWhatsNew(shown, delta).then((wantsUpdate) => {
-              if (wantsUpdate) void updateServiceWorker(true);
-            });
-          },
-        });
-      }
-      buttons.push({ text: 'Update', handler: () => void updateServiceWorker(true) });
-      buttons.push({ text: 'Later', role: 'cancel' });
+    // Per-user delta: the changes the incoming build adds that this one didn't have.
+    const delta = computeDelta(incoming, __RELEASE_NOTES__ ?? []);
 
-      const toast = await toastController.create({
-        header: 'Update available',
-        message: label,
-        // Top of the screen, where every other notification (banners, error
-        // toasts) surfaces; see the .app-update-toast rules in App.vue.
-        position: 'top',
-        cssClass: 'app-update-toast',
-        // Stack the buttons BELOW the message. The default 'baseline' layout puts
-        // the (three) buttons inline with the message and reserves their width, so
-        // on a phone the message gets squeezed into a sliver and wraps one word per
-        // line. Stacked gives the message the full toast width.
-        layout: 'stacked',
-        // No duration: stay until the user chooses.
-        buttons,
+    const buttons: { text: string; role?: 'cancel'; handler?: () => boolean | void }[] = [];
+    if (delta.length) {
+      buttons.push({
+        text: `What's new (${delta.length})`,
+        // No `return false`: tapping this dismisses the toast and opens the sheet,
+        // which carries its own Update / Later actions.
+        handler: () => {
+          void presentWhatsNew(shown, delta).then((wantsUpdate) => {
+            if (wantsUpdate) void updateServiceWorker(true);
+          });
+        },
       });
-      void toast.onDidDismiss().then(() => {
-        prompting = false; // allow a re-prompt if a still-newer build arrives
-      });
-      await toast.present();
-    },
-    { immediate: true },
-  );
+    }
+    buttons.push({ text: 'Update', handler: () => void updateServiceWorker(true) });
+    buttons.push({ text: 'Later', role: 'cancel' });
+
+    const toast = await toastController.create({
+      header: 'Update available',
+      message: label,
+      // Top of the screen, where every other notification (banners, error
+      // toasts) surfaces; see the .app-update-toast rules in App.vue.
+      position: 'top',
+      cssClass: 'app-update-toast',
+      // Stack the buttons BELOW the message. The default 'baseline' layout puts
+      // the (three) buttons inline with the message and reserves their width, so
+      // on a phone the message gets squeezed into a sliver and wraps one word per
+      // line. Stacked gives the message the full toast width.
+      layout: 'stacked',
+      // No duration: stay until the user chooses.
+      buttons,
+    });
+    void toast.onDidDismiss().then(() => {
+      prompting = false; // allow a re-prompt on next foreground / a still-newer build
+    });
+    await toast.present();
+  }
+
+  // Fire when a new worker first appears; immediate covers an update that was
+  // already waiting when the app mounted.
+  watch(needRefresh, () => void maybePrompt(), { immediate: true });
 }
