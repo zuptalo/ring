@@ -1,3 +1,19 @@
+<!--
+Sync Impact Report
+- Version: 1.0.0 → 1.1.0 (MINOR: new principle added)
+- Added: Principle XI — Ionic-First UI (stock Ionic components + existing theme
+  tokens; custom only when no Ionic primitive exists, composed from Ionic).
+- Modified: none (Principle X unchanged; XI complements it).
+- Removed: none.
+- Templates / docs reviewed for sync:
+  - .specify/templates/plan-template.md — ✅ no change needed (Constitution Check is
+    derived generically from this file; XI is picked up automatically).
+  - .specify/templates/spec-template.md — ✅ no change needed (no new mandatory section).
+  - .specify/templates/tasks-template.md — ✅ no change needed.
+  - CLAUDE.md — ✅ already advises Ionic-native components + the settings schema;
+    consistent with XI, no edit required.
+- Deferred TODOs: none.
+-->
 # Ring Constitution
 
 Ring is a private, end-to-end-encrypted messenger and calling app: an installable
@@ -136,6 +152,26 @@ The UI works for everyone, in every direction.
   regress direction handling. Reasonable a11y (labels, focus, contrast via the
   `--ring-*` tokens) is part of every UI spec.
 
+### XI. Ionic-First UI
+
+The interface is built from stock Ionic, not hand-rolled widgets.
+
+- New UI MUST be composed from stock Ionic components, styled only with the
+  project's existing theme tokens (the `--ring-*` CSS variables and the
+  `ion-palette-dark` class). No ad-hoc per-component restyling and no hand-rolled
+  widget that duplicates an Ionic primitive (e.g. don't build a custom list row,
+  toggle, modal, or toast when `ion-item`, `ion-toggle`, `ion-modal`, `ion-toast`
+  exist).
+- A custom component is justified ONLY when no Ionic component covers the need;
+  even then it MUST be composed from existing Ionic components with the minimum
+  necessary customization, reusing the existing theme tokens rather than inventing
+  new colours/spacings.
+- Rationale: this keeps the UI consistent, accessible, theme-correct (light/dark +
+  RTL), and upgrade-safe, and it is why a new settings screen is a data edit to
+  `src/settings/schema.ts` (Principle X) rather than a bespoke component. Deviations
+  are reasoned in the plan; a bespoke widget that an Ionic primitive could have
+  provided is a defect.
+
 ## Domain Constraints
 
 These are project-specific guardrails every relevant spec MUST respect.
@@ -185,4 +221,4 @@ These are project-specific guardrails every relevant spec MUST respect.
 - Runtime engineering guidance that is not constitutional lives in `CLAUDE.md` and
   `CONTRIBUTING.md`; where they conflict with this document, this document wins.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-06-15
+**Version**: 1.1.0 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-06-16
