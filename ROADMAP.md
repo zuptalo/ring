@@ -19,7 +19,7 @@ Specs are grouped by category band; status moves
 
 | Spec | Title | Status |
 |------|-------|--------|
-| [1001](specs/1001-smooth-tab-transitions/spec.md) | Smooth Tab Transitions | ⚪ planned |
+| [1001](specs/1001-smooth-tab-transitions/spec.md) | Smooth Tab Transitions | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
