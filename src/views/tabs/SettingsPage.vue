@@ -112,11 +112,9 @@ import { logOutOutline, warningOutline } from 'ionicons/icons';
 import { YOU_SECTIONS, ICONS, searchSettings } from '@/settings/schema';
 import { clearToken } from '@/services/auth';
 import { listAlerts, resolveAlert } from '@/db/queries';
-import { getSecret } from '@/db/secrets';
-import { isUnlocked } from '@/services/crypto/identity';
 import type { Alert } from '@/db/types';
-import { initialsAvatar } from '@/db/avatars';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { useSelfProfile } from '@/composables/useSelfProfile';
 
 const router = useRouter();
 const open = (section: string) => router.push(`/settings/${section}`);
@@ -133,28 +131,10 @@ async function handleAlert(alert: Alert) {
   router.push(`/settings/${alert.section}`);
 }
 
-// Profile fields are encrypted at rest (Class B); the isUnlocked dep re-reads
-// them once the keystore unlocks.
-const profileNameRef = useLiveQuery(
-  () => getSecret('profileName', 'You'),
-  ['settings'],
-  'You',
-  () => isUnlocked.value,
-);
-const about = useLiveQuery(
-  () => getSecret('profileAbout', 'Hey there! I am using Ring.'),
-  ['settings'],
-  'Hey there! I am using Ring.',
-  () => isUnlocked.value,
-);
-const photo = useLiveQuery(
-  () => getSecret('profileAvatar', ''),
-  ['settings'],
-  '',
-  () => isUnlocked.value,
-);
-const profileName = computed(() => profileNameRef.value);
-const avatar = computed(() => photo.value || initialsAvatar(profileNameRef.value));
+// Own profile from the shared warm singleton: decrypted once at unlock and kept
+// live, so the header shows the real name/photo on first paint instead of the
+// "You"/initials placeholder that used to swap in a moment later (spec 1001).
+const { name: profileName, avatar, about } = useSelfProfile();
 
 function logout() {
   clearToken();

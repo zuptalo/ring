@@ -1,6 +1,15 @@
 import { createRouter, createWebHistory } from '@ionic/vue-router';
 import type { RouteRecordRaw } from 'vue-router';
 import { isAuthenticated } from '@/services/auth';
+// The four bottom-tab pages are eager-loaded (static imports), NOT lazy
+// `() => import()` chunks. They are the app's core surface, reached within
+// seconds of launch and already SW-precached; lazy-splitting them only bought a
+// first-switch chunk-fetch stall that rendered the tab in pieces. Folding them
+// into the entry graph means the first switch has no fetch/parse delay (spec 1001).
+import CallsPage from '@/views/tabs/CallsPage.vue';
+import ChatsPage from '@/views/tabs/ChatsPage.vue';
+import ContactsPage from '@/views/tabs/ContactsPage.vue';
+import SettingsPage from '@/views/tabs/SettingsPage.vue';
 
 const routes: RouteRecordRaw[] = [
   // Land inside the tabs; the guard below bounces unauthenticated users to the
@@ -27,13 +36,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/TabsPage.vue'),
     children: [
       { path: '', redirect: '/tabs/chats' },
-      { path: 'calls', component: () => import('@/views/tabs/CallsPage.vue') },
-      { path: 'chats', component: () => import('@/views/tabs/ChatsPage.vue') },
-      {
-        path: 'contacts',
-        component: () => import('@/views/tabs/ContactsPage.vue'),
-      },
-      { path: 'settings', component: () => import('@/views/tabs/SettingsPage.vue') },
+      { path: 'calls', component: CallsPage },
+      { path: 'chats', component: ChatsPage },
+      { path: 'contacts', component: ContactsPage },
+      { path: 'settings', component: SettingsPage },
       // Backward-compat for old links/bookmarks to the former "You" tab.
       { path: 'you', redirect: '/tabs/settings' },
     ],
