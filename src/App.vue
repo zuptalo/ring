@@ -25,7 +25,8 @@
 import { onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { isAuthenticated } from '@/services/auth';
-import { isUnlockedNow } from '@/services/crypto/identity';
+import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
+import { warmAll, clearWarm } from '@/composables/warmStores';
 import { IonApp, IonRouterOutlet, toastController } from '@ionic/vue';
 import { inviteNeedsProfile } from '@/services/invites';
 import { useViewportHeight } from '@/composables/useViewportHeight';
@@ -53,6 +54,21 @@ useSync();
 useAppUpdate();
 
 const router = useRouter();
+
+// Warm the shared in-memory stores (own profile + chat/call/contact lists) the
+// instant the keystore unlocks, so a tab's first paint is already populated and
+// Settings shows the real identity without a placeholder swap. Clearing on every
+// session-end (lock / sign-out / account removal all flip isUnlocked → false)
+// wipes the decrypted plaintext from memory — it never touches disk (spec 1001,
+// FR-ZK-1/FR-ZK-2). immediate: handle an already-unlocked state at startup.
+watch(
+  isUnlocked,
+  (unlocked) => {
+    if (unlocked) void warmAll();
+    else clearWarm();
+  },
+  { immediate: true },
+);
 
 // If authentication is lost mid-session, e.g. the server no longer recognizes
 // this device (account deleted / database wiped) and verifySessionOrReset wiped
