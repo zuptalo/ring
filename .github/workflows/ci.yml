@@ -10,10 +10,13 @@ on:
     branches: [main, develop]
   workflow_dispatch: # allow manual runs (also re-publishes the develop image)
 
-# Newer pushes to the same branch/PR cancel in-flight runs.
+# Only cancel superseded PR runs. A push to develop must NOT be cancellable: a rapid
+# follow-up merge would otherwise kill an in-flight develop image build, leaving
+# :develop stale (this happened — a code merge's image build was cancelled by the
+# doc merges right after it). Pushes + workflow_dispatch always run to completion.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -55,12 +58,13 @@ jobs:
               - '.dockerignore'
               - '.github/workflows/**'
 
-  # The full build + test suite. Skipped for doc/spec-only changes (see `changes`)
-  # so a roadmap badge edit doesn't pay the multi-minute Playwright tax. The CI gate
-  # below still reports a single required status either way.
+  # The full build + test suite. Path-filtering only optimizes PR CI: a doc/spec-only
+  # PR skips this (the CI gate still reports a single required status). A push to
+  # develop or a manual workflow_dispatch ALWAYS runs it, so the develop image is
+  # rebuilt for every develop commit and `workflow_dispatch` reliably republishes.
   verify:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code == 'true' }}
     uses: ./.github/workflows/build-test.yml
 
   # Gate the one merge that actually ships: a PR into main must carry a version
