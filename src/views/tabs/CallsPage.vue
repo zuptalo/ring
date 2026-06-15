@@ -82,7 +82,9 @@
       <!-- No calls yet: a hint row points to Contacts to start a call (mirrors the
            Contacts "Browse user directory" row). -->
       <ion-list v-if="loaded && calls.length === 0" class="hint-list">
-        <ion-item button :detail="true" lines="full" @click="router.push('/tabs/contacts')">
+        <!-- router.replace (not push): a tab switch is terminal and must not grow
+             history, like tapping the tab bar (see navigation.spec). -->
+        <ion-item button :detail="true" lines="full" @click="router.replace('/tabs/contacts')">
           <ion-icon slot="start" :icon="peopleOutline" color="primary" />
           <ion-label>
             <h2>Start a call</h2>

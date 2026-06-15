@@ -33,14 +33,20 @@ test('tab switches replace history; drill-downs still push', async ({ browser })
   }
   expect(await a.page.evaluate(() => history.length)).toBe(h0);
 
-  // Drill-down still PUSHES: a fresh account's empty Chats offers "Browse the
-  // directory" → /directory. That must add an entry, and back must return to Chats.
-  await a.page.getByRole('button', { name: /browse the directory/i }).click();
+  // Empty Chats now hints to Contacts to start a conversation (spec 1003). That's a
+  // tab switch (replace), so history must NOT grow.
+  await a.page.getByRole('button', { name: /start a conversation/i }).click();
+  await a.page.waitForURL('**/tabs/contacts');
+  expect(await a.page.evaluate(() => history.length)).toBe(h0);
+
+  // Drill-down still PUSHES: Contacts' "Browse user directory" → /directory adds an
+  // entry, and back must return to Contacts.
+  await a.page.getByRole('button', { name: /browse user directory/i }).click();
   await a.page.waitForURL('**/directory');
   expect(await a.page.evaluate(() => history.length)).toBe(h0 + 1);
 
   await a.page.goBack();
-  await a.page.waitForURL('**/tabs/chats');
+  await a.page.waitForURL('**/tabs/contacts');
 
   await ctx.close();
 });

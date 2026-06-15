@@ -54,7 +54,9 @@
            start a conversation (mirrors the Contacts "Browse user directory" row);
            a filtered view that happens to be empty just says so. -->
       <ion-list v-if="loaded && activeFilter === 'all' && allChats.length === 0" class="hint-list">
-        <ion-item button :detail="true" lines="full" @click="router.push('/tabs/contacts')">
+        <!-- router.replace (not push): switching to a tab is terminal, like tapping
+             the tab bar — it must not grow history (see navigation.spec). -->
+        <ion-item button :detail="true" lines="full" @click="router.replace('/tabs/contacts')">
           <ion-icon slot="start" :icon="peopleOutline" color="primary" />
           <ion-label>
             <h2>Start a conversation</h2>
