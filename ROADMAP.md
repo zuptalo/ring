@@ -19,4 +19,6 @@ _None yet._
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
-_None yet._
+| Spec | Title | Status |
+|------|-------|--------|
+| [2001](specs/2001-stabilize-message-status/spec.md) | Stabilize message status reporting around downloaded-blob receipts | 🔵 in-review |

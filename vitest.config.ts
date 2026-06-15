@@ -41,6 +41,10 @@ export default defineConfig({
         'src/services/crypto/message.ts',
         'src/services/crypto/ratchet.ts',
         'src/services/crypto/senderkeys.ts',
+        // Pure message-status reducers + the serialization primitive behind the
+        // status-stability fix (spec 2001). Pure, fully unit-tested — gate them too.
+        'src/services/message-status.ts',
+        'src/services/keyed-mutex.ts',
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 80 },
     },
