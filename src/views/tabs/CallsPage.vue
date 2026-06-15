@@ -79,9 +79,19 @@
         <ion-infinite-scroll-content />
       </ion-infinite-scroll>
 
-      <div v-if="loaded && calls.length === 0" class="empty">
-        <ion-note>No calls found</ion-note>
-      </div>
+      <!-- No calls yet: a hint row points to Contacts to start a call (mirrors the
+           Contacts "Browse user directory" row). -->
+      <ion-list v-if="loaded && calls.length === 0" class="hint-list">
+        <!-- router.replace (not push): a tab switch is terminal and must not grow
+             history, like tapping the tab bar (see navigation.spec). -->
+        <ion-item button :detail="true" lines="full" @click="router.replace('/tabs/contacts')">
+          <ion-icon slot="start" :icon="peopleOutline" color="primary" />
+          <ion-label>
+            <h2>Start a call</h2>
+            <p>Pick a contact to call</p>
+          </ion-label>
+        </ion-item>
+      </ion-list>
     </ion-content>
 
     <!-- New call: pick a contact to open their call screen. -->
@@ -200,8 +210,11 @@ onIonViewDidEnter(() => void markCallsSeen());
 </script>
 
 <style scoped>
-.empty {
-  text-align: center;
-  margin-top: 40px;
+/* "Start a call" hint row, flush at the top like the Contacts browse row. */
+.hint-list {
+  padding-top: 0;
+}
+.hint-list ion-icon {
+  font-size: 24px;
 }
 </style>
