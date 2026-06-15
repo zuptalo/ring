@@ -87,6 +87,31 @@ func (h *Handlers) acceptConnection(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// withdrawConnection (POST /v1/connections/withdraw) lets the caller (requester)
+// take back a pending request they sent to {target}. The pending row is removed
+// server-side so the target's incoming list drops it; the target is notified so its
+// UI/badge update live.
+func (h *Handlers) withdrawConnection(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var req connTargetReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil ||
+		!uuidRE.MatchString(req.Target) || req.Target == uid {
+		httpx.Error(w, http.StatusBadRequest, "invalid target")
+		return
+	}
+	if err := h.Connections.WithdrawConnection(r.Context(), uid, req.Target); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not withdraw")
+		return
+	}
+	// Tell the target their incoming request is gone (so it leaves their list/badge).
+	h.notifyConn(req.Target, map[string]any{"t": "connect-update", "from": uid, "state": "withdrawn"})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // rejectConnection (POST /v1/connections/reject) rejects (optionally + blocks) the
 // pending request from {requester}; a block also hides the caller from them.
 func (h *Handlers) rejectConnection(w http.ResponseWriter, r *http.Request) {
