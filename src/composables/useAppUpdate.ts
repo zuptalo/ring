@@ -17,7 +17,7 @@ import { watch } from 'vue';
 import { useRegisterSW } from 'virtual:pwa-register/vue';
 import { toastController, modalController } from '@ionic/vue';
 import { fetchServerConfig } from '@/services/api';
-import { computeDelta, type ReleaseNote } from '@/services/release-notes';
+import { computeDelta, displayVersion, type ReleaseNote } from '@/services/release-notes';
 import WhatsNewSheet from '@/components/WhatsNewSheet.vue';
 
 /** Present the "What's new" sheet with the per-user delta. Resolves true when the
@@ -92,7 +92,10 @@ export function useAppUpdate(): void {
         /* generic message + no notes when config can't be fetched */
       }
       const running = __APP_VERSION__;
-      const label = version && version !== running ? `Ring ${version} is ready to install.` : 'A new version of Ring is ready.';
+      // Display version strips the long +<sha> build metadata (it's an unbreakable
+      // token that otherwise wraps one char per line and wrecks the toast).
+      const shown = displayVersion(version);
+      const label = version && version !== running ? `Ring ${shown} is ready to install.` : 'A new version of Ring is ready.';
 
       // Per-user delta: the changes the incoming build adds that this one didn't have.
       const delta = computeDelta(incoming, __RELEASE_NOTES__ ?? []);
@@ -101,13 +104,12 @@ export function useAppUpdate(): void {
       if (delta.length) {
         buttons.push({
           text: `What's new (${delta.length})`,
+          // No `return false`: tapping this dismisses the toast and opens the sheet,
+          // which carries its own Update / Later actions.
           handler: () => {
-            // Open the sheet; keep the toast open behind it (return false) so Update/
-            // Later stay reachable. An "Update now" inside the sheet installs directly.
-            void presentWhatsNew(version, delta).then((wantsUpdate) => {
+            void presentWhatsNew(shown, delta).then((wantsUpdate) => {
               if (wantsUpdate) void updateServiceWorker(true);
             });
-            return false;
           },
         });
       }
