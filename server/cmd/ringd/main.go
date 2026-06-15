@@ -90,6 +90,15 @@ func splitCSV(s string) []string {
 	return out
 }
 
+// devProxy returns the dev hot-reload proxy target, but only in dev mode so a
+// stray DEV_PROXY can never turn a production server into a reverse proxy.
+func devProxy(cfg config.Config) string {
+	if cfg.IsDev() {
+		return cfg.DevProxy
+	}
+	return ""
+}
+
 // ensureBootstrapInvite guarantees an empty system can onboard its first user.
 // When there are no accounts, it reuses an existing claimable invitation code or
 // mints one, and surfaces it in the logs. The code lives in the invitations
@@ -206,28 +215,12 @@ func run() error {
 
 	if cfg.IsDev() {
 		// 8-char codes - the register UI requires exactly 8 chars ([A-Z0-9]{8}).
-		// These spare codes let you register additional test accounts.
+		// A simple, memorable pool for signing up test accounts manually.
+		// e2e specs don't depend on these: createAccount() falls back to the
+		// dev-only freshCode() mint when a given code isn't seeded.
 		codes := []string{
-			"RINGDEV1", "RINGDEV2", "RINGDEV3", "RINGDEV4", "RINGDEV5",
-			"RINGDEV6", "RINGDEV7", "RINGDEV8", "RINGDEV9", "TESTCODE",
-			"RINGTST1", "RINGTST2", "RINGTST3", "RINGTST4", "RINGTST5",
-			"RINGTST6", "RINGTST7", "RINGTST8", "RINGTST9", "TESTCOD2",
-			"SHARETST", "SHARETS2",
-			"REKEYTS1", "REKEYTS2",
-			"GHOSTTS1", "GHOSTTS2",
-			"BLOCKTS1", "BLOCKTS2",
-			"DIRTST01", "DIRTST02",
-			"GRPINV01", "GRPINV02", "GRPINV03",
-			"GRPADD01", "GRPADD02", "GRPADD03",
-			"AUTOLCK1", "AUTOLCK2",
-			"SWDECR01", "SWDECR02",
-			"CURATED1", "CURATED2",
-			"PRESTIR1", "PRESTIR2", "PRESTIR3",
-			"MEDIACLN",
-			"CALLLBL1", "CALLLBL2", "CALLLBL3",
-			"CALLSPK1", "CALLSPK2",
-			"CHATFLT1", "CHATFLT2", "CHATFLT3",
-			"NAVTERM1", "PASTECP1", "PASTECP2", "EDITDEL1", "EDITDEL2",
+			"INVITE01", "INVITE02", "INVITE03", "INVITE04", "INVITE05",
+			"INVITE06", "INVITE07", "INVITE08", "INVITE09", "INVITE10",
 		}
 		if err := st.SeedDevInvites(ctx, codes); err != nil {
 			return err
@@ -345,7 +338,10 @@ func run() error {
 		TurnURLs:      turnURLs,
 		Emoji:     st,
 		StaticDir: cfg.StaticDir,
-		DevMode:   cfg.IsDev(),
+		// Dev-only hot-reload proxy: forward the app + HMR socket to the Vite dev
+		// server so the public dev URL gets true HMR. Ignored outside dev.
+		DevProxy: devProxy(cfg),
+		DevMode:  cfg.IsDev(),
 	}, cfg.AllowedOrigins)
 
 	// Plain HTTP listener: always on. Behind a TLS-terminating proxy this is the

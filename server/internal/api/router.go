@@ -155,6 +155,11 @@ type Handlers struct {
 	// same origin. Empty in dev/tests (Vite serves the client), so the catch-all
 	// route is not mounted and the API 404s unknown paths as before.
 	StaticDir string
+	// DevProxy, when non-empty (dev only), reverse-proxies all non-API requests -
+	// including the Vite HMR websocket - to this dev-server URL instead of serving
+	// StaticDir, so the public dev URL gets true hot reload. Takes precedence over
+	// StaticDir. Empty in production.
+	DevProxy string
 	// DevMode mounts dev/test-only routes (currently POST /v1/dev/invite, which
 	// mints fresh invite codes for the e2e harness). Off in production.
 	DevMode bool
@@ -289,7 +294,12 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	// precedence in the stdlib mux, so every API route above still wins; only
 	// non-API paths reach the static handler. Unmounted when STATIC_DIR is empty
 	// (dev/tests), leaving the API-only surface untouched.
-	if h.StaticDir != "" {
+	// DevProxy wins over StaticDir: in dev hot-reload mode we forward the app
+	// (and the HMR websocket) to the running Vite dev server instead of serving
+	// built files, so the public dev URL gets true HMR.
+	if h.DevProxy != "" {
+		mux.Handle("/", devProxyHandler(h.DevProxy))
+	} else if h.StaticDir != "" {
 		mux.Handle("/", spaHandler(h.StaticDir))
 	}
 

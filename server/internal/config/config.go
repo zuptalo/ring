@@ -32,6 +32,12 @@ type Config struct {
 	// and the API on the same origin. Empty in dev (Vite serves the client and
 	// proxies the API); set in the Docker image to the copied-in dist/.
 	StaticDir string
+	// DevProxy (DEV_PROXY), dev-only, reverse-proxies all non-API requests -
+	// including the Vite HMR websocket - to a running dev server (e.g.
+	// http://localhost:5173) instead of serving StaticDir. This lets the public
+	// dev URL get true hot-module-reload while ringd keeps terminating TLS and
+	// serving /v1 + TURN. Ignored outside dev; takes precedence over StaticDir.
+	DevProxy string
 	// WarmEmoji, when set (WARM_EMOJI=1), pre-populates the self-hosted Noto emoji
 	// cache with a curated common set on startup (one-time, in the background) so
 	// common emoji never trigger an outbound fetch to Google.
@@ -130,6 +136,7 @@ func Load() (Config, error) {
 		PublicURL:           os.Getenv("PUBLIC_URL"),
 		SecretsKey:          os.Getenv("SECRETS_KEY"),
 		StaticDir:           os.Getenv("STATIC_DIR"),
+		DevProxy:            os.Getenv("DEV_PROXY"),
 		WarmEmoji:           envBool("WARM_EMOJI", false),
 		EnableCalls:         envBool("ENABLE_CALLS", dev),
 		RequireConnection:   envBool("REQUIRE_CONNECTION", true),

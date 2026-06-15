@@ -1,12 +1,38 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 )
+
+// devProxyHandler reverse-proxies all non-API requests to a running dev server
+// (Vite), used only in dev hot-reload mode (DEV_PROXY). httputil.ReverseProxy
+// transparently carries WebSocket upgrades, so the Vite HMR socket tunnels
+// through too - giving the public dev URL true HMR while ringd keeps owning the
+// TLS cert, /v1, /v1/ws and TURN. API paths still 404 here (they're matched by
+// more specific routes before this catch-all; an unknown /v1/* must not be sent
+// to the dev server). Never mounted in production.
+func devProxyHandler(target string) http.Handler {
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		slog.Error("DEV_PROXY is not a valid URL; dev proxy disabled", "value", target, "err", err)
+		return http.HandlerFunc(http.NotFound)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(u)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/v1/") {
+			http.NotFound(w, r)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
+}
 
 // spaHandler serves the built PWA from dir. Real files are served directly with
 // sensible cache headers; any other (non-API) route falls back to index.html so
