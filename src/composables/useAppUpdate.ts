@@ -123,6 +123,11 @@ export function useAppUpdate(): void {
         // toasts) surfaces; see the .app-update-toast rules in App.vue.
         position: 'top',
         cssClass: 'app-update-toast',
+        // Stack the buttons BELOW the message. The default 'baseline' layout puts
+        // the (three) buttons inline with the message and reserves their width, so
+        // on a phone the message gets squeezed into a sliver and wraps one word per
+        // line. Stacked gives the message the full toast width.
+        layout: 'stacked',
         // No duration: stay until the user chooses.
         buttons,
       });
