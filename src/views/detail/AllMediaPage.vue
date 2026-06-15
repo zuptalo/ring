@@ -103,7 +103,8 @@ import {
   CAPTION_MAX,
 } from '@/db/queries';
 import { formatBytes } from '@/utils/bytes';
-import { get } from '@/db/idb';
+import { get, put } from '@/db/idb';
+import { generateVideoPoster } from '@/utils/media-meta';
 import type { Chat, Media, Message } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { formatStamp, formatFull } from '@/utils/time';
@@ -179,38 +180,32 @@ watch(
             mime: md.mime,
             name: md.name,
           };
-          if (m.kind === 'video' && !info.value[m.mediaId].posterUrl) void poster(url, m.mediaId);
+          if (m.kind === 'video' && !info.value[m.mediaId].posterUrl) void poster(md.blob, m.mediaId);
         }
       }
     }
   },
   { immediate: true },
 );
-async function poster(url: string, mediaId: string): Promise<void> {
-  const v = document.createElement('video');
-  v.muted = true;
-  v.preload = 'metadata';
-  v.src = url;
-  await new Promise<void>((resolve) => {
-    v.onloadeddata = () => {
-      v.onseeked = () => {
-        const c = document.createElement('canvas');
-        c.width = v.videoWidth || 240;
-        c.height = v.videoHeight || 240;
-        c.getContext('2d')?.drawImage(v, 0, 0, c.width, c.height);
-        c.toBlob((b) => {
-          if (b) info.value[mediaId] = { ...info.value[mediaId], posterUrl: URL.createObjectURL(b) };
-          resolve();
-        }, 'image/jpeg', 0.7);
-      };
-      try {
-        v.currentTime = Math.min(0.1, (v.duration || 1) / 2);
-      } catch {
-        resolve();
-      }
-    };
-    v.onerror = () => resolve();
-  });
+
+// Generate a video poster through the SHARED, concurrency-bounded helper (spec
+// 2002) instead of a bespoke per-cell <video> — so a media grid full of videos
+// can't spin up a decoder per cell at once — and PERSIST it (posterBlob) so it's
+// produced once and reused, here and in the chat view.
+async function poster(blob: Blob, mediaId: string): Promise<void> {
+  const dataUrl = await generateVideoPoster(blob);
+  if (!dataUrl) return;
+  info.value[mediaId] = { ...info.value[mediaId], posterUrl: dataUrl };
+  try {
+    const md = await get<Media>('media', mediaId);
+    if (md && !md.posterBlob) {
+      md.posterBlob = await (await fetch(dataUrl)).blob();
+      md.updatedAt = Date.now();
+      await put('media', md);
+    }
+  } catch {
+    /* best-effort cache */
+  }
 }
 
 // Group media by month (newest-first), with "This month" for the current month.

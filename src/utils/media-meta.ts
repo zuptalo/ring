@@ -4,6 +4,7 @@
  * that never fires its load/seek event (common on iOS for large clips) must not
  * hang the send pipeline, so each call resolves on a timeout with whatever it has.
  */
+import { createLimiter } from '@/utils/concurrency';
 export interface VideoMeta {
   width?: number;
   height?: number;
@@ -61,12 +62,25 @@ export function readImageMeta(blob: Blob, timeoutMs = 6000): Promise<ImageMeta> 
   });
 }
 
+// Cap concurrent poster generations. Each one decodes a real <video>, so an
+// unbounded herd (one per video in a media-heavy chat) saturated the device's
+// decoders and froze/crashed the app. Two at a time keeps thumbnails filling in
+// promptly while staying well within device limits (spec 2002).
+const posterLimiter = createLimiter(2);
+
 /** A small first-frame JPEG thumbnail (data URL) sent with a video message so the
  *  recipient sees a preview without downloading the clip. Time-bounded and
  *  iOS-robust: the <video> is attached (hidden) to the DOM and decoded via
  *  play() + requestVideoFrameCallback, because an offscreen seek-to-frame often
- *  never fires on iOS Safari. */
+ *  never fires on iOS Safari.
+ *
+ *  Runs through a shared concurrency limiter so that, however many videos need a
+ *  poster at once, only a couple decode simultaneously (spec 2002). */
 export function generateVideoPoster(blob: Blob, maxEdge = 480, timeoutMs = 10000): Promise<string | undefined> {
+  return posterLimiter(() => generateVideoPosterUnlimited(blob, maxEdge, timeoutMs));
+}
+
+function generateVideoPosterUnlimited(blob: Blob, maxEdge: number, timeoutMs: number): Promise<string | undefined> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(blob);
     const v = document.createElement('video');
