@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-15
 
-**Status**: in-review
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User description: "I would like the update toast sent to the users to now have a
