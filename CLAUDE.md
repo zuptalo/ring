@@ -152,6 +152,32 @@ passthrough proxy (not a TLS-terminating HTTP proxy). With `ACME=true`, ringd
 provisions and renews its own certs (autocert, TLS-ALPN-01), cached encrypted in
 Postgres. See `server/docs/CALLING.md` before touching calling/deploy.
 
+## Spec-driven development
+
+New behavior is built spec-first with **Spec Kit**. The governing principles —
+including the non-negotiable zero-knowledge boundary and a TDD mandate — live in
+`.specify/memory/constitution.md`; every spec is checked against it. Full
+contributor walkthrough is in `CONTRIBUTING.md`.
+
+- **Start a spec** with `make spec CATEGORY=<planned|adhoc|hotfix> DESC="…"` (or
+  `scripts/spec-new.sh …`). The number encodes the category: planned `0001+`,
+  ad-hoc `1001+`, hotfix/bug `2001+`. The helper allocates the next free number in
+  the band, creates the branch (`feat/NNNN-slug` for planned/ad-hoc, `fix/NNNN-slug`
+  for hotfixes) and the **flat** `specs/<NNNN-slug>/spec.md` (the directory is never
+  prefixed — only the branch is), and writes `.specify/feature.json` (gitignored) so
+  the speckit commands target it.
+- **Required pipeline** (the `/speckit-*` agent skills, in order): `specify →
+  clarify → plan → tasks → analyze → taskstoissues → implement`. `analyze` only
+  reports — fix the flagged artifact (spec/plan/tasks) and re-run downstream until
+  clean before implementing. `checklist` is required for crypto / zero-knowledge specs.
+- **`ROADMAP.md` is generated** from `specs/` — never hand-edit it. Run
+  `make roadmap` after adding a spec or changing a `**Status**:` line
+  (`planned → in-progress → in-review → shipped`); CI's `Roadmap up to date` guard
+  fails if it's stale.
+- **Auto-close issues**: `taskstoissues` opens one GitHub issue per task; the
+  feature → `develop` PR must list `Closes #N` for each so they close on merge
+  (works because `develop` is the default branch).
+
 ## Git, branching, and releases
 
 GitFlow. **`develop`** is the integration branch; **`main`** is production.
@@ -193,3 +219,8 @@ GitFlow. **`develop`** is the integration branch; **`main`** is production.
 - Go: stdlib-first, small interfaces at call sites, `gofmt`'d, table-ish tests
   against the fake store. Run `go vet` before finishing.
 - Keep the zero-knowledge invariant intact in every change that touches the wire.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
