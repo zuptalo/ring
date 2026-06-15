@@ -151,6 +151,19 @@ cd server && go test ./...          # backend unit tests (in-memory store, no DB
 npm run test:e2e                    # Playwright e2e (needs `make db-up` running)
 ```
 
+## Roadmap and contributing
+
+Ring is built **spec-first** with [Spec Kit](https://github.com/github/spec-kit):
+every feature or fix starts as a numbered spec under `specs/` and runs through a
+fixed pipeline before code lands. The live, auto-generated roadmap is
+**[`ROADMAP.md`](ROADMAP.md)** (grouped into planned features, ad-hoc work, and
+hotfixes; never hand-edited — `make roadmap` regenerates it from the specs). The
+governing principles, including the non-negotiable zero-knowledge boundary, live
+in [`.specify/memory/constitution.md`](.specify/memory/constitution.md).
+
+New contributors: start with **[`CONTRIBUTING.md`](CONTRIBUTING.md)** for the full
+spec-driven workflow, the spec-number bands, and the test gates.
+
 ## Branching and releases
 
 The repo follows a simple GitFlow:

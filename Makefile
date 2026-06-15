@@ -11,7 +11,7 @@ SERVER_DIR := server
 GOBIN := $(shell go env GOPATH)/bin
 AIR := $(GOBIN)/air
 
-.PHONY: start stop db-up db-down tools backend frontend hooks
+.PHONY: start stop db-up db-down tools backend frontend hooks roadmap spec
 
 ## start: database (if needed) + backend hot reload + frontend hot reload
 start: db-up tools
@@ -56,3 +56,12 @@ hooks:
 	@git config core.hooksPath scripts/hooks
 	@echo "▶ Git hooks enabled (core.hooksPath = scripts/hooks)."
 	@echo "  Disable with: git config --unset core.hooksPath"
+
+## roadmap: regenerate ROADMAP.md from specs/ (CI fails if it's stale)
+roadmap:
+	@python3 scripts/roadmap-gen.py
+
+## spec: start a new numbered spec — make spec CATEGORY=planned DESC="Add search"
+##       CATEGORY is planned|adhoc|hotfix (default planned).
+spec:
+	@scripts/spec-new.sh "$(or $(CATEGORY),planned)" "$(DESC)"

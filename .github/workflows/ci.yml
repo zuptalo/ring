@@ -75,6 +75,18 @@ jobs:
 
           echo "✓ Version bumped $base_ver → $head_ver and v$head_ver is unreleased. Release PR is good to merge."
 
+  # Keep ROADMAP.md honest: it is generated from specs/<NNNN-slug>/spec.md, so a
+  # spec added or a Status bumped without regenerating would let the roadmap drift
+  # from what's actually checked in. This fails the build until `make roadmap` is
+  # run and the result committed. Cheap, and runs on every push + PR.
+  roadmap-guard:
+    name: Roadmap up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify ROADMAP.md matches specs/
+        run: python3 scripts/roadmap-gen.py --check
+
   develop-image:
     name: Publish develop image
     needs: verify

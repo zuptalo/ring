@@ -35,3 +35,7 @@ server/data
 server/tmp
 server/ringd
 server/.env
+
+# Spec Kit: per-active-feature pointer written by spec-new.sh / the speckit
+# commands. Ephemeral working state — the tracked source of truth is specs/.
+.specify/feature.json
