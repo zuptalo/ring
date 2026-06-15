@@ -79,7 +79,7 @@
         <ion-infinite-scroll-content />
       </ion-infinite-scroll>
 
-      <div v-if="calls.length === 0" class="empty">
+      <div v-if="loaded && calls.length === 0" class="empty">
         <ion-note>No calls found</ion-note>
       </div>
     </ion-content>
@@ -145,6 +145,7 @@ import { deleteCalls, listCallGroups, markCallsSeen, listContacts } from '@/db/q
 import type { CallGroup } from '@/db/queries';
 import type { Call } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { warmCalls, warmCallsLoaded, warmWhenIdle } from '@/composables/warmStores';
 import { formatTime } from '@/utils/time';
 
 const PAGE = 15;
@@ -152,12 +153,19 @@ const router = useRouter();
 const openInfo = (contactId: string) => router.push(`/call/${contactId}`);
 const search = ref('');
 const visible = ref(PAGE);
+// Empty search → seed first paint from the warm calls store; a typed term falls
+// back to the live query (spec 1001 "Search contract").
 const calls = useLiveQuery(
   () => listCallGroups(search.value),
   ['calls'],
-  [],
+  [] as CallGroup[],
   () => search.value,
+  warmWhenIdle(warmCalls, warmCallsLoaded, search),
 );
+// Gate the empty state so "No calls found" only shows once data has actually
+// resolved (true immediately when seeded from the warm store), never as a flash
+// before the list arrives (spec 1001 FR-006).
+const loaded = calls.loaded;
 watch(search, () => (visible.value = PAGE));
 const visibleCalls = computed(() => calls.value.slice(0, visible.value));
 

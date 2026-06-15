@@ -17,7 +17,9 @@ Specs are grouped by category band; status moves
 
 ## ⚡ Ad-hoc (1001–1999)
 
-_None yet._
+| Spec | Title | Status |
+|------|-------|--------|
+| [1001](specs/1001-smooth-tab-transitions/spec.md) | Smooth Tab Transitions | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

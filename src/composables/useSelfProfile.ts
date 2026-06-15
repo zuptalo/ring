@@ -1,37 +1,24 @@
 /**
- * Reactive access to the local user's OWN chosen profile name + avatar, for every
- * place the user is shown to themselves (call tiles, group member lists, reply quotes,
- * media captions, …). Both are encrypted-at-rest secrets, so we read them through
- * `useLiveQuery` over the `settings` store: the value re-resolves when the keystore
- * unlocks and updates live when the user edits their profile (Profile/Settings write
- * the same secret), so a rename propagates everywhere without a reload.
+ * Reactive access to the local user's OWN chosen profile name + avatar (+ about),
+ * for every place the user is shown to themselves (Settings header, call tiles,
+ * group member lists, reply quotes, media captions, …).
  *
- * Name falls back to the immutable @username (then "You") while the profile is empty or
- * the store is still locked; the avatar falls back to a generated initials avatar so a
- * face is always shown.
+ * Backed by the shared, warm singleton in `warmStores` rather than a fresh
+ * per-call query: the singleton is decrypted once when the keystore unlocks and
+ * kept live via the `settings` change bus, so every consumer shows the REAL
+ * identity from its first paint — no "You"/initials placeholder that swaps to the
+ * real photo/name a moment later (spec 1001 FR-005/FR-ZK-6). The decrypted values
+ * live in memory only.
+ *
+ * Name falls back to the immutable @username (then "You") while the profile is
+ * empty or the keystore is locked; the avatar falls back to a generated initials
+ * avatar so a face is always shown.
  */
 import { computed, type Ref } from 'vue';
-import { useLiveQuery } from '@/composables/useLiveQuery';
-import { getSecret } from '@/db/secrets';
-import { getSelfUsername } from '@/services/auth';
-import { isUnlocked } from '@/services/crypto/identity';
+import { profileName, profileAbout, profileAvatarRaw } from '@/composables/warmStores';
 import { initialsAvatar } from '@/db/avatars';
-import { capitalizeFirst } from '@/utils/text';
 
-export function useSelfProfile(): { name: Ref<string>; avatar: Ref<string> } {
-  const fallbackName = capitalizeFirst(getSelfUsername() ?? 'You');
-  const name = useLiveQuery(
-    () => getSecret('profileName', fallbackName),
-    ['settings'],
-    fallbackName,
-    () => isUnlocked.value,
-  );
-  const rawAvatar = useLiveQuery(
-    () => getSecret('profileAvatar', ''),
-    ['settings'],
-    '',
-    () => isUnlocked.value,
-  );
-  const avatar = computed(() => rawAvatar.value || initialsAvatar(name.value));
-  return { name, avatar };
+export function useSelfProfile(): { name: Ref<string>; avatar: Ref<string>; about: Ref<string> } {
+  const avatar = computed(() => profileAvatarRaw.value || initialsAvatar(profileName.value));
+  return { name: profileName, avatar, about: profileAbout };
 }

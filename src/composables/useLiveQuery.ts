@@ -17,9 +17,16 @@ export function useLiveQuery<T>(
   stores: StoreName[],
   initial: T,
   deps: () => unknown = () => undefined,
+  // Optional warm source: when it returns a defined value, that value seeds the
+  // FIRST paint (and `loaded` starts true) instead of the cold `initial`, so a
+  // page backed by a pre-warmed singleton renders populated immediately. When it
+  // returns undefined (or is omitted) behavior is identical to before. The live
+  // `run()` below still executes and reconciles, so the value stays fresh.
+  warmSource?: () => T | undefined,
 ): LiveRef<T> {
-  const value = ref(initial) as Ref<T>;
-  const loaded = ref(false);
+  const warm = warmSource?.();
+  const value = ref(warm !== undefined ? warm : initial) as Ref<T>;
+  const loaded = ref(warm !== undefined);
   let token = 0;
 
   const run = async () => {

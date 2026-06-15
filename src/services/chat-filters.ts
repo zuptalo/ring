@@ -7,6 +7,7 @@
  */
 import { computed, ref, watch, type Ref, type ComputedRef } from 'vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { warmChats, warmChatsLoaded, warmWhenIdle } from '@/composables/warmStores';
 import { listChats, listChatLists, getSetting, setSetting, chatIsUnread } from '@/db/queries';
 import type { Chat, ChatList } from '@/db/types';
 
@@ -94,11 +95,16 @@ export function useChatFilters(search: Ref<string>): {
   loaded: Ref<boolean>;
   tabFilters: Ref<FilterId[]>;
 } {
+  // When the search box is empty, seed first paint from the warm chats store so
+  // the list is already populated on tab entry; a typed term falls back to the
+  // live `listChats(term)` query (filtering stays in the data layer). See the
+  // "Search contract" in spec 1001's data-model.
   const allChats = useLiveQuery(
     () => listChats(search.value),
     ['chats', 'messages', 'chatlists'],
     [] as Chat[],
     () => search.value,
+    warmWhenIdle(warmChats, warmChatsLoaded, search),
   );
   const lists = useLiveQuery(() => listChatLists(), ['chatlists'], [] as ChatList[]);
   const listsMap = computed(() => new Map(lists.value.map((l) => [l.id, l])));
