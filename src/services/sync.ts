@@ -15,6 +15,8 @@ import type { Frame, Transport } from '@/services/transport';
 import type { Message } from '@/db/types';
 import { applyPresenceFrame } from '@/composables/usePresence';
 import { deleteBlob } from '@/services/media-transfer';
+import { applyStatusReceipt, applyDownloadedReceipt, type ReceiptStatus } from '@/services/message-status';
+import { KeyedMutex } from '@/services/keyed-mutex';
 
 const CURSOR_KEY = 'syncCursor';
 
@@ -77,14 +79,33 @@ export async function drainOutbox(transport: Transport): Promise<number> {
 
 /* ---- pull / inbound ---- */
 
-const STATUS_ORDER: Record<Message['status'], number> = {
-  compressing: 0, // local pre-send states sit below 'sent' so a server ack advances
-  failed: 0,
-  pending: 0,
-  sent: 1,
-  delivered: 2,
-  read: 3,
-};
+// Serialize every read-modify-write of a given message row. Receipt application
+// and media-cleanup both read a message, change a few fields, and write it back;
+// without serialization a `downloaded` cleanup write made from a snapshot taken
+// BEFORE an `await` could clobber a concurrent status transition (the regression
+// this module fixes). Keying the lock by message id keeps unrelated messages
+// fully concurrent.
+const messageLock = new KeyedMutex();
+
+/** Atomically update a message row: under the per-id lock, re-read the LATEST row,
+ *  apply `fn`, and persist only if `fn` actually changed it (the pure reducers
+ *  return the same reference on a no-op). Returns the resulting row, or undefined
+ *  if the message no longer exists. */
+async function mutateMessage(
+  id: string,
+  fn: (m: Message) => Message,
+): Promise<Message | undefined> {
+  return messageLock.run(id, async () => {
+    const cur = await getMessage(id);
+    if (!cur) return undefined;
+    const next = fn(cur);
+    if (next !== cur) {
+      next.updatedAt = Date.now();
+      await bulkPut('messages', [next]); // notifies 'messages' → UI updates
+    }
+    return next;
+  });
+}
 
 /** Apply one inbound frame to local storage. */
 export async function handleIncomingFrame(frame: Frame): Promise<void> {
@@ -163,64 +184,11 @@ async function applyReceipt(
   if (status === 'sent' || status === 'delivered' || status === 'read') {
     await removeOutboxByFrameId(messageId, recipient);
   }
-  const m = await getMessage(messageId);
-  if (!m) return;
-
-  const recs = m.receipts;
-  if (recs && recs.length) {
-    // The real "sent" time is when the server accepted it (not when composed). Set
-    // here (the group path always persists) so the aggregate below can read it.
-    if (status === 'sent') m.sentAt ??= at;
-    // GROUP message: every fan-out copy is confirmed independently, and the server
-    // stamps each receipt with the member who confirmed it (`recipient`). Record
-    // ONLY that member's row (never the whole array), then derive the message-level
-    // status from the aggregate, WhatsApp-style: a double (delivered) check only once
-    // every member's device has it, blue (read) only once every member has opened it.
-    // (The old code marked every member delivered/read on a single member's receipt,
-    //  so Message info showed everyone as read the instant one person read.)
-    if (recipient && (status === 'delivered' || status === 'read')) {
-      const r = recs.find((x) => x.contactId === recipient);
-      if (r) {
-        if (status === 'delivered') r.deliveredAt ??= at;
-        if (status === 'read') {
-          r.deliveredAt ??= at;
-          r.readAt = at;
-        }
-      }
-    }
-    const allDelivered = recs.every((r) => r.deliveredAt);
-    const allRead = recs.every((r) => r.readAt);
-    // Message-level timestamps only once the WHOLE group reaches that state.
-    if (allDelivered) m.deliveredAt ??= Math.max(...recs.map((r) => r.deliveredAt ?? 0));
-    if (allRead) m.readAt ??= Math.max(...recs.map((r) => r.readAt ?? 0));
-    const agg: Message['status'] = allRead
-      ? 'read'
-      : allDelivered
-        ? 'delivered'
-        : m.sentAt
-          ? 'sent'
-          : m.status;
-    // Monotonic clamp: a late member's 'delivered' must never regress an
-    // already-all-read message, and an out-of-order frame can only raise status.
-    if (STATUS_ORDER[agg] > STATUS_ORDER[m.status]) m.status = agg;
-    m.updatedAt = Date.now();
-    await bulkPut('messages', [m]); // notifies 'messages' → UI updates
-    return;
-  }
-
-  // 1:1 message: a single scalar status timeline, monotonic.
-  if (STATUS_ORDER[status] <= STATUS_ORDER[m.status]) return; // never regress
-  m.status = status;
-  m.updatedAt = Date.now();
-  // The real "sent" time is when the server accepted it (not when composed).
-  if (status === 'sent') m.sentAt ??= at;
-  // Record when delivery/read happened so Message info can show a timeline.
-  if (status === 'delivered') m.deliveredAt ??= at;
-  if (status === 'read') {
-    m.deliveredAt ??= at;
-    m.readAt = at;
-  }
-  await bulkPut('messages', [m]); // notifies 'messages' → UI updates
+  // Status derivation is a pure reducer (see message-status.ts, fully unit-tested);
+  // mutateMessage serializes the read-modify-write so a concurrent cleanup or local
+  // write can't clobber it. The reducer no-ops (same reference) on a duplicate/late
+  // frame, so no spurious write/notification happens.
+  await mutateMessage(messageId, (m) => applyStatusReceipt(m, status as ReceiptStatus, at, recipient));
 }
 
 /** A recipient confirmed they hold our media's bytes. Once EVERY recipient has, delete the
@@ -228,30 +196,26 @@ async function applyReceipt(
  *  with the server's age sweep only as a backstop. 1:1 = the single peer; group = all
  *  members (m.receipts). Never changes the message's displayed status. */
 async function applyDownloaded(messageId: string, recipient: string, at: number): Promise<void> {
-  const m = await getMessage(messageId);
-  if (!m || !m.outgoing || !m.sentBlobId) return; // not ours, or blob already gone
-  let allDownloaded: boolean;
-  if (m.receipts && m.receipts.length) {
-    // Group: stamp this member, then check the whole roster.
-    const r = m.receipts.find((x) => x.contactId === recipient);
-    if (r) r.downloadedAt ??= at;
-    allDownloaded = m.receipts.every((x) => x.downloadedAt);
-  } else {
-    // 1:1: the sole recipient confirming is enough.
-    m.downloadedBy = [...new Set([...(m.downloadedBy ?? []), recipient])];
-    allDownloaded = true;
-  }
-  m.updatedAt = Date.now();
-  await bulkPut('messages', [m]);
-  if (!allDownloaded) return;
+  // Phase 1: stamp the cleanup bookkeeping under the lock (re-reading the latest row),
+  // and learn whether every recipient now holds the bytes.
+  let allDownloaded = false;
+  const m = await mutateMessage(messageId, (cur) => {
+    if (!cur.outgoing || !cur.sentBlobId) return cur; // not ours, or blob already gone
+    const res = applyDownloadedReceipt(cur, recipient, at);
+    allDownloaded = res.allDownloaded;
+    return res.msg;
+  });
+  if (!m || !allDownloaded || !m.sentBlobId) return;
+
+  // Phase 2: delete the server blob, then clear sentBlobId in a SEPARATE locked
+  // mutation that re-reads the latest row. Crucially we never hold a message snapshot
+  // across this await, so the clear can't overwrite a status change made meanwhile.
   try {
     await deleteBlob(m.sentBlobId);
-    m.sentBlobId = undefined; // done — never try again
-    m.updatedAt = Date.now();
-    await bulkPut('messages', [m]);
   } catch {
-    // Leave sentBlobId set: retried on the next 'downloaded' / on chat delete; TTL backstops.
+    return; // leave sentBlobId set: retried on the next 'downloaded' / on chat delete; TTL backstops
   }
+  await mutateMessage(messageId, (cur) => (cur.sentBlobId ? { ...cur, sentBlobId: undefined } : cur));
 }
 
 interface MergeRow {

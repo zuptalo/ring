@@ -278,8 +278,8 @@ func TestRelayRoutesReadReceipt(t *testing.T) {
 		t.Fatalf("B send read receipt: %v", err)
 	}
 	got := readFrame(t, a)
-	if got["t"] != "receipt" || got["messageId"] != "m1" || got["status"] != "read" {
-		t.Fatalf("A expected read receipt, got: %v", got)
+	if got["t"] != "receipt" || got["messageId"] != "m1" || got["status"] != "read" || got["from"] != "user-b" {
+		t.Fatalf("A expected read receipt from user-b, got: %v", got)
 	}
 }
 
@@ -322,6 +322,27 @@ func TestRelayDropsClientForgedDeliveredReceipt(t *testing.T) {
 	_ = a.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	if _, _, err := a.ReadMessage(); err == nil {
 		t.Fatal("A must receive nothing for a client-forged 'delivered' receipt")
+	}
+}
+
+// 'sent' is server-authoritative too: only the relay emits it (when it accepts a
+// message). A client claiming 'sent' for a peer is dropped, like 'delivered'.
+func TestRelayDropsClientForgedSentReceipt(t *testing.T) {
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	defer b.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	if err := b.WriteJSON(map[string]any{"t": "receipt", "messageId": "m1", "status": "sent", "to": "user-a"}); err != nil {
+		t.Fatalf("B send forged sent: %v", err)
+	}
+	_ = a.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, _, err := a.ReadMessage(); err == nil {
+		t.Fatal("A must receive nothing for a client-forged 'sent' receipt")
 	}
 }
 
