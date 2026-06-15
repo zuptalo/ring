@@ -156,6 +156,12 @@ npm run test:e2e              # Playwright e2e (needs `make db-up`; spins its ow
   sibling `_test.go` — keep that pattern.
 - The e2e harness resets a throwaway `ring_e2e` DB and launches an isolated test
   `ringd`; it does **not** touch your `make start` stack.
+- **Path-filtered CI:** a PR that changes only docs/specs/tooling (`**/*.md`,
+  `specs/**`, `.specify/**`, `scripts/**`, `ROADMAP.md`) skips the heavy
+  build/test/e2e suite — only the `Roadmap up to date` guard and the `CI gate`
+  aggregate run. Any change under `src/`, `server/`, `e2e/`, deps, configs, the
+  `Dockerfile`, or `.github/workflows/` runs the full suite. The single required
+  check is **`CI gate`**, so doc-only PRs stay unblocked without it.
 
 ## Releases and release candidates
 
