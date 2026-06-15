@@ -45,6 +45,8 @@ export default defineConfig({
         // status-stability fix (spec 2001). Pure, fully unit-tested — gate them too.
         'src/services/message-status.ts',
         'src/services/keyed-mutex.ts',
+        // Pure release-note delta/prettify behind the What's-new toast (spec 0001).
+        'src/services/release-notes.ts',
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 80 },
     },

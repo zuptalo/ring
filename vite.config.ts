@@ -16,6 +16,18 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 };
 const appVersion = process.env.RING_VERSION || pkg.version;
 
+// This build's release notes (changes since the last release tag), exposed as the
+// compile-time constant __RELEASE_NOTES__ and used as the "running" side of the
+// What's-new update delta. The Docker build passes the SAME JSON into both this and
+// the Go binary (served from /v1/config), produced by scripts/release-notes.sh.
+// Defaults to an empty list for local/dev builds that don't set RING_RELEASE_NOTES.
+let releaseNotes: unknown = [];
+try {
+  releaseNotes = JSON.parse(process.env.RING_RELEASE_NOTES || '[]');
+} catch {
+  releaseNotes = [];
+}
+
 // Backend the dev server proxies /v1 + /healthz to. Defaults to local ringd on
 // :8080; the e2e harness overrides it to its isolated test backend.
 const proxyTarget = process.env.RING_PROXY_TARGET || 'http://localhost:8080';
@@ -23,6 +35,7 @@ const proxyTarget = process.env.RING_PROXY_TARGET || 'http://localhost:8080';
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
+    __RELEASE_NOTES__: JSON.stringify(releaseNotes),
   },
   server: {
     host: true, // listen on 0.0.0.0 so 10.0.1.50:5173 is reachable on the LAN

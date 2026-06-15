@@ -53,6 +53,14 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Compose the build's release notes BEFORE creating the new tag, so the script's
+      # "since the last release tag" range is this release's changes (the previous tag
+      # is still the highest one). Baked into the image for the PWA's "what's new".
+      - name: Compose release notes (base64 JSON)
+        id: notes
+        if: steps.check.outputs.exists == 'false'
+        run: echo "b64=$(scripts/release-notes.sh | base64 -w0)" >> "$GITHUB_OUTPUT"
+
       - name: Create and push tag
         if: steps.check.outputs.exists == 'false'
         run: |
@@ -89,6 +97,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
+            RELEASE_NOTES_B64=${{ steps.notes.outputs.b64 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
