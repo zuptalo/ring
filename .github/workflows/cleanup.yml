@@ -45,8 +45,11 @@ jobs:
           # develop-<sha>, X.Y.Z-dev.N) do NOT match this, so they remain subject to
           # keep-n-tagged below.
           exclude-tags: '/^(latest|v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?|[0-9]+\.[0-9]+|[0-9]+)$/'
-          # Keep the newest 3 of the remaining tagged images (the develop builds).
-          keep-n-tagged: 3
+          # Keep the newest 5 of the remaining tagged images (the develop builds) —
+          # a roomier rollback window for the continuously-deployed develop channel,
+          # while doc-only develop pushes no longer mint images at all (path-filtered
+          # CI), so this stays small.
+          keep-n-tagged: 5
           # Remove orphaned untagged manifests.
           delete-untagged: true
           dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
