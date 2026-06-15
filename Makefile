@@ -5,13 +5,18 @@
 #   3. Frontend (Vite) in hot-reload mode
 #
 # Backend and frontend run concurrently in the foreground; Ctrl+C stops both.
+#
+# `make deploy-dev` instead runs the public deployment posture (ACME TLS + TURN)
+# WITH hot reload: ringd reverse-proxies the app + HMR socket to the Vite dev
+# server, so https://ring-dev.zuptalo.com gets true HMR (great for phone/PWA
+# testing) while ringd owns the cert, /v1 and TURN.
 
 SHELL := /bin/bash
 SERVER_DIR := server
 GOBIN := $(shell go env GOPATH)/bin
 AIR := $(GOBIN)/air
 
-.PHONY: start stop db-up db-down tools backend frontend hooks roadmap spec
+.PHONY: start stop db-up db-down tools backend frontend deploy-dev hooks roadmap spec
 
 ## start: database (if needed) + backend hot reload + frontend hot reload
 start: db-up tools
@@ -44,6 +49,18 @@ backend: tools
 ## frontend: run only the frontend in hot-reload mode
 frontend:
 	@npm run dev
+
+## deploy-dev: public dev deployment WITH hot reload (e.g. https://ring-dev.zuptalo.com).
+##   db + Vite dev server (HMR) + ringd (ACME TLS + TURN). ringd reverse-proxies the
+##   app + HMR websocket to Vite (DEV_PROXY), so the public URL gets true HMR while
+##   ringd owns the cert, /v1 and TURN. DEV_HMR_PUBLIC_PORT=443 tells the Vite HMR
+##   client to connect over the public :443 origin. Reads server/.env. Ctrl+C stops both.
+deploy-dev: db-up tools
+	@echo "▶ Dev deployment (HMR): vite dev + ringd (ACME/TURN, proxy → vite) - Ctrl+C to stop both"
+	@trap 'kill 0' INT TERM EXIT; \
+		( DEV_HMR_PUBLIC_PORT=443 npm run dev ) & \
+		( cd $(SERVER_DIR) && set -a; [ -f .env ] && . ./.env; DEV_PROXY=http://localhost:5173; set +a; $(AIR) ) & \
+		wait
 
 ## tools: install air (Go live-reload) if missing
 tools: $(AIR)
