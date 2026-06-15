@@ -222,7 +222,7 @@ import { listInvitations, extendInvitation, type ServerInvitation } from '@/serv
 import { initialsAvatar } from '@/db/avatars';
 import type { Contact, FriendRequest } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
-import { warmContacts, warmWhenIdle } from '@/composables/warmStores';
+import { warmContacts, warmContactsLoaded, warmWhenIdle } from '@/composables/warmStores';
 import { useConnect } from '@/composables/useConnect';
 import { peerPresence } from '@/composables/usePresence';
 import { capitalizeFirst } from '@/utils/text';
@@ -244,7 +244,7 @@ const contacts = useLiveQuery(
   () => search.value,
   // Empty search → seed first paint from the warm contacts store; a typed term
   // falls back to the live query (spec 1001 "Search contract").
-  warmWhenIdle(warmContacts, search),
+  warmWhenIdle(warmContacts, warmContactsLoaded, search),
 );
 // Gate the empty state so "No contacts found" only shows once data has resolved
 // (true immediately when seeded from the warm store), never as a flash (FR-006).

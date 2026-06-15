@@ -145,7 +145,7 @@ import { deleteCalls, listCallGroups, markCallsSeen, listContacts } from '@/db/q
 import type { CallGroup } from '@/db/queries';
 import type { Call } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
-import { warmCalls, warmWhenIdle } from '@/composables/warmStores';
+import { warmCalls, warmCallsLoaded, warmWhenIdle } from '@/composables/warmStores';
 import { formatTime } from '@/utils/time';
 
 const PAGE = 15;
@@ -160,7 +160,7 @@ const calls = useLiveQuery(
   ['calls'],
   [] as CallGroup[],
   () => search.value,
-  warmWhenIdle(warmCalls, search),
+  warmWhenIdle(warmCalls, warmCallsLoaded, search),
 );
 // Gate the empty state so "No calls found" only shows once data has actually
 // resolved (true immediately when seeded from the warm store), never as a flash

@@ -23,8 +23,9 @@ vi.mock('@/db/queries', () => ({
 vi.mock('@/db/idb', () => ({ subscribe: h.subscribe }));
 vi.mock('@/services/auth', () => ({ getSelfUsername: () => 'alice' }));
 
+import { ref } from 'vue';
 import {
-  warmAll, clearWarm,
+  warmAll, clearWarm, warmWhenIdle,
   profileName, profileAbout, profileAvatarRaw, profileWarmed,
   warmChats, warmChatsLoaded, warmCalls, warmCallsLoaded, warmContacts, warmContactsLoaded,
 } from './warmStores';
@@ -125,5 +126,32 @@ describe('warmStores', () => {
 
     // Each live subscription was torn down.
     expect(h.unsub).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('warmWhenIdle', () => {
+  it('seeds first paint only when idle AND loaded', () => {
+    const source = ref(['x']);
+    const loaded = ref(true);
+    const search = ref('');
+    const src = warmWhenIdle(source, loaded, search);
+    expect(src()).toEqual(['x']);
+  });
+
+  it('returns undefined while the warm store is still cold (no empty-state flash)', () => {
+    const source = ref<string[]>([]);
+    const loaded = ref(false); // warmAll not finished yet
+    const search = ref('');
+    const src = warmWhenIdle(source, loaded, search);
+    // Cold → undefined, so useLiveQuery keeps loaded=false and the gate holds.
+    expect(src()).toBeUndefined();
+  });
+
+  it('returns undefined when a search term is present (live query path)', () => {
+    const source = ref(['x']);
+    const loaded = ref(true);
+    const search = ref('bob');
+    const src = warmWhenIdle(source, loaded, search);
+    expect(src()).toBeUndefined();
   });
 });

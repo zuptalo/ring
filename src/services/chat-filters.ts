@@ -7,7 +7,7 @@
  */
 import { computed, ref, watch, type Ref, type ComputedRef } from 'vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
-import { warmChats, warmWhenIdle } from '@/composables/warmStores';
+import { warmChats, warmChatsLoaded, warmWhenIdle } from '@/composables/warmStores';
 import { listChats, listChatLists, getSetting, setSetting, chatIsUnread } from '@/db/queries';
 import type { Chat, ChatList } from '@/db/types';
 
@@ -104,7 +104,7 @@ export function useChatFilters(search: Ref<string>): {
     ['chats', 'messages', 'chatlists'],
     [] as Chat[],
     () => search.value,
-    warmWhenIdle(warmChats, search),
+    warmWhenIdle(warmChats, warmChatsLoaded, search),
   );
   const lists = useLiveQuery(() => listChatLists(), ['chatlists'], [] as ChatList[]);
   const listsMap = computed(() => new Map(lists.value.map((l) => [l.id, l])));

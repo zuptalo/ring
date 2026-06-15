@@ -126,9 +126,16 @@ export function clearWarm(): void {
   warmContactsLoaded.value = false;
 }
 
-/** Warm-source helper for `useLiveQuery`: return the warm value only when the
- *  search box is empty (the first-paint case). A typed term falls back to the
- *  live query so data-layer filtering stays where it is (spec "Search contract"). */
-export function warmWhenIdle<T>(source: Ref<T>, search: Ref<string>): () => T | undefined {
-  return () => (search.value ? undefined : source.value);
+/** Warm-source helper for `useLiveQuery`: seed first paint from `source` ONLY when
+ *  the search box is empty AND the warm store has actually loaded. If the store is
+ *  still cold (e.g. a page mounts before `warmAll()` finishes on a fresh launch),
+ *  return undefined so `useLiveQuery` keeps its cold behaviour (loaded=false) and
+ *  the empty state stays gated — no empty→populated flash. A typed term also falls
+ *  back to the live query so data-layer filtering stays put (spec "Search contract"). */
+export function warmWhenIdle<T>(
+  source: Ref<T>,
+  loaded: Ref<boolean>,
+  search: Ref<string>,
+): () => T | undefined {
+  return () => (!search.value && loaded.value ? source.value : undefined);
 }
