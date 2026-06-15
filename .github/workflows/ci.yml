@@ -19,7 +19,48 @@ permissions:
   contents: read
 
 jobs:
+  # Detect whether this change touches anything the heavy build/test/e2e jobs
+  # actually validate. Doc/spec/tooling-only changes (markdown, specs/, .specify/,
+  # ROADMAP.md, scripts/) skip the heavy suite — the always-on roadmap-guard below
+  # is the real gate for those. Anything in app code, server, e2e, deps, configs,
+  # the Dockerfile, or the workflows themselves runs the full suite.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # paths-filter needs history to diff a push event
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # `code` is true when ANY path the heavy jobs cover changed. If nothing
+          # here matched, the change is docs/specs/tooling-only and verify is skipped.
+          filters: |
+            code:
+              - 'src/**'
+              - 'server/**'
+              - 'e2e/**'
+              - 'public/**'
+              - 'index.html'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig*.json'
+              - 'vite.config.*'
+              - 'vitest.config.*'
+              - 'playwright.config.*'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - '.github/workflows/**'
+
+  # The full build + test suite. Skipped for doc/spec-only changes (see `changes`)
+  # so a roadmap badge edit doesn't pay the multi-minute Playwright tax. The CI gate
+  # below still reports a single required status either way.
   verify:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     uses: ./.github/workflows/build-test.yml
 
   # Gate the one merge that actually ships: a PR into main must carry a version
@@ -86,6 +127,39 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify ROADMAP.md matches specs/
         run: python3 scripts/roadmap-gen.py --check
+
+  # Single required status check for branch protection. Because `verify` is
+  # conditionally skipped, its individual "verify / *" checks can't be required
+  # directly — a skipped-but-required check blocks the PR forever. This gate runs
+  # ALWAYS and passes when every upstream job either succeeded or was deliberately
+  # skipped, failing only if one actually failed or was cancelled. Branch protection
+  # requires THIS plus the always-on roadmap + release guards (see
+  # scripts/setup-branch-protection.sh).
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs: [changes, verify, roadmap-guard, release-guard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every upstream job to have passed (or been skipped)
+        run: |
+          set -euo pipefail
+          declare -A results=(
+            [changes]='${{ needs.changes.result }}'
+            [verify]='${{ needs.verify.result }}'
+            [roadmap-guard]='${{ needs.roadmap-guard.result }}'
+            [release-guard]='${{ needs.release-guard.result }}'
+          )
+          fail=0
+          for job in "${!results[@]}"; do
+            r="${results[$job]}"
+            echo "$job: $r"
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then fail=1; fi
+          done
+          if [ "$fail" = "1" ]; then
+            echo "::error::a required CI job did not pass"; exit 1
+          fi
+          echo "All required CI jobs passed or were intentionally skipped."
 
   develop-image:
     name: Publish develop image

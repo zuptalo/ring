@@ -38,18 +38,25 @@ set -euo pipefail
 REPO="${REPO:-zuptalo/ring}"
 BRANCHES=(develop main)
 
-# Required status check contexts. These are "<caller-job> / <job name>" where the
-# caller job is `verify` (in ci.yml / release.yml) and the names come from the jobs
-# in .github/workflows/build-test.yml. If you rename a job, update it here too.
+# Required status check contexts.
 #
-# "Release guard (version bump)" is a top-level job in ci.yml (not under `verify`),
-# so it has no caller prefix. It reports green on PRs into develop and only enforces
-# a version bump on PRs into main — safe to require on both branches.
+# The heavy build/test/e2e jobs (the `verify` caller of build-test.yml) are
+# CONDITIONALLY SKIPPED for doc/spec/tooling-only changes (see the `changes` job in
+# ci.yml). A skipped check that is *required* would block the PR forever, so we must
+# NOT require the individual "verify / *" contexts. Instead we require "CI gate" —
+# an always-running aggregate that passes when every upstream job succeeded or was
+# intentionally skipped, and fails if any actually failed. That keeps doc-only PRs
+# unblocked while still enforcing the full suite whenever code changes.
+#
+# "Roadmap up to date" and "Release guard (version bump)" are top-level ci.yml jobs
+# that always run (cheap), so they are required directly too. The release guard is
+# green on PRs into develop and only enforces a version bump on PRs into main.
+#
+# IMPORTANT: run this script only AFTER the ci.yml that defines "CI gate" has merged,
+# or PRs will require a check that doesn't exist yet.
 REQUIRED_CHECKS=(
-  "verify / Client (typecheck + build)"
-  "verify / Client (unit tests)"
-  "verify / Server (build + vet + test)"
-  "verify / End-to-end (Playwright)"
+  "CI gate"
+  "Roadmap up to date"
   "Release guard (version bump)"
 )
 
