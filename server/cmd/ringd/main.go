@@ -38,6 +38,30 @@ import (
 // -ldflags "-X main.version=...". Defaults to "dev" for plain `go build`/`go run`.
 var version = "dev"
 
+// releaseNotesB64 is this build's changelog since the last release tag — base64-
+// encoded JSON ([]api.ReleaseNote), stamped at link time via
+// -ldflags "-X main.releaseNotesB64=...". base64 sidesteps quoting/space issues of
+// putting JSON in ldflags. Empty for plain go build/run. Surfaced at /v1/config so
+// the PWA can show a per-user "what's new". A bad value degrades to no notes.
+var releaseNotesB64 = ""
+
+func decodeReleaseNotes(b64 string) []api.ReleaseNote {
+	if b64 == "" {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		slog.Warn("release notes: invalid base64, ignoring", "err", err)
+		return nil
+	}
+	var notes []api.ReleaseNote
+	if err := json.Unmarshal(raw, &notes); err != nil {
+		slog.Warn("release notes: invalid JSON, ignoring", "err", err)
+		return nil
+	}
+	return notes
+}
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "err", err)
@@ -316,6 +340,7 @@ func run() error {
 		Invites: st, Notifier: notifier, RequireConnection: cfg.RequireConnection,
 		PublicURL: cfg.PublicURL, VapidPublicKey: secs.VapidPublicKey, MaxBlobBytes: cfg.MaxBlobBytes,
 		Version:      version,
+		ReleaseNotes: decodeReleaseNotes(releaseNotesB64),
 		CallsEnabled: cfg.EnableCalls, TurnSharedSecret: secs.TurnSharedSecret,
 		TurnURLs:      turnURLs,
 		Emoji:     st,

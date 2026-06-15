@@ -11,7 +11,9 @@ Specs are grouped by category band; status moves
 
 ## 📌 Planned Features (0001–0999)
 
-_None yet._
+| Spec | Title | Status |
+|------|-------|--------|
+| [0001](specs/0001-show-what-changed/spec.md) | Show what changed in the update toast (release-note delta) | 🔵 in-review |
 
 ## ⚡ Ad-hoc (1001–1999)
 

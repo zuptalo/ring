@@ -289,6 +289,7 @@ export async function fetchServerConfig(): Promise<{
   vapidPublicKey: string;
   maxBlobBytes?: number;
   version?: string;
+  notes?: import('@/services/release-notes').ReleaseNote[];
 }> {
   // Bounded so a hung /v1/config can't stall callers that gate on it (push
   // (re)subscription, version checks). A slow-but-alive network still succeeds.
@@ -301,7 +302,13 @@ export async function fetchServerConfig(): Promise<{
     clearTimeout(timer);
   }
   if (!res.ok) throw new Error(`server config failed: ${res.status}`);
-  return (await res.json()) as { publicUrl: string; vapidPublicKey: string; maxBlobBytes?: number; version?: string };
+  return (await res.json()) as {
+    publicUrl: string;
+    vapidPublicKey: string;
+    maxBlobBytes?: number;
+    version?: string;
+    notes?: import('@/services/release-notes').ReleaseNote[];
+  };
 }
 
 /** One reconciled delivery: a message we sent reached `recipient` (a group message

@@ -130,6 +130,10 @@ type Handlers struct {
 	// Version is the running server build (main.version, stamped via -ldflags),
 	// advertised at GET /v1/config so a possibly-stale PWA can detect a new deploy.
 	Version string
+	// ReleaseNotes is this build's changelog since the last release tag (stamped via
+	// -ldflags, decoded from base64 JSON), advertised at GET /v1/config so the PWA can
+	// show a per-user "what's new" between the running and the newly deployed build.
+	ReleaseNotes []ReleaseNote
 	// MaxBlobBytes caps a single encrypted media upload (bytes); advertised at
 	// GET /v1/config so clients can pre-validate before encrypting + uploading.
 	MaxBlobBytes int

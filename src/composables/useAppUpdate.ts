@@ -15,8 +15,25 @@
  */
 import { watch } from 'vue';
 import { useRegisterSW } from 'virtual:pwa-register/vue';
-import { toastController } from '@ionic/vue';
+import { toastController, modalController } from '@ionic/vue';
 import { fetchServerConfig } from '@/services/api';
+import { computeDelta, type ReleaseNote } from '@/services/release-notes';
+import WhatsNewSheet from '@/components/WhatsNewSheet.vue';
+
+/** Present the "What's new" sheet with the per-user delta. Resolves true when the
+ *  user chose to install from the sheet. */
+async function presentWhatsNew(version: string, notes: ReleaseNote[]): Promise<boolean> {
+  const modal = await modalController.create({
+    component: WhatsNewSheet,
+    componentProps: { version, notes },
+    breakpoints: [0, 1],
+    initialBreakpoint: 1,
+    cssClass: 'whats-new-modal',
+  });
+  await modal.present();
+  const { role } = await modal.onDidDismiss();
+  return role === 'update';
+}
 
 let started = false;
 let swReg: ServiceWorkerRegistration | null = null;
@@ -63,15 +80,40 @@ export function useAppUpdate(): void {
       if (!need || prompting) return;
       prompting = true;
       // The waiting SW IS the new build; ask the (already-deployed) server which
-      // version that is, so the toast can name it. A miss just drops the version.
+      // version that is AND its release notes, so the toast can name the version and
+      // offer a per-user "What's new". A miss just drops both (generic message).
       let version = '';
+      let incoming: ReleaseNote[] = [];
       try {
-        version = (await fetchServerConfig()).version ?? '';
+        const cfg = await fetchServerConfig();
+        version = cfg.version ?? '';
+        incoming = cfg.notes ?? [];
       } catch {
-        /* generic message when the version can't be fetched */
+        /* generic message + no notes when config can't be fetched */
       }
       const running = __APP_VERSION__;
       const label = version && version !== running ? `Ring ${version} is ready to install.` : 'A new version of Ring is ready.';
+
+      // Per-user delta: the changes the incoming build adds that this one didn't have.
+      const delta = computeDelta(incoming, __RELEASE_NOTES__ ?? []);
+
+      const buttons: { text: string; role?: 'cancel'; handler?: () => boolean | void }[] = [];
+      if (delta.length) {
+        buttons.push({
+          text: `What's new (${delta.length})`,
+          handler: () => {
+            // Open the sheet; keep the toast open behind it (return false) so Update/
+            // Later stay reachable. An "Update now" inside the sheet installs directly.
+            void presentWhatsNew(version, delta).then((wantsUpdate) => {
+              if (wantsUpdate) void updateServiceWorker(true);
+            });
+            return false;
+          },
+        });
+      }
+      buttons.push({ text: 'Update', handler: () => void updateServiceWorker(true) });
+      buttons.push({ text: 'Later', role: 'cancel' });
+
       const toast = await toastController.create({
         header: 'Update available',
         message: label,
@@ -80,10 +122,7 @@ export function useAppUpdate(): void {
         position: 'top',
         cssClass: 'app-update-toast',
         // No duration: stay until the user chooses.
-        buttons: [
-          { text: 'Later', role: 'cancel' },
-          { text: 'Update', handler: () => void updateServiceWorker(true) },
-        ],
+        buttons,
       });
       void toast.onDidDismiss().then(() => {
         prompting = false; // allow a re-prompt if a still-newer build arrives

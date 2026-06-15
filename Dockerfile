@@ -30,7 +30,13 @@ COPY . .
 # Stamp the SAME version into the PWA as the Go binary below, so the UI reports the
 # true deployed version and can detect a newer one. Defaults to dev for plain builds.
 ARG VERSION=dev
-RUN RING_VERSION="$VERSION" npm run build
+# Release notes JSON (base64-encoded to dodge quoting through the build-arg chain),
+# the SAME value the Go binary gets below. The PWA bakes the decoded JSON into
+# __RELEASE_NOTES__ as the "running" side of the What's-new delta. Defaults to [].
+ARG RELEASE_NOTES_B64=''
+RUN RING_VERSION="$VERSION" \
+    RING_RELEASE_NOTES="$([ -n "$RELEASE_NOTES_B64" ] && printf '%s' "$RELEASE_NOTES_B64" | base64 -d || printf '[]')" \
+    npm run build
 
 # --- Stage 2: build the server ----------------------------------------------
 # Also pinned to $BUILDPLATFORM and cross-compiled to the target arch via
@@ -42,12 +48,16 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 ARG VERSION=dev
+# Already-base64 release notes JSON, stamped straight into main.releaseNotesB64
+# (the server decodes it at boot and serves it at /v1/config). base64 needs no
+# escaping in ldflags. Defaults to empty → no notes.
+ARG RELEASE_NOTES_B64=''
 ARG TARGETOS
 ARG TARGETARCH
 # Static, stripped binary. -trimpath keeps paths reproducible; the version is
 # stamped into main.version for `ringd starting version=...` and ops visibility.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath \
-    -ldflags="-s -w -X main.version=${VERSION}" \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.releaseNotesB64=${RELEASE_NOTES_B64}" \
     -o /out/ringd ./cmd/ringd
 
 # --- Stage 3: runtime -------------------------------------------------------
