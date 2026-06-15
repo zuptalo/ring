@@ -57,7 +57,7 @@ jobs:
       # "since the last release tag" range is this release's changes (the previous tag
       # is still the highest one). Baked into the image for the PWA's "what's new".
       - name: Compose release notes (base64 JSON)
-        id: notes
+        id: notes_b64
         if: steps.check.outputs.exists == 'false'
         run: echo "b64=$(scripts/release-notes.sh | base64 -w0)" >> "$GITHUB_OUTPUT"
 
@@ -97,7 +97,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
-            RELEASE_NOTES_B64=${{ steps.notes.outputs.b64 }}
+            RELEASE_NOTES_B64=${{ steps.notes_b64.outputs.b64 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
