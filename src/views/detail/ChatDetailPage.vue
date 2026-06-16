@@ -3577,7 +3577,11 @@ function cancelRecording() {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 1px;
+  /* A tall, comfortable footer row on EVERY message (text + all media kinds), so the
+     react button has a generous tap target and the timestamp has room to breathe. */
+  min-height: 40px;
+  margin-top: 2px;
+  padding-top: 4px;
 }
 .msg-foot.out {
   justify-content: flex-end;
@@ -3595,9 +3599,11 @@ function cancelRecording() {
   justify-content: center;
   border: none;
   background: transparent;
-  padding: 0;
+  /* Fill the taller row for an easy, finger-sized hit target. */
+  width: 36px;
+  height: 36px;
   margin: 0;
-  font-size: 19px;
+  font-size: 22px;
   line-height: 1;
   color: var(--app-text-muted, #8e8e93);
   cursor: pointer;
