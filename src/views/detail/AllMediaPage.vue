@@ -104,7 +104,7 @@ import {
 } from '@/db/queries';
 import { formatBytes } from '@/utils/bytes';
 import { get, put } from '@/db/idb';
-import { generateVideoPoster } from '@/utils/media-meta';
+import { generateVideoPoster, generateImageThumb } from '@/utils/media-meta';
 import type { Chat, Media, Message } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { formatStamp, formatFull } from '@/utils/time';
@@ -187,6 +187,7 @@ watch(
             name: md.name,
           };
           if (m.kind === 'video' && !info.value[m.mediaId].posterUrl) void poster(md.blob, m.mediaId);
+          if (m.kind === 'image' && !info.value[m.mediaId].posterUrl) void imageThumb(md.blob, m.mediaId);
         }
       }
     }
@@ -206,6 +207,24 @@ async function poster(blob: Blob, mediaId: string): Promise<void> {
     const md = await get<Media>('media', mediaId);
     if (md && !md.posterBlob) {
       md.posterBlob = await (await fetch(dataUrl)).blob();
+      md.updatedAt = Date.now();
+      await put('media', md);
+    }
+  } catch {
+    /* best-effort cache */
+  }
+}
+
+// Small image thumbnail for the grid (the cells are tiny) so it doesn't decode the
+// full-resolution photo per cell. Persisted as posterBlob, shared with the chat view.
+async function imageThumb(blob: Blob, mediaId: string): Promise<void> {
+  const thumb = await generateImageThumb(blob);
+  if (!thumb) return;
+  info.value[mediaId] = { ...info.value[mediaId], posterUrl: URL.createObjectURL(thumb) };
+  try {
+    const md = await get<Media>('media', mediaId);
+    if (md && !md.posterBlob) {
+      md.posterBlob = thumb;
       md.updatedAt = Date.now();
       await put('media', md);
     }

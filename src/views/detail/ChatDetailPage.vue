@@ -208,7 +208,7 @@
                 <!-- A tap anywhere on the image opens the action menu (the whole
                      bubble is the hit target); "View" in the menu opens the viewer. -->
                 <div v-if="m.kind === 'image'" class="media-wrap">
-                  <img class="bubble-image" :src="mediaInfo[m.mediaId].url" alt="photo" loading="lazy" decoding="async" />
+                  <img class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl || mediaInfo[m.mediaId].url" :style="mediaAspect(m)" alt="photo" loading="lazy" decoding="async" />
                   <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                 </div>
                 <!-- Round video note: plays inline on tap, long-press for actions. -->
@@ -228,11 +228,12 @@
                       v-if="m.posterData || mediaInfo[m.mediaId].posterUrl"
                       class="bubble-image"
                       :src="m.posterData || mediaInfo[m.mediaId].posterUrl"
+                      :style="mediaAspect(m)"
                       alt="video"
                       loading="lazy"
                       decoding="async"
                     />
-                    <div v-else class="bubble-image video-noposter" />
+                    <div v-else class="bubble-image video-noposter" :style="mediaAspect(m)" />
                     <ion-icon
                       class="play-overlay"
                       :icon="playCircle"
@@ -835,7 +836,7 @@ import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
 import { type Quality } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
-import { resolutionLabel, fileSizeLabel, generateVideoPoster } from '@/utils/media-meta';
+import { resolutionLabel, fileSizeLabel, generateVideoPoster, generateImageThumb } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing, capitalizeFirst } from '@/utils/text';
@@ -968,6 +969,13 @@ async function downloadVideo(id: string): Promise<void> {
 // Badge on a photo/video bubble (same facts both sides), e.g. for a video
 // "HD · 720p · 0:34 · 4.2 MB", for a photo "HD · 1.2 MB".
 const QUALITY_LABEL: Record<string, string> = { sd: 'SD', hd: 'HD', original: 'Original' };
+// Reserve the media box's height from the stored pixel dimensions, so a row is the
+// right height BEFORE the image/poster decodes. Without this the box is ~0 tall
+// until load, then grows — shifting everything below and making scroll-back jump
+// past messages (spec 1005). Returns an aspect-ratio style, or {} if unknown.
+function mediaAspect(m: Message): Record<string, string> {
+  return m.mediaWidth && m.mediaHeight ? { aspectRatio: `${m.mediaWidth} / ${m.mediaHeight}` } : {};
+}
 function mediaMetaLabel(m: Message): string {
   const parts: string[] = [];
   if (m.mediaQuality) parts.push(QUALITY_LABEL[m.mediaQuality] ?? '');
@@ -2077,6 +2085,27 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
           const md = await get<Media>('media', mid);
           if (md && !md.posterBlob) {
             md.posterBlob = await (await fetch(poster)).blob();
+            md.updatedAt = Date.now();
+            await put('media', md);
+          }
+        } catch {
+          /* best-effort cache */
+        }
+      });
+    }
+    // Images: derive a small thumbnail (stored as posterBlob) the bubble/grid/strip
+    // render instead of the full image, so scroll-back doesn't re-decode full-res
+    // photos. The full image is still used in the viewer. Persist so it's one-time.
+    if (m.kind === 'image' && !info.posterUrl) {
+      const blob = media.blob;
+      const mid = m.mediaId;
+      void generateImageThumb(blob).then(async (thumb) => {
+        if (!thumb || !mediaInfo.value[mid]) return;
+        mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: URL.createObjectURL(thumb) };
+        try {
+          const md = await get<Media>('media', mid);
+          if (md && !md.posterBlob) {
+            md.posterBlob = thumb;
             md.updatedAt = Date.now();
             await put('media', md);
           }
