@@ -501,13 +501,14 @@
                   class="album-cell"
                   @click.stop="openMediaViewer(am.id)"
                 >
-                  <template v-if="am.mediaId && mediaInfo[am.mediaId]">
+                  <template v-if="am.mediaId && mediaInfo[am.mediaId]?.posterUrl">
                     <img :src="mediaInfo[am.mediaId].posterUrl" alt="" loading="lazy" decoding="async" />
                     <ion-icon v-if="am.kind === 'video'" class="play-overlay-sm" :icon="playCircle" />
                     <div v-if="idx === 3 && albumOverlay(item.messages)" class="album-more">
                       +{{ albumOverlay(item.messages) }}
                     </div>
                   </template>
+                  <ion-icon v-else class="media-ph" :icon="am.kind === 'video' ? videocamOutline : imageOutline" />
                 </button>
               </div>
               <div class="msg-foot" :class="item.messages[0].outgoing ? 'out' : 'in'">
