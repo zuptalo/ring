@@ -3583,11 +3583,14 @@ function cancelRecording() {
   margin-top: 2px;
   padding-top: 4px;
 }
+/* React button and timestamp sit at the two ends of the row. Sent (normal order):
+   react far-left, time+tick far-right. Received (reversed order): time far-left,
+   react far-right — so an incoming message's timestamp is on the LEFT. */
 .msg-foot.out {
-  justify-content: flex-end;
+  justify-content: space-between;
 }
 .msg-foot.in {
-  justify-content: flex-start;
+  justify-content: space-between;
   flex-direction: row-reverse;
 }
 .msg-foot .time {
