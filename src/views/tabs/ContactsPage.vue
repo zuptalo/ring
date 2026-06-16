@@ -47,7 +47,7 @@
           </ion-avatar>
           <ion-label class="ion-text-wrap">
             <h2>{{ req.name }}</h2>
-            <p>wants to connect</p>
+            <p>wants to be friends · {{ formatStamp(req.updatedMs) }}</p>
           </ion-label>
           <ion-button slot="end" fill="solid" size="small" @click="acceptConn(req.userId)">Accept</ion-button>
           <ion-button slot="end" fill="clear" size="small" color="medium" @click="rejectConn(req)">Reject</ion-button>
@@ -64,8 +64,18 @@
           </ion-avatar>
           <ion-label class="ion-text-wrap">
             <h2>{{ req.name }}</h2>
-            <p>{{ req.state === 'rejected' ? 'Declined' : 'Request sent' }}</p>
+            <p>{{ req.state === 'rejected' ? 'Declined' : 'Request sent' }} · {{ formatStamp(req.updatedMs) }}</p>
           </ion-label>
+          <!-- Cancel an outgoing request → server withdraw, retracts it from the
+               other party's incoming list (spec 0002 FR-008). -->
+          <ion-button
+            v-if="req.state === 'pending'"
+            slot="end"
+            fill="clear"
+            size="small"
+            color="medium"
+            @click="withdrawConn(req.userId)"
+          >Cancel</ion-button>
         </ion-item>
       </ion-list>
 
@@ -209,9 +219,10 @@ import {
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import { personAddOutline, trashOutline, ellipsisHorizontal, compassOutline } from 'ionicons/icons';
 import {
-  incomingRequests, outgoingRequests, acceptConnect, rejectConnect, refreshConnections,
+  incomingRequests, outgoingRequests, acceptConnect, rejectConnect, withdrawConnect, refreshConnections,
   type ConnItem,
 } from '@/services/connections';
+import { formatStamp } from '@/utils/time';
 import {
   acceptRequest, cancelSentRequest, deleteContact,
   listContacts, listPendingRequests, listSentRequests, rejectRequest,
@@ -373,6 +384,11 @@ async function doCancel(code: string): Promise<void> {
 // Connect-request actions (the connection store reconciles via WS frames + connect).
 async function acceptConn(userId: string): Promise<void> {
   await acceptConnect(userId);
+}
+// Cancel an outgoing request: authoritative server withdraw (retracts it from the
+// other party's incoming list), not just a local removal (spec 0002 FR-008).
+async function withdrawConn(userId: string): Promise<void> {
+  await withdrawConnect(userId);
 }
 async function rejectConn(req: ConnItem): Promise<void> {
   const sheet = await actionSheetController.create({

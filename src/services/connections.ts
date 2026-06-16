@@ -9,7 +9,7 @@
  */
 import { ref } from 'vue';
 import {
-  listConnections, connectRequest, connectAccept, connectReject, connectLink as apiLink,
+  listConnections, connectRequest, connectAccept, connectReject, connectWithdraw, connectLink as apiLink,
   fetchDirectoryUser,
 } from '@/services/api';
 import { importDirectoryUser } from '@/services/directory';
@@ -20,6 +20,8 @@ export interface ConnItem {
   name: string;
   avatar: string;
   state: string;
+  /** When the request was last updated (ms epoch, from the server), for "2h ago". */
+  updatedMs: number;
 }
 
 export const incomingRequests = ref<ConnItem[]>([]);
@@ -42,17 +44,27 @@ async function hydrate(userId: string): Promise<{ name: string; avatar: string }
 /** Reconcile the reactive request lists from the server. Safe to call on connect and
  *  whenever a connect-req / connect-update frame arrives. */
 export async function refreshConnections(): Promise<void> {
-  let data: { incoming: { requester: string }[]; outgoing: { target: string; state: string }[] };
+  let data: Awaited<ReturnType<typeof listConnections>>;
   try {
     data = await listConnections();
   } catch {
     return;
   }
   incomingRequests.value = await Promise.all(
-    data.incoming.map(async (r) => ({ userId: r.requester, ...(await hydrate(r.requester)), state: 'pending' })),
+    data.incoming.map(async (r) => ({
+      userId: r.requester,
+      ...(await hydrate(r.requester)),
+      state: 'pending',
+      updatedMs: r.updatedAt,
+    })),
   );
   outgoingRequests.value = await Promise.all(
-    data.outgoing.map(async (r) => ({ userId: r.target, ...(await hydrate(r.target)), state: r.state })),
+    data.outgoing.map(async (r) => ({
+      userId: r.target,
+      ...(await hydrate(r.target)),
+      state: r.state,
+      updatedMs: r.updatedAt,
+    })),
   );
 }
 
@@ -75,6 +87,13 @@ export async function acceptConnect(userId: string): Promise<void> {
 /** Reject (optionally + block) an incoming request. */
 export async function rejectConnect(userId: string, block: boolean): Promise<void> {
   await connectReject(userId, block);
+  await refreshConnections();
+}
+
+/** Withdraw (cancel) an outgoing request we sent: removes it server-side so it
+ *  leaves the other party's incoming list too. */
+export async function withdrawConnect(userId: string): Promise<void> {
+  await connectWithdraw(userId);
   await refreshConnections();
 }
 

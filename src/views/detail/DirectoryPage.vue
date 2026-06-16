@@ -20,7 +20,7 @@
     <ion-content :fullscreen="true">
       <ion-list>
         <ion-item
-          v-for="u in results"
+          v-for="u in visibleResults"
           :key="u.id"
           button
           :detail="false"
@@ -42,7 +42,7 @@
         </ion-item>
       </ion-list>
 
-      <div v-if="!loading && results.length === 0" class="empty">
+      <div v-if="!loading && visibleResults.length === 0" class="empty">
         <ion-note>{{ query ? 'No one matches that.' : 'No other members yet.' }}</ion-note>
       </div>
       <div v-if="loading" class="empty">
@@ -53,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonContent,
@@ -61,8 +61,7 @@ import {
   actionSheetController, toastController,
 } from '@ionic/vue';
 import { fetchDirectory, type DirectoryUser } from '@/services/api';
-import { importDirectoryUser } from '@/services/directory';
-import { requestConnect } from '@/services/connections';
+import { requestConnect, incomingRequests, outgoingRequests, refreshConnections } from '@/services/connections';
 import { getContact, startDirectChat } from '@/db/queries';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { initialsAvatar } from '@/db/avatars';
@@ -73,6 +72,18 @@ const router = useRouter();
 const query = ref('');
 const results = ref<DirectoryUser[]>([]);
 const loading = ref(false);
+
+// Hide people you already have an OPEN friend request with (either direction) —
+// there's nothing to act on for them here; they live in Friend Requests instead.
+// (Accepted friends are excluded in a follow-up once directory auto-connect is
+// removed; a rejected/withdrawn request frees them to reappear.) Spec 0002 FR-001.
+const pendingIds = computed(() => {
+  const ids = new Set<string>();
+  for (const r of incomingRequests.value) ids.add(r.userId);
+  for (const r of outgoingRequests.value) if (r.state === 'pending') ids.add(r.userId);
+  return ids;
+});
+const visibleResults = computed(() => results.value.filter((u) => !pendingIds.value.has(u.id)));
 
 // Token so a slow earlier search can't overwrite a newer one.
 let seq = 0;
@@ -100,12 +111,10 @@ function onSearch(q: string): void {
   void load(q);
 }
 
-onMounted(() => void load(''));
-
-// Save someone from the directory: import their profile into contacts.
-async function save(u: DirectoryUser): Promise<string | null> {
-  return importDirectoryUser(u.id);
-}
+onMounted(() => {
+  void load('');
+  void refreshConnections(); // so pending requests are hidden from the list
+});
 
 async function connect(u: DirectoryUser): Promise<void> {
   if (!(await ensureProfile())) return; // require a name + photo before reaching out
@@ -134,17 +143,8 @@ async function openActions(u: DirectoryUser): Promise<void> {
     header: `${u.displayName} · @${u.username}`,
     buttons: [
       {
-        text: 'Connect',
+        text: 'Request Friendship',
         handler: () => void connect(u),
-      },
-      {
-        text: 'Save to contacts',
-        handler: () => {
-          void (async () => {
-            await save(u);
-            router.push(`/contact/${u.id}`);
-          })();
-        },
       },
       { text: 'Cancel', role: 'cancel' },
     ],
