@@ -397,7 +397,7 @@
                   aria-label="React"
                   @click.stop="openQuickReact(m, $event)"
                 >
-                  <ion-icon :icon="logoReact" />
+                  <ion-icon :icon="addCircleOutline" />
                 </button>
                 <span class="time">
                   <span v-if="m.editedAt" class="edited">edited</span>
@@ -536,7 +536,7 @@
                   aria-label="React"
                   @click.stop="openQuickReact(item.messages[0], $event)"
                 >
-                  <ion-icon :icon="logoReact" />
+                  <ion-icon :icon="addCircleOutline" />
                 </button>
                 <span class="time">
                   {{ formatClock(item.messages[item.messages.length - 1].timestamp) }}
@@ -835,7 +835,7 @@ import {
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
   callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline,
-  timeOutline, checkmark, checkmarkDone, addOutline, logoReact, cameraOutline,
+  timeOutline, checkmark, checkmarkDone, addOutline, addCircleOutline, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
