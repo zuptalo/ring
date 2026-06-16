@@ -62,7 +62,7 @@ import {
 } from '@ionic/vue';
 import { fetchDirectory, type DirectoryUser } from '@/services/api';
 import { requestConnect, incomingRequests, outgoingRequests, refreshConnections } from '@/services/connections';
-import { getContact, startDirectChat } from '@/db/queries';
+import { getContact, startDirectChat, listContacts } from '@/db/queries';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { initialsAvatar } from '@/db/avatars';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
@@ -83,7 +83,18 @@ const pendingIds = computed(() => {
   for (const r of outgoingRequests.value) if (r.state === 'pending') ids.add(r.userId);
   return ids;
 });
-const visibleResults = computed(() => results.value.filter((u) => !pendingIds.value.has(u.id)));
+// Friends = local contacts (only the accept flow creates one now), so hide them too.
+const friendIds = ref<Set<string>>(new Set());
+async function loadFriends(): Promise<void> {
+  try {
+    friendIds.value = new Set((await listContacts()).map((c) => c.id));
+  } catch {
+    /* leave as-is; directory just shows a few already-known people until next load */
+  }
+}
+const visibleResults = computed(() =>
+  results.value.filter((u) => !pendingIds.value.has(u.id) && !friendIds.value.has(u.id)),
+);
 
 // Token so a slow earlier search can't overwrite a newer one.
 let seq = 0;
@@ -114,6 +125,7 @@ function onSearch(q: string): void {
 onMounted(() => {
   void load('');
   void refreshConnections(); // so pending requests are hidden from the list
+  void loadFriends(); // so existing friends are hidden too
 });
 
 async function connect(u: DirectoryUser): Promise<void> {

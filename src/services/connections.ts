@@ -13,7 +13,7 @@ import {
   fetchDirectoryUser,
 } from '@/services/api';
 import { importDirectoryUser } from '@/services/directory';
-import { getContact } from '@/db/queries';
+import { getContact, markContactConnected } from '@/db/queries';
 
 export interface ConnItem {
   userId: string;
@@ -68,19 +68,26 @@ export async function refreshConnections(): Promise<void> {
   );
 }
 
-/** Send a connect request to a directory user (and save them as a contact so we can
- *  message once accepted). Returns the resulting state. */
+/** Request friendship with a directory user. A plain pending request creates NO
+ *  local contact — they're not a friend yet (they show under outgoing requests,
+ *  hydrated read-only from the directory). Only a mutual 'accepted' (they had
+ *  already requested us) makes them a friend right away. Returns the state. */
 export async function requestConnect(userId: string): Promise<string> {
   const state = await connectRequest(userId);
-  await importDirectoryUser(userId); // so their profile is on hand once accepted
+  if (state === 'accepted') {
+    await importDirectoryUser(userId); // now a friend → save their profile
+    await markContactConnected(userId);
+  }
   await refreshConnections();
   return state;
 }
 
-/** Accept an incoming request: connect + add them as a contact (so a chat can start). */
+/** Accept an incoming request: now a friend → import their profile as a contact and
+ *  mark connected (so a chat can start; the server already recorded the accept). */
 export async function acceptConnect(userId: string): Promise<void> {
   await connectAccept(userId);
   await importDirectoryUser(userId);
+  await markContactConnected(userId);
   await refreshConnections();
 }
 
