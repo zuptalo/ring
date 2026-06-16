@@ -90,9 +90,12 @@
     <ion-content ref="contentEl" :fullscreen="true" class="chat-content" :scroll-events="true" @ionScroll="onContentScroll">
       <div ref="listEl" class="msg-list" :style="{ visibility: listReady ? 'visible' : 'hidden' }">
       <!-- Top of the list: pull up to load earlier messages (older pages). -->
+      <!-- Page older messages well before the very top is reached (look-ahead), so
+           scrolling back never stalls at the load boundary (spec 1005 FR-001). -->
       <ion-infinite-scroll
         :disabled="!listReady || visible >= messages.length"
         position="top"
+        threshold="25%"
         @ion-infinite="loadOlder"
       >
         <ion-infinite-scroll-content loading-text="Loading earlier messages…" />
@@ -203,7 +206,7 @@
 
               <template v-if="m.mediaId && mediaInfo[m.mediaId]">
                 <div v-if="m.kind === 'image'" class="media-wrap" @click.stop="openMediaViewer(m.id)">
-                  <img class="bubble-image" :src="mediaInfo[m.mediaId].url" alt="photo" />
+                  <img class="bubble-image" :src="mediaInfo[m.mediaId].url" alt="photo" loading="lazy" decoding="async" />
                   <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                 </div>
                 <!-- Round video note: plays inline on tap, long-press for actions. -->
@@ -223,6 +226,8 @@
                       class="bubble-image"
                       :src="m.posterData || mediaInfo[m.mediaId].posterUrl"
                       alt="video"
+                      loading="lazy"
+                      decoding="async"
                     />
                     <div v-else class="bubble-image video-noposter" />
                     <ion-icon class="play-overlay" :icon="playCircle" />
@@ -473,7 +478,7 @@
                   @click.stop="openMediaViewer(am.id)"
                 >
                   <template v-if="am.mediaId && mediaInfo[am.mediaId]">
-                    <img :src="mediaInfo[am.mediaId].posterUrl || mediaInfo[am.mediaId].url" alt="" />
+                    <img :src="mediaInfo[am.mediaId].posterUrl || mediaInfo[am.mediaId].url" alt="" loading="lazy" decoding="async" />
                     <ion-icon v-if="am.kind === 'video'" class="play-overlay-sm" :icon="playCircle" />
                     <div v-if="idx === 3 && albumOverlay(item.messages)" class="album-more">
                       +{{ albumOverlay(item.messages) }}
@@ -819,6 +824,7 @@ import { type Quality } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
 import { resolutionLabel, fileSizeLabel, generateVideoPoster } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
+import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing, capitalizeFirst } from '@/utils/text';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
@@ -1047,13 +1053,24 @@ const viewerItems = computed(() =>
     };
   }),
 );
-// Tapping any media opens the viewer at that item, across all chat media.
-function openMediaViewer(msgId: string): void {
+// Tapping any media opens the viewer at that item, across all chat media. The
+// viewer can swipe through the WHOLE chat's media, so resolve it all and pin it
+// (against eviction) before opening — the list itself only resolves its window.
+async function openMediaViewer(msgId: string): Promise<void> {
+  const all = messages.value.filter(
+    (m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId,
+  );
+  await resolveMediaFor(all);
+  viewerPins.value = new Set(all.map((m) => m.mediaId!));
+  await nextTick();
   const start = chatMediaMsgs.value.findIndex((m) => m.id === msgId);
   viewer.value = { open: true, start: Math.max(0, start) };
 }
 function onViewerDismiss(id: string): void {
   viewer.value.open = false;
+  // Unpin the chat's media so the bounded cache can reclaim what's off-screen.
+  viewerPins.value = new Set();
+  evictMedia();
   // Album members render under one bubble keyed by the first message's id.
   const m = messages.value.find((x) => x.id === id);
   let target = id;
@@ -1967,59 +1984,118 @@ interface MediaInfo {
 }
 
 const mediaInfo = ref<Record<string, MediaInfo>>({});
-watch(
-  messages,
-  async (list) => {
-    for (const m of list) {
-      if (m.mediaId && !mediaInfo.value[m.mediaId]) {
-        const media = await get<Media>('media', m.mediaId);
-        if (media) {
-          const url = URL.createObjectURL(media.blob);
-          const info: MediaInfo = {
-            url,
-            posterUrl: media.posterBlob ? URL.createObjectURL(media.posterBlob) : undefined,
-            mime: media.mime,
-            name: media.name,
-          };
-          mediaInfo.value[m.mediaId] = info;
-          // Videos: prefer the sent thumbnail (m.posterData, a stable data URL).
-          // Otherwise derive one from the first frame and PERSIST it (posterBlob)
-          // so it isn't regenerated/lost on every remount.
-          if (m.kind === 'video' && !info.posterUrl && !m.posterData) {
-            const blob = media.blob;
-            const mid = m.mediaId;
-            void generateVideoPoster(blob).then(async (poster) => {
-              if (!poster) return;
-              mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: poster };
-              try {
-                const md = await get<Media>('media', mid);
-                if (md && !md.posterBlob) {
-                  md.posterBlob = await (await fetch(poster)).blob();
-                  md.updatedAt = Date.now();
-                  await put('media', md);
-                }
-              } catch {
-                /* best-effort cache */
-              }
-            });
-          }
-          // Audio (shared music): pull embedded cover art for the track card.
-          if (m.kind === 'audio' && !info.posterUrl) {
-            void readAudioTags(media.blob).then((tags) => {
-              if (tags.cover && m.mediaId) {
-                mediaInfo.value[m.mediaId] = {
-                  ...mediaInfo.value[m.mediaId],
-                  posterUrl: URL.createObjectURL(tags.cover),
-                };
-              }
-            });
-          }
-        }
-      }
+// Resolved object URLs are bounded so a very long, media-heavy chat doesn't keep
+// every poster/cover decoded and every blob URL alive at once. We keep at most
+// MAX_MEDIA live, evicting the least-recently-used items that are neither on screen
+// nor pinned by an open viewer, and revoking their URLs. Far-scrolled media is
+// re-resolved lazily when it scrolls back (spec 1005 FR-003/004/005).
+const MAX_MEDIA = 60;
+const mediaLru: string[] = []; // mediaIds, least-recently-used first
+function touchMedia(id: string): void {
+  const i = mediaLru.indexOf(id);
+  if (i !== -1) mediaLru.splice(i, 1);
+  mediaLru.push(id);
+}
+// Media ids the full-screen viewer is currently showing — never evict these while
+// it's open (it can swipe across all of the chat's media).
+const viewerPins = ref<Set<string>>(new Set());
+
+// The on-screen window (plus viewer pins) that eviction must never touch.
+function currentMediaKeep(): Set<string> {
+  const keep = new Set<string>(viewerPins.value);
+  for (const m of visibleMessages.value) if (m.mediaId) keep.add(m.mediaId);
+  return keep;
+}
+
+// Resolve on-device media (Blobs) → object URLs for the GIVEN messages only — the
+// rendered window, or all chat media when the viewer opens — so opening a long
+// media chat doesn't eagerly decode every poster/cover up front. Already-resolved
+// items are just marked recently-used (reused, never recreated per render).
+async function resolveMediaFor(list: Message[]): Promise<void> {
+  for (const m of list) {
+    if (!m.mediaId) continue;
+    if (mediaInfo.value[m.mediaId]) {
+      touchMedia(m.mediaId);
+      continue;
     }
+    const media = await get<Media>('media', m.mediaId);
+    if (!media) continue;
+    const info: MediaInfo = {
+      url: URL.createObjectURL(media.blob),
+      posterUrl: media.posterBlob ? URL.createObjectURL(media.posterBlob) : undefined,
+      mime: media.mime,
+      name: media.name,
+    };
+    mediaInfo.value[m.mediaId] = info;
+    touchMedia(m.mediaId);
+    // Videos: prefer the sent thumbnail (m.posterData, a stable data URL).
+    // Otherwise derive one from the first frame and PERSIST it (posterBlob) so it
+    // isn't regenerated/lost on every remount.
+    if (m.kind === 'video' && !info.posterUrl && !m.posterData) {
+      const blob = media.blob;
+      const mid = m.mediaId;
+      void generateVideoPoster(blob).then(async (poster) => {
+        if (!poster || !mediaInfo.value[mid]) return; // evicted before it resolved
+        mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: poster };
+        try {
+          const md = await get<Media>('media', mid);
+          if (md && !md.posterBlob) {
+            md.posterBlob = await (await fetch(poster)).blob();
+            md.updatedAt = Date.now();
+            await put('media', md);
+          }
+        } catch {
+          /* best-effort cache */
+        }
+      });
+    }
+    // Audio (shared music): pull embedded cover art for the track card.
+    if (m.kind === 'audio' && !info.posterUrl) {
+      const mid = m.mediaId;
+      void readAudioTags(media.blob).then((tags) => {
+        if (tags.cover && mediaInfo.value[mid]) {
+          mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: URL.createObjectURL(tags.cover) };
+        }
+      });
+    }
+  }
+}
+
+// Release least-recently-used media that's neither on screen nor pinned, revoking
+// its URLs so memory stays bounded in very long chats.
+function evictMedia(): void {
+  const keep = currentMediaKeep();
+  for (const id of selectEvictions(mediaLru, keep, MAX_MEDIA)) {
+    const mi = mediaInfo.value[id];
+    if (mi) {
+      URL.revokeObjectURL(mi.url);
+      if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
+      delete mediaInfo.value[id];
+    }
+    const i = mediaLru.indexOf(id);
+    if (i !== -1) mediaLru.splice(i, 1);
+  }
+}
+
+// Resolve media for the rendered window as it grows/changes (look-ahead paging
+// extends `visibleMessages` before the user reaches the top), then evict far LRU.
+watch(
+  visibleMessages,
+  async (list) => {
+    await resolveMediaFor(list);
+    evictMedia();
   },
   { immediate: true },
 );
+
+// Revoke every resolved object URL when leaving the chat so they don't leak across
+// chat opens (the cache only lives for this view).
+onUnmounted(() => {
+  for (const mi of Object.values(mediaInfo.value)) {
+    URL.revokeObjectURL(mi.url);
+    if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
+  }
+});
 
 // Close the viewer if its last item was deleted. (Defined here, after `messages`,
 // because watch() evaluates its source once at setup.)
