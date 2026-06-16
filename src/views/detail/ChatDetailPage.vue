@@ -170,7 +170,7 @@
               :data-mid="m.id"
               :style="swipeStyle(m.id)"
               @touchstart.passive="onSwipeStart($event, m)"
-              @touchmove="onSwipeMove($event)"
+              @touchmove.passive="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
               @click="(e) => !m.deleted && onBubbleTap(m, e)"
             >
@@ -472,7 +472,7 @@
               :data-mid="item.messages[0].id"
               :style="swipeStyle(item.messages[0].id)"
               @touchstart.passive="onSwipeStart($event, item.messages[0])"
-              @touchmove="onSwipeMove($event)"
+              @touchmove.passive="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
               @click="(e) => onBubbleTap(item.messages[0], e)"
             >
@@ -1079,8 +1079,12 @@ const chatMediaMsgs = computed(() =>
   messages.value.filter((m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId),
 );
 const viewer = ref<{ open: boolean; start: number }>({ open: false, start: 0 });
-const viewerItems = computed(() =>
-  chatMediaMsgs.value.map((m) => {
+const viewerItems = computed(() => {
+  // Only build the (whole-chat) viewer list while the viewer is open. Otherwise this
+  // O(all-media) map + formatFull + groupedReactions would re-run on every mediaInfo
+  // mutation as thumbnails decode during scroll — pure waste on the scroll hot path.
+  if (!viewer.value.open) return [];
+  return chatMediaMsgs.value.map((m) => {
     const mi = mediaInfo.value[m.mediaId!];
     return {
       id: m.id,
@@ -1094,8 +1098,8 @@ const viewerItems = computed(() =>
       favorite: !!m.favorite,
       reactions: groupedReactions(m.reactions).map((g) => ({ emoji: g.emoji, count: g.count })),
     };
-  }),
-);
+  });
+});
 // Resolve (+ pin against eviction) only the current viewer item and its neighbours, so
 // at most ~3 full-res media are ever decoded at once.
 async function resolveViewerWindow(i: number): Promise<void> {
@@ -1645,7 +1649,9 @@ function onSwipeMove(e: TouchEvent): void {
     let v = dx;
     if (Math.abs(v) > SWIPE_MAX) v = (v > 0 ? 1 : -1) * (SWIPE_MAX + (Math.abs(v) - SWIPE_MAX) * 0.18);
     swipeDx.value = v;
-    if (e.cancelable) e.preventDefault();
+    // No preventDefault needed: the bubble's `touch-action: pan-y` already stops the
+    // browser acting on a horizontal drag, so this listener can stay passive (no
+    // main-thread round-trip at the start of every vertical scroll).
   }
 }
 function onSwipeEnd(): void {
@@ -1888,7 +1894,9 @@ let listReadyFallback: ReturnType<typeof setTimeout> | undefined;
 function observeScroll(): void {
   if (!resizeObs && 'ResizeObserver' in window) {
     resizeObs = new ResizeObserver(() => {
-      if (stickBottom) void scrollToNewest();
+      // Re-pin to newest as media grows / the keyboard opens — but never mid-fling
+      // (that fights iOS momentum). Wait until the user's scroll has settled.
+      if (stickBottom && Date.now() - lastScrollAt > MOMENTUM_QUIET_MS) void scrollToNewest();
     });
   }
   if (resizeObs && listEl.value) resizeObs.observe(listEl.value); // content height (media)
@@ -2265,6 +2273,12 @@ let stickBottom = true;
 // ResizeObserver stops re-pinning → the view drifts up. Refreshed on each pin;
 // genuine user scrolls land outside it.
 let suppressStickUntil = 0;
+// When the user last scrolled (genuine, non-echo). The ResizeObserver re-pin must NOT
+// fire while a fling is still in flight — a programmatic scrollTop write mid-inertia
+// fights iOS WebKit's native momentum and stutters/teleports. We only re-pin once the
+// fling has settled (no user scroll for a beat).
+let lastScrollAt = 0;
+const MOMENTUM_QUIET_MS = 220;
 // Cache ion-content's inner scroll element so we can read scroll metrics
 // synchronously and pin without an async hop each message.
 let scrollEl: HTMLElement | null = null;
@@ -2295,6 +2309,7 @@ function nearBottom(): boolean {
 // our own programmatic pin so late-loading media can't flip the pin off mid-settle.
 function onContentScroll(): void {
   if (Date.now() < suppressStickUntil) return;
+  lastScrollAt = Date.now(); // genuine user scroll (the pin echo is suppressed above)
   stickBottom = nearBottom();
 }
 
@@ -3137,6 +3152,10 @@ function cancelRecording() {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Let the browser own vertical scroll natively; only horizontal drags reach JS
+     (swipe-to-reply), so the touchmove listener can be passive — no input-latency
+     round-trip at the start of every vertical flick. */
+  touch-action: pan-y;
   box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.08);
   /* A thin, theme-contrasting outline (dark in light theme, light in dark theme) so
      each bubble's boundary reads clearly against the chat background. Uses --app-text
