@@ -52,8 +52,8 @@ import SpeedPill from '@/components/SpeedPill.vue';
 import { nextRate, playWhenReady } from '@/utils/playback';
 import { useScrub } from '@/composables/useScrub';
 
-const props = defineProps<{ src: string; embedded?: boolean; chromeHidden?: boolean }>();
-const emit = defineEmits<{ (e: 'tap'): void }>();
+const props = defineProps<{ src: string; embedded?: boolean; chromeHidden?: boolean; startAt?: number }>();
+const emit = defineEmits<{ (e: 'tap'): void; (e: 'time', seconds: number): void }>();
 
 const el = ref<HTMLVideoElement>();
 const playing = ref(false);
@@ -122,19 +122,34 @@ async function togglePip(): Promise<void> {
 }
 
 function onMeta(): void {
-  if (el.value && Number.isFinite(el.value.duration)) total.value = el.value.duration;
+  const v = el.value;
+  if (!v) return;
+  if (Number.isFinite(v.duration)) total.value = v.duration;
+  // Resume where we left off when this player remounts after being slid past
+  // (spec 1007 FR-005). Only seek into a valid range.
+  if (props.startAt && props.startAt > 0 && props.startAt < (total.value || Infinity)) {
+    v.currentTime = props.startAt;
+    onTime();
+  }
 }
 function onTime(): void {
   const v = el.value;
   if (!v) return;
   elapsed.value = v.currentTime;
   progress.value = total.value ? Math.min(1, v.currentTime / total.value) : 0;
+  emit('time', v.currentTime); // let the viewer remember the position across slides
 }
 function onEnd(): void {
   playing.value = false;
   progress.value = 0;
   elapsed.value = 0;
   if (el.value) el.value.currentTime = 0;
+  emit('time', 0);
+}
+// Pause and silence this player (used when the viewer slides away from it so no
+// off-screen video keeps playing audio in the background — FR-004).
+function pauseSilent(): void {
+  el.value?.pause();
 }
 
 const onEnterPip = (): void => {
@@ -155,7 +170,7 @@ onBeforeUnmount(() => {
 });
 
 // Surface state + controls so the media viewer can host the scrubber/PiP in its chrome.
-defineExpose({ playing, elapsed, total, progress, rate, pipActive, toggle, seekTo, cycleRate, togglePip, pipSupported });
+defineExpose({ playing, elapsed, total, progress, rate, pipActive, toggle, pauseSilent, seekTo, cycleRate, togglePip, pipSupported });
 </script>
 
 <style scoped>

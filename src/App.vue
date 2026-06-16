@@ -13,6 +13,9 @@
     <incoming-call-overlay />
     <!-- Floating call widget when a call runs but the call screen is minimized. -->
     <minimized-call />
+    <!-- Hovering media-audio controller while a voice message / music plays (it
+         persists across navigation; spec 1007). -->
+    <minimized-audio />
     <!-- Persistent remote-audio sink: keeps call audio playing across navigation
          (e.g. while minimized), independent of any call screen. -->
     <call-media-sink />
@@ -37,8 +40,11 @@ import KeyGuard from '@/components/KeyGuard.vue';
 import InstallGuard from '@/components/InstallGuard.vue';
 import IncomingCallOverlay from '@/components/IncomingCallOverlay.vue';
 import MinimizedCall from '@/components/MinimizedCall.vue';
+import MinimizedAudio from '@/components/MinimizedAudio.vue';
 import CallMediaSink from '@/components/CallMediaSink.vue';
 import NotificationBanners from '@/components/NotificationBanners.vue';
+import { callState } from '@/composables/useCall';
+import { stopAudio } from '@/composables/useAudioPlayer';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed } from '@/db/queries';
@@ -65,7 +71,10 @@ watch(
   isUnlocked,
   (unlocked) => {
     if (unlocked) void warmAll();
-    else clearWarm();
+    else {
+      clearWarm();
+      stopAudio(); // never leave media audio playing once locked / signed out
+    }
   },
   { immediate: true },
 );
@@ -182,6 +191,12 @@ onUnmounted(() => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.removeEventListener('message', onServiceWorkerMessage);
   }
+});
+
+// Call audio takes precedence over media audio (spec 1007 FR-009): when a call
+// becomes active, stop any voice message / music so they never play over a call.
+watch(callState, (s) => {
+  if (s !== 'idle') stopAudio();
 });
 
 // Clear the app-icon badge + pending notifications when foregrounded.

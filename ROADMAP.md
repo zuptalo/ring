@@ -26,6 +26,7 @@ Specs are grouped by category band; status moves
 | [1004](specs/1004-message-action-menu/spec.md) | Message Action Menu | 🔵 in-review |
 | [1005](specs/1005-chat-history-scroll/spec.md) | Chat History Scroll Performance & Media Caching | 🔵 in-review |
 | [1006](specs/1006-test-coverage-uplift/spec.md) | Test Coverage Uplift | 🔵 in-review |
+| [1007](specs/1007-media-playback-and/spec.md) | Media Playback & Embedded Thumbnails | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

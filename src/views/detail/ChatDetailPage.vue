@@ -245,6 +245,8 @@
                 </template>
                 <voice-player
                   v-else-if="m.kind === 'voice'"
+                  :mid="m.id"
+                  :sender="m.outgoing ? 'You' : chat?.isGroup ? m.senderName : chat?.name ?? m.senderName"
                   :src="mediaInfo[m.mediaId].url"
                   :outgoing="m.outgoing"
                   :avatar="!m.outgoing && !chat?.isGroup ? chat?.avatar : undefined"
@@ -841,6 +843,11 @@ import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
 import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import {
+  audioCurId, audioPlaying, audioProgress, audioRate,
+  playAudio, seekAudioFrac, cycleAudioRate, stopAudio, detachAudioEnded,
+  type AudioTrackMeta,
+} from '@/composables/useAudioPlayer';
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
 import { sendReadReceipts, sendDownloadedReceipts } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
@@ -2429,27 +2436,11 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
   }
 }
 
-/* ---- shared audio player: received/sent music files play as a playlist ---- */
-const audioEl = new Audio();
-audioEl.preload = 'auto'; // buffer eagerly so the first tap isn't silent
-const audioCurId = ref<string | null>(null);
-const audioPlaying = ref(false);
-const audioProgress = ref(0);
-const audioRate = ref(1);
-audioEl.addEventListener('timeupdate', () => {
-  audioProgress.value = audioEl.duration ? audioEl.currentTime / audioEl.duration : 0;
-});
-audioEl.addEventListener('play', () => (audioPlaying.value = true));
-audioEl.addEventListener('pause', () => (audioPlaying.value = false));
-audioEl.addEventListener('ended', () => {
-  audioPlaying.value = false;
-  audioProgress.value = 0;
-  playNextAudio();
-});
-onUnmounted(() => {
-  audioEl.pause();
-  audioEl.src = '';
-});
+/* ---- audio playback: voice + music via the global single-source player ---- */
+// Audio (voice + music) plays through the global single-source player so it keeps
+// going when you leave the chat and a hovering controller can drive it (spec 1007).
+// Leaving the chat only detaches the playlist auto-advance — it does NOT stop audio.
+onUnmounted(detachAudioEnded);
 
 // Audio messages in chronological order, the implicit playlist.
 const audioOrder = computed(() =>
@@ -2458,38 +2449,39 @@ const audioOrder = computed(() =>
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((m) => m.id),
 );
-const audioUrlFor = (id: string): string | undefined => {
+// Build the now-playing metadata (for the hovering controller) from a message.
+function audioMetaFor(id: string): AudioTrackMeta | undefined {
   const m = messages.value.find((x) => x.id === id);
-  return m?.mediaId ? mediaInfo.value[m.mediaId]?.url : undefined;
-};
-function toggleAudio(id: string): void {
-  if (audioCurId.value === id) {
-    if (audioEl.paused) void playWhenReady(audioEl);
-    else audioEl.pause();
-    return;
+  if (!m?.mediaId) return undefined;
+  const url = mediaInfo.value[m.mediaId]?.url;
+  if (!url) return undefined;
+  const who = m.outgoing ? 'You' : chat.value?.isGroup ? m.senderName : chat.value?.name ?? m.senderName;
+  if (m.kind === 'audio') {
+    return {
+      id,
+      url,
+      title: m.audio?.title || mediaInfo.value[m.mediaId]?.name || 'Audio',
+      subtitle: m.audio?.artist,
+      coverUrl: mediaInfo.value[m.mediaId]?.posterUrl,
+      isVoice: false,
+    };
   }
-  const url = audioUrlFor(id);
-  if (!url) return;
-  audioEl.src = url;
-  audioEl.playbackRate = audioRate.value;
-  audioCurId.value = id;
-  audioProgress.value = 0;
-  void playWhenReady(audioEl);
+  return { id, url, title: 'Voice message', subtitle: who, isVoice: true };
+}
+function toggleAudio(id: string): void {
+  const meta = audioMetaFor(id);
+  if (!meta) return;
+  playAudio(meta, playNextAudio);
 }
 function seekAudio(id: string, frac: number): void {
-  if (audioCurId.value !== id || !audioEl.duration) return;
-  audioEl.currentTime = frac * audioEl.duration;
-}
-function cycleAudioRate(): void {
-  audioRate.value = nextRate(audioRate.value);
-  audioEl.playbackRate = audioRate.value;
+  if (audioCurId.value === id) seekAudioFrac(frac);
 }
 function playNextAudio(): void {
   const ids = audioOrder.value;
   const i = audioCurId.value ? ids.indexOf(audioCurId.value) : -1;
   const next = i >= 0 && i + 1 < ids.length ? ids[i + 1] : null;
   if (next) toggleAudio(next);
-  else audioCurId.value = null;
+  else stopAudio();
 }
 
 /* ---- audio file review queue (title/artist before sending) ---- */
@@ -3558,8 +3550,15 @@ function cancelRecording() {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #fff;
-  font-size: 34px;
+  font-size: 28px;
+  background: rgba(0, 0, 0, 0.42); /* scrim disc → legible on any thumbnail (FR-003) */
+  border-radius: 50%;
   pointer-events: none;
 }
 .album-bubble .time {
@@ -3637,13 +3636,23 @@ function cancelRecording() {
   position: relative;
   display: inline-block;
 }
+/* Play affordance over a video thumbnail. A translucent dark scrim disc behind the
+   white glyph guarantees legibility on ANY thumbnail — dark or bright (spec 1007
+   FR-003) — without baking pixels into the JPEG. */
 .play-overlay {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 48px;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
   color: #fff;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 50%;
   filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.5));
   cursor: pointer;
   /* The poster opens the menu; only this play button opens the viewer, so give it

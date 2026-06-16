@@ -343,8 +343,15 @@ const goChat = () => router.push(`/chat/${chatId}`);
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #fff;
-  font-size: 30px;
+  font-size: 26px;
+  background: rgba(0, 0, 0, 0.42); /* scrim disc → legible on any thumbnail (spec 1007 FR-003) */
+  border-radius: 50%;
   pointer-events: none;
 }
 .empty {
