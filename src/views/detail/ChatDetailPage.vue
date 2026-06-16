@@ -2050,7 +2050,15 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
     if (!media) continue;
     const info: MediaInfo = {
       url: URL.createObjectURL(media.blob),
-      posterUrl: media.posterBlob ? URL.createObjectURL(media.posterBlob) : undefined,
+      // Poster precedence: a persisted posterBlob, else the sender-embedded
+      // posterData (a stable data URL). Feeding posterData into posterUrl means the
+      // viewer, bottom slider and Media grid (which read posterUrl, not the message)
+      // show a video's thumbnail too — not just the chat bubble (spec 1007 FR-001).
+      posterUrl: media.posterBlob
+        ? URL.createObjectURL(media.posterBlob)
+        : m.kind === 'video'
+          ? m.posterData
+          : undefined,
       mime: media.mime,
       name: media.name,
     };

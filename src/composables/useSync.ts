@@ -156,6 +156,16 @@ export function nudgeReconnect(): void {
   if (isAuthenticated.value && token) void transport.connect(token);
 }
 
+/** Force a fresh reconnect even if currently connected, so the server re-runs its
+ *  on-connect queue flush. Used after unblocking a contact to pull the messages the
+ *  server held while they were blocked (the queue only flushes on connect). */
+export function forceReconnect(): void {
+  if (!transport) return;
+  transport.disconnect();
+  const token = getToken();
+  if (isAuthenticated.value && token) void transport.connect(token);
+}
+
 /** Test-only: drop the WebSocket so the server queues messages for this account
  *  (simulating a backgrounded/closed app), exercising the SW background-decrypt
  *  path. Reconnect with nudgeReconnect(). */

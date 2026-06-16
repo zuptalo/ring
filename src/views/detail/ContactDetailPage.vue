@@ -110,6 +110,7 @@ import {
   getPresenceOverrides, setPresenceOverride,
 } from '@/db/queries';
 import { ensureProfile } from '@/composables/useProfileGate';
+import { forceReconnect } from '@/composables/useSync';
 import type { Contact, Chat } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
@@ -265,13 +266,31 @@ async function block() {
 }
 
 async function unblock() {
-  try {
-    await unblockContact(contactId);
-  } catch {
-    void toastController
-      .create({ message: 'Could not unblock. Try again.', duration: 1500, position: 'top', color: 'danger' })
-      .then((t) => t.present());
-  }
+  const alert = await alertController.create({
+    header: 'Unblock contact?',
+    message: 'They will be able to message you and add you again, and any messages they sent while blocked will be delivered.',
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Unblock',
+        handler: () => {
+          void (async () => {
+            try {
+              await unblockContact(contactId);
+              // Force a reconnect so the server flushes the messages it held while
+              // blocked (the offline queue only flushes on connect).
+              forceReconnect();
+            } catch {
+              void toastController
+                .create({ message: 'Could not unblock. Try again.', duration: 1500, position: 'top', color: 'danger' })
+                .then((t) => t.present());
+            }
+          })();
+        },
+      },
+    ],
+  });
+  await alert.present();
 }
 
 function copyUsername() {

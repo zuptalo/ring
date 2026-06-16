@@ -37,7 +37,7 @@ test('blocking stops delivery + re-adding; unblock resumes', async ({ browser })
   await ev(a, (bid) => (window as any).__ringTest.blockContact(bid), b.id);
   expect(await ev(a, (bid) => (window as any).__ringTest.isPeerBlocked(bid), b.id)).toBe(true);
 
-  // B sends while blocked → A must NOT receive it (relay drops it silently).
+  // B sends while blocked → A must NOT receive it live (the relay HOLDS it silently).
   await ev(b, (id) => (window as any).__ringTest.sendChatMessage(id, 'while-blocked'), bChat);
   await a.page.waitForTimeout(3000);
   expect(await bodies(a, aChat)).not.toContain('while-blocked');
@@ -46,8 +46,11 @@ test('blocking stops delivery + re-adding; unblock resumes', async ({ browser })
   // B can no longer fetch A's bundle → can't re-add A.
   expect(await ev(b, (aid) => (window as any).__ringTest.peerBundleExists(aid), a.id)).toBe(false);
 
-  // A unblocks → B's next message delivers again.
+  // A unblocks → the message held during the block flushes on reconnect, and B's
+  // next message delivers live again.
   await ev(a, (bid) => (window as any).__ringTest.unblockContact(bid), b.id);
+  await ev(a, () => (window as any).__ringTest.forceReconnect());
+  await expect.poll(() => bodies(a, aChat), { timeout: 30_000 }).toContain('while-blocked');
   await ev(b, (id) => (window as any).__ringTest.sendChatMessage(id, 'after-unblock'), bChat);
   await expect.poll(() => bodies(a, aChat), { timeout: 30_000 }).toContain('after-unblock');
 });

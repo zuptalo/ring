@@ -176,7 +176,13 @@ watch(
           const url = URL.createObjectURL(md.blob);
           info.value[m.mediaId] = {
             url,
-            posterUrl: md.posterBlob ? URL.createObjectURL(md.posterBlob) : undefined,
+            // posterBlob, else the sender-embedded posterData (data URL) for videos,
+            // so the grid shows a thumbnail without re-generating one (spec 1007).
+            posterUrl: md.posterBlob
+              ? URL.createObjectURL(md.posterBlob)
+              : m.kind === 'video'
+                ? m.posterData
+                : undefined,
             mime: md.mime,
             name: md.name,
           };

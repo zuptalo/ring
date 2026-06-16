@@ -10,7 +10,7 @@
 import { register, getSelfUserId, getSelfUsername } from '@/services/auth';
 import { syncDirectory, importDirectoryUser, searchDirectory, publishOwnProfile } from '@/services/directory';
 import { previewPending } from '@/services/sw-inbox';
-import { disconnectTransport, nudgeReconnect, sendDownloadedReceipts } from '@/composables/useSync';
+import { disconnectTransport, nudgeReconnect, forceReconnect, sendDownloadedReceipts } from '@/composables/useSync';
 import {
   ensureIdentity,
   isUnlocked,
@@ -167,6 +167,7 @@ export function installTestHook(): void {
     disconnect: () => disconnectTransport(),
     /** Reconnect the WebSocket (drains the queue for real). */
     reconnect: () => nudgeReconnect(),
+    forceReconnect: () => forceReconnect(),
     /** Lock memory (to test re-unlock on reload). */
     lockNow: () => lockIdentity(),
     /** Whether this device auto-unlocks (no passcode lock). */

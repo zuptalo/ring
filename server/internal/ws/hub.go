@@ -818,6 +818,13 @@ func (c *Client) flushPending() {
 		return
 	}
 	for _, it := range items {
+		// Hold back messages from senders this user has blocked — they stay queued
+		// and flush once unblocked (the recipient reconnects after unblocking).
+		if it.Sender != "" {
+			if blocked, err := c.store.IsBlocked(ctx, c.userID, it.Sender); err == nil && blocked {
+				continue
+			}
+		}
 		select {
 		case c.send <- it.Payload:
 		case <-time.After(writeWait):
@@ -962,13 +969,14 @@ func (c *Client) handleFrame(data []byte) {
 		if f.To == "" || f.ID == "" {
 			return
 		}
-		// If the recipient has blocked the sender, drop the message silently - no
-		// queue, no live delivery, no push - but still tell the sender it was
-		// "sent" so the block stays invisible to them (their message just never
-		// turns "delivered").
-		if blocked, err := c.store.IsBlocked(ctx, f.To, c.userID); err == nil && blocked {
-			c.send1(frame{T: "receipt", MessageID: f.ID, Status: "sent", At: time.Now().UnixMilli(), From: f.To})
-			return
+		// If the recipient has blocked the sender, the message is HELD: still durably
+		// queued (E2EE ciphertext the server can't read), but NOT delivered live, NOT
+		// pushed, and NOT marked delivered. The drain paths skip held senders until
+		// the recipient unblocks, at which point the backlog flushes. The sender just
+		// sees "sent" (never "delivered") so the block stays invisible to them.
+		blocked := false
+		if b, err := c.store.IsBlocked(ctx, f.To, c.userID); err == nil {
+			blocked = b
 		}
 		delivered := frame{T: "msg", ID: f.ID, From: c.userID, Ciphertext: f.Ciphertext}
 		payload, err := json.Marshal(delivered)
@@ -979,15 +987,17 @@ func (c *Client) handleFrame(data []byte) {
 			slog.Error("enqueue relay", "err", err)
 			return
 		}
-		// Deliver to any live sockets (best-effort; the durable copy is already
-		// queued above). Decide the push on *foregrounded, proven-live* presence: a
-		// recipient with no fresh active connection - offline, backgrounded, OR a
-		// frozen tab whose socket went quiet - gets a push tickle, as does one whose
-		// every live socket's buffer was full (delivered to zero). A foregrounded,
-		// responsive recipient gets it in-app and needs no push.
-		sent := c.hub.Send(f.To, payload)
-		if !c.hub.isActiveFresh(f.To) || !sent {
-			c.notifyAsync(f.To, false)
+		if !blocked {
+			// Deliver to any live sockets (best-effort; the durable copy is already
+			// queued above). Decide the push on *foregrounded, proven-live* presence: a
+			// recipient with no fresh active connection - offline, backgrounded, OR a
+			// frozen tab whose socket went quiet - gets a push tickle, as does one whose
+			// every live socket's buffer was full (delivered to zero). A foregrounded,
+			// responsive recipient gets it in-app and needs no push.
+			sent := c.hub.Send(f.To, payload)
+			if !c.hub.isActiveFresh(f.To) || !sent {
+				c.notifyAsync(f.To, false)
+			}
 		}
 		// Tell the sender the server accepted it.
 		c.send1(frame{T: "receipt", MessageID: f.ID, Status: "sent", At: time.Now().UnixMilli(), From: f.To})

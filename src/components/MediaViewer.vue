@@ -220,6 +220,16 @@ function goToStart(): void {
   const el = track.value;
   if (el) el.scrollLeft = props.start * el.clientWidth;
   void scrollStrip();
+  void playCurrentIfVideo();
+}
+// Autoplay the video we've landed on (the off-screen ones are paused by the index
+// watch / pauseOffscreenVideos), so sliding onto a video plays it and sliding away
+// stops it — only the on-screen video is ever active.
+async function playCurrentIfVideo(): Promise<void> {
+  await nextTick();
+  if (cur.value?.kind !== 'video') return;
+  const api = videoApis.get(index.value);
+  if (api && !api.playing) api.toggle();
 }
 function onScroll(): void {
   const el = track.value;
@@ -451,7 +461,10 @@ function pauseOffscreenVideos(): void {
 }
 // Item ids → last playback position (seconds), so a remounted player resumes there.
 const positions = reactive<Record<string, number>>({});
-watch(index, () => pauseOffscreenVideos());
+watch(index, () => {
+  pauseOffscreenVideos();
+  void playCurrentIfVideo();
+});
 const vfmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 // Tap on the video → hide all chrome for a video-only view; tap again → bring it back.
 function onVideoTap(): void {

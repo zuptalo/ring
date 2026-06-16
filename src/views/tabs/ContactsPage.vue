@@ -115,7 +115,7 @@
       </ion-list>
 
       <ion-list>
-        <ion-list-header v-if="contacts.length">
+        <ion-list-header v-if="friends.length">
           <ion-label>Friends</ion-label>
         </ion-list-header>
         <template v-for="group in groups" :key="group.letter">
@@ -142,10 +142,35 @@
             </ion-item-options>
           </ion-item-sliding>
         </template>
+
+        <!-- Blocked contacts live at the bottom, out of the way and easy to spot.
+             Tapping opens the contact where they can be unblocked. -->
+        <template v-if="blockedContacts.length">
+          <ion-list-header>
+            <ion-label>Blocked</ion-label>
+          </ion-list-header>
+          <ion-item
+            v-for="person in blockedContacts"
+            :key="`blocked-${person.id}`"
+            button
+            :detail="false"
+            class="blocked-row"
+            @click="open(person.id)"
+          >
+            <ion-avatar slot="start">
+              <img :src="person.avatar" :alt="person.name" />
+            </ion-avatar>
+            <ion-label>
+              <h2>{{ capitalizeFirst(person.name) }}</h2>
+              <p>Blocked</p>
+            </ion-label>
+            <ion-icon slot="end" :icon="banOutline" color="medium" />
+          </ion-item>
+        </template>
       </ion-list>
 
       <ion-infinite-scroll
-        :disabled="visible >= contacts.length"
+        :disabled="visible >= friends.length"
         @ion-infinite="loadMore"
       >
         <ion-infinite-scroll-content />
@@ -170,7 +195,7 @@ import {
   actionSheetController, alertController, toastController, onIonViewWillEnter,
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
-import { personAddOutline, trashOutline, ellipsisHorizontal, compassOutline } from 'ionicons/icons';
+import { personAddOutline, trashOutline, ellipsisHorizontal, compassOutline, banOutline } from 'ionicons/icons';
 import {
   incomingRequests, outgoingRequests, acceptConnect, rejectConnect, withdrawConnect, refreshConnections,
   type ConnItem,
@@ -364,9 +389,13 @@ function loadMore(ev: InfiniteScrollCustomEvent) {
 }
 
 // Group the visible (already sorted) contacts by first letter for the headers.
+// Active friends (alphabetical groups) vs. blocked contacts, which drop to their own
+// section at the bottom so they're easy to find and out of the way.
+const friends = computed(() => contacts.value.filter((c) => !c.blocked));
+const blockedContacts = computed(() => contacts.value.filter((c) => c.blocked));
 const groups = computed(() => {
   const map = new Map<string, Contact[]>();
-  for (const c of contacts.value.slice(0, visible.value)) {
+  for (const c of friends.value.slice(0, visible.value)) {
     const letter = (c.name[0] ?? '#').toUpperCase();
     if (!map.has(letter)) map.set(letter, []);
     map.get(letter)!.push(c);
