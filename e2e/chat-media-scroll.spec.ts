@@ -44,11 +44,9 @@ test('image renders in the list and the full-screen viewer opens on tap', async 
   const image = a.page.locator('.bubble .bubble-image').last();
   await expect(image).toBeVisible({ timeout: 30_000 });
 
-  // Tapping a media bubble opens the action menu (spec 1004); "View" opens the
-  // full-screen viewer, which resolves+pins the chat's media on open (spec 1005).
+  // A single tap opens the viewer directly (spec 1008), which resolves+pins the
+  // chat's media on open (spec 1005).
   await image.click();
-  await expect(a.page.locator('.ma')).toBeVisible({ timeout: 10_000 });
-  await a.page.getByText('View', { exact: true }).click();
   await expect(a.page.locator('.viewer-modal')).toBeVisible({ timeout: 10_000 });
 
   await ctxA.close();

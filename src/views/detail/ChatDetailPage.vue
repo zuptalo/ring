@@ -172,7 +172,11 @@
               @touchstart.passive="onSwipeStart($event, m)"
               @touchmove="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
-              @click="!m.deleted && openMenu(m, $event)"
+              @pointerdown="(e) => !m.deleted && !m.videoNote && lp.onPointerDown(m, e)"
+              @pointermove="lp.onPointerMove"
+              @pointerup="lp.onPointerUp"
+              @pointercancel="lp.onPointerUp"
+              @click="(e) => !m.deleted && onBubbleTap(m, e)"
             >
               <template v-if="m.deleted">
                 <span class="text deleted-msg"><ion-icon :icon="banOutline" /> This message was deleted</span>
@@ -234,13 +238,10 @@
                       decoding="async"
                     />
                     <div v-else class="bubble-image video-noposter" :style="mediaAspect(m)" />
-                    <ion-icon
-                      class="play-overlay"
-                      :icon="playCircle"
-                      role="button"
-                      aria-label="Play video"
-                      @click.stop="openMediaViewer(m.id)"
-                    />
+                    <!-- Visual play affordance only; a tap anywhere on the poster opens
+                         the viewer via the bubble's tap handler (pointer-events: none so
+                         it never double-handles after a long-press). -->
+                    <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />
                     <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                   </div>
                 </template>
@@ -380,16 +381,23 @@
                   <span class="job-num">{{ jobPct(m.id, 'upload') }}</span>
                 </div>
               </div>
-              <span class="time">
-                <span v-if="m.editedAt" class="edited">edited</span>
-                {{ formatClock(m.sentAt ?? m.timestamp) }}
-                <ion-icon
-                  v-if="m.outgoing && m.status !== 'failed'"
-                  class="tick"
-                  :class="{ read: m.status === 'read' }"
-                  :icon="statusIcon(m.status)"
-                />
-              </span>
+              <!-- Direction-aware foot: react button opposite the timestamp; sent →
+                   time+tick right / react left, received → time left / react right. -->
+              <div class="msg-foot" :class="m.outgoing ? 'out' : 'in'">
+                <button type="button" class="react-btn" aria-label="React" @click.stop="openQuickReact(m, $event)">
+                  <ion-icon :icon="addCircleOutline" />
+                </button>
+                <span class="time">
+                  <span v-if="m.editedAt" class="edited">edited</span>
+                  {{ formatClock(m.sentAt ?? m.timestamp) }}
+                  <ion-icon
+                    v-if="m.outgoing && m.status !== 'failed'"
+                    class="tick"
+                    :class="{ read: m.status === 'read' }"
+                    :icon="statusIcon(m.status)"
+                  />
+                </span>
+              </div>
               </template>
             </div>
             </div>
@@ -464,7 +472,11 @@
               @touchstart.passive="onSwipeStart($event, item.messages[0])"
               @touchmove="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
-              @click="openMenu(item.messages[0], $event)"
+              @pointerdown="(e) => lp.onPointerDown(item.messages[0], e)"
+              @pointermove="lp.onPointerMove"
+              @pointerup="lp.onPointerUp"
+              @pointercancel="lp.onPointerUp"
+              @click="(e) => onBubbleTap(item.messages[0], e)"
             >
               <button
                 v-if="item.messages[0].replyTo"
@@ -489,7 +501,7 @@
                   :key="am.id"
                   type="button"
                   class="album-cell"
-                  @click.stop="openMenu(am, $event)"
+                  @click.stop="onAlbumCellTap(am, $event)"
                 >
                   <template v-if="am.mediaId && mediaInfo[am.mediaId]">
                     <img :src="mediaInfo[am.mediaId].posterUrl || mediaInfo[am.mediaId].url" alt="" loading="lazy" decoding="async" />
@@ -500,15 +512,20 @@
                   </template>
                 </button>
               </div>
-              <span class="time">
-                {{ formatClock(item.messages[item.messages.length - 1].timestamp) }}
-                <ion-icon
-                  v-if="item.messages[0].outgoing"
-                  class="tick"
-                  :class="{ read: item.messages[item.messages.length - 1].status === 'read' }"
-                  :icon="statusIcon(item.messages[item.messages.length - 1].status)"
-                />
-              </span>
+              <div class="msg-foot" :class="item.messages[0].outgoing ? 'out' : 'in'">
+                <button type="button" class="react-btn" aria-label="React" @click.stop="openQuickReact(item.messages[0], $event)">
+                  <ion-icon :icon="addCircleOutline" />
+                </button>
+                <span class="time">
+                  {{ formatClock(item.messages[item.messages.length - 1].timestamp) }}
+                  <ion-icon
+                    v-if="item.messages[0].outgoing"
+                    class="tick"
+                    :class="{ read: item.messages[item.messages.length - 1].status === 'read' }"
+                    :icon="statusIcon(item.messages[item.messages.length - 1].status)"
+                  />
+                </span>
+              </div>
             </div>
             </div>
 
@@ -795,7 +812,7 @@ import {
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
   callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline,
-  timeOutline, checkmark, checkmarkDone, addOutline, cameraOutline,
+  timeOutline, checkmark, checkmarkDone, addOutline, addCircleOutline, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
@@ -812,6 +829,8 @@ import {
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
+import QuickReactBar from '@/components/QuickReactBar.vue';
+import { useLongPress } from '@/composables/useLongPress';
 import ReactionDetails from '@/components/ReactionDetails.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
 import VideoNote from '@/components/VideoNote.vue';
@@ -1191,20 +1210,61 @@ function onViewerAllMedia(): void {
   router.push(`/chat/${chatId}/media`);
 }
 
-// Tapping a bubble opens the unified popover (emoji quick-row + actions) anchored
-// to it. It opens downward when the bubble is in the top half of the screen and
-// upward in the bottom half, so the menu stays on screen.
+// The two per-message popups (quick-react + full menu) are mutually exclusive and must
+// never linger over another view. We track the open one and dismiss it before opening
+// either, and on leaving the chat (covers the back button AND the swipe-back gesture).
+let openPopover: HTMLIonPopoverElement | null = null;
+async function dismissOpenPopovers(): Promise<void> {
+  const p = openPopover;
+  openPopover = null;
+  if (p) {
+    try {
+      await p.dismiss();
+    } catch {
+      /* already dismissing */
+    }
+  }
+}
+
+// Pick the popover side so it stays on screen: open downward in the top half of the
+// viewport, upward in the bottom half.
+const popoverSide = (ev: Event): 'top' | 'bottom' =>
+  ((ev as MouseEvent).clientY ?? window.innerHeight) < window.innerHeight / 2 ? 'bottom' : 'top';
+
+// Tap on the reaction button → a transient popover of the 7 most-used emoji + "+".
+async function openQuickReact(m: Message, ev: Event): Promise<void> {
+  await dismissOpenPopovers();
+  menuFocusId.value = m.id;
+  const popover = await popoverController.create({
+    component: QuickReactBar,
+    cssClass: 'reaction-popover',
+    componentProps: { myEmojis: myEmojisFor(m), quick: await quickReactEmojis(7) },
+    event: ev,
+    reference: 'event',
+    side: popoverSide(ev),
+    alignment: 'center',
+  });
+  openPopover = popover;
+  await popover.present();
+  const { data } = await popover.onWillDismiss();
+  if (openPopover === popover) openPopover = null;
+  menuFocusId.value = null;
+  if (!data) return;
+  if (data.action === 'react') await onReact(m.id, data.emoji);
+  else if (data.action === 'more') await openEmojiPicker(m);
+}
+
+// Long-press a bubble → the full action menu (reply/forward/edit/…); reactions now live
+// in the bottom-row quick-react button, so the menu no longer carries the emoji row.
 async function openMenu(m: Message, ev: Event) {
-  const y = (ev as MouseEvent).clientY ?? window.innerHeight;
-  const side = y < window.innerHeight / 2 ? 'bottom' : 'top';
+  await dismissOpenPopovers();
   // A single image/video/file/audio offers "Save"; an album bubble offers "Save all".
   const SAVE_KINDS = ['image', 'video', 'file', 'audio', 'voice'];
   const canSaveAll = !!m.albumId;
   const canSave = !canSaveAll && SAVE_KINDS.includes(m.kind) && (!!m.mediaId || !!m.pendingMedia);
-  // A single tap on a media bubble now opens this menu (the whole bubble is the hit
-  // target), so the full-screen viewer is reached from here via "View".
+  // Media is reachable by tapping it, but "View" stays in the menu as a fallback.
   const canView = (m.kind === 'image' || m.kind === 'video') && !m.videoNote && !!m.mediaId;
-  // Briefly emphasise the tapped bubble so it's clear which message the menu acts on.
+  // Briefly emphasise the bubble so it's clear which message the menu acts on.
   menuFocusId.value = m.id;
   const popover = await popoverController.create({
     component: MessageActions,
@@ -1216,22 +1276,20 @@ async function openMenu(m: Message, ev: Event) {
       canEdit: m.outgoing && m.kind === 'text' && !m.deleted,
       canSave,
       canSaveAll,
-      myEmojis: myEmojisFor(m),
       reactionCount: m.reactions?.length ?? 0,
-      quick: await quickReactEmojis(12),
     },
     event: ev,
     reference: 'event',
-    side,
+    side: popoverSide(ev),
     alignment: 'center',
   });
+  openPopover = popover;
   await popover.present();
   const { data } = await popover.onWillDismiss();
+  if (openPopover === popover) openPopover = null;
   menuFocusId.value = null;
   if (!data) return;
-  if (data.action === 'react') await onReact(m.id, data.emoji);
-  else if (data.action === 'view') openMediaViewer(m.id);
-  else if (data.action === 'more') await openEmojiPicker(m);
+  if (data.action === 'view') openMediaViewer(m.id);
   else if (data.action === 'details') await openReactionDetails(m);
   else if (data.action === 'reply') void startReply(m);
   else if (data.action === 'forward') openForward(m.id);
@@ -1242,6 +1300,21 @@ async function openMenu(m: Message, ev: Event) {
   else if (data.action === 'edit') startEdit(m);
   else if (data.action === 'select') enterSelect(m);
   else if (data.action === 'delete') void confirmDelete(m);
+}
+
+// Long-press opens the full menu; a plain tap opens media (or does nothing on text).
+const lp = useLongPress<Message>((m, ev) => void openMenu(m, ev));
+function onBubbleTap(m: Message, _ev: Event): void {
+  if (m.deleted) return;
+  if (!lp.consumeClick()) return; // a long-press just opened the menu — swallow the tap
+  if ((m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId) {
+    openMediaViewer(m.id);
+  }
+  // Text / other kinds: tap does nothing (react via the foot button, menu via long-press).
+}
+function onAlbumCellTap(am: Message, _ev: Event): void {
+  if (!lp.consumeClick()) return;
+  openMediaViewer(am.id);
 }
 
 /* ---- forwarding ---- */
@@ -1933,6 +2006,7 @@ onIonViewWillLeave(() => {
   setActiveChat(null);
   clearTimeout(shareHintTimer);
   dismissShareHintToast(); // don't let the hint linger on other pages
+  void dismissOpenPopovers(); // a quick-react/menu popover must not linger after leaving
 });
 
 const messages = useLiveQuery(
@@ -3496,6 +3570,41 @@ function cancelRecording() {
   align-items: center;
   gap: 3px;
 }
+/* Direction-aware bottom row (spec 1008): the react button sits opposite the
+   timestamp — sent → time+tick right / react left; received → time left / react
+   right. Logical layout so it mirrors correctly in RTL. */
+.msg-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 1px;
+}
+.msg-foot.out {
+  justify-content: flex-end;
+}
+.msg-foot.in {
+  justify-content: flex-start;
+  flex-direction: row-reverse;
+}
+.msg-foot .time {
+  align-self: center;
+}
+.react-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font-size: 19px;
+  line-height: 1;
+  color: var(--app-text-muted, #8e8e93);
+  cursor: pointer;
+}
+.react-btn:active {
+  transform: scale(0.85);
+}
 /* Reaction pills straddle the bubble's bottom edge: the negative margin pulls
    them up so only ~30% overlaps the bubble (the rest hangs below), while still
    occupying normal-flow space so the next message keeps a regular gap. */
@@ -3691,11 +3800,8 @@ function cancelRecording() {
   background: rgba(0, 0, 0, 0.42);
   border-radius: 50%;
   filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.5));
-  cursor: pointer;
-  /* The poster opens the menu; only this play button opens the viewer, so give it
-     a comfortable hit area distinct from the surrounding bubble. */
-  padding: 6px;
-  border-radius: 50%;
+  /* Visual only — the whole poster is the tap target (handled on the bubble). */
+  pointer-events: none;
 }
 .bubble-audio {
   width: 240px;

@@ -21,11 +21,11 @@ existing `feat/1008-one-tap-media` branch.
 
 ## Phase 2: Foundational (blocking prerequisites)
 
-- [ ] T001 Create `src/composables/useLongPress.ts`: a shared long-press helper
+- [x] T001 Create `src/composables/useLongPress.ts`: a shared long-press helper
   (pointerdown→500ms timer→callback) that cancels on `pointermove` beyond a small
   threshold and on `pointerup`/`pointercancel`, and exposes a "suppress next click"
   flag so a fired long-press doesn't also trigger the bubble's `@click`.
-- [ ] T002 [P] Add a `dismissOpenPopovers()` helper in `src/views/detail/ChatDetailPage.vue`
+- [x] T002 [P] Add a `dismissOpenPopovers()` helper in `src/views/detail/ChatDetailPage.vue`
   (tracks the currently-open popover handle) and call it from `onIonViewWillLeave` so
   any open quick-react/menu popover is dismissed on back **and** swipe-back (US5 base).
 
@@ -36,18 +36,18 @@ existing `feat/1008-one-tap-media` branch.
 **Goal**: a single tap on image/video/album opens the media directly; text tap no-ops.
 **Independent test**: tap each media kind → viewer/playback opens, no menu step.
 
-- [ ] T003 [US1] In `src/views/detail/ChatDetailPage.vue`, change the message bubble
+- [x] T003 [US1] In `src/views/detail/ChatDetailPage.vue`, change the message bubble
   root so a single tap calls `openMediaViewer(m.id)` for image/video (non-videoNote)
   and does nothing for text/other kinds; remove the 1004 "tap opens the action menu"
   behavior from the bubble `@click`. (The menu's "View" item stays as a fallback,
   reachable via long-press.)
-- [ ] T004 [US1] In `src/views/detail/ChatDetailPage.vue`, keep the video poster's
+- [x] T004 [US1] In `src/views/detail/ChatDetailPage.vue`, keep the video poster's
   play-overlay as the explicit direct-play affordance (`@click.stop` → viewer) so a
   video bubble both opens on a plain tap and shows a clear play target; video **notes**
   keep tap-to-play inline (unchanged).
-- [ ] T005 [US1] In `src/views/detail/ChatDetailPage.vue`, make album cells open the
+- [x] T005 [US1] In `src/views/detail/ChatDetailPage.vue`, make album cells open the
   viewer at the tapped item (`openMediaViewer(am.id)`) instead of opening the menu.
-- [ ] T006 [P] [US1] Update `e2e/message-menu.spec.ts`: a single tap on an image bubble
+- [x] T006 [P] [US1] Update `e2e/message-menu.spec.ts`: a single tap on an image bubble
   opens `.viewer-modal` directly (no "View" step) — replacing the 1004 tap-opens-menu
   assertions for media. Video/album one-tap share the same tap handler and are covered
   by the quickstart manual smoke (seeding a video in e2e is impractical).
@@ -59,15 +59,15 @@ existing `feat/1008-one-tap-media` branch.
 **Goal**: long-press opens the full menu; it keeps all actions minus the inline emoji
 row. **Independent test**: long-press a message → full menu with all actions.
 
-- [ ] T007 [US4] Edit `src/components/MessageActions.vue`: remove the inline quick-react
+- [x] T007 [US4] Edit `src/components/MessageActions.vue`: remove the inline quick-react
   emoji row (and its props/styles for it); keep the action list
   (reply/forward/edit/save/saveAll/copy/details/info/copy/select/delete/view).
-- [ ] T008 [US4] In `src/views/detail/ChatDetailPage.vue`, open the full menu
+- [x] T008 [US4] In `src/views/detail/ChatDetailPage.vue`, open the full menu
   (`openMenu`) from a **long-press** on the bubble using `useLongPress` (T001), for
   text, media, and album bubbles; call `dismissOpenPopovers()` first.
-- [ ] T009 [P] [US4] Refactor `src/components/VideoNote.vue` to use `useLongPress`
+- [x] T009 [P] [US4] Refactor `src/components/VideoNote.vue` to use `useLongPress`
   (T001) instead of its inline timer (no behavior change), so there's one implementation.
-- [ ] T010 [P] [US4] Update `e2e/message-menu.spec.ts`: a long-press (pointerdown →
+- [x] T010 [P] [US4] Update `e2e/message-menu.spec.ts`: a long-press (pointerdown →
   >500ms → pointerup) on a text bubble opens the full menu (`.ma`) with its actions.
 
 ---
@@ -77,11 +77,11 @@ row. **Independent test**: long-press a message → full menu with all actions.
 **Goal**: a slightly taller `.msg-foot` lays out time/tick and the reaction button by
 direction. **Independent test**: render a sent vs received message; assert sides.
 
-- [ ] T011 [US3] In `src/views/detail/ChatDetailPage.vue`, replace the bubble's `.time`
+- [x] T011 [US3] In `src/views/detail/ChatDetailPage.vue`, replace the bubble's `.time`
   span with a flex `.msg-foot` row containing the reaction button and the time+tick,
   ordered by `m.outgoing` (sent → react left / time+tick right; received → time left /
   react right); apply the same foot to the album bubble.
-- [ ] T012 [US3] Add `.msg-foot` styles in `src/views/detail/ChatDetailPage.vue`
+- [x] T012 [US3] Add `.msg-foot` styles in `src/views/detail/ChatDetailPage.vue`
   (slightly taller row, alignment by direction, RTL-safe via logical properties),
   using existing theme tokens.
 
@@ -92,19 +92,19 @@ direction. **Independent test**: render a sent vs received message; assert sides
 **Goal**: the reaction button opens a transient popover of 7 most-used emoji + "+",
 all visible. **Independent test**: open it, see 7 + "+", apply one, add a custom one.
 
-- [ ] T013 [US2] Create `src/components/QuickReactBar.vue`: a single non-scrolling flex
+- [x] T013 [US2] Create `src/components/QuickReactBar.vue`: a single non-scrolling flex
   row of 7 emoji (via the existing `Emoji` component) + a trailing `add-circle-outline`
   "+"; emits `{ action: 'react', emoji }` or `{ action: 'more' }` and dismisses the
   popover (stock Ionic + theme tokens; aria-labels).
-- [ ] T014 [US2] In `src/views/detail/ChatDetailPage.vue`, add `openQuickReact(m, ev)`:
+- [x] T014 [US2] In `src/views/detail/ChatDetailPage.vue`, add `openQuickReact(m, ev)`:
   `dismissOpenPopovers()`, then present an `ion-popover` (anchored to the reaction
   button) hosting `QuickReactBar` with `await quickReactEmojis(7)`; wire `react` →
   `onReact(m.id, emoji)` and `more` → `openEmojiPicker(m)`.
-- [ ] T015 [US2] Wire the `.msg-foot` reaction button (`add-circle-outline`) to
+- [x] T015 [US2] Wire the `.msg-foot` reaction button (`add-circle-outline`) to
   `openQuickReact(m, $event)` for message and album bubbles, with an aria-label. For an
   album, target its representative message (`item.messages[0]`), matching the existing
   album menu behavior.
-- [ ] T016 [P] [US2] Create `e2e/quick-react.spec.ts`: opening the reaction button shows
+- [x] T016 [P] [US2] Create `e2e/quick-react.spec.ts`: opening the reaction button shows
   7 emoji + "+" all visible (no scroll); tapping one applies it (`getReactions`); a
   custom emoji via the tally surfaces in `quickReactEmojis(7)`.
 
@@ -114,20 +114,20 @@ all visible. **Independent test**: open it, see 7 + "+", apply one, add a custom
 
 **Goal**: only one popup open at a time; none lingers after leaving the chat.
 
-- [ ] T017 [US5] In `src/views/detail/ChatDetailPage.vue`, ensure opening the
+- [x] T017 [US5] In `src/views/detail/ChatDetailPage.vue`, ensure opening the
   quick-react or the full menu first dismisses the other (via the tracked handle), so
   only one is ever open.
-- [ ] T018 [P] [US5] Extend `e2e/quick-react.spec.ts`: open a popover, navigate back
+- [x] T018 [P] [US5] Extend `e2e/quick-react.spec.ts`: open a popover, navigate back
   (router back / swipe-back), assert no popover (`.ma` / quick-react) remains in the DOM.
 
 ---
 
 ## Phase 8: Polish & cross-cutting
 
-- [ ] T019 Run `npx vue-tsc --noEmit` + `npm run build`; fix any type/build issues.
-- [ ] T020 [P] Verify RTL + light/dark: the `.msg-foot` mirrors correctly and the
+- [x] T019 Run `npx vue-tsc --noEmit` + `npm run build`; fix any type/build issues.
+- [x] T020 [P] Verify RTL + light/dark: the `.msg-foot` mirrors correctly and the
   quick-react popover stays fully on-screen for top/bottom-edge messages.
-- [ ] T021 Run the full e2e for touched areas (`message-menu`, `quick-react`,
+- [x] T021 Run the full e2e for touched areas (`message-menu`, `quick-react`,
   `reactions`, `reply`, `paste-image`, `edit-delete`) and confirm green; update the
   spec **Status** to `in-review` and run `make roadmap`.
 

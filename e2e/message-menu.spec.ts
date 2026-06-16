@@ -4,10 +4,10 @@ import { createAccount, pair } from './helpers';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * Message action menu (spec 1004): a single tap anywhere on a bubble — text or the
- * full image/video/album area — opens the unified menu (a horizontally-scrolling
- * quick-react row with an always-visible "+" on top, actions below). These tests
- * drive the real popover via taps, and verify usage-based reordering of the row.
+ * Message gestures (spec 1008): a single tap opens media directly (no menu step) and
+ * does nothing on text; the full action menu opens on a LONG-PRESS. Reactions moved to
+ * the bottom-row quick-react button (see quick-react.spec.ts). These tests drive real
+ * taps + a synthesized long-press, and verify usage-based reordering of the quick set.
  */
 
 const chatWith = (p: any, peerId: string) =>
@@ -19,13 +19,20 @@ const send = (p: any, chatId: string, body: string) =>
   );
 const messages = (p: any, chatId: string) =>
   p.page.evaluate((id: string) => (window as any).__ringTest.messages(id), chatId);
-const getReactions = (p: any, messageId: string): Promise<string[]> =>
-  p.page.evaluate(
-    (id: string) => (window as any).__ringTest.getReactions(id).then((rs: any[]) => rs.map((r) => r.emoji)),
-    messageId,
-  );
 
-test('single tap on a text bubble opens the menu; the emoji row + "+" work', async ({ browser }) => {
+/** Press-and-hold the center of a locator long enough to trip the 500ms long-press. */
+async function longPress(page: any, locator: any): Promise<void> {
+  await locator.scrollIntoViewIfNeeded();
+  const box = await locator.boundingBox();
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.waitForTimeout(650);
+  await page.mouse.up();
+}
+
+test('long-press opens the full menu; a plain tap on text does nothing', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'MSGMENU1');
@@ -33,32 +40,28 @@ test('single tap on a text bubble opens the menu; the emoji row + "+" work', asy
   await pair(a, b);
 
   const aChat = (await chatWith(a, b.id)) as string;
-  await send(a, aChat, 'tap me');
-  const mid = ((await messages(a, aChat)) as any[]).find((m) => m.body === 'tap me').id as string;
+  await send(a, aChat, 'hold me');
+  const mid = ((await messages(a, aChat)) as any[]).find((m) => m.body === 'hold me').id as string;
 
   await a.page.goto(`/chat/${aChat}`);
   const bubble = a.page.locator(`.bubble[data-mid="${mid}"]`);
   await bubble.waitFor({ state: 'visible', timeout: 30_000 });
 
-  // A single tap opens the action menu (no long-press needed).
+  // A plain tap on a text bubble does nothing (no menu, no viewer).
   await bubble.click();
-  const menu = a.page.locator('.ma');
-  await expect(menu).toBeVisible();
+  await expect(a.page.locator('.ma')).toHaveCount(0);
 
-  // The reaction row scrolls (its own track) and the trailing "+" is fully visible.
-  await expect(a.page.locator('.ma .ma-emoji-track')).toBeVisible();
-  await expect(a.page.locator('.ma .ma-more')).toBeVisible();
-
-  // Tapping the first quick emoji applies it as a reaction, then dismisses the menu.
-  await a.page.locator('.ma .ma-emoji-track .ma-emoji').first().click();
-  await expect(menu).toBeHidden();
-  await expect.poll(() => getReactions(a, mid)).not.toEqual([]);
+  // A long-press opens the full action menu with its actions.
+  await longPress(a.page, bubble);
+  await expect(a.page.locator('.ma')).toBeVisible();
+  await expect(a.page.getByText('Reply', { exact: true })).toBeVisible();
+  await expect(a.page.getByText('Forward', { exact: true })).toBeVisible();
 
   await ctxA.close();
   await ctxB.close();
 });
 
-test('single tap on an image bubble opens the menu with a "View" action', async ({ browser }) => {
+test('a single tap on an image opens the viewer directly (no menu step)', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'MSGMENU3');
@@ -68,7 +71,7 @@ test('single tap on an image bubble opens the menu with a "View" action', async 
   const aChat = (await chatWith(a, b.id)) as string;
   await a.page.goto(`/chat/${aChat}`);
 
-  // Paste + send a 1×1 PNG so a real image bubble renders (no precise edge-tapping).
+  // Paste + send a 1×1 PNG so a real image bubble renders.
   const composer = a.page.locator('ion-textarea.composer textarea');
   await composer.waitFor({ state: 'visible', timeout: 30_000 });
   await composer.click();
@@ -86,17 +89,16 @@ test('single tap on an image bubble opens the menu with a "View" action', async 
   const image = a.page.locator('.bubble .bubble-image').last();
   await expect(image).toBeVisible({ timeout: 30_000 });
 
-  // Tapping anywhere on the image opens the menu (the whole bubble is the hit
-  // target), and the viewer is reachable from there via "View".
+  // One tap → the viewer opens directly; no action menu appears.
   await image.click();
-  await expect(a.page.locator('.ma')).toBeVisible();
-  await expect(a.page.getByText('View', { exact: true })).toBeVisible();
+  await expect(a.page.locator('.viewer-modal')).toBeVisible({ timeout: 10_000 });
+  await expect(a.page.locator('.ma')).toHaveCount(0);
 
   await ctxA.close();
   await ctxB.close();
 });
 
-test('the reaction row reorders by usage — a more-used emoji surfaces first', async ({ browser }) => {
+test('the quick set reorders by usage — a more-used emoji surfaces first', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'MSGMENU5');
@@ -107,10 +109,10 @@ test('the reaction row reorders by usage — a more-used emoji surfaces first', 
   await send(a, aChat, 'react here');
   const mid = ((await messages(a, aChat)) as any[]).find((m) => m.body === 'react here').id as string;
 
-  // Reacting with a custom (non-default) emoji records a use; it should then lead
-  // the quick-react order ahead of the zero-use defaults (FR-006 / SC-005).
+  // Reacting with a custom emoji records a use; it then leads the quick-react order
+  // ahead of the zero-use defaults (FR-005).
   const quickFirst = async (): Promise<string> => {
-    const q = (await a.page.evaluate(() => (window as any).__ringTest.quickReactEmojis(12))) as string[];
+    const q = (await a.page.evaluate(() => (window as any).__ringTest.quickReactEmojis(7))) as string[];
     return q[0];
   };
   expect(await quickFirst()).not.toBe('🔥'); // a fresh account leads with a default

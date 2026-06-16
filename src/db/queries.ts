@@ -2472,7 +2472,9 @@ export function setSetting<T>(key: string, value: T): Promise<void> {
 
 /* ---- emoji usage (drives the most-used-first quick-react row) ---- */
 const EMOJI_USAGE_KEY = 'emojiUsage';
-const DEFAULT_QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+// Seven defaults so the quick-react bar is full (7) on a fresh account before any
+// usage history exists (spec 1008).
+const DEFAULT_QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🎉'];
 
 /** Bump a reaction emoji's usage count. */
 export async function recordEmojiUse(emoji: string): Promise<void> {
