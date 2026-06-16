@@ -1238,7 +1238,7 @@ async function openQuickReact(m: Message, ev: Event): Promise<void> {
   await dismissOpenPopovers();
   const popover = await popoverController.create({
     component: QuickReactBar,
-    cssClass: 'reaction-popover',
+    cssClass: 'reaction-popover quick-react-popover',
     componentProps: { myEmojis: myEmojisFor(m), quick: await quickReactEmojis(5) },
     event: ev,
     reference: 'event',
@@ -3122,9 +3122,10 @@ function cancelRecording() {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* Soft shadow (not a border) so the bright incoming bubble still reads on the
-     light theme's white background. */
   box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.08);
+  /* A thin, theme-contrasting outline (dark in light theme, light in dark theme) so
+     each bubble's boundary reads clearly against the chat background. */
+  border: 1px solid color-mix(in srgb, var(--ion-text-color) 18%, transparent);
 }
 .bubble.out {
   background: var(--app-bubble-out);
@@ -3136,6 +3137,7 @@ function cancelRecording() {
 .bubble-plain.out {
   background: transparent;
   box-shadow: none;
+  border: none; /* round video note has no rectangular bubble to outline */
   padding: 0;
   align-items: center;
 }

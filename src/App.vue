@@ -243,6 +243,17 @@ body.keyboard-open ion-tab-bar {
     --background: #2c2c2e;
   }
 }
+/* Size the quick-react bar to its contents (so all 5 emoji + "+" are visible without
+   sliding), capped at the screen width — neither clipped nor full-bleed. */
+ion-popover.quick-react-popover {
+  --width: max-content;
+  --max-width: 96vw;
+}
+/* A thin, theme-contrasting border so the popover's boundary reads clearly against
+   the chat behind it (light border in dark theme, dark border in light theme). */
+ion-popover.reaction-popover::part(content) {
+  border: 1px solid color-mix(in srgb, var(--ion-text-color) 28%, transparent);
+}
 
 body.keyboard-open ion-footer {
   --ion-safe-area-bottom: 0px;
