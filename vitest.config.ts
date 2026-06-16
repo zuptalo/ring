@@ -47,6 +47,15 @@ export default defineConfig({
         'src/services/keyed-mutex.ts',
         // Pure release-note delta/prettify behind the What's-new toast (spec 0001).
         'src/services/release-notes.ts',
+        // Pure presentation/format utilities, each directly unit-tested (spec 1006).
+        // Gated so their coverage can't regress.
+        'src/utils/bytes.ts',
+        'src/utils/text.ts',
+        'src/utils/uid.ts',
+        'src/utils/user-color.ts',
+        'src/utils/emoji.ts',
+        'src/utils/notify-preview.ts',
+        'src/utils/time.ts',
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 80 },
     },
