@@ -27,6 +27,7 @@ Specs are grouped by category band; status moves
 | [1005](specs/1005-chat-history-scroll/spec.md) | Chat History Scroll Performance & Media Caching | 🔵 in-review |
 | [1006](specs/1006-test-coverage-uplift/spec.md) | Test Coverage Uplift | 🔵 in-review |
 | [1007](specs/1007-media-playback-and/spec.md) | Media Playback & Embedded Thumbnails | 🔵 in-review |
+| [1008](specs/1008-one-tap-media/spec.md) | One-Tap Media Open & Inline Quick-React Bar | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
