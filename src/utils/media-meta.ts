@@ -129,12 +129,19 @@ function generateVideoPosterUnlimited(blob: Blob, maxEdge: number, timeoutMs: nu
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rvfc = (v as any).requestVideoFrameCallback?.bind(v);
     if (rvfc) {
-      rvfc(() => capture());
+      // Capture a frame a fraction of a second in, not frame 0 — the very first frame
+      // of a clip (especially a camera recording) is often black during warm-up.
+      const SKIP = 0.2;
+      const tick = (): void => {
+        if (v.currentTime >= SKIP || v.currentTime >= (v.duration || SKIP)) capture();
+        else rvfc(tick);
+      };
+      rvfc(tick);
       void v.play().catch(() => {
         // play blocked → fall back to seek-based capture
         v.onseeked = capture;
         try {
-          v.currentTime = 0.05;
+          v.currentTime = SKIP;
         } catch {
           /* timeout handles it */
         }
