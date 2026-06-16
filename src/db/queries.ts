@@ -1458,10 +1458,15 @@ async function runMediaJob(messageId: string): Promise<void> {
         await put('messages', message);
         // Embed a first-frame poster for ALL videos, including round video notes, so
         // they show a thumbnail before/without playback (otherwise iOS shows nothing).
-        const poster = await generateVideoPoster(uploadBlob);
-        if (poster) {
-          message.posterData = poster;
-          await put('messages', message);
+        // Skip if a poster is already embedded (e.g. the live frame the video-note
+        // recorder captured) — don't overwrite a good frame with the often-black
+        // first frame of the clip (camera warm-up).
+        if (!message.posterData) {
+          const poster = await generateVideoPoster(uploadBlob);
+          if (poster) {
+            message.posterData = poster;
+            await put('messages', message);
+          }
         }
       } else if (message.kind === 'image') {
         const meta = await readImageMeta(uploadBlob);
