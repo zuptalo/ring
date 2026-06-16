@@ -19,14 +19,14 @@
     </svg>
     <div v-if="!playing" class="vnp-play"><ion-icon :icon="play" /></div>
     <div class="vnp-badge">
-      <ion-icon :icon="playing ? volumeHigh : volumeMute" />
+      <ion-icon :icon="playing && !muted ? volumeHigh : volumeMute" />
       {{ fmt(playing ? Math.max(0, total - elapsed) : total) }}
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, volumeHigh, volumeMute } from 'ionicons/icons';
 
@@ -35,27 +35,57 @@ const props = defineProps<{ src: string; durationSec?: number; poster?: string }
 const CIRC = 2 * Math.PI * 48;
 const el = ref<HTMLVideoElement>();
 const playing = ref(false);
+const muted = ref(false);
 const elapsed = ref(0);
 const total = ref(props.durationSec ?? 0);
 const progress = computed(() => (total.value ? Math.min(1, elapsed.value / total.value) : 0));
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
-function toggle(): void {
+// Auto-play sequence: when the note first comes into view it plays 3 times — once
+// with audio, then twice muted — then stops; after that, playback is manual (tap).
+const AUTO_CYCLES = 3;
+let started = false; // the auto sequence has begun for this note (only once)
+let autoActive = false; // currently running the auto sequence
+let autoCount = 0; // auto cycles completed
+
+function playEl(wantMuted: boolean): void {
   const v = el.value;
   if (!v) return;
-  if (v.paused) {
-    v.muted = false;
-    void v.play();
-    playing.value = true;
-  } else {
+  v.muted = wantMuted;
+  muted.value = wantMuted;
+  playing.value = true;
+  void v.play().catch(() => {
+    // Autoplay WITH audio is blocked without a user gesture on some platforms; retry
+    // muted so the note still plays (the user can tap for sound).
+    if (!v.muted) {
+      v.muted = true;
+      muted.value = true;
+      void v.play().catch(() => (playing.value = false));
+    } else {
+      playing.value = false;
+    }
+  });
+}
+
+function startAuto(): void {
+  if (started) return;
+  started = true;
+  autoActive = true;
+  autoCount = 0;
+  playEl(false); // first cycle: audio on
+}
+
+// A tap plays/pauses with audio; any manual interaction ends the auto sequence.
+function onClick(): void {
+  const v = el.value;
+  if (!v) return;
+  autoActive = false;
+  started = true;
+  if (v.paused) playEl(false);
+  else {
     v.pause();
     playing.value = false;
   }
-}
-
-// A tap plays/pauses; the action menu is reached from the footer below (parent bubble).
-function onClick(): void {
-  toggle();
 }
 function onMeta(): void {
   if (el.value && Number.isFinite(el.value.duration) && el.value.duration > 0) total.value = el.value.duration;
@@ -64,11 +94,38 @@ function onTime(): void {
   if (el.value) elapsed.value = el.value.currentTime;
 }
 function onEnd(): void {
-  playing.value = false;
   elapsed.value = 0;
   if (el.value) el.value.currentTime = 0;
+  if (autoActive) {
+    autoCount += 1;
+    if (autoCount >= AUTO_CYCLES) {
+      autoActive = false;
+      playing.value = false; // done → show the play button; further plays are manual
+    } else {
+      playEl(true); // 2nd & 3rd cycles loop muted
+    }
+  } else {
+    playing.value = false;
+  }
 }
-onBeforeUnmount(() => el.value?.pause());
+
+// Kick off the auto sequence the first time the note scrolls into view.
+let io: IntersectionObserver | undefined;
+onMounted(() => {
+  const v = el.value;
+  if (!v) return;
+  io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) if (e.isIntersecting && !started) startAuto();
+    },
+    { threshold: 0.6 },
+  );
+  io.observe(v);
+});
+onBeforeUnmount(() => {
+  io?.disconnect();
+  el.value?.pause();
+});
 </script>
 
 <style scoped>
