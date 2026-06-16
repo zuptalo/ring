@@ -126,6 +126,16 @@
           v-else
           class="bubble-row"
           :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id) }"
+          v-memo="[
+            m.updatedAt,
+            mediaInfo[m.mediaId!]?.posterUrl,
+            swipeId === m.id ? swipeDx : 0,
+            selecting,
+            isSelected(m.id),
+            downloadingVideo[m.id],
+            groupRunStart(i),
+            senderAvatar(m.senderId),
+          ]"
           @click="selecting && toggleSelect([m.id])"
         >
           <ion-icon
@@ -209,7 +219,7 @@
                      of the bubble → the action menu. -->
                 <div v-if="m.kind === 'image'" class="media-wrap" @click.stop="openMediaViewer(m.id)">
                   <img v-if="mediaInfo[m.mediaId].posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl" alt="photo" loading="lazy" decoding="async" />
-                  <ion-icon v-else class="media-ph" :icon="imageOutline" />
+                  <ion-skeleton-text v-else :animated="true" class="media-skel" />
                   <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                 </div>
                 <!-- Round video note: plays inline on tap; the action menu opens from
@@ -234,7 +244,7 @@
                       loading="lazy"
                       decoding="async"
                     />
-                    <ion-icon v-else class="media-ph" :icon="videocamOutline" />
+                    <ion-skeleton-text v-else :animated="true" class="media-skel" />
                     <!-- Visual play affordance only; a tap anywhere on the poster opens
                          the viewer via the bubble's tap handler. -->
                     <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />
@@ -285,7 +295,7 @@
                 @click.stop="downloadVideo(m.id)"
               >
                 <img v-if="m.posterData" class="bubble-image" :src="m.posterData" alt="video" />
-                <ion-icon v-else class="media-ph" :icon="videocamOutline" />
+                <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 <span class="dl-btn">
                   <ion-spinner v-if="downloadingVideo[m.id]" name="crescent" />
                   <ion-icon v-else :icon="downloadOutline" />
@@ -442,6 +452,13 @@
           v-else
           class="bubble-row"
           :class="{ out: item.messages[0].outgoing, 'sel-mode': selecting, 'sel-on': isSelected(item.messages[0].id) }"
+          v-memo="[
+            item.messages.map((mm) => mm.updatedAt).join(),
+            item.messages.map((mm) => mediaInfo[mm.mediaId!]?.posterUrl ?? '').join(),
+            swipeId === item.messages[0].id ? swipeDx : 0,
+            selecting,
+            isSelected(item.messages[0].id),
+          ]"
           @click="selecting && toggleSelect(item.messages.map((mm) => mm.id))"
         >
           <ion-icon
@@ -508,7 +525,7 @@
                       +{{ albumOverlay(item.messages) }}
                     </div>
                   </template>
-                  <ion-icon v-else class="media-ph" :icon="am.kind === 'video' ? videocamOutline : imageOutline" />
+                  <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 </button>
               </div>
               <div class="msg-foot" :class="item.messages[0].outgoing ? 'out' : 'in'">
@@ -2041,8 +2058,10 @@ watch(messages, async (list, prev) => {
 });
 
 // Paginate: render the newest `visible` messages (natural order); pulling up at the
-// top loads older ones.
-const PAGE = 25;
+// top loads older ones. Kept modest so each pull-up mounts a sub-frame-budget batch
+// (a big batch is one long task that hitches mid-drag); the 25% look-ahead threshold
+// means smaller, more frequent loads instead of one stutter.
+const PAGE = 14;
 const visible = ref(PAGE);
 const visibleMessages = computed(() => messages.value.slice(-visible.value));
 watch(search, () => (visible.value = PAGE));
@@ -2218,6 +2237,7 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
 // Release least-recently-used media that's neither on screen nor pinned, revoking
 // its URLs so memory stays bounded in very long chats.
 function evictMedia(): void {
+  if (mediaLru.length <= MAX_MEDIA) return; // nothing over the cap — skip the Set + scan
   const keep = currentMediaKeep();
   for (const id of selectEvictions(mediaLru, keep, MAX_MEDIA)) {
     const mi = mediaInfo.value[id];
@@ -2233,10 +2253,13 @@ function evictMedia(): void {
 
 // Resolve media for the rendered window as it grows/changes (look-ahead paging
 // extends `visibleMessages` before the user reaches the top), then evict far LRU.
+// Keyed on the visible MEDIA SET (mediaIds), not the array identity — so a status
+// tick or reaction (which reassigns messages.value to fresh objects every time) does
+// NOT re-run IndexedDB reads + URL allocation + eviction on the scroll hot path.
 watch(
-  visibleMessages,
-  async (list) => {
-    await resolveMediaFor(list);
+  () => visibleMessages.value.map((m) => m.mediaId ?? '').join('|'),
+  async () => {
+    await resolveMediaFor(visibleMessages.value);
     evictMedia();
   },
   { immediate: true },
@@ -3419,13 +3442,16 @@ function cancelRecording() {
   background: rgba(127, 127, 127, 0.15);
   cursor: pointer;
 }
-.media-ph {
+/* Ionic skeleton loader filling a media frame / album cell until the thumbnail
+   resolves. Override its default text-line margin + pill radius so it covers the
+   whole frame (which already clips to the rounded corners via overflow: hidden). */
+.media-skel {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 40px;
-  color: var(--app-text-muted, #8e8e93);
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  --border-radius: 0;
 }
 /* Failed send → red retry button in front of the bubble. */
 .retry-btn {
