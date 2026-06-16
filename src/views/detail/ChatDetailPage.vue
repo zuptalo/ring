@@ -208,7 +208,7 @@
                 <!-- Tap the image → open the viewer directly; tap the empty/footer area
                      of the bubble → the action menu. -->
                 <div v-if="m.kind === 'image'" class="media-wrap" @click.stop="openMediaViewer(m.id)">
-                  <img class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl || mediaInfo[m.mediaId].url" :style="mediaAspect(m)" alt="photo" loading="lazy" decoding="async" />
+                  <img class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl" :style="mediaAspect(m)" alt="photo" loading="lazy" decoding="async" />
                   <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                 </div>
                 <!-- Round video note: plays inline on tap; the action menu opens from
@@ -503,7 +503,7 @@
                   @click.stop="openMediaViewer(am.id)"
                 >
                   <template v-if="am.mediaId && mediaInfo[am.mediaId]">
-                    <img :src="mediaInfo[am.mediaId].posterUrl || mediaInfo[am.mediaId].url" alt="" loading="lazy" decoding="async" />
+                    <img :src="mediaInfo[am.mediaId].posterUrl" alt="" loading="lazy" decoding="async" />
                     <ion-icon v-if="am.kind === 'video'" class="play-overlay-sm" :icon="playCircle" />
                     <div v-if="idx === 3 && albumOverlay(item.messages)" class="album-more">
                       +{{ albumOverlay(item.messages) }}
@@ -2075,13 +2075,20 @@ const albumCells = (msgs: Message[]) => msgs.slice(0, 4);
 const albumOverlay = (msgs: Message[]) => (msgs.length > 4 ? msgs.length - 3 : 0);
 
 async function loadOlder(ev: InfiniteScrollCustomEvent) {
-  // Prepending older messages grows the list above the viewport; keep the messages
-  // currently under the user's eyes by adding the height delta to scrollTop.
+  // Prepending older messages grows the list above the viewport. Anchor on the
+  // topmost rendered bubble and keep it at the same screen position afterwards — this
+  // is robust to the loading spinner's height and any late layout (unlike a total
+  // scrollHeight delta, which skews and makes the view jump).
   const el = await ensureScrollEl();
-  const before = el?.scrollHeight ?? 0;
+  const anchor = listEl.value?.querySelector<HTMLElement>('.bubble[data-mid]') ?? null;
+  const anchorMid = anchor?.dataset.mid ?? null;
+  const beforeTop = anchor?.getBoundingClientRect().top ?? 0;
   visible.value += PAGE;
   await nextTick();
-  if (el) el.scrollTop += el.scrollHeight - before;
+  if (el && anchorMid) {
+    const a2 = listEl.value?.querySelector<HTMLElement>(`.bubble[data-mid="${anchorMid}"]`) ?? null;
+    if (a2) el.scrollTop += a2.getBoundingClientRect().top - beforeTop;
+  }
   void ev.target.complete();
 }
 
@@ -2174,8 +2181,15 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
       const blob = media.blob;
       const mid = m.mediaId;
       void generateImageThumb(blob).then(async (thumb) => {
-        if (!thumb || !mediaInfo.value[mid]) return;
-        mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: URL.createObjectURL(thumb) };
+        const info2 = mediaInfo.value[mid];
+        if (!info2) return; // evicted before it resolved
+        if (!thumb) {
+          // Small image (or decode failed): the original IS the thumbnail — so the
+          // bubble (which renders posterUrl) still has something light to show.
+          mediaInfo.value[mid] = { ...info2, posterUrl: info2.url };
+          return;
+        }
+        mediaInfo.value[mid] = { ...info2, posterUrl: URL.createObjectURL(thumb) };
         try {
           const md = await get<Media>('media', mid);
           if (md && !md.posterBlob) {
