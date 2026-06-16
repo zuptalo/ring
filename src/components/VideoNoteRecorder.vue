@@ -17,7 +17,7 @@
           :stroke-dashoffset="CIRC * (1 - progress)"
         />
       </svg>
-      <video ref="preview" class="vn-video" autoplay muted playsinline></video>
+      <video ref="preview" class="vn-video" :class="{ mirror: facing === 'user' }" autoplay muted playsinline></video>
     </div>
 
     <button class="vn-flip" aria-label="Flip camera" @click="flip"><ion-icon :icon="cameraReverseOutline" /></button>
@@ -187,6 +187,10 @@ onBeforeUnmount(teardown);
   border-radius: 50%;
   object-fit: cover;
   background: #000;
+}
+/* Mirror the front (selfie) camera preview so it behaves like a mirror. */
+.vn-video.mirror {
+  transform: scaleX(-1);
 }
 .vn-flip {
   position: absolute;

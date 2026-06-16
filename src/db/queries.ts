@@ -1443,13 +1443,15 @@ async function runMediaJob(messageId: string): Promise<void> {
       console.info('[media-job] encoded', { id: messageId, kind: message.kind, bytes: uploadBlob.size });
       // Tag the bubble with resolution / length / size (persisted FIRST so the badge
       // shows even if the thumbnail step is slow), then best-effort thumbnail.
-      if (message.kind === 'video' && !message.videoNote) {
+      if (message.kind === 'video') {
         const meta = await readVideoMeta(uploadBlob);
         message.mediaWidth = meta.width;
         message.mediaHeight = meta.height;
         message.durationSec = meta.durationSec ?? message.durationSec;
         message.mediaSize = uploadBlob.size;
         await put('messages', message);
+        // Embed a first-frame poster for ALL videos, including round video notes, so
+        // they show a thumbnail before/without playback (otherwise iOS shows nothing).
         const poster = await generateVideoPoster(uploadBlob);
         if (poster) {
           message.posterData = poster;
