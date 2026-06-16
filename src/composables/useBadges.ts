@@ -16,6 +16,7 @@ import {
   countUnread,
   countUnresolvedAlerts,
 } from '@/db/queries';
+import { incomingRequests } from '@/services/connections';
 
 function setAppBadge(total: number): void {
   try {
@@ -33,7 +34,12 @@ function setAppBadge(total: number): void {
 export function useBadges() {
   const chats = useLiveQuery(() => countUnread(), ['chats'], 0);
   const calls = useLiveQuery(() => countMissedUnseen(), ['calls'], 0);
-  const contacts = useLiveQuery(() => countPendingRequests(), ['requests'], 0);
+  // Contacts badge = group invites + legacy db requests (countPendingRequests) PLUS
+  // incoming friend requests, which live in the connections store (server-driven,
+  // reconciled on connect by useSync). Persists until the request is answered
+  // (accept/decline refresh the store). Spec 0002 FR-010.
+  const pendingDb = useLiveQuery(() => countPendingRequests(), ['requests'], 0);
+  const contacts = computed(() => pendingDb.value + incomingRequests.value.length);
   const you = useLiveQuery(() => countUnresolvedAlerts(), ['alerts'], 0);
 
   const total = computed(

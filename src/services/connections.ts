@@ -97,6 +97,15 @@ export async function rejectConnect(userId: string, block: boolean): Promise<voi
   await refreshConnections();
 }
 
+/** Our outgoing request was accepted (a connect-update frame arrived). They're a
+ *  friend now: import their profile as a contact + mark connected (we no longer
+ *  auto-import the directory), then reconcile the request lists. */
+export async function onConnectionAccepted(userId: string): Promise<void> {
+  await importDirectoryUser(userId);
+  await markContactConnected(userId);
+  await refreshConnections();
+}
+
 /** Withdraw (cancel) an outgoing request we sent: removes it server-side so it
  *  leaves the other party's incoming list too. */
 export async function withdrawConnect(userId: string): Promise<void> {

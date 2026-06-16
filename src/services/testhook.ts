@@ -89,13 +89,18 @@ import {
 } from '@/services/chat-filters';
 import {
   createInvitation, deleteAccount, fetchPeerBundle,
-  connectRequest as apiConnectRequest, connectAccept as apiConnectAccept,
-  connectReject as apiConnectReject, listConnections as apiListConnections,
+  listConnections as apiListConnections,
   connectLink as apiConnectLink,
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
 import { notifyBanners } from '@/services/notify';
 import { syncContactEdges } from '@/services/directory';
+import {
+  requestConnect as storeRequestConnect, acceptConnect as storeAcceptConnect,
+  rejectConnect as storeRejectConnect, withdrawConnect as storeWithdrawConnect,
+  refreshConnections as storeRefreshConnections,
+  incomingRequests as storeIncomingRequests,
+} from '@/services/connections';
 import { subscribePresence } from '@/composables/useSync';
 import { peerPresence } from '@/composables/usePresence';
 import { setSecret } from '@/db/secrets';
@@ -445,11 +450,22 @@ export function installTestHook(): void {
     deleteMediaByKind: (kinds: Media['kind'][], chatId?: string) => dbDeleteMediaByKind(kinds, chatId),
     deleteMediaLargerThan: (bytes: number, chatId?: string) => dbDeleteMediaLargerThan(bytes, chatId),
     /** Server-side directory search → [{id, username, displayName}]. */
-    connectRequest: (target: string) => apiConnectRequest(target),
+    // Drive the real client store actions (import + mark-connected + reconcile),
+    // not the raw API, so e2e exercises the actual friend-request behavior.
+    connectRequest: (target: string) => storeRequestConnect(target),
     connectLink: (target: string) => apiConnectLink(target),
-    connectAccept: (requester: string) => apiConnectAccept(requester),
-    connectReject: (requester: string, block: boolean) => apiConnectReject(requester, block),
+    connectAccept: (requester: string) => storeAcceptConnect(requester),
+    connectReject: (requester: string, block: boolean) => storeRejectConnect(requester, block),
+    connectWithdraw: (target: string) => storeWithdrawConnect(target),
     connections: () => apiListConnections(),
+    // Reconcile the reactive connections store from the server — the same thing
+    // useSync does on (re)connect. Lets e2e assert the badge deterministically
+    // instead of racing the best-effort live connect-req push.
+    syncConnections: () => storeRefreshConnections(),
+    // The Contacts-tab badge counts exactly these (useBadges → incomingRequests),
+    // so asserting on the store is asserting the badge's source of truth without
+    // having to drive the full auth UI into the tab bar.
+    incomingRequestIds: (): string[] => storeIncomingRequests.value.map((r) => r.userId),
     searchDirectory: async (q: string) =>
       (await searchDirectory(q)).map((u) => ({ id: u.id, username: u.username, displayName: u.displayName })),
 
