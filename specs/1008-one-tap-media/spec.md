@@ -44,7 +44,8 @@ Tapping an image, a video, or an album cell opens the media directly — the ful
 viewer for images, playback for video — with no intermediate menu step.
 
 **Why this priority**: This is the most common media interaction and the most-felt
-regression from 1004; restoring it is the core value.
+regression from 1004; restoring it is the core value. Ships together with US4 — once
+tap no longer opens the menu, long-press must provide it, so the two are one slice.
 
 **Independent Test**: Send/receive an image, a video, and an album; tap each and
 confirm the viewer/playback opens directly (no menu in between).
@@ -156,7 +157,8 @@ back with a popup still open.
 
 - **FR-001**: A single tap on an image, video, or album (cell) MUST open the media
   directly — the full-screen viewer for images, playback for video, the tapped item
-  for an album — with no intermediate menu.
+  for an album — with no intermediate menu. Video **notes** (round) are excluded: they
+  keep tap-to-play inline, with long-press for the menu (they aren't viewer media).
 - **FR-002**: Each non-deleted message bubble MUST present a reaction button in its
   bottom row. Tapping it MUST reveal a quick-react popup of the 7 most-used emoji plus
   a trailing "+", all visible at once (no horizontal scrolling).
@@ -198,8 +200,9 @@ back with a popup still open.
 
 ### Measurable Outcomes
 
-- **SC-001**: Opening a photo/video/album from the chat is a single tap (verified e2e
-  for each kind: tap → viewer/playback, no menu step).
+- **SC-001**: Opening a photo/video/album from the chat is a single tap → viewer /
+  playback, no menu step. Verified e2e for images (and the album/video paths share the
+  same tap handler); video/album one-tap also covered by the manual smoke in quickstart.
 - **SC-002**: The quick-react popup shows 7 emoji + "+" with none clipped or requiring
   a scroll, at narrow and wide bubble widths (verified by assertion + visual).
 - **SC-003**: Tapping a quick-react emoji applies it; "+" applies a custom one that

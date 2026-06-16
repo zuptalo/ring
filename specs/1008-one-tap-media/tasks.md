@@ -39,16 +39,18 @@ existing `feat/1008-one-tap-media` branch.
 - [ ] T003 [US1] In `src/views/detail/ChatDetailPage.vue`, change the message bubble
   root so a single tap calls `openMediaViewer(m.id)` for image/video (non-videoNote)
   and does nothing for text/other kinds; remove the 1004 "tap opens the action menu"
-  behavior from the bubble `@click`.
-- [ ] T004 [US1] In `src/views/detail/ChatDetailPage.vue`, restore image/video bubble
-  media taps to open the viewer directly (drop the menu-only "View" requirement);
-  keep the video play-overlay as a direct affordance; the menu's "View" stays as a
-  fallback.
+  behavior from the bubble `@click`. (The menu's "View" item stays as a fallback,
+  reachable via long-press.)
+- [ ] T004 [US1] In `src/views/detail/ChatDetailPage.vue`, keep the video poster's
+  play-overlay as the explicit direct-play affordance (`@click.stop` → viewer) so a
+  video bubble both opens on a plain tap and shows a clear play target; video **notes**
+  keep tap-to-play inline (unchanged).
 - [ ] T005 [US1] In `src/views/detail/ChatDetailPage.vue`, make album cells open the
   viewer at the tapped item (`openMediaViewer(am.id)`) instead of opening the menu.
 - [ ] T006 [P] [US1] Update `e2e/message-menu.spec.ts`: a single tap on an image bubble
   opens `.viewer-modal` directly (no "View" step) — replacing the 1004 tap-opens-menu
-  assertions for media.
+  assertions for media. Video/album one-tap share the same tap handler and are covered
+  by the quickstart manual smoke (seeding a video in e2e is impractical).
 
 ---
 
@@ -99,7 +101,9 @@ all visible. **Independent test**: open it, see 7 + "+", apply one, add a custom
   button) hosting `QuickReactBar` with `await quickReactEmojis(7)`; wire `react` →
   `onReact(m.id, emoji)` and `more` → `openEmojiPicker(m)`.
 - [ ] T015 [US2] Wire the `.msg-foot` reaction button (`add-circle-outline`) to
-  `openQuickReact(m, $event)` for message and album bubbles, with an aria-label.
+  `openQuickReact(m, $event)` for message and album bubbles, with an aria-label. For an
+  album, target its representative message (`item.messages[0]`), matching the existing
+  album menu behavior.
 - [ ] T016 [P] [US2] Create `e2e/quick-react.spec.ts`: opening the reaction button shows
   7 emoji + "+" all visible (no scroll); tapping one applies it (`getReactions`); a
   custom emoji via the tally surfaces in `quickReactEmojis(7)`.
