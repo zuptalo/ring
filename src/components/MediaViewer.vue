@@ -48,7 +48,11 @@
       >
         <div v-for="(it, i) in items" :key="it.id" class="viewer-slide">
           <div class="zoom-layer" :style="i === index ? zoomStyle : undefined">
-            <img v-if="it.kind === 'image'" :src="it.url" alt="" @click="onMediaClick" @dblclick="onMediaDblClick" />
+            <!-- Only the current slide and its neighbours render real media, so a
+                 media-heavy chat never decodes everything at once (OOM). -->
+            <template v-if="it.kind === 'image'">
+              <img v-if="i === index || nearby(i)" :src="it.url || it.thumb" alt="" @click="onMediaClick" @dblclick="onMediaDblClick" />
+            </template>
             <video-player
               v-else-if="i === index || nearby(i)"
               :ref="(c) => bindVideo(c, i)"
@@ -197,6 +201,7 @@ const emit = defineEmits<{
   (e: 'caption', id: string): void;
   (e: 'goto', id: string): void;
   (e: 'allmedia'): void;
+  (e: 'index', i: number): void; // current slide changed → parent resolves its window
 }>();
 
 const QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -220,6 +225,7 @@ function goToStart(): void {
   const el = track.value;
   if (el) el.scrollLeft = props.start * el.clientWidth;
   void scrollStrip();
+  emit('index', props.start); // resolve the opening item's window (index may not change)
   void playCurrentIfVideo();
 }
 // Autoplay the video we've landed on (the off-screen ones are paused by the index
@@ -463,6 +469,7 @@ function pauseOffscreenVideos(): void {
 const positions = reactive<Record<string, number>>({});
 watch(index, () => {
   pauseOffscreenVideos();
+  emit('index', index.value); // let the parent resolve this window's media
   void playCurrentIfVideo();
 });
 const vfmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;

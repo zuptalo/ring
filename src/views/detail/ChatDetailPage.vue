@@ -771,6 +771,7 @@
       @caption="onViewerCaption"
       @goto="onViewerGoto"
       @allmedia="onViewerAllMedia"
+      @index="onViewerIndex"
     />
 
     <!-- Round video-note recorder (hold the camera button) -->
@@ -1077,13 +1078,12 @@ function showDay(i: number): boolean {
 /* ---- media viewer (over ALL the chat's media) ---- */
 // Every image/video in the chat, chronological. The viewer shows them all and
 // starts at whichever one was tapped (in a bubble or an album).
+// ALL the chat's image/video media (not gated on being resolved), so the viewer can
+// span the whole chat. Memory is bounded by resolving/rendering only a small window
+// around the current item (resolveViewerWindow), never the whole set at once — that
+// all-at-once decode was crashing the web view (OOM) on media-heavy chats.
 const chatMediaMsgs = computed(() =>
-  messages.value.filter(
-    (m) =>
-      (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) &&
-      m.mediaId &&
-      mediaInfo.value[m.mediaId!],
-  ),
+  messages.value.filter((m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId),
 );
 const viewer = ref<{ open: boolean; start: number }>({ open: false, start: 0 });
 const viewerItems = computed(() =>
@@ -1091,9 +1091,9 @@ const viewerItems = computed(() =>
     const mi = mediaInfo.value[m.mediaId!];
     return {
       id: m.id,
-      url: mi.url,
-      thumb: mi.posterUrl || mi.url,
-      kind: mi.mime.startsWith('video/') ? 'video' : 'image',
+      url: mi?.url ?? '', // '' until this item's window is resolved
+      thumb: mi?.posterUrl || m.posterData || mi?.url || '',
+      kind: m.kind === 'video' ? 'video' : 'image',
       caption: m.body,
       senderName: m.outgoing ? 'You' : chat.value?.isGroup ? m.senderName : chat.value?.name ?? m.senderName,
       when: formatFull(m.timestamp),
@@ -1103,18 +1103,25 @@ const viewerItems = computed(() =>
     };
   }),
 );
-// Tapping any media opens the viewer at that item, across all chat media. The
-// viewer can swipe through the WHOLE chat's media, so resolve it all and pin it
-// (against eviction) before opening — the list itself only resolves its window.
+// Resolve (+ pin against eviction) only the current viewer item and its neighbours, so
+// at most ~3 full-res media are ever decoded at once.
+async function resolveViewerWindow(i: number): Promise<void> {
+  const list = chatMediaMsgs.value;
+  const near = [list[i - 1], list[i], list[i + 1]].filter((m): m is Message => !!m);
+  await resolveMediaFor(near);
+  viewerPins.value = new Set(near.map((m) => m.mediaId!).filter(Boolean));
+}
+// Tapping any media opens the viewer at that item; the viewer can swipe across the
+// whole chat's media, resolving each window on demand as you go.
 async function openMediaViewer(msgId: string): Promise<void> {
-  const all = messages.value.filter(
-    (m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId,
-  );
-  await resolveMediaFor(all);
-  viewerPins.value = new Set(all.map((m) => m.mediaId!));
+  const start = Math.max(0, chatMediaMsgs.value.findIndex((m) => m.id === msgId));
+  await resolveViewerWindow(start);
   await nextTick();
-  const start = chatMediaMsgs.value.findIndex((m) => m.id === msgId);
-  viewer.value = { open: true, start: Math.max(0, start) };
+  viewer.value = { open: true, start };
+}
+// As the viewer moves, resolve the window around the new index and evict the rest.
+function onViewerIndex(i: number): void {
+  void resolveViewerWindow(i).then(() => evictMedia());
 }
 function onViewerDismiss(id: string): void {
   viewer.value.open = false;
