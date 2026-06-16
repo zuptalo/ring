@@ -376,6 +376,17 @@ export async function connectReject(requester: string, block: boolean): Promise<
   if (!res.ok) throw new Error(`connect reject failed: ${res.status}`);
 }
 
+/** Withdraw a pending request you sent to `target`: removes it server-side so it
+ *  leaves the target's incoming list (authoritative cancel). */
+export async function connectWithdraw(target: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/connections/withdraw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ target }),
+  });
+  if (!res.ok) throw new Error(`connect withdraw failed: ${res.status}`);
+}
+
 /** Create an accepted connection to `target` without a request (group co-members:
  *  membership is the consent), so fan-out can fetch their bundle under the gate. */
 export async function connectLink(target: string): Promise<void> {

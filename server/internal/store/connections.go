@@ -76,6 +76,17 @@ func (s *Store) AcceptConnection(ctx context.Context, target, requester string) 
 	return err
 }
 
+// WithdrawConnection lets the REQUESTER take back a request they sent: it removes
+// the pending requester→target row entirely (no-op if it isn't pending), so the
+// target's incoming list no longer shows it and both can rediscover each other in
+// the directory. Authoritative server-side cancel (vs. the best-effort peer card).
+func (s *Store) WithdrawConnection(ctx context.Context, requester, target string) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM connections WHERE requester = $1 AND target = $2 AND state = 'pending'`,
+		requester, target)
+	return err
+}
+
 // RejectConnection marks the request requester->target rejected. When block is true
 // it also blocks the requester, so they can no longer see target in the directory or
 // its presence (and the request shows as rejected for them).

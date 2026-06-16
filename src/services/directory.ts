@@ -2,12 +2,12 @@
  * Public in-network directory → local contacts.
  *
  * The network is invite-only, but inside it every member is discoverable. This
- * service pulls the server directory (GET /v1/users) and mirrors each member into
- * the local `contacts` store as an auto-connected contact, so they appear in the
- * Contacts list and you can start an E2EE chat/call with them WITHOUT a friend
- * request. The directory is the source of truth for OTHER members' profile fields
- * (display name, avatar, About, username); it never overrides local block/ghost
- * state, and Block stays the only barrier.
+ * service reads the server directory (GET /v1/users) and mirrors a member's
+ * PROFILE (display name, avatar, About, username) into the local `contacts` store.
+ * It does NOT make them a friend: friendship is established only via the
+ * request/accept flow (spec 0002), which is what the server consent gate enforces
+ * (you can't fetch a non-connected peer's key bundle). Mirroring a profile never
+ * overrides local block/ghost state, and Block stays the only barrier.
  */
 import {
   fetchDirectory,
@@ -18,7 +18,7 @@ import {
 } from './api';
 import { getSelfUserId } from './auth';
 import { get, put } from '@/db/idb';
-import { markContactConnected, isPeerBlocked, getSetting, downscaleAvatar, listContacts } from '@/db/queries';
+import { isPeerBlocked, getSetting, downscaleAvatar, listContacts } from '@/db/queries';
 import { getSecret } from '@/db/secrets';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { initialsAvatar } from '@/db/avatars';
@@ -49,8 +49,7 @@ export async function upsertDirectoryContact(u: DirectoryUser): Promise<void> {
     existing.avatar === avatar &&
     existing.about === about
   ) {
-    await markContactConnected(u.id); // still ensure the friendship flag is set
-    return;
+    return; // nothing the directory owns changed
   }
 
   const contact: Contact = {
@@ -62,10 +61,9 @@ export async function upsertDirectoryContact(u: DirectoryUser): Promise<void> {
     about,
     updatedAt: u.profileAt || Date.now(),
   };
+  // Mirror the PROFILE only — this does not make them a friend. Friendship is set
+  // (markContactConnected) by the accept flow; the server gate enforces it.
   await put('contacts', contact);
-  // Every directory member is an accepted "friend"; their messages show
-  // immediately (no friend-request gate) and they appear in the contacts list.
-  await markContactConnected(u.id);
 }
 
 /** Pull the whole directory and mirror it into contacts. Paged; best-effort
