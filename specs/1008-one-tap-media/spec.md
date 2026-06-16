@@ -11,7 +11,7 @@
      are derived from the directory number (0001+ planned, 1001+ ad-hoc,
      2001+ hotfix), so do not restate them by hand. -->
 
-**Input**: User description: "The image/video/album viewing has become 2 steps since we have to first tap the content and then choose 'View'. For videos/images/albums where tapping is expected to open the media, tapping should open it directly. Make the bubble's bottom (timestamp) row a bit taller; put the timestamp for sent on the right next to the delivery status, and for received on the left (incoming messages are left-aligned). On the opposite side — right for incoming, left for outgoing — put an add-circle-outline icon that brings up only the 7 most-used emoji, with an add-circle-outline at the end of that list to pick a new one (which then joins the most-used list). No more sliding; all are visible. The full message menu stays home to the rest of the message functionality. So two separate popups; one could be visible at a time, and leaving the chat dismisses any open one even if it was open when the user swiped right to go back."
+**Input**: User description: "The image/video/album viewing has become 2 steps since we have to first tap the content and then choose 'View'. For videos/images/albums where tapping is expected to open the media, tapping should open it directly. Make the bubble's bottom (timestamp) row a bit taller; put the timestamp for sent on the right next to the delivery status, and for received on the left (incoming messages are left-aligned). On the opposite side — right for incoming, left for outgoing — put an add-circle-outline icon that brings up only the 5 most-used emoji, with an add-circle-outline at the end of that list to pick a new one (which then joins the most-used list). No more sliding; all are visible. The full message menu stays home to the rest of the message functionality. So two separate popups; one could be visible at a time, and leaving the chat dismisses any open one even if it was open when the user swiped right to go back."
 
 ## Overview
 
@@ -27,7 +27,7 @@ This feature splits the interaction into two distinct, purpose-built affordances
    directly (the full-screen viewer / playback), the way tapping media is expected
    to behave.
 2. **Inline quick-react** — each bubble's bottom row gains a direction-aware reaction
-   button that reveals the **7 most-used emoji** (all visible, no scrolling) plus a
+   button that reveals the **5 most-used emoji** (all visible, no scrolling) plus a
    "+" to pick a new one (which then enters the most-used set). The timestamp and
    delivery status are laid out by message direction.
 
@@ -61,28 +61,28 @@ confirm the viewer/playback opens directly (no menu in between).
 
 ---
 
-### User Story 2 - Inline quick-react with the 7 most-used, no sliding (Priority: P1)
+### User Story 2 - Inline quick-react with the 5 most-used, no sliding (Priority: P1)
 
 Every message bubble shows a reaction button in its bottom row. Tapping it reveals
-exactly the 7 most-used emoji (all visible at once) and a trailing "+" to choose a
+exactly the 5 most-used emoji (all visible at once) and a trailing "+" to choose a
 new emoji; choosing one applies it and moves it into the most-used set.
 
 **Why this priority**: Reacting is frequent; making all options visible without a
 slide (the 1004 row didn't slide reliably) is the second core improvement.
 
-**Independent Test**: Open the quick-react on a message, confirm 7 emoji + "+" are
+**Independent Test**: Open the quick-react on a message, confirm 5 emoji + "+" are
 all visible without scrolling, tap one and confirm it's applied; tap "+", pick a new
-emoji, confirm it applies and later appears in the 7.
+emoji, confirm it applies and later appears in the 5.
 
 **Acceptance Scenarios**:
 
 1. **Given** any message, **When** I tap its reaction button, **Then** a quick-react
-   popup shows the 7 most-used emoji and a trailing "+", all fully visible (no scroll).
+   popup shows the 5 most-used emoji and a trailing "+", all fully visible (no scroll).
 2. **Given** the quick-react popup, **When** I tap an emoji, **Then** it's applied as
    my reaction and the popup closes.
 3. **Given** the quick-react popup, **When** I tap "+", choose an emoji, **Then** it's
-   applied and, over time, surfaces among the 7 most-used.
-4. **Given** repeated reactions, **When** the 7 are computed, **Then** they reflect
+   applied and, over time, surfaces among the 5 most-used.
+4. **Given** repeated reactions, **When** the 5 are computed, **Then** they reflect
    usage (most-used first), consistent with the existing on-device usage tally.
 
 ---
@@ -144,8 +144,8 @@ back with a popup still open.
 
 ### Edge Cases
 
-- A fresh account with no reaction history shows a sensible default set of 7.
-- Very wide / very narrow bubbles still show all 7 emoji + "+" without clipping or
+- A fresh account with no reaction history shows a sensible default set of 5.
+- Very wide / very narrow bubbles still show all 5 emoji + "+" without clipping or
   scrolling, in both LTR and RTL.
 - A deleted message shows no reaction button (and no menu).
 - Tapping a non-media bubble (text) does nothing; reactions come from the bottom-row
@@ -161,7 +161,7 @@ back with a popup still open.
   for an album — with no intermediate menu. Video **notes** (round) are excluded: they
   keep tap-to-play inline, with long-press for the menu (they aren't viewer media).
 - **FR-002**: Each non-deleted message bubble MUST present a reaction button in its
-  bottom row. Tapping it MUST reveal a quick-react popup of the 7 most-used emoji plus
+  bottom row. Tapping it MUST reveal a quick-react popup of the 5 most-used emoji plus
   a trailing "+", all visible at once (no horizontal scrolling).
 - **FR-003**: Tapping an emoji in the quick-react popup MUST apply it as the user's
   reaction (toggling off if already set, per existing behavior) and close the popup.
@@ -205,10 +205,10 @@ back with a popup still open.
 - **SC-001**: Opening a photo/video/album from the chat is a single tap → viewer /
   playback, no menu step. Verified e2e for images (and the album/video paths share the
   same tap handler); video/album one-tap also covered by the manual smoke in quickstart.
-- **SC-002**: The quick-react popup shows 7 emoji + "+" with none clipped or requiring
+- **SC-002**: The quick-react popup shows 5 emoji + "+" with none clipped or requiring
   a scroll, at narrow and wide bubble widths (verified by assertion + visual).
 - **SC-003**: Tapping a quick-react emoji applies it; "+" applies a custom one that
-  later appears in the 7 (verified e2e via the usage tally).
+  later appears in the 5 (verified e2e via the usage tally).
 - **SC-004**: The full menu remains reachable and exposes all prior actions (verified
   e2e: invoke the menu gesture, assert the actions are present).
 - **SC-005**: Leaving the chat with a popup open leaves no lingering overlay (verified
@@ -221,7 +221,7 @@ back with a popup still open.
   tally, the media viewer (one-tap → `openMediaViewer`), and the emoji picker all
   exist and are reused; this spec re-wires gestures and adds the inline bottom-row
   reaction button rather than building new subsystems.
-- "7 most-used" reuses `quickReactEmojis` (it already returns most-used-first with a
+- "5 most-used" reuses `quickReactEmojis` (it already returns most-used-first with a
   default fallback); the count is fixed at 7 here.
 - The full emoji picker for "+" is the existing one used by 1004's "more".
 - Default emoji set before any usage history is the existing `DEFAULT_QUICK` set.

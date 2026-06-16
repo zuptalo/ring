@@ -31,7 +31,7 @@ async function openChatAt(p: any, chatId: string, mid: string) {
   return bubble;
 }
 
-test('the reaction button shows 7 emoji + "+" (all visible) and applies one', async ({ browser }) => {
+test('the reaction button shows 5 emoji + "+" (all visible) and applies one', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'QREACT1');
@@ -48,8 +48,8 @@ test('the reaction button shows 7 emoji + "+" (all visible) and applies one', as
   const bar = a.page.locator('.qr');
   await expect(bar).toBeVisible();
 
-  // 7 emoji + a trailing "+" — and every one is actually visible (no scroll).
-  await expect(bar.locator('.qr-emoji:not(.qr-more)')).toHaveCount(7);
+  // 5 emoji + a trailing "+" — and every one is actually visible (no scroll).
+  await expect(bar.locator('.qr-emoji:not(.qr-more)')).toHaveCount(5);
   await expect(bar.locator('.qr-more')).toBeVisible();
   for (const e of await bar.locator('.qr-emoji').all()) await expect(e).toBeVisible();
 

@@ -1238,8 +1238,8 @@ async function openQuickReact(m: Message, ev: Event): Promise<void> {
   await dismissOpenPopovers();
   const popover = await popoverController.create({
     component: QuickReactBar,
-    cssClass: 'reaction-popover quick-react-popover',
-    componentProps: { myEmojis: myEmojisFor(m), quick: await quickReactEmojis(7) },
+    cssClass: 'reaction-popover',
+    componentProps: { myEmojis: myEmojisFor(m), quick: await quickReactEmojis(5) },
     event: ev,
     reference: 'event',
     side: popoverSide(ev),
