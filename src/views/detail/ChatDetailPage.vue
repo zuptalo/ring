@@ -3124,8 +3124,9 @@ function cancelRecording() {
   gap: 2px;
   box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.08);
   /* A thin, theme-contrasting outline (dark in light theme, light in dark theme) so
-     each bubble's boundary reads clearly against the chat background. */
-  border: 1px solid color-mix(in srgb, var(--ion-text-color) 18%, transparent);
+     each bubble's boundary reads clearly against the chat background. Uses --app-text
+     (reliably defined in BOTH themes; Ionic's --ion-text-color isn't, in this setup). */
+  border: 1px solid color-mix(in srgb, var(--app-text) 18%, transparent);
 }
 .bubble.out {
   background: var(--app-bubble-out);

@@ -250,9 +250,10 @@ ion-popover.quick-react-popover {
   --max-width: 96vw;
 }
 /* A thin, theme-contrasting border so the popover's boundary reads clearly against
-   the chat behind it (light border in dark theme, dark border in light theme). */
+   the chat behind it. Uses --app-text (defined in BOTH themes) so the border shows in
+   light AND dark — Ionic's --ion-text-color isn't reliable in this setup. */
 ion-popover.reaction-popover::part(content) {
-  border: 1px solid color-mix(in srgb, var(--ion-text-color) 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--app-text) 28%, transparent);
 }
 
 body.keyboard-open ion-footer {
