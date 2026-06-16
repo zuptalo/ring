@@ -22,7 +22,7 @@ Specs are grouped by category band; status moves
 | [1001](specs/1001-smooth-tab-transitions/spec.md) | Smooth Tab Transitions | 🔵 in-review |
 | [1002](specs/1002-local-dev-deployment/spec.md) | Local Dev Deployment Tooling + Hot Reload | 🔵 in-review |
 | [1003](specs/1003-empty-chats-calls/spec.md) | Empty Chats/Calls Hint | 🔵 in-review |
-| [1007](specs/1007-media-playback-and/spec.md) | Media Playback & Embedded Thumbnails | 🟡 in-progress |
+| [1007](specs/1007-media-playback-and/spec.md) | Media Playback & Embedded Thumbnails | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
