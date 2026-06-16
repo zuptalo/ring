@@ -4,10 +4,10 @@ import { createAccount, pair } from './helpers';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * Message gestures (spec 1008): a single tap opens media directly (no menu step) and
- * does nothing on text; the full action menu opens on a LONG-PRESS. Reactions moved to
- * the bottom-row quick-react button (see quick-react.spec.ts). These tests drive real
- * taps + a synthesized long-press, and verify usage-based reordering of the quick set.
+ * Message gestures (spec 1008): a single tap on media opens it directly (no menu step);
+ * a tap on a text bubble (or the empty/footer area of a media bubble) opens the action
+ * menu — no long-press. Reactions moved to the bottom-row quick-react button (see
+ * quick-react.spec.ts). These tests drive real taps + verify usage reordering.
  */
 
 const chatWith = (p: any, peerId: string) =>
@@ -20,19 +20,7 @@ const send = (p: any, chatId: string, body: string) =>
 const messages = (p: any, chatId: string) =>
   p.page.evaluate((id: string) => (window as any).__ringTest.messages(id), chatId);
 
-/** Press-and-hold the center of a locator long enough to trip the 500ms long-press. */
-async function longPress(page: any, locator: any): Promise<void> {
-  await locator.scrollIntoViewIfNeeded();
-  const box = await locator.boundingBox();
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
-  await page.mouse.move(cx, cy);
-  await page.mouse.down();
-  await page.waitForTimeout(650);
-  await page.mouse.up();
-}
-
-test('long-press opens the full menu; a plain tap on text does nothing', async ({ browser }) => {
+test('a tap on a text bubble opens the full action menu', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'MSGMENU1');
@@ -40,19 +28,15 @@ test('long-press opens the full menu; a plain tap on text does nothing', async (
   await pair(a, b);
 
   const aChat = (await chatWith(a, b.id)) as string;
-  await send(a, aChat, 'hold me');
-  const mid = ((await messages(a, aChat)) as any[]).find((m) => m.body === 'hold me').id as string;
+  await send(a, aChat, 'tap me');
+  const mid = ((await messages(a, aChat)) as any[]).find((m) => m.body === 'tap me').id as string;
 
   await a.page.goto(`/chat/${aChat}`);
   const bubble = a.page.locator(`.bubble[data-mid="${mid}"]`);
   await bubble.waitFor({ state: 'visible', timeout: 30_000 });
 
-  // A plain tap on a text bubble does nothing (no menu, no viewer).
+  // A single tap on a text bubble opens the full action menu (no long-press).
   await bubble.click();
-  await expect(a.page.locator('.ma')).toHaveCount(0);
-
-  // A long-press opens the full action menu with its actions.
-  await longPress(a.page, bubble);
   await expect(a.page.locator('.ma')).toBeVisible();
   await expect(a.page.getByText('Reply', { exact: true })).toBeVisible();
   await expect(a.page.getByText('Forward', { exact: true })).toBeVisible();

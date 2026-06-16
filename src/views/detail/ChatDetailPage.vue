@@ -172,10 +172,6 @@
               @touchstart.passive="onSwipeStart($event, m)"
               @touchmove="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
-              @pointerdown="(e) => !m.deleted && !m.videoNote && lp.onPointerDown(m, e)"
-              @pointermove="lp.onPointerMove"
-              @pointerup="lp.onPointerUp"
-              @pointercancel="lp.onPointerUp"
               @click="(e) => !m.deleted && onBubbleTap(m, e)"
             >
               <template v-if="m.deleted">
@@ -209,25 +205,25 @@
               >
 
               <template v-if="m.mediaId && mediaInfo[m.mediaId]">
-                <!-- A tap anywhere on the image opens the action menu (the whole
-                     bubble is the hit target); "View" in the menu opens the viewer. -->
-                <div v-if="m.kind === 'image'" class="media-wrap">
+                <!-- Tap the image → open the viewer directly; tap the empty/footer area
+                     of the bubble → the action menu. -->
+                <div v-if="m.kind === 'image'" class="media-wrap" @click.stop="openMediaViewer(m.id)">
                   <img class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl || mediaInfo[m.mediaId].url" :style="mediaAspect(m)" alt="photo" loading="lazy" decoding="async" />
                   <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                 </div>
-                <!-- Round video note: plays inline on tap, long-press for actions. -->
+                <!-- Round video note: plays inline on tap; the action menu opens from
+                     the bubble footer below. -->
                 <video-note
                   v-else-if="m.kind === 'video' && m.videoNote"
                   :src="mediaInfo[m.mediaId].url"
                   :poster="mediaInfo[m.mediaId].posterUrl"
                   :duration-sec="m.durationSec"
-                  @menu="(ev) => openMenu(m, ev)"
                 />
                 <!-- Video: a still thumbnail with a play button. Tapping the poster
                      opens the action menu (whole bubble is the hit target); the play
                      button is the direct affordance to the full-screen viewer. -->
                 <template v-else-if="m.kind === 'video'">
-                  <div class="video-poster">
+                  <div class="video-poster" @click.stop="openMediaViewer(m.id)">
                     <img
                       v-if="m.posterData || mediaInfo[m.mediaId].posterUrl"
                       class="bubble-image"
@@ -385,7 +381,7 @@
                    time+tick right / react left, received → time left / react right. -->
               <div class="msg-foot" :class="m.outgoing ? 'out' : 'in'">
                 <button type="button" class="react-btn" aria-label="React" @click.stop="openQuickReact(m, $event)">
-                  <ion-icon :icon="addCircleOutline" />
+                  <ion-icon :icon="logoReact" />
                 </button>
                 <span class="time">
                   <span v-if="m.editedAt" class="edited">edited</span>
@@ -472,10 +468,6 @@
               @touchstart.passive="onSwipeStart($event, item.messages[0])"
               @touchmove="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
-              @pointerdown="(e) => lp.onPointerDown(item.messages[0], e)"
-              @pointermove="lp.onPointerMove"
-              @pointerup="lp.onPointerUp"
-              @pointercancel="lp.onPointerUp"
               @click="(e) => onBubbleTap(item.messages[0], e)"
             >
               <button
@@ -501,7 +493,7 @@
                   :key="am.id"
                   type="button"
                   class="album-cell"
-                  @click.stop="onAlbumCellTap(am, $event)"
+                  @click.stop="openMediaViewer(am.id)"
                 >
                   <template v-if="am.mediaId && mediaInfo[am.mediaId]">
                     <img :src="mediaInfo[am.mediaId].posterUrl || mediaInfo[am.mediaId].url" alt="" loading="lazy" decoding="async" />
@@ -514,7 +506,7 @@
               </div>
               <div class="msg-foot" :class="item.messages[0].outgoing ? 'out' : 'in'">
                 <button type="button" class="react-btn" aria-label="React" @click.stop="openQuickReact(item.messages[0], $event)">
-                  <ion-icon :icon="addCircleOutline" />
+                  <ion-icon :icon="logoReact" />
                 </button>
                 <span class="time">
                   {{ formatClock(item.messages[item.messages.length - 1].timestamp) }}
@@ -812,7 +804,7 @@ import {
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
   callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline,
-  timeOutline, checkmark, checkmarkDone, addOutline, addCircleOutline, cameraOutline,
+  timeOutline, checkmark, checkmarkDone, addOutline, logoReact, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
@@ -830,7 +822,6 @@ import {
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
 import QuickReactBar from '@/components/QuickReactBar.vue';
-import { useLongPress } from '@/composables/useLongPress';
 import ReactionDetails from '@/components/ReactionDetails.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
 import VideoNote from '@/components/VideoNote.vue';
@@ -1240,6 +1231,7 @@ async function openQuickReact(m: Message, ev: Event): Promise<void> {
     reference: 'event',
     side: popoverSide(ev),
     alignment: 'center',
+    showBackdrop: false, // don't dim the chat behind the popover
   });
   openPopover = popover;
   await popover.present();
@@ -1276,6 +1268,7 @@ async function openMenu(m: Message, ev: Event) {
     reference: 'event',
     side: popoverSide(ev),
     alignment: 'center',
+    showBackdrop: false, // don't dim the chat behind the popover
   });
   openPopover = popover;
   await popover.present();
@@ -1295,19 +1288,12 @@ async function openMenu(m: Message, ev: Event) {
   else if (data.action === 'delete') void confirmDelete(m);
 }
 
-// Long-press opens the full menu; a plain tap opens media (or does nothing on text).
-const lp = useLongPress<Message>((m, ev) => void openMenu(m, ev));
-function onBubbleTap(m: Message, _ev: Event): void {
+// A tap on the bubble itself — the whole text message, or the empty/footer area of a
+// media bubble — opens the action menu. Media elements stop propagation and open the
+// viewer instead; the react button opens the quick-react popover. No long-press.
+function onBubbleTap(m: Message, ev: Event): void {
   if (m.deleted) return;
-  if (!lp.consumeClick()) return; // a long-press just opened the menu — swallow the tap
-  if ((m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId) {
-    openMediaViewer(m.id);
-  }
-  // Text / other kinds: tap does nothing (react via the foot button, menu via long-press).
-}
-function onAlbumCellTap(am: Message, _ev: Event): void {
-  if (!lp.consumeClick()) return;
-  openMediaViewer(am.id);
+  void openMenu(m, ev);
 }
 
 /* ---- forwarding ---- */

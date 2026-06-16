@@ -44,8 +44,8 @@ Tapping an image, a video, or an album cell opens the media directly — the ful
 viewer for images, playback for video — with no intermediate menu step.
 
 **Why this priority**: This is the most common media interaction and the most-felt
-regression from 1004; restoring it is the core value. Ships together with US4 — once
-tap no longer opens the menu, long-press must provide it, so the two are one slice.
+regression from 1004; restoring it is the core value. Tapping the media opens it;
+tapping the rest of the bubble (or a text bubble) opens the menu (US4).
 
 **Independent Test**: Send/receive an image, a video, and an album; tap each and
 confirm the viewer/playback opens directly (no menu in between).
@@ -106,20 +106,21 @@ the visual frame for US2 but secondary to the react behavior itself.
 
 ---
 
-### User Story 4 - Full message menu via long-press (Priority: P1)
+### User Story 4 - Full message menu via tapping the bubble (Priority: P1)
 
 The full action menu (reply, forward, edit, save/save-all, copy, select, delete,
-message info, reactions list) is still available, reached by a **long-press** on the
-bubble — distinct from the one-tap-open and the quick-react button.
+message info, reactions list) is still available, reached by a **single tap** on the
+bubble: the whole text message, or the empty/footer area of a media bubble (tapping
+the media itself opens the viewer). No long-press.
 
 **Why this priority**: All the non-reaction actions must remain reachable; without
 this the redesign removes functionality.
 
 **Acceptance Scenarios**:
 
-1. **Given** any message, **When** I long-press it, **Then** the full action menu
-   opens with the same actions as today (minus the inline quick-react row, which now
-   lives in the bottom-row button).
+1. **Given** a text message, **When** I tap it (or the footer area of a media bubble),
+   **Then** the full action menu opens with the same actions as today (minus the inline
+   quick-react row, which now lives in the bottom-row button).
 2. **Given** a media message, **When** the full menu is open, **Then** it still
    offers media actions (save / save all / view), so media is reachable from the menu
    too, not only by tapping.
@@ -175,15 +176,16 @@ back with a popup still open.
   button comfortably.
 - **FR-007**: The full message menu MUST remain available with all current actions
   (reply, forward, edit, save, save all, copy, select, delete, message info, reactions
-  list, and media "view"), opened by a **long-press** on the bubble (any kind). The
-  single-tap-on-media open and the long-press-for-menu are distinct gestures.
-- **FR-008**: A single tap on a text (non-media) bubble MUST do nothing (text has no
-  "open" action). Reactions come from the bottom-row button; the full menu from
-  long-press. Tap therefore never opens a menu anywhere — consistent across bubbles.
+  list, and media "view"), opened by a **single tap** on the bubble — the whole text
+  message, or the empty/footer area of a media bubble. There is **no long-press**.
+- **FR-008**: A single tap on a media element (image/video/album cell) opens the
+  viewer; a tap on the rest of that bubble (the footer/empty area) opens the menu. A
+  tap on a text bubble opens the menu. The reaction button opens the quick-react popup.
 - **FR-009**: The quick-react popup is a transient popover: it opens on tapping the
   reaction button and closes on an outside tap or after a pick. The quick-react popup
   and the full menu MUST be mutually exclusive — opening one closes the other (only one
-  popup visible at a time).
+  popup visible at a time). Neither popover dims/darkens the chat behind it (no
+  backdrop) — they're lightweight, tap-anywhere-to-dismiss.
 - **FR-010**: Any open popup MUST be dismissed when the chat view is left, including a
   swipe-right back gesture, so it never lingers over another view.
 - **FR-011**: All UI MUST use stock Ionic components + existing theme tokens; build

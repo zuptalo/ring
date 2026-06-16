@@ -1,15 +1,8 @@
 <template>
-  <!-- Round video-note bubble: tap to play (with sound), long-press for actions;
-       a ring shows progress; shows the first-frame thumbnail until played. -->
-  <div
-    class="vnp"
-    @pointerdown="(e) => lp.onPointerDown(undefined, e)"
-    @pointermove="lp.onPointerMove"
-    @pointerup="lp.onPointerUp"
-    @pointerleave="lp.onPointerUp"
-    @pointercancel="lp.onPointerUp"
-    @click.stop="onClick"
-  >
+  <!-- Round video-note bubble: tap to play (with sound); a ring shows progress and
+       it shows the first-frame thumbnail until played. The action menu opens from the
+       footer below (handled by the parent bubble). -->
+  <div class="vnp" @click.stop="onClick">
     <video
       ref="el"
       class="vnp-video"
@@ -36,10 +29,8 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, volumeHigh, volumeMute } from 'ionicons/icons';
-import { useLongPress } from '@/composables/useLongPress';
 
 const props = defineProps<{ src: string; durationSec?: number; poster?: string }>();
-const emit = defineEmits<{ (e: 'menu', ev: PointerEvent): void }>();
 
 const CIRC = 2 * Math.PI * 48;
 const el = ref<HTMLVideoElement>();
@@ -62,11 +53,8 @@ function toggle(): void {
   }
 }
 
-// Long-press opens the message actions (reply / forward / …) via the shared helper;
-// a plain tap (not a long-press, not a drag) plays/pauses.
-const lp = useLongPress<void>((_payload, e) => emit('menu', e));
+// A tap plays/pauses; the action menu is reached from the footer below (parent bubble).
 function onClick(): void {
-  if (!lp.consumeClick()) return; // a long-press just fired — don't also toggle play
   toggle();
 }
 function onMeta(): void {
