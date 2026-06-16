@@ -55,7 +55,9 @@
               :src="it.url"
               :embedded="true"
               :chrome-hidden="chromeHidden"
+              :start-at="positions[it.id]"
               @tap="onVideoTap"
+              @time="(t) => (positions[it.id] = t)"
             />
           </div>
         </div>
@@ -164,6 +166,7 @@ interface VideoApi {
   pipActive: boolean;
   pipSupported: boolean;
   toggle: () => void;
+  pauseSilent: () => void;
   seekTo: (r: number) => void;
   cycleRate: () => void;
   togglePip: () => void;
@@ -431,11 +434,24 @@ const activeVideo = shallowRef<VideoApi | null>(null);
 // inline ref callback every render (old→null, new→instance), so we MUST ignore the null
 // detach and skip same-value writes — otherwise the template reading `activeVideo` would
 // rewrite it every render → infinite re-render loop (the web process crashes).
+// All currently-mounted players, by slide index (plain Map — never read in the
+// template, so it triggers no re-render; activeVideo drives the chrome). Lets us
+// pause every player except the on-screen one when the user slides (FR-004).
+const videoApis = new Map<number, VideoApi>();
 function bindVideo(c: unknown, i: number): void {
-  if (i !== index.value) return;
   const inst = (c as VideoApi | null) ?? null;
-  if (inst && activeVideo.value !== inst) activeVideo.value = inst;
+  if (inst) videoApis.set(i, inst);
+  else videoApis.delete(i);
+  if (i === index.value && inst && activeVideo.value !== inst) activeVideo.value = inst;
 }
+// Sliding away from a video must stop it fully (no off-screen audio/decoding),
+// while its position is remembered via @time so sliding back resumes there.
+function pauseOffscreenVideos(): void {
+  for (const [i, api] of videoApis) if (i !== index.value) api.pauseSilent();
+}
+// Item ids → last playback position (seconds), so a remounted player resumes there.
+const positions = reactive<Record<string, number>>({});
+watch(index, () => pauseOffscreenVideos());
 const vfmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 // Tap on the video → hide all chrome for a video-only view; tap again → bring it back.
 function onVideoTap(): void {
@@ -451,6 +467,10 @@ function onMediaDblClick(): void {
 
 watch(() => props.start, (s) => {
   if (props.open) index.value = s;
+});
+// Closing the viewer stops any playing video (FR-006).
+watch(() => props.open, (o) => {
+  if (!o) for (const api of videoApis.values()) api.pauseSilent();
 });
 </script>
 

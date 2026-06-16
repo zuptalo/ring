@@ -3451,8 +3451,15 @@ function cancelRecording() {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #fff;
-  font-size: 34px;
+  font-size: 28px;
+  background: rgba(0, 0, 0, 0.42); /* scrim disc → legible on any thumbnail (FR-003) */
+  border-radius: 50%;
   pointer-events: none;
 }
 .album-bubble .time {
@@ -3530,13 +3537,23 @@ function cancelRecording() {
   position: relative;
   display: inline-block;
 }
+/* Play affordance over a video thumbnail. A translucent dark scrim disc behind the
+   white glyph guarantees legibility on ANY thumbnail — dark or bright (spec 1007
+   FR-003) — without baking pixels into the JPEG. */
 .play-overlay {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 48px;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
   color: #fff;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 50%;
   filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.5));
 }
 .bubble-audio {
