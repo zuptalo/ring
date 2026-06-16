@@ -29,8 +29,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, volumeHigh, volumeMute } from 'ionicons/icons';
+import { getSetting, setSetting } from '@/db/queries';
 
-const props = defineProps<{ src: string; durationSec?: number; poster?: string }>();
+const props = defineProps<{ src: string; mid?: string; durationSec?: number; poster?: string }>();
 
 const CIRC = 2 * Math.PI * 48;
 const el = ref<HTMLVideoElement>();
@@ -67,12 +68,26 @@ function playEl(wantMuted: boolean): void {
   });
 }
 
+// Remember which notes have used up their 3 auto-plays, so they only show the
+// thumbnail on later views (no more autoplay), persisted across remounts/sessions.
+const AUTOPLAYED_KEY = 'vnAutoplayed';
+async function markAutoplayed(): Promise<void> {
+  if (!props.mid) return;
+  try {
+    const done = await getSetting<Record<string, boolean>>(AUTOPLAYED_KEY, {});
+    done[props.mid] = true;
+    await setSetting(AUTOPLAYED_KEY, done);
+  } catch {
+    /* best-effort */
+  }
+}
+
 function startAuto(): void {
   if (started) return;
   started = true;
   autoActive = true;
   autoCount = 0;
-  playEl(false); // first cycle: audio on
+  playEl(true); // always start muted — tap for sound
 }
 
 // A tap plays/pauses with audio; any manual interaction ends the auto sequence.
@@ -100,20 +115,32 @@ function onEnd(): void {
     autoCount += 1;
     if (autoCount >= AUTO_CYCLES) {
       autoActive = false;
-      playing.value = false; // done → show the play button; further plays are manual
+      playing.value = false; // done → show the thumbnail; further plays are manual
+      void markAutoplayed(); // and never autoplay this note again
     } else {
-      playEl(true); // 2nd & 3rd cycles loop muted
+      playEl(true); // all auto cycles are muted
     }
   } else {
     playing.value = false;
   }
 }
 
-// Kick off the auto sequence the first time the note scrolls into view.
+// Kick off the auto sequence the first time the note scrolls into view — unless this
+// note has already used up its 3 auto-plays before, in which case just show the
+// thumbnail and don't autoplay at all.
 let io: IntersectionObserver | undefined;
-onMounted(() => {
+onMounted(async () => {
   const v = el.value;
   if (!v) return;
+  try {
+    const done = await getSetting<Record<string, boolean>>(AUTOPLAYED_KEY, {});
+    if (props.mid && done[props.mid]) {
+      started = true; // already auto-played 3× → thumbnail only
+      return;
+    }
+  } catch {
+    /* fall through to normal autoplay */
+  }
   io = new IntersectionObserver(
     (entries) => {
       for (const e of entries) if (e.isIntersecting && !started) startAuto();

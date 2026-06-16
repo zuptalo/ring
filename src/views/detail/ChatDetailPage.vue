@@ -215,6 +215,7 @@
                      the bubble footer below. -->
                 <video-note
                   v-else-if="m.kind === 'video' && m.videoNote"
+                  :mid="m.id"
                   :src="mediaInfo[m.mediaId].url"
                   :poster="mediaInfo[m.mediaId].posterUrl"
                   :duration-sec="m.durationSec"
