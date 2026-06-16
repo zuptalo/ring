@@ -14,7 +14,7 @@ Specs are grouped by category band; status moves
 | Spec | Title | Status |
 |------|-------|--------|
 | [0001](specs/0001-show-what-changed/spec.md) | Show what changed in the update toast (release-note delta) | 🟢 shipped |
-| [0002](specs/0002-connections-and-friendship/spec.md) | Connections & Friendship | 🔵 in-review |
+| [0002](specs/0002-connections-and-friendship/spec.md) | Connections & Friendship | 🟢 shipped |
 
 ## ⚡ Ad-hoc (1001–1999)
 
@@ -23,11 +23,11 @@ Specs are grouped by category band; status moves
 | [1001](specs/1001-smooth-tab-transitions/spec.md) | Smooth Tab Transitions | 🔵 in-review |
 | [1002](specs/1002-local-dev-deployment/spec.md) | Local Dev Deployment Tooling + Hot Reload | 🔵 in-review |
 | [1003](specs/1003-empty-chats-calls/spec.md) | Empty Chats/Calls Hint | 🔵 in-review |
-| [1004](specs/1004-message-action-menu/spec.md) | Message Action Menu | 🔵 in-review |
-| [1005](specs/1005-chat-history-scroll/spec.md) | Chat History Scroll Performance & Media Caching | 🔵 in-review |
-| [1006](specs/1006-test-coverage-uplift/spec.md) | Test Coverage Uplift | 🔵 in-review |
-| [1007](specs/1007-media-playback-and/spec.md) | Media Playback & Embedded Thumbnails | 🔵 in-review |
-| [1008](specs/1008-one-tap-media/spec.md) | One-Tap Media Open & Inline Quick-React Bar | 🔵 in-review |
+| [1004](specs/1004-message-action-menu/spec.md) | Message Action Menu | 🟢 shipped |
+| [1005](specs/1005-chat-history-scroll/spec.md) | Chat History Scroll Performance & Media Caching | 🟢 shipped |
+| [1006](specs/1006-test-coverage-uplift/spec.md) | Test Coverage Uplift | 🟢 shipped |
+| [1007](specs/1007-media-playback-and/spec.md) | Media Playback & Embedded Thumbnails | 🟢 shipped |
+| [1008](specs/1008-one-tap-media/spec.md) | One-Tap Media Open & Inline Quick-React Bar | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
