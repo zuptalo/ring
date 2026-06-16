@@ -104,7 +104,7 @@ import {
 } from '@/db/queries';
 import { formatBytes } from '@/utils/bytes';
 import { get, put } from '@/db/idb';
-import { generateVideoPoster } from '@/utils/media-meta';
+import { generateVideoPoster, generateImageThumb } from '@/utils/media-meta';
 import type { Chat, Media, Message } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { formatStamp, formatFull } from '@/utils/time';
@@ -176,11 +176,18 @@ watch(
           const url = URL.createObjectURL(md.blob);
           info.value[m.mediaId] = {
             url,
-            posterUrl: md.posterBlob ? URL.createObjectURL(md.posterBlob) : undefined,
+            // posterBlob, else the sender-embedded posterData (data URL) for videos,
+            // so the grid shows a thumbnail without re-generating one (spec 1007).
+            posterUrl: md.posterBlob
+              ? URL.createObjectURL(md.posterBlob)
+              : m.kind === 'video'
+                ? m.posterData
+                : undefined,
             mime: md.mime,
             name: md.name,
           };
           if (m.kind === 'video' && !info.value[m.mediaId].posterUrl) void poster(md.blob, m.mediaId);
+          if (m.kind === 'image' && !info.value[m.mediaId].posterUrl) void imageThumb(md.blob, m.mediaId);
         }
       }
     }
@@ -200,6 +207,24 @@ async function poster(blob: Blob, mediaId: string): Promise<void> {
     const md = await get<Media>('media', mediaId);
     if (md && !md.posterBlob) {
       md.posterBlob = await (await fetch(dataUrl)).blob();
+      md.updatedAt = Date.now();
+      await put('media', md);
+    }
+  } catch {
+    /* best-effort cache */
+  }
+}
+
+// Small image thumbnail for the grid (the cells are tiny) so it doesn't decode the
+// full-resolution photo per cell. Persisted as posterBlob, shared with the chat view.
+async function imageThumb(blob: Blob, mediaId: string): Promise<void> {
+  const thumb = await generateImageThumb(blob);
+  if (!thumb) return;
+  info.value[mediaId] = { ...info.value[mediaId], posterUrl: URL.createObjectURL(thumb) };
+  try {
+    const md = await get<Media>('media', mediaId);
+    if (md && !md.posterBlob) {
+      md.posterBlob = thumb;
       md.updatedAt = Date.now();
       await put('media', md);
     }
@@ -343,8 +368,15 @@ const goChat = () => router.push(`/chat/${chatId}`);
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #fff;
-  font-size: 30px;
+  font-size: 26px;
+  background: rgba(0, 0, 0, 0.42); /* scrim disc → legible on any thumbnail (spec 1007 FR-003) */
+  border-radius: 50%;
   pointer-events: none;
 }
 .empty {

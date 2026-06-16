@@ -13,6 +13,9 @@
     <incoming-call-overlay />
     <!-- Floating call widget when a call runs but the call screen is minimized. -->
     <minimized-call />
+    <!-- Hovering media-audio controller while a voice message / music plays (it
+         persists across navigation; spec 1007). -->
+    <minimized-audio />
     <!-- Persistent remote-audio sink: keeps call audio playing across navigation
          (e.g. while minimized), independent of any call screen. -->
     <call-media-sink />
@@ -37,8 +40,11 @@ import KeyGuard from '@/components/KeyGuard.vue';
 import InstallGuard from '@/components/InstallGuard.vue';
 import IncomingCallOverlay from '@/components/IncomingCallOverlay.vue';
 import MinimizedCall from '@/components/MinimizedCall.vue';
+import MinimizedAudio from '@/components/MinimizedAudio.vue';
 import CallMediaSink from '@/components/CallMediaSink.vue';
 import NotificationBanners from '@/components/NotificationBanners.vue';
+import { callState } from '@/composables/useCall';
+import { stopAudio } from '@/composables/useAudioPlayer';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed } from '@/db/queries';
@@ -65,7 +71,10 @@ watch(
   isUnlocked,
   (unlocked) => {
     if (unlocked) void warmAll();
-    else clearWarm();
+    else {
+      clearWarm();
+      stopAudio(); // never leave media audio playing once locked / signed out
+    }
   },
   { immediate: true },
 );
@@ -184,6 +193,12 @@ onUnmounted(() => {
   }
 });
 
+// Call audio takes precedence over media audio (spec 1007 FR-009): when a call
+// becomes active, stop any voice message / music so they never play over a call.
+watch(callState, (s) => {
+  if (s !== 'idle') stopAudio();
+});
+
 // Clear the app-icon badge + pending notifications when foregrounded.
 useAppBadge();
 
@@ -227,6 +242,18 @@ body.keyboard-open ion-tab-bar {
   :root:not(.ion-palette-light) ion-popover.reaction-popover {
     --background: #2c2c2e;
   }
+}
+/* Size the quick-react bar to its contents (so all 5 emoji + "+" are visible without
+   sliding), capped at the screen width — neither clipped nor full-bleed. */
+ion-popover.quick-react-popover {
+  --width: max-content;
+  --max-width: 96vw;
+}
+/* A thin, theme-contrasting border so the popover's boundary reads clearly against
+   the chat behind it. Uses --app-text (defined in BOTH themes) so the border shows in
+   light AND dark — Ionic's --ion-text-color isn't reliable in this setup. */
+ion-popover.reaction-popover::part(content) {
+  border: 1px solid color-mix(in srgb, var(--app-text) 28%, transparent);
 }
 
 body.keyboard-open ion-footer {

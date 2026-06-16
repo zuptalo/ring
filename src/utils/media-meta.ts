@@ -129,12 +129,19 @@ function generateVideoPosterUnlimited(blob: Blob, maxEdge: number, timeoutMs: nu
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rvfc = (v as any).requestVideoFrameCallback?.bind(v);
     if (rvfc) {
-      rvfc(() => capture());
+      // Capture a frame a fraction of a second in, not frame 0 — the very first frame
+      // of a clip (especially a camera recording) is often black during warm-up.
+      const SKIP = 0.2;
+      const tick = (): void => {
+        if (v.currentTime >= SKIP || v.currentTime >= (v.duration || SKIP)) capture();
+        else rvfc(tick);
+      };
+      rvfc(tick);
       void v.play().catch(() => {
         // play blocked → fall back to seek-based capture
         v.onseeked = capture;
         try {
-          v.currentTime = 0.05;
+          v.currentTime = SKIP;
         } catch {
           /* timeout handles it */
         }
@@ -152,6 +159,40 @@ function generateVideoPosterUnlimited(blob: Blob, maxEdge: number, timeoutMs: nu
     v.onerror = () => finish();
     v.src = url;
   });
+}
+
+/** A small downscaled thumbnail (Blob) for an image, so lists / grids / the viewer's
+ *  bottom strip render a lightweight preview instead of decoding the full-resolution
+ *  image as rows recycle (the big driver of media-heavy scroll jank). Returns
+ *  undefined if the image is already within `maxEdge` or decoding fails — the caller
+ *  then just uses the full image. Bounded by the shared limiter like video posters. */
+export function generateImageThumb(blob: Blob, maxEdge = 400, quality = 0.7): Promise<Blob | undefined> {
+  return posterLimiter(() => generateImageThumbUnlimited(blob, maxEdge, quality));
+}
+
+async function generateImageThumbUnlimited(blob: Blob, maxEdge: number, quality: number): Promise<Blob | undefined> {
+  try {
+    const bmp = await createImageBitmap(blob);
+    const big = Math.max(bmp.width, bmp.height);
+    if (big <= maxEdge) {
+      bmp.close?.();
+      return undefined; // already small — no point storing a second copy
+    }
+    const scale = maxEdge / big;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(bmp.width * scale));
+    c.height = Math.max(1, Math.round(bmp.height * scale));
+    const cx = c.getContext('2d');
+    if (!cx) {
+      bmp.close?.();
+      return undefined;
+    }
+    cx.drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close?.();
+    return await new Promise<Blob | undefined>((res) => c.toBlob((b) => res(b ?? undefined), 'image/jpeg', quality));
+  } catch {
+    return undefined;
+  }
 }
 
 /** A short resolution label from pixel dimensions, e.g. 1280×720 → "720p". */

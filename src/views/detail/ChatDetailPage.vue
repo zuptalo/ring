@@ -90,9 +90,12 @@
     <ion-content ref="contentEl" :fullscreen="true" class="chat-content" :scroll-events="true" @ionScroll="onContentScroll">
       <div ref="listEl" class="msg-list" :style="{ visibility: listReady ? 'visible' : 'hidden' }">
       <!-- Top of the list: pull up to load earlier messages (older pages). -->
+      <!-- Page older messages well before the very top is reached (look-ahead), so
+           scrolling back never stalls at the load boundary (spec 1005 FR-001). -->
       <ion-infinite-scroll
         :disabled="!listReady || visible >= messages.length"
         position="top"
+        threshold="25%"
         @ion-infinite="loadOlder"
       >
         <ion-infinite-scroll-content loading-text="Loading earlier messages…" />
@@ -123,6 +126,16 @@
           v-else
           class="bubble-row"
           :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id) }"
+          v-memo="[
+            m.updatedAt,
+            mediaInfo[m.mediaId!]?.posterUrl,
+            swipeId === m.id ? swipeDx : 0,
+            selecting,
+            isSelected(m.id),
+            downloadingVideo[m.id],
+            groupRunStart(i),
+            senderAvatar(m.senderId),
+          ]"
           @click="selecting && toggleSelect([m.id])"
         >
           <ion-icon
@@ -167,9 +180,9 @@
               :data-mid="m.id"
               :style="swipeStyle(m.id)"
               @touchstart.passive="onSwipeStart($event, m)"
-              @touchmove="onSwipeMove($event)"
+              @touchmove.passive="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
-              @click="!m.deleted && openMenu(m, $event)"
+              @click="(e) => !m.deleted && onBubbleTap(m, e)"
             >
               <template v-if="m.deleted">
                 <span class="text deleted-msg"><ion-icon :icon="banOutline" /> This message was deleted</span>
@@ -202,20 +215,25 @@
               >
 
               <template v-if="m.mediaId && mediaInfo[m.mediaId]">
+                <!-- Tap the image → open the viewer directly; tap the empty/footer area
+                     of the bubble → the action menu. -->
                 <div v-if="m.kind === 'image'" class="media-wrap" @click.stop="openMediaViewer(m.id)">
-                  <img class="bubble-image" :src="mediaInfo[m.mediaId].url" alt="photo" />
+                  <img v-if="mediaInfo[m.mediaId].posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl" alt="photo" loading="lazy" decoding="async" />
+                  <ion-skeleton-text v-else :animated="true" class="media-skel" />
                   <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                 </div>
-                <!-- Round video note: plays inline on tap, long-press for actions. -->
+                <!-- Round video note: plays inline on tap; the action menu opens from
+                     the bubble footer below. -->
                 <video-note
                   v-else-if="m.kind === 'video' && m.videoNote"
+                  :mid="m.id"
                   :src="mediaInfo[m.mediaId].url"
                   :poster="mediaInfo[m.mediaId].posterUrl"
                   :duration-sec="m.durationSec"
-                  @menu="(ev) => openMenu(m, ev)"
                 />
-                <!-- Video: a still thumbnail with a play button; tapping opens the
-                     full-screen viewer (falls back to inline if no thumbnail). -->
+                <!-- Video: a still thumbnail with a play button. Tapping the poster
+                     opens the action menu (whole bubble is the hit target); the play
+                     button is the direct affordance to the full-screen viewer. -->
                 <template v-else-if="m.kind === 'video'">
                   <div class="video-poster" @click.stop="openMediaViewer(m.id)">
                     <img
@@ -223,14 +241,20 @@
                       class="bubble-image"
                       :src="m.posterData || mediaInfo[m.mediaId].posterUrl"
                       alt="video"
+                      loading="lazy"
+                      decoding="async"
                     />
-                    <div v-else class="bubble-image video-noposter" />
-                    <ion-icon class="play-overlay" :icon="playCircle" />
+                    <ion-skeleton-text v-else :animated="true" class="media-skel" />
+                    <!-- Visual play affordance only; a tap anywhere on the poster opens
+                         the viewer via the bubble's tap handler. -->
+                    <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />
                     <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                   </div>
                 </template>
                 <voice-player
                   v-else-if="m.kind === 'voice'"
+                  :mid="m.id"
+                  :sender="m.outgoing ? 'You' : chat?.isGroup ? m.senderName : chat?.name ?? m.senderName"
                   :src="mediaInfo[m.mediaId].url"
                   :outgoing="m.outgoing"
                   :avatar="!m.outgoing && !chat?.isGroup ? chat?.avatar : undefined"
@@ -271,7 +295,7 @@
                 @click.stop="downloadVideo(m.id)"
               >
                 <img v-if="m.posterData" class="bubble-image" :src="m.posterData" alt="video" />
-                <div v-else class="bubble-image video-noposter" />
+                <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 <span class="dl-btn">
                   <ion-spinner v-if="downloadingVideo[m.id]" name="crescent" />
                   <ion-icon v-else :icon="downloadOutline" />
@@ -363,16 +387,29 @@
                   <span class="job-num">{{ jobPct(m.id, 'upload') }}</span>
                 </div>
               </div>
-              <span class="time">
-                <span v-if="m.editedAt" class="edited">edited</span>
-                {{ formatClock(m.sentAt ?? m.timestamp) }}
-                <ion-icon
-                  v-if="m.outgoing && m.status !== 'failed'"
-                  class="tick"
-                  :class="{ read: m.status === 'read' }"
-                  :icon="statusIcon(m.status)"
-                />
-              </span>
+              <!-- Direction-aware foot: react button opposite the timestamp; sent →
+                   time+tick right / react left, received → time left / react right. -->
+              <div class="msg-foot" :class="m.outgoing ? 'out' : 'in'">
+                <button
+                  v-if="myEmojisFor(m).length < MAX_REACTIONS_PER_USER"
+                  type="button"
+                  class="react-btn"
+                  aria-label="React"
+                  @click.stop="openQuickReact(m, $event)"
+                >
+                  <ion-icon :icon="addCircleOutline" />
+                </button>
+                <span class="time">
+                  <span v-if="m.editedAt" class="edited">edited</span>
+                  {{ formatClock(m.sentAt ?? m.timestamp) }}
+                  <ion-icon
+                    v-if="m.outgoing && m.status !== 'failed'"
+                    class="tick"
+                    :class="{ read: m.status === 'read' }"
+                    :icon="statusIcon(m.status)"
+                  />
+                </span>
+              </div>
               </template>
             </div>
             </div>
@@ -415,6 +452,13 @@
           v-else
           class="bubble-row"
           :class="{ out: item.messages[0].outgoing, 'sel-mode': selecting, 'sel-on': isSelected(item.messages[0].id) }"
+          v-memo="[
+            item.messages.map((mm) => mm.updatedAt).join(),
+            item.messages.map((mm) => mediaInfo[mm.mediaId!]?.posterUrl ?? '').join(),
+            swipeId === item.messages[0].id ? swipeDx : 0,
+            selecting,
+            isSelected(item.messages[0].id),
+          ]"
           @click="selecting && toggleSelect(item.messages.map((mm) => mm.id))"
         >
           <ion-icon
@@ -445,9 +489,9 @@
               :data-mid="item.messages[0].id"
               :style="swipeStyle(item.messages[0].id)"
               @touchstart.passive="onSwipeStart($event, item.messages[0])"
-              @touchmove="onSwipeMove($event)"
+              @touchmove.passive="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
-              @click="openMenu(item.messages[0], $event)"
+              @click="(e) => onBubbleTap(item.messages[0], e)"
             >
               <button
                 v-if="item.messages[0].replyTo"
@@ -465,6 +509,8 @@
               </button>
               <span v-if="item.messages[0].albumName" class="album-name">{{ item.messages[0].albumName }}</span>
               <div class="album-grid">
+                <!-- A tap on a cell opens the menu for that specific image/video
+                     (FR-001 covers the album area); "View" opens the viewer at it. -->
                 <button
                   v-for="(am, idx) in albumCells(item.messages)"
                   :key="am.id"
@@ -472,24 +518,36 @@
                   class="album-cell"
                   @click.stop="openMediaViewer(am.id)"
                 >
-                  <template v-if="am.mediaId && mediaInfo[am.mediaId]">
-                    <img :src="mediaInfo[am.mediaId].posterUrl || mediaInfo[am.mediaId].url" alt="" />
+                  <template v-if="am.mediaId && mediaInfo[am.mediaId]?.posterUrl">
+                    <img :src="mediaInfo[am.mediaId].posterUrl" alt="" loading="lazy" decoding="async" />
                     <ion-icon v-if="am.kind === 'video'" class="play-overlay-sm" :icon="playCircle" />
                     <div v-if="idx === 3 && albumOverlay(item.messages)" class="album-more">
                       +{{ albumOverlay(item.messages) }}
                     </div>
                   </template>
+                  <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 </button>
               </div>
-              <span class="time">
-                {{ formatClock(item.messages[item.messages.length - 1].timestamp) }}
-                <ion-icon
-                  v-if="item.messages[0].outgoing"
-                  class="tick"
-                  :class="{ read: item.messages[item.messages.length - 1].status === 'read' }"
-                  :icon="statusIcon(item.messages[item.messages.length - 1].status)"
-                />
-              </span>
+              <div class="msg-foot" :class="item.messages[0].outgoing ? 'out' : 'in'">
+                <button
+                  v-if="myEmojisFor(item.messages[0]).length < MAX_REACTIONS_PER_USER"
+                  type="button"
+                  class="react-btn"
+                  aria-label="React"
+                  @click.stop="openQuickReact(item.messages[0], $event)"
+                >
+                  <ion-icon :icon="addCircleOutline" />
+                </button>
+                <span class="time">
+                  {{ formatClock(item.messages[item.messages.length - 1].timestamp) }}
+                  <ion-icon
+                    v-if="item.messages[0].outgoing"
+                    class="tick"
+                    :class="{ read: item.messages[item.messages.length - 1].status === 'read' }"
+                    :icon="statusIcon(item.messages[item.messages.length - 1].status)"
+                  />
+                </span>
+              </div>
             </div>
             </div>
 
@@ -730,6 +788,7 @@
       @caption="onViewerCaption"
       @goto="onViewerGoto"
       @allmedia="onViewerAllMedia"
+      @index="onViewerIndex"
     />
 
     <!-- Round video-note recorder (hold the camera button) -->
@@ -776,7 +835,7 @@ import {
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
   callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline,
-  timeOutline, checkmark, checkmarkDone, addOutline, cameraOutline,
+  timeOutline, checkmark, checkmarkDone, addOutline, addCircleOutline, cameraOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
@@ -786,6 +845,7 @@ import {
   reactToMessage, deleteMessage, softDeleteMessage, deleteMessageForEveryone, editMessage,
   toggleFavorite, setCaption, forwardMessage,
   quickReactEmojis,
+  MAX_REACTIONS_PER_USER,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
@@ -793,6 +853,7 @@ import {
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
+import QuickReactBar from '@/components/QuickReactBar.vue';
 import ReactionDetails from '@/components/ReactionDetails.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
 import VideoNote from '@/components/VideoNote.vue';
@@ -817,13 +878,19 @@ import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
 import { type Quality } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
-import { resolutionLabel, fileSizeLabel, generateVideoPoster } from '@/utils/media-meta';
+import { resolutionLabel, fileSizeLabel, generateVideoPoster, generateImageThumb } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
+import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing, capitalizeFirst } from '@/utils/text';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
 import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import {
+  audioCurId, audioPlaying, audioProgress, audioRate,
+  playAudio, seekAudioFrac, cycleAudioRate, stopAudio, detachAudioEnded,
+  type AudioTrackMeta,
+} from '@/composables/useAudioPlayer';
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
 import { sendReadReceipts, sendDownloadedReceipts } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
@@ -1021,23 +1088,26 @@ function showDay(i: number): boolean {
 /* ---- media viewer (over ALL the chat's media) ---- */
 // Every image/video in the chat, chronological. The viewer shows them all and
 // starts at whichever one was tapped (in a bubble or an album).
+// ALL the chat's image/video media (not gated on being resolved), so the viewer can
+// span the whole chat. Memory is bounded by resolving/rendering only a small window
+// around the current item (resolveViewerWindow), never the whole set at once — that
+// all-at-once decode was crashing the web view (OOM) on media-heavy chats.
 const chatMediaMsgs = computed(() =>
-  messages.value.filter(
-    (m) =>
-      (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) &&
-      m.mediaId &&
-      mediaInfo.value[m.mediaId!],
-  ),
+  messages.value.filter((m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId),
 );
 const viewer = ref<{ open: boolean; start: number }>({ open: false, start: 0 });
-const viewerItems = computed(() =>
-  chatMediaMsgs.value.map((m) => {
+const viewerItems = computed(() => {
+  // Only build the (whole-chat) viewer list while the viewer is open. Otherwise this
+  // O(all-media) map + formatFull + groupedReactions would re-run on every mediaInfo
+  // mutation as thumbnails decode during scroll — pure waste on the scroll hot path.
+  if (!viewer.value.open) return [];
+  return chatMediaMsgs.value.map((m) => {
     const mi = mediaInfo.value[m.mediaId!];
     return {
       id: m.id,
-      url: mi.url,
-      thumb: mi.posterUrl || mi.url,
-      kind: mi.mime.startsWith('video/') ? 'video' : 'image',
+      url: mi?.url ?? '', // '' until this item's window is resolved
+      thumb: mi?.posterUrl || m.posterData || mi?.url || '',
+      kind: m.kind === 'video' ? 'video' : 'image',
       caption: m.body,
       senderName: m.outgoing ? 'You' : chat.value?.isGroup ? m.senderName : chat.value?.name ?? m.senderName,
       when: formatFull(m.timestamp),
@@ -1045,15 +1115,33 @@ const viewerItems = computed(() =>
       favorite: !!m.favorite,
       reactions: groupedReactions(m.reactions).map((g) => ({ emoji: g.emoji, count: g.count })),
     };
-  }),
-);
-// Tapping any media opens the viewer at that item, across all chat media.
-function openMediaViewer(msgId: string): void {
-  const start = chatMediaMsgs.value.findIndex((m) => m.id === msgId);
-  viewer.value = { open: true, start: Math.max(0, start) };
+  });
+});
+// Resolve (+ pin against eviction) only the current viewer item and its neighbours, so
+// at most ~3 full-res media are ever decoded at once.
+async function resolveViewerWindow(i: number): Promise<void> {
+  const list = chatMediaMsgs.value;
+  const near = [list[i - 1], list[i], list[i + 1]].filter((m): m is Message => !!m);
+  await resolveMediaFor(near);
+  viewerPins.value = new Set(near.map((m) => m.mediaId!).filter(Boolean));
+}
+// Tapping any media opens the viewer at that item; the viewer can swipe across the
+// whole chat's media, resolving each window on demand as you go.
+async function openMediaViewer(msgId: string): Promise<void> {
+  const start = Math.max(0, chatMediaMsgs.value.findIndex((m) => m.id === msgId));
+  await resolveViewerWindow(start);
+  await nextTick();
+  viewer.value = { open: true, start };
+}
+// As the viewer moves, resolve the window around the new index and evict the rest.
+function onViewerIndex(i: number): void {
+  void resolveViewerWindow(i).then(() => evictMedia());
 }
 function onViewerDismiss(id: string): void {
   viewer.value.open = false;
+  // Unpin the chat's media so the bounded cache can reclaim what's off-screen.
+  viewerPins.value = new Set();
+  evictMedia();
   // Album members render under one bubble keyed by the first message's id.
   const m = messages.value.find((x) => x.id === id);
   let target = id;
@@ -1146,39 +1234,83 @@ function onViewerAllMedia(): void {
   router.push(`/chat/${chatId}/media`);
 }
 
-// Tapping a bubble opens the unified popover (emoji quick-row + actions) anchored
-// to it. It opens downward when the bubble is in the top half of the screen and
-// upward in the bottom half, so the menu stays on screen.
+// The two per-message popups (quick-react + full menu) are mutually exclusive and must
+// never linger over another view. We track the open one and dismiss it before opening
+// either, and on leaving the chat (covers the back button AND the swipe-back gesture).
+let openPopover: HTMLIonPopoverElement | null = null;
+async function dismissOpenPopovers(): Promise<void> {
+  const p = openPopover;
+  openPopover = null;
+  if (p) {
+    try {
+      await p.dismiss();
+    } catch {
+      /* already dismissing */
+    }
+  }
+}
+
+// Pick the popover side so it stays on screen: open downward in the top half of the
+// viewport, upward in the bottom half.
+const popoverSide = (ev: Event): 'top' | 'bottom' =>
+  ((ev as MouseEvent).clientY ?? window.innerHeight) < window.innerHeight / 2 ? 'bottom' : 'top';
+
+// Tap on the reaction button → a transient popover of the 7 most-used emoji + "+".
+async function openQuickReact(m: Message, ev: Event): Promise<void> {
+  await dismissOpenPopovers();
+  const popover = await popoverController.create({
+    component: QuickReactBar,
+    cssClass: 'reaction-popover quick-react-popover',
+    componentProps: { myEmojis: myEmojisFor(m), quick: await quickReactEmojis(5) },
+    event: ev,
+    reference: 'event',
+    side: popoverSide(ev),
+    alignment: 'center',
+    showBackdrop: false, // don't dim the chat behind the popover
+  });
+  openPopover = popover;
+  await popover.present();
+  const { data } = await popover.onWillDismiss();
+  if (openPopover === popover) openPopover = null;
+  if (!data) return;
+  if (data.action === 'react') await onReact(m.id, data.emoji);
+  else if (data.action === 'more') await openEmojiPicker(m);
+}
+
+// Long-press a bubble → the full action menu (reply/forward/edit/…); reactions now live
+// in the bottom-row quick-react button, so the menu no longer carries the emoji row.
 async function openMenu(m: Message, ev: Event) {
-  const y = (ev as MouseEvent).clientY ?? window.innerHeight;
-  const side = y < window.innerHeight / 2 ? 'bottom' : 'top';
+  await dismissOpenPopovers();
   // A single image/video/file/audio offers "Save"; an album bubble offers "Save all".
   const SAVE_KINDS = ['image', 'video', 'file', 'audio', 'voice'];
   const canSaveAll = !!m.albumId;
   const canSave = !canSaveAll && SAVE_KINDS.includes(m.kind) && (!!m.mediaId || !!m.pendingMedia);
+  // Media is reachable by tapping it, but "View" stays in the menu as a fallback.
+  const canView = (m.kind === 'image' || m.kind === 'video') && !m.videoNote && !!m.mediaId;
   const popover = await popoverController.create({
     component: MessageActions,
     cssClass: 'reaction-popover',
     componentProps: {
       isOutgoing: m.outgoing,
       canCopy: !!m.body,
+      canView,
       canEdit: m.outgoing && m.kind === 'text' && !m.deleted,
       canSave,
       canSaveAll,
-      myEmojis: myEmojisFor(m),
       reactionCount: m.reactions?.length ?? 0,
-      quick: await quickReactEmojis(4),
     },
     event: ev,
     reference: 'event',
-    side,
+    side: popoverSide(ev),
     alignment: 'center',
+    showBackdrop: false, // don't dim the chat behind the popover
   });
+  openPopover = popover;
   await popover.present();
   const { data } = await popover.onWillDismiss();
+  if (openPopover === popover) openPopover = null;
   if (!data) return;
-  if (data.action === 'react') await onReact(m.id, data.emoji);
-  else if (data.action === 'more') await openEmojiPicker(m);
+  if (data.action === 'view') openMediaViewer(m.id);
   else if (data.action === 'details') await openReactionDetails(m);
   else if (data.action === 'reply') void startReply(m);
   else if (data.action === 'forward') openForward(m.id);
@@ -1189,6 +1321,14 @@ async function openMenu(m: Message, ev: Event) {
   else if (data.action === 'edit') startEdit(m);
   else if (data.action === 'select') enterSelect(m);
   else if (data.action === 'delete') void confirmDelete(m);
+}
+
+// A tap on the bubble itself — the whole text message, or the empty/footer area of a
+// media bubble — opens the action menu. Media elements stop propagation and open the
+// viewer instead; the react button opens the quick-react popover. No long-press.
+function onBubbleTap(m: Message, ev: Event): void {
+  if (m.deleted) return;
+  void openMenu(m, ev);
 }
 
 /* ---- forwarding ---- */
@@ -1526,7 +1666,9 @@ function onSwipeMove(e: TouchEvent): void {
     let v = dx;
     if (Math.abs(v) > SWIPE_MAX) v = (v > 0 ? 1 : -1) * (SWIPE_MAX + (Math.abs(v) - SWIPE_MAX) * 0.18);
     swipeDx.value = v;
-    if (e.cancelable) e.preventDefault();
+    // No preventDefault needed: the bubble's `touch-action: pan-y` already stops the
+    // browser acting on a horizontal drag, so this listener can stay passive (no
+    // main-thread round-trip at the start of every vertical scroll).
   }
 }
 function onSwipeEnd(): void {
@@ -1769,7 +1911,9 @@ let listReadyFallback: ReturnType<typeof setTimeout> | undefined;
 function observeScroll(): void {
   if (!resizeObs && 'ResizeObserver' in window) {
     resizeObs = new ResizeObserver(() => {
-      if (stickBottom) void scrollToNewest();
+      // Re-pin to newest as media grows / the keyboard opens — but never mid-fling
+      // (that fights iOS momentum). Wait until the user's scroll has settled.
+      if (stickBottom && Date.now() - lastScrollAt > MOMENTUM_QUIET_MS) void scrollToNewest();
     });
   }
   if (resizeObs && listEl.value) resizeObs.observe(listEl.value); // content height (media)
@@ -1880,6 +2024,7 @@ onIonViewWillLeave(() => {
   setActiveChat(null);
   clearTimeout(shareHintTimer);
   dismissShareHintToast(); // don't let the hint linger on other pages
+  void dismissOpenPopovers(); // a quick-react/menu popover must not linger after leaving
 });
 
 const messages = useLiveQuery(
@@ -1913,8 +2058,10 @@ watch(messages, async (list, prev) => {
 });
 
 // Paginate: render the newest `visible` messages (natural order); pulling up at the
-// top loads older ones.
-const PAGE = 25;
+// top loads older ones. Kept modest so each pull-up mounts a sub-frame-budget batch
+// (a big batch is one long task that hitches mid-drag); the 25% look-ahead threshold
+// means smaller, more frequent loads instead of one stutter.
+const PAGE = 14;
 const visible = ref(PAGE);
 const visibleMessages = computed(() => messages.value.slice(-visible.value));
 watch(search, () => (visible.value = PAGE));
@@ -1948,13 +2095,20 @@ const albumCells = (msgs: Message[]) => msgs.slice(0, 4);
 const albumOverlay = (msgs: Message[]) => (msgs.length > 4 ? msgs.length - 3 : 0);
 
 async function loadOlder(ev: InfiniteScrollCustomEvent) {
-  // Prepending older messages grows the list above the viewport; keep the messages
-  // currently under the user's eyes by adding the height delta to scrollTop.
+  // Prepending older messages grows the list above the viewport. Anchor on the
+  // topmost rendered bubble and keep it at the same screen position afterwards — this
+  // is robust to the loading spinner's height and any late layout (unlike a total
+  // scrollHeight delta, which skews and makes the view jump).
   const el = await ensureScrollEl();
-  const before = el?.scrollHeight ?? 0;
+  const anchor = listEl.value?.querySelector<HTMLElement>('.bubble[data-mid]') ?? null;
+  const anchorMid = anchor?.dataset.mid ?? null;
+  const beforeTop = anchor?.getBoundingClientRect().top ?? 0;
   visible.value += PAGE;
   await nextTick();
-  if (el) el.scrollTop += el.scrollHeight - before;
+  if (el && anchorMid) {
+    const a2 = listEl.value?.querySelector<HTMLElement>(`.bubble[data-mid="${anchorMid}"]`) ?? null;
+    if (a2) el.scrollTop += a2.getBoundingClientRect().top - beforeTop;
+  }
   void ev.target.complete();
 }
 
@@ -1967,59 +2121,158 @@ interface MediaInfo {
 }
 
 const mediaInfo = ref<Record<string, MediaInfo>>({});
-watch(
-  messages,
-  async (list) => {
-    for (const m of list) {
-      if (m.mediaId && !mediaInfo.value[m.mediaId]) {
-        const media = await get<Media>('media', m.mediaId);
-        if (media) {
-          const url = URL.createObjectURL(media.blob);
-          const info: MediaInfo = {
-            url,
-            posterUrl: media.posterBlob ? URL.createObjectURL(media.posterBlob) : undefined,
-            mime: media.mime,
-            name: media.name,
-          };
-          mediaInfo.value[m.mediaId] = info;
-          // Videos: prefer the sent thumbnail (m.posterData, a stable data URL).
-          // Otherwise derive one from the first frame and PERSIST it (posterBlob)
-          // so it isn't regenerated/lost on every remount.
-          if (m.kind === 'video' && !info.posterUrl && !m.posterData) {
-            const blob = media.blob;
-            const mid = m.mediaId;
-            void generateVideoPoster(blob).then(async (poster) => {
-              if (!poster) return;
-              mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: poster };
-              try {
-                const md = await get<Media>('media', mid);
-                if (md && !md.posterBlob) {
-                  md.posterBlob = await (await fetch(poster)).blob();
-                  md.updatedAt = Date.now();
-                  await put('media', md);
-                }
-              } catch {
-                /* best-effort cache */
-              }
-            });
-          }
-          // Audio (shared music): pull embedded cover art for the track card.
-          if (m.kind === 'audio' && !info.posterUrl) {
-            void readAudioTags(media.blob).then((tags) => {
-              if (tags.cover && m.mediaId) {
-                mediaInfo.value[m.mediaId] = {
-                  ...mediaInfo.value[m.mediaId],
-                  posterUrl: URL.createObjectURL(tags.cover),
-                };
-              }
-            });
-          }
-        }
-      }
+// Resolved object URLs are bounded so a very long, media-heavy chat doesn't keep
+// every poster/cover decoded and every blob URL alive at once. We keep at most
+// MAX_MEDIA live, evicting the least-recently-used items that are neither on screen
+// nor pinned by an open viewer, and revoking their URLs. Far-scrolled media is
+// re-resolved lazily when it scrolls back (spec 1005 FR-003/004/005).
+const MAX_MEDIA = 60;
+const mediaLru: string[] = []; // mediaIds, least-recently-used first
+function touchMedia(id: string): void {
+  const i = mediaLru.indexOf(id);
+  if (i !== -1) mediaLru.splice(i, 1);
+  mediaLru.push(id);
+}
+// Media ids the full-screen viewer is currently showing — never evict these while
+// it's open (it can swipe across all of the chat's media).
+const viewerPins = ref<Set<string>>(new Set());
+
+// The on-screen window (plus viewer pins) that eviction must never touch.
+function currentMediaKeep(): Set<string> {
+  const keep = new Set<string>(viewerPins.value);
+  for (const m of visibleMessages.value) if (m.mediaId) keep.add(m.mediaId);
+  return keep;
+}
+
+// Resolve on-device media (Blobs) → object URLs for the GIVEN messages only — the
+// rendered window, or all chat media when the viewer opens — so opening a long
+// media chat doesn't eagerly decode every poster/cover up front. Already-resolved
+// items are just marked recently-used (reused, never recreated per render).
+async function resolveMediaFor(list: Message[]): Promise<void> {
+  for (const m of list) {
+    if (!m.mediaId) continue;
+    if (mediaInfo.value[m.mediaId]) {
+      touchMedia(m.mediaId);
+      continue;
     }
+    const media = await get<Media>('media', m.mediaId);
+    if (!media) continue;
+    const info: MediaInfo = {
+      url: URL.createObjectURL(media.blob),
+      // Poster precedence: a persisted posterBlob, else the sender-embedded
+      // posterData (a stable data URL). Feeding posterData into posterUrl means the
+      // viewer, bottom slider and Media grid (which read posterUrl, not the message)
+      // show a video's thumbnail too — not just the chat bubble (spec 1007 FR-001).
+      posterUrl: media.posterBlob
+        ? URL.createObjectURL(media.posterBlob)
+        : m.kind === 'video'
+          ? m.posterData
+          : undefined,
+      mime: media.mime,
+      name: media.name,
+    };
+    mediaInfo.value[m.mediaId] = info;
+    touchMedia(m.mediaId);
+    // Videos: prefer the sent thumbnail (m.posterData, a stable data URL).
+    // Otherwise derive one from the first frame and PERSIST it (posterBlob) so it
+    // isn't regenerated/lost on every remount.
+    if (m.kind === 'video' && !info.posterUrl && !m.posterData) {
+      const blob = media.blob;
+      const mid = m.mediaId;
+      void generateVideoPoster(blob).then(async (poster) => {
+        if (!poster || !mediaInfo.value[mid]) return; // evicted before it resolved
+        mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: poster };
+        try {
+          const md = await get<Media>('media', mid);
+          if (md && !md.posterBlob) {
+            md.posterBlob = await (await fetch(poster)).blob();
+            md.updatedAt = Date.now();
+            await put('media', md);
+          }
+        } catch {
+          /* best-effort cache */
+        }
+      });
+    }
+    // Images: derive a small thumbnail (stored as posterBlob) the bubble/grid/strip
+    // render instead of the full image, so scroll-back doesn't re-decode full-res
+    // photos. The full image is still used in the viewer. Persist so it's one-time.
+    if (m.kind === 'image' && !info.posterUrl) {
+      const blob = media.blob;
+      const mid = m.mediaId;
+      void generateImageThumb(blob).then(async (thumb) => {
+        const info2 = mediaInfo.value[mid];
+        if (!info2) return; // evicted before it resolved
+        if (!thumb) {
+          // Small image (or decode failed): the original IS the thumbnail — so the
+          // bubble (which renders posterUrl) still has something light to show.
+          mediaInfo.value[mid] = { ...info2, posterUrl: info2.url };
+          return;
+        }
+        mediaInfo.value[mid] = { ...info2, posterUrl: URL.createObjectURL(thumb) };
+        try {
+          const md = await get<Media>('media', mid);
+          if (md && !md.posterBlob) {
+            md.posterBlob = thumb;
+            md.updatedAt = Date.now();
+            await put('media', md);
+          }
+        } catch {
+          /* best-effort cache */
+        }
+      });
+    }
+    // Audio (shared music): pull embedded cover art for the track card.
+    if (m.kind === 'audio' && !info.posterUrl) {
+      const mid = m.mediaId;
+      void readAudioTags(media.blob).then((tags) => {
+        if (tags.cover && mediaInfo.value[mid]) {
+          mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: URL.createObjectURL(tags.cover) };
+        }
+      });
+    }
+  }
+}
+
+// Release least-recently-used media that's neither on screen nor pinned, revoking
+// its URLs so memory stays bounded in very long chats.
+function evictMedia(): void {
+  if (mediaLru.length <= MAX_MEDIA) return; // nothing over the cap — skip the Set + scan
+  const keep = currentMediaKeep();
+  for (const id of selectEvictions(mediaLru, keep, MAX_MEDIA)) {
+    const mi = mediaInfo.value[id];
+    if (mi) {
+      URL.revokeObjectURL(mi.url);
+      if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
+      delete mediaInfo.value[id];
+    }
+    const i = mediaLru.indexOf(id);
+    if (i !== -1) mediaLru.splice(i, 1);
+  }
+}
+
+// Resolve media for the rendered window as it grows/changes (look-ahead paging
+// extends `visibleMessages` before the user reaches the top), then evict far LRU.
+// Keyed on the visible MEDIA SET (mediaIds), not the array identity — so a status
+// tick or reaction (which reassigns messages.value to fresh objects every time) does
+// NOT re-run IndexedDB reads + URL allocation + eviction on the scroll hot path.
+watch(
+  () => visibleMessages.value.map((m) => m.mediaId ?? '').join('|'),
+  async () => {
+    await resolveMediaFor(visibleMessages.value);
+    evictMedia();
   },
   { immediate: true },
 );
+
+// Revoke every resolved object URL when leaving the chat so they don't leak across
+// chat opens (the cache only lives for this view).
+onUnmounted(() => {
+  for (const mi of Object.values(mediaInfo.value)) {
+    URL.revokeObjectURL(mi.url);
+    if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
+  }
+});
 
 // Close the viewer if its last item was deleted. (Defined here, after `messages`,
 // because watch() evaluates its source once at setup.)
@@ -2043,6 +2296,12 @@ let stickBottom = true;
 // ResizeObserver stops re-pinning → the view drifts up. Refreshed on each pin;
 // genuine user scrolls land outside it.
 let suppressStickUntil = 0;
+// When the user last scrolled (genuine, non-echo). The ResizeObserver re-pin must NOT
+// fire while a fling is still in flight — a programmatic scrollTop write mid-inertia
+// fights iOS WebKit's native momentum and stutters/teleports. We only re-pin once the
+// fling has settled (no user scroll for a beat).
+let lastScrollAt = 0;
+const MOMENTUM_QUIET_MS = 220;
 // Cache ion-content's inner scroll element so we can read scroll metrics
 // synchronously and pin without an async hop each message.
 let scrollEl: HTMLElement | null = null;
@@ -2073,6 +2332,7 @@ function nearBottom(): boolean {
 // our own programmatic pin so late-loading media can't flip the pin off mid-settle.
 function onContentScroll(): void {
   if (Date.now() < suppressStickUntil) return;
+  lastScrollAt = Date.now(); // genuine user scroll (the pin echo is suppressed above)
   stickBottom = nearBottom();
 }
 
@@ -2211,12 +2471,12 @@ function camCancel(): void {
   if (camTimer) clearTimeout(camTimer);
   camTimer = undefined;
 }
-async function onVideoNoteSend(blob: Blob, dur: number): Promise<void> {
+async function onVideoNoteSend(blob: Blob, dur: number, poster?: string): Promise<void> {
   videoNoteOpen.value = false;
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
-  await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply });
+  await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply, poster });
 }
 
 // Ask for an optional album name; defaults to the album's date (the earliest of the
@@ -2332,27 +2592,11 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
   }
 }
 
-/* ---- shared audio player: received/sent music files play as a playlist ---- */
-const audioEl = new Audio();
-audioEl.preload = 'auto'; // buffer eagerly so the first tap isn't silent
-const audioCurId = ref<string | null>(null);
-const audioPlaying = ref(false);
-const audioProgress = ref(0);
-const audioRate = ref(1);
-audioEl.addEventListener('timeupdate', () => {
-  audioProgress.value = audioEl.duration ? audioEl.currentTime / audioEl.duration : 0;
-});
-audioEl.addEventListener('play', () => (audioPlaying.value = true));
-audioEl.addEventListener('pause', () => (audioPlaying.value = false));
-audioEl.addEventListener('ended', () => {
-  audioPlaying.value = false;
-  audioProgress.value = 0;
-  playNextAudio();
-});
-onUnmounted(() => {
-  audioEl.pause();
-  audioEl.src = '';
-});
+/* ---- audio playback: voice + music via the global single-source player ---- */
+// Audio (voice + music) plays through the global single-source player so it keeps
+// going when you leave the chat and a hovering controller can drive it (spec 1007).
+// Leaving the chat only detaches the playlist auto-advance — it does NOT stop audio.
+onUnmounted(detachAudioEnded);
 
 // Audio messages in chronological order, the implicit playlist.
 const audioOrder = computed(() =>
@@ -2361,38 +2605,39 @@ const audioOrder = computed(() =>
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((m) => m.id),
 );
-const audioUrlFor = (id: string): string | undefined => {
+// Build the now-playing metadata (for the hovering controller) from a message.
+function audioMetaFor(id: string): AudioTrackMeta | undefined {
   const m = messages.value.find((x) => x.id === id);
-  return m?.mediaId ? mediaInfo.value[m.mediaId]?.url : undefined;
-};
-function toggleAudio(id: string): void {
-  if (audioCurId.value === id) {
-    if (audioEl.paused) void playWhenReady(audioEl);
-    else audioEl.pause();
-    return;
+  if (!m?.mediaId) return undefined;
+  const url = mediaInfo.value[m.mediaId]?.url;
+  if (!url) return undefined;
+  const who = m.outgoing ? 'You' : chat.value?.isGroup ? m.senderName : chat.value?.name ?? m.senderName;
+  if (m.kind === 'audio') {
+    return {
+      id,
+      url,
+      title: m.audio?.title || mediaInfo.value[m.mediaId]?.name || 'Audio',
+      subtitle: m.audio?.artist,
+      coverUrl: mediaInfo.value[m.mediaId]?.posterUrl,
+      isVoice: false,
+    };
   }
-  const url = audioUrlFor(id);
-  if (!url) return;
-  audioEl.src = url;
-  audioEl.playbackRate = audioRate.value;
-  audioCurId.value = id;
-  audioProgress.value = 0;
-  void playWhenReady(audioEl);
+  return { id, url, title: 'Voice message', subtitle: who, isVoice: true };
+}
+function toggleAudio(id: string): void {
+  const meta = audioMetaFor(id);
+  if (!meta) return;
+  playAudio(meta, playNextAudio);
 }
 function seekAudio(id: string, frac: number): void {
-  if (audioCurId.value !== id || !audioEl.duration) return;
-  audioEl.currentTime = frac * audioEl.duration;
-}
-function cycleAudioRate(): void {
-  audioRate.value = nextRate(audioRate.value);
-  audioEl.playbackRate = audioRate.value;
+  if (audioCurId.value === id) seekAudioFrac(frac);
 }
 function playNextAudio(): void {
   const ids = audioOrder.value;
   const i = audioCurId.value ? ids.indexOf(audioCurId.value) : -1;
   const next = i >= 0 && i + 1 < ids.length ? ids[i + 1] : null;
   if (next) toggleAudio(next);
-  else audioCurId.value = null;
+  else stopAudio();
 }
 
 /* ---- audio file review queue (title/artist before sending) ---- */
@@ -2930,9 +3175,15 @@ function cancelRecording() {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  /* Soft shadow (not a border) so the bright incoming bubble still reads on the
-     light theme's white background. */
+  /* Let the browser own vertical scroll natively; only horizontal drags reach JS
+     (swipe-to-reply), so the touchmove listener can be passive — no input-latency
+     round-trip at the start of every vertical flick. */
+  touch-action: pan-y;
   box-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.08);
+  /* A thin, theme-contrasting outline (dark in light theme, light in dark theme) so
+     each bubble's boundary reads clearly against the chat background. Uses --app-text
+     (reliably defined in BOTH themes; Ionic's --ion-text-color isn't, in this setup). */
+  border: 1px solid color-mix(in srgb, var(--app-text) 18%, transparent);
 }
 .bubble.out {
   background: var(--app-bubble-out);
@@ -2944,6 +3195,7 @@ function cancelRecording() {
 .bubble-plain.out {
   background: transparent;
   box-shadow: none;
+  border: none; /* round video note has no rectangular bubble to outline */
   padding: 0;
   align-items: center;
 }
@@ -3175,10 +3427,31 @@ function cancelRecording() {
   font-variant-numeric: tabular-nums;
 }
 /* Wrapper so a photo can overlay its quality/size badge. */
-.media-wrap {
+/* Fixed media frame: image/video bubbles are a constant square, so every media row
+   has a predictable height — the thumbnail fills it (cover) and a placeholder icon
+   shows until it loads. No reflow → fluid history scrolling. The full media opens in
+   the viewer on tap. */
+.media-wrap,
+.video-poster {
   position: relative;
-  display: inline-block;
+  width: 240px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(127, 127, 127, 0.15);
   cursor: pointer;
+}
+/* Ionic skeleton loader filling a media frame / album cell until the thumbnail
+   resolves. Override its default text-line margin + pill radius so it covers the
+   whole frame (which already clips to the rounded corners via overflow: hidden). */
+.media-skel {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  --border-radius: 0;
 }
 /* Failed send → red retry button in front of the bubble. */
 .retry-btn {
@@ -3200,13 +3473,6 @@ function cancelRecording() {
 /* Not-yet-downloaded video: thumbnail + a tappable download button. */
 .video-poster.pending {
   cursor: pointer;
-}
-.video-noposter {
-  width: 220px;
-  max-width: 100%;
-  aspect-ratio: 16 / 10;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.2);
 }
 .dl-btn {
   position: absolute;
@@ -3360,6 +3626,54 @@ function cancelRecording() {
   align-items: center;
   gap: 3px;
 }
+/* Direction-aware bottom row (spec 1008): the react button sits opposite the
+   timestamp — sent → time+tick right / react left; received → time left / react
+   right. Logical layout so it mirrors correctly in RTL. */
+.msg-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* A tall, comfortable footer row on EVERY message (text + all media kinds), so the
+     react button has a generous tap target and the timestamp has room to breathe. */
+  min-height: 40px;
+  margin-top: 2px;
+  padding-top: 4px;
+}
+/* React button and timestamp sit at opposite ends. The timestamp is pinned to its
+   side with an auto margin so it STAYS there even when the react button is hidden
+   (once the 3-reaction cap is reached). Sent: react left, time right. Received: time
+   left, react right (via order). */
+.msg-foot.out .time {
+  margin-left: auto;
+}
+.msg-foot.in .time {
+  order: 1;
+  margin-right: auto;
+}
+.msg-foot.in .react-btn {
+  order: 2;
+}
+.msg-foot .time {
+  align-self: center;
+}
+.react-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  /* Fill the taller row for an easy, finger-sized hit target. */
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--app-text-muted, #8e8e93);
+  cursor: pointer;
+}
+.react-btn:active {
+  transform: scale(0.85);
+}
 /* Reaction pills straddle the bubble's bottom edge: the negative margin pulls
    them up so only ~30% overlaps the bubble (the rest hangs below), while still
    occupying normal-flow space so the next message keeps a regular gap. */
@@ -3379,10 +3693,10 @@ function cancelRecording() {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 1px 7px;
-  height: 24px;
+  padding: 1px 9px;
+  height: 30px;
   border: 1px solid var(--ion-color-step-150, rgba(0, 0, 0, 0.1));
-  border-radius: 12px;
+  border-radius: 15px;
   background: var(--ion-background-color, #fff);
   cursor: pointer;
   line-height: 1;
@@ -3392,7 +3706,7 @@ function cancelRecording() {
   background: color-mix(in srgb, var(--ion-color-primary) 14%, var(--ion-background-color, #fff));
 }
 .r-emoji {
-  font-size: 14px;
+  font-size: 19px;
 }
 .r-count {
   font-size: 12px;
@@ -3451,8 +3765,15 @@ function cancelRecording() {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #fff;
-  font-size: 34px;
+  font-size: 28px;
+  background: rgba(0, 0, 0, 0.42); /* scrim disc → legible on any thumbnail (FR-003) */
+  border-radius: 50%;
   pointer-events: none;
 }
 .album-bubble .time {
@@ -3521,23 +3842,32 @@ function cancelRecording() {
   color: #34b7f1;
 }
 .bubble-image {
-  border-radius: 12px;
-  width: 220px;
-  max-width: 100%;
+  /* Fills the fixed media frame (cropped to cover). */
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
-.video-poster {
-  position: relative;
-  display: inline-block;
-}
+/* Play affordance over a video thumbnail. A translucent dark scrim disc behind the
+   white glyph guarantees legibility on ANY thumbnail — dark or bright (spec 1007
+   FR-003) — without baking pixels into the JPEG. */
 .play-overlay {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 48px;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
   color: #fff;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 50%;
   filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.5));
+  /* Visual only — the whole poster is the tap target (handled on the bubble). */
+  pointer-events: none;
 }
 .bubble-audio {
   width: 240px;

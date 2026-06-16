@@ -48,6 +48,7 @@ type ConnectionStore interface {
 	RequestConnection(ctx context.Context, requester, target string) (string, error)
 	AcceptConnection(ctx context.Context, target, requester string) error
 	RejectConnection(ctx context.Context, target, requester string, block bool) error
+	WithdrawConnection(ctx context.Context, requester, target string) error
 	IncomingRequests(ctx context.Context, user string) ([]store.ConnectionReq, error)
 	OutgoingRequests(ctx context.Context, user string) ([]store.ConnectionReq, error)
 }
@@ -210,6 +211,7 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	mux.Handle("POST /v1/connections/request", authMW(http.HandlerFunc(h.requestConnection)))
 	mux.Handle("POST /v1/connections/accept", authMW(http.HandlerFunc(h.acceptConnection)))
 	mux.Handle("POST /v1/connections/reject", authMW(http.HandlerFunc(h.rejectConnection)))
+	mux.Handle("POST /v1/connections/withdraw", authMW(http.HandlerFunc(h.withdrawConnection)))
 	mux.Handle("POST /v1/connections/link", authMW(http.HandlerFunc(h.linkConnection)))
 
 	// Public in-network directory: discover any member, fetch one profile, update

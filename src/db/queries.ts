@@ -1274,6 +1274,9 @@ export async function sendMediaMessage(
     videoNote?: boolean;
     audio?: AudioMeta;
     quality?: 'sd' | 'hd' | 'original';
+    /** A ready-made thumbnail (data URL) to embed, e.g. a frame captured live by the
+     *  video-note recorder — more reliable than decoding the recorded blob. */
+    poster?: string;
     /** Caption typed alongside the media (the message body); receivers render it
      *  under the photo/video. Clamped to CAPTION_MAX. */
     caption?: string;
@@ -1324,6 +1327,9 @@ export async function sendMediaMessage(
     albumName: opts?.albumName,
     videoNote: opts?.videoNote,
     audio: opts?.audio,
+    // A caller-provided thumbnail (video-note recorder); runMediaJob may later replace
+    // it with a first-frame poster if it can decode one, but this guarantees one.
+    posterData: opts?.poster,
     updatedAt: ts,
   };
   await put('messages', message);
@@ -1443,17 +1449,24 @@ async function runMediaJob(messageId: string): Promise<void> {
       console.info('[media-job] encoded', { id: messageId, kind: message.kind, bytes: uploadBlob.size });
       // Tag the bubble with resolution / length / size (persisted FIRST so the badge
       // shows even if the thumbnail step is slow), then best-effort thumbnail.
-      if (message.kind === 'video' && !message.videoNote) {
+      if (message.kind === 'video') {
         const meta = await readVideoMeta(uploadBlob);
         message.mediaWidth = meta.width;
         message.mediaHeight = meta.height;
         message.durationSec = meta.durationSec ?? message.durationSec;
         message.mediaSize = uploadBlob.size;
         await put('messages', message);
-        const poster = await generateVideoPoster(uploadBlob);
-        if (poster) {
-          message.posterData = poster;
-          await put('messages', message);
+        // Embed a first-frame poster for ALL videos, including round video notes, so
+        // they show a thumbnail before/without playback (otherwise iOS shows nothing).
+        // Skip if a poster is already embedded (e.g. the live frame the video-note
+        // recorder captured) — don't overwrite a good frame with the often-black
+        // first frame of the clip (camera warm-up).
+        if (!message.posterData) {
+          const poster = await generateVideoPoster(uploadBlob);
+          if (poster) {
+            message.posterData = poster;
+            await put('messages', message);
+          }
         }
       } else if (message.kind === 'image') {
         const meta = await readImageMeta(uploadBlob);
@@ -2472,7 +2485,9 @@ export function setSetting<T>(key: string, value: T): Promise<void> {
 
 /* ---- emoji usage (drives the most-used-first quick-react row) ---- */
 const EMOJI_USAGE_KEY = 'emojiUsage';
-const DEFAULT_QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+// Seven defaults so the quick-react bar is full (7) on a fresh account before any
+// usage history exists (spec 1008).
+const DEFAULT_QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🎉'];
 
 /** Bump a reaction emoji's usage count. */
 export async function recordEmojiUse(emoji: string): Promise<void> {

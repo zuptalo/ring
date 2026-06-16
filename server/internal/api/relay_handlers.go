@@ -46,6 +46,12 @@ func (h *Handlers) relayPending(w http.ResponseWriter, r *http.Request) {
 	}
 	frames := make([]json.RawMessage, 0, len(items))
 	for _, it := range items {
+		// Skip messages from senders the caller has blocked — held until unblock.
+		if it.Sender != "" {
+			if blocked, err := h.Blocks.IsBlocked(r.Context(), uid, it.Sender); err == nil && blocked {
+				continue
+			}
+		}
 		frames = append(frames, json.RawMessage(it.Payload))
 		if it.Sender != "" && it.MsgID != "" {
 			// Record durably first so the sender can reconcile even if it's offline

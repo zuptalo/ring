@@ -48,14 +48,20 @@
       >
         <div v-for="(it, i) in items" :key="it.id" class="viewer-slide">
           <div class="zoom-layer" :style="i === index ? zoomStyle : undefined">
-            <img v-if="it.kind === 'image'" :src="it.url" alt="" @click="onMediaClick" @dblclick="onMediaDblClick" />
+            <!-- Only the current slide and its neighbours render real media, so a
+                 media-heavy chat never decodes everything at once (OOM). -->
+            <template v-if="it.kind === 'image'">
+              <img v-if="i === index || nearby(i)" :src="it.url || it.thumb" alt="" @click="onMediaClick" @dblclick="onMediaDblClick" />
+            </template>
             <video-player
               v-else-if="i === index || nearby(i)"
               :ref="(c) => bindVideo(c, i)"
               :src="it.url"
               :embedded="true"
               :chrome-hidden="chromeHidden"
+              :start-at="positions[it.id]"
               @tap="onVideoTap"
+              @time="(t) => (positions[it.id] = t)"
             />
           </div>
         </div>
@@ -164,6 +170,7 @@ interface VideoApi {
   pipActive: boolean;
   pipSupported: boolean;
   toggle: () => void;
+  pauseSilent: () => void;
   seekTo: (r: number) => void;
   cycleRate: () => void;
   togglePip: () => void;
@@ -194,6 +201,7 @@ const emit = defineEmits<{
   (e: 'caption', id: string): void;
   (e: 'goto', id: string): void;
   (e: 'allmedia'): void;
+  (e: 'index', i: number): void; // current slide changed → parent resolves its window
 }>();
 
 const QUICK = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -217,6 +225,17 @@ function goToStart(): void {
   const el = track.value;
   if (el) el.scrollLeft = props.start * el.clientWidth;
   void scrollStrip();
+  emit('index', props.start); // resolve the opening item's window (index may not change)
+  void playCurrentIfVideo();
+}
+// Autoplay the video we've landed on (the off-screen ones are paused by the index
+// watch / pauseOffscreenVideos), so sliding onto a video plays it and sliding away
+// stops it — only the on-screen video is ever active.
+async function playCurrentIfVideo(): Promise<void> {
+  await nextTick();
+  if (cur.value?.kind !== 'video') return;
+  const api = videoApis.get(index.value);
+  if (api && !api.playing) api.toggle();
 }
 function onScroll(): void {
   const el = track.value;
@@ -431,11 +450,28 @@ const activeVideo = shallowRef<VideoApi | null>(null);
 // inline ref callback every render (old→null, new→instance), so we MUST ignore the null
 // detach and skip same-value writes — otherwise the template reading `activeVideo` would
 // rewrite it every render → infinite re-render loop (the web process crashes).
+// All currently-mounted players, by slide index (plain Map — never read in the
+// template, so it triggers no re-render; activeVideo drives the chrome). Lets us
+// pause every player except the on-screen one when the user slides (FR-004).
+const videoApis = new Map<number, VideoApi>();
 function bindVideo(c: unknown, i: number): void {
-  if (i !== index.value) return;
   const inst = (c as VideoApi | null) ?? null;
-  if (inst && activeVideo.value !== inst) activeVideo.value = inst;
+  if (inst) videoApis.set(i, inst);
+  else videoApis.delete(i);
+  if (i === index.value && inst && activeVideo.value !== inst) activeVideo.value = inst;
 }
+// Sliding away from a video must stop it fully (no off-screen audio/decoding),
+// while its position is remembered via @time so sliding back resumes there.
+function pauseOffscreenVideos(): void {
+  for (const [i, api] of videoApis) if (i !== index.value) api.pauseSilent();
+}
+// Item ids → last playback position (seconds), so a remounted player resumes there.
+const positions = reactive<Record<string, number>>({});
+watch(index, () => {
+  pauseOffscreenVideos();
+  emit('index', index.value); // let the parent resolve this window's media
+  void playCurrentIfVideo();
+});
 const vfmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 // Tap on the video → hide all chrome for a video-only view; tap again → bring it back.
 function onVideoTap(): void {
@@ -451,6 +487,10 @@ function onMediaDblClick(): void {
 
 watch(() => props.start, (s) => {
   if (props.open) index.value = s;
+});
+// Closing the viewer stops any playing video (FR-006).
+watch(() => props.open, (o) => {
+  if (!o) for (const api of videoApis.values()) api.pauseSilent();
 });
 </script>
 

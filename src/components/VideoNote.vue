@@ -1,13 +1,8 @@
 <template>
-  <!-- Round video-note bubble: tap to play (with sound), long-press for actions;
-       a ring shows progress; shows the first-frame thumbnail until played. -->
-  <div
-    class="vnp"
-    @pointerdown="lpDown"
-    @pointerup="lpUp"
-    @pointerleave="lpUp"
-    @click.stop="onClick"
-  >
+  <!-- Round video-note bubble: tap to play (with sound); a ring shows progress and
+       it shows the first-frame thumbnail until played. The action menu opens from the
+       footer below (handled by the parent bubble). -->
+  <div class="vnp" @click.stop="onClick">
     <video
       ref="el"
       class="vnp-video"
@@ -24,61 +19,88 @@
     </svg>
     <div v-if="!playing" class="vnp-play"><ion-icon :icon="play" /></div>
     <div class="vnp-badge">
-      <ion-icon :icon="playing ? volumeHigh : volumeMute" />
+      <ion-icon :icon="playing && !muted ? volumeHigh : volumeMute" />
       {{ fmt(playing ? Math.max(0, total - elapsed) : total) }}
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, volumeHigh, volumeMute } from 'ionicons/icons';
+import { getSetting, setSetting } from '@/db/queries';
 
-const props = defineProps<{ src: string; durationSec?: number; poster?: string }>();
-const emit = defineEmits<{ (e: 'menu', ev: PointerEvent): void }>();
+const props = defineProps<{ src: string; mid?: string; durationSec?: number; poster?: string }>();
 
 const CIRC = 2 * Math.PI * 48;
 const el = ref<HTMLVideoElement>();
 const playing = ref(false);
+const muted = ref(false);
 const elapsed = ref(0);
 const total = ref(props.durationSec ?? 0);
 const progress = computed(() => (total.value ? Math.min(1, elapsed.value / total.value) : 0));
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
-function toggle(): void {
+// Auto-play sequence: when the note first comes into view it plays 3 times — once
+// with audio, then twice muted — then stops; after that, playback is manual (tap).
+const AUTO_CYCLES = 3;
+let started = false; // the auto sequence has begun for this note (only once)
+let autoActive = false; // currently running the auto sequence
+let autoCount = 0; // auto cycles completed
+
+function playEl(wantMuted: boolean): void {
   const v = el.value;
   if (!v) return;
-  if (v.paused) {
-    v.muted = false;
-    void v.play();
-    playing.value = true;
-  } else {
-    v.pause();
-    playing.value = false;
+  v.muted = wantMuted;
+  muted.value = wantMuted;
+  playing.value = true;
+  void v.play().catch(() => {
+    // Autoplay WITH audio is blocked without a user gesture on some platforms; retry
+    // muted so the note still plays (the user can tap for sound).
+    if (!v.muted) {
+      v.muted = true;
+      muted.value = true;
+      void v.play().catch(() => (playing.value = false));
+    } else {
+      playing.value = false;
+    }
+  });
+}
+
+// Remember which notes have used up their 3 auto-plays, so they only show the
+// thumbnail on later views (no more autoplay), persisted across remounts/sessions.
+const AUTOPLAYED_KEY = 'vnAutoplayed';
+async function markAutoplayed(): Promise<void> {
+  if (!props.mid) return;
+  try {
+    const done = await getSetting<Record<string, boolean>>(AUTOPLAYED_KEY, {});
+    done[props.mid] = true;
+    await setSetting(AUTOPLAYED_KEY, done);
+  } catch {
+    /* best-effort */
   }
 }
 
-// Long-press opens the message actions (react / reply / forward / …).
-let lpTimer: number | undefined;
-let lp = false;
-function lpDown(e: PointerEvent): void {
-  lp = false;
-  lpTimer = window.setTimeout(() => {
-    lp = true;
-    emit('menu', e);
-  }, 500);
+function startAuto(): void {
+  if (started) return;
+  started = true;
+  autoActive = true;
+  autoCount = 0;
+  playEl(true); // always start muted — tap for sound
 }
-function lpUp(): void {
-  if (lpTimer) clearTimeout(lpTimer);
-  lpTimer = undefined;
-}
+
+// A tap plays/pauses with audio; any manual interaction ends the auto sequence.
 function onClick(): void {
-  if (lp) {
-    lp = false;
-    return;
+  const v = el.value;
+  if (!v) return;
+  autoActive = false;
+  started = true;
+  if (v.paused) playEl(false);
+  else {
+    v.pause();
+    playing.value = false;
   }
-  toggle();
 }
 function onMeta(): void {
   if (el.value && Number.isFinite(el.value.duration) && el.value.duration > 0) total.value = el.value.duration;
@@ -87,11 +109,50 @@ function onTime(): void {
   if (el.value) elapsed.value = el.value.currentTime;
 }
 function onEnd(): void {
-  playing.value = false;
   elapsed.value = 0;
   if (el.value) el.value.currentTime = 0;
+  if (autoActive) {
+    autoCount += 1;
+    if (autoCount >= AUTO_CYCLES) {
+      autoActive = false;
+      playing.value = false; // done → show the thumbnail; further plays are manual
+      void markAutoplayed(); // and never autoplay this note again
+    } else {
+      playEl(true); // all auto cycles are muted
+    }
+  } else {
+    playing.value = false;
+  }
 }
-onBeforeUnmount(() => el.value?.pause());
+
+// Kick off the auto sequence the first time the note scrolls into view — unless this
+// note has already used up its 3 auto-plays before, in which case just show the
+// thumbnail and don't autoplay at all.
+let io: IntersectionObserver | undefined;
+onMounted(async () => {
+  const v = el.value;
+  if (!v) return;
+  try {
+    const done = await getSetting<Record<string, boolean>>(AUTOPLAYED_KEY, {});
+    if (props.mid && done[props.mid]) {
+      started = true; // already auto-played 3× → thumbnail only
+      return;
+    }
+  } catch {
+    /* fall through to normal autoplay */
+  }
+  io = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) if (e.isIntersecting && !started) startAuto();
+    },
+    { threshold: 0.6 },
+  );
+  io.observe(v);
+});
+onBeforeUnmount(() => {
+  io?.disconnect();
+  el.value?.pause();
+});
 </script>
 
 <style scoped>

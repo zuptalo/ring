@@ -21,7 +21,7 @@ import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
 import { publishOwnProfile, syncContactEdges, refreshContactProfiles } from '@/services/directory';
 import { applyPushPreference, disablePush, revalidatePushSubscription } from '@/services/push';
 import { checkForUpdate } from '@/composables/useAppUpdate';
-import { refreshConnections } from '@/services/connections';
+import { refreshConnections, onConnectionAccepted } from '@/services/connections';
 import { notifyIncoming } from '@/services/notify';
 import { runInviteSync } from '@/services/invites';
 import { clearPresence } from '@/composables/usePresence';
@@ -156,6 +156,16 @@ export function nudgeReconnect(): void {
   if (isAuthenticated.value && token) void transport.connect(token);
 }
 
+/** Force a fresh reconnect even if currently connected, so the server re-runs its
+ *  on-connect queue flush. Used after unblocking a contact to pull the messages the
+ *  server held while they were blocked (the queue only flushes on connect). */
+export function forceReconnect(): void {
+  if (!transport) return;
+  transport.disconnect();
+  const token = getToken();
+  if (isAuthenticated.value && token) void transport.connect(token);
+}
+
 /** Test-only: drop the WebSocket so the server queues messages for this account
  *  (simulating a backgrounded/closed app), exercising the SW background-decrypt
  *  path. Reconnect with nudgeReconnect(). */
@@ -229,11 +239,17 @@ function start(): void {
   transport.onMessage((f) => {
     // Connect-request notifications: re-read the authoritative state, and alert on a
     // new incoming request (so it surfaces like a friend request).
-    if (f.t === 'connect-req' || f.t === 'connect-update') {
+    if (f.t === 'connect-req') {
       void refreshConnections();
-      if (f.t === 'connect-req') {
-        void notifyIncoming({ kind: 'request', name: 'Someone', body: 'wants to connect' });
-      }
+      void notifyIncoming({ kind: 'request', name: 'Someone', body: 'wants to be friends' });
+      return;
+    }
+    if (f.t === 'connect-update') {
+      // Our outgoing request was accepted → they're a friend now: import + mark
+      // connected (we no longer auto-import the directory). Rejected/withdrawn just
+      // reconcile the lists.
+      if (f.state === 'accepted') void onConnectionAccepted(f.from);
+      else void refreshConnections();
       return;
     }
     const live = f.t.startsWith('call-') || f.t.startsWith('sfu-') || f.t === 'presence';

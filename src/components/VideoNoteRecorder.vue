@@ -17,7 +17,10 @@
           :stroke-dashoffset="CIRC * (1 - progress)"
         />
       </svg>
-      <video ref="preview" class="vn-video" autoplay muted playsinline></video>
+      <video ref="preview" class="vn-video" :class="{ mirror: facing === 'user' }" autoplay muted playsinline></video>
+      <!-- Black overlay that fades to reveal the footage during the 3s countdown. -->
+      <div class="vn-fade" :class="{ go: fading }"></div>
+      <div v-if="countdown" class="vn-count">{{ countdown }}</div>
     </div>
 
     <button class="vn-flip" aria-label="Flip camera" @click="flip"><ion-icon :icon="cameraReverseOutline" /></button>
@@ -39,16 +42,19 @@ const MAX = 60; // seconds
 const CIRC = 2 * Math.PI * 48;
 
 const props = defineProps<{ open: boolean }>();
-const emit = defineEmits<{ (e: 'send', blob: Blob, dur: number): void; (e: 'cancel'): void }>();
+const emit = defineEmits<{ (e: 'send', blob: Blob, dur: number, poster?: string): void; (e: 'cancel'): void }>();
 
 const preview = ref<HTMLVideoElement>();
 const elapsed = ref(0);
 const facing = ref<'user' | 'environment'>('user');
+const countdown = ref<number | null>(null); // 3..1 before recording starts (null = recording)
+const fading = ref(false); // drives the black→footage fade during the countdown
 let stream: MediaStream | null = null;
 let recorder: MediaRecorder | null = null;
 let chunks: BlobPart[] = [];
 let startMs = 0;
 let timer: number | undefined;
+let countTimer: number | undefined;
 
 const progress = computed(() => Math.min(1, elapsed.value / MAX));
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -65,26 +71,49 @@ async function start(): Promise<void> {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing.value }, audio: true });
     if (preview.value) preview.value.srcObject = stream;
-    const types = ['video/webm', 'video/mp4'];
-    const mt = types.find((t) => MediaRecorder.isTypeSupported?.(t));
-    recorder = new MediaRecorder(stream, mt ? { mimeType: mt } : undefined);
-    chunks = [];
-    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    recorder.start();
-    startMs = Date.now();
-    elapsed.value = 0;
-    timer = window.setInterval(() => {
-      elapsed.value = (Date.now() - startMs) / 1000;
-      if (elapsed.value >= MAX) void stopAndSend();
-    }, 100);
+    // 3-2-1 countdown with the preview fading up from black, THEN begin recording.
+    countdown.value = 3;
+    fading.value = false;
+    requestAnimationFrame(() => (fading.value = true)); // trigger the CSS fade-out
+    countTimer = window.setInterval(() => {
+      const next = (countdown.value ?? 1) - 1;
+      if (next <= 0) {
+        if (countTimer) clearInterval(countTimer);
+        countTimer = undefined;
+        countdown.value = null;
+        beginRecording();
+      } else {
+        countdown.value = next;
+      }
+    }, 1000);
   } catch {
     emit('cancel'); // no camera/mic access
   }
 }
 
+function beginRecording(): void {
+  if (!stream) return;
+  const types = ['video/webm', 'video/mp4'];
+  const mt = types.find((t) => MediaRecorder.isTypeSupported?.(t));
+  recorder = new MediaRecorder(stream, mt ? { mimeType: mt } : undefined);
+  chunks = [];
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.start();
+  startMs = Date.now();
+  elapsed.value = 0;
+  timer = window.setInterval(() => {
+    elapsed.value = (Date.now() - startMs) / 1000;
+    if (elapsed.value >= MAX) void stopAndSend();
+  }, 100);
+}
+
 function teardown(): void {
   if (timer) clearInterval(timer);
   timer = undefined;
+  if (countTimer) clearInterval(countTimer);
+  countTimer = undefined;
+  countdown.value = null;
+  fading.value = false;
   try {
     if (recorder && recorder.state !== 'inactive') recorder.stop();
   } catch {
@@ -95,9 +124,32 @@ function teardown(): void {
   recorder = null;
 }
 
+// Grab a still from the live preview as a thumbnail — reliable (we always have real
+// frames here), unlike decoding the recorded blob, which can fail on some devices.
+// drawImage reads the raw frame (the CSS mirror doesn't apply), so it matches the
+// recorded, un-mirrored video.
+function capturePoster(): string | undefined {
+  const v = preview.value;
+  if (!v || !v.videoWidth) return undefined;
+  try {
+    const maxEdge = 320;
+    const scale = Math.min(1, maxEdge / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(v.videoWidth * scale));
+    c.height = Math.max(1, Math.round(v.videoHeight * scale));
+    const cx = c.getContext('2d');
+    if (!cx) return undefined;
+    cx.drawImage(v, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.6);
+  } catch {
+    return undefined;
+  }
+}
+
 async function stopAndSend(): Promise<void> {
   if (!recorder) return;
   const dur = Math.max(1, Math.round(elapsed.value));
+  const poster = capturePoster(); // capture while the preview stream is still live
   const rec = recorder;
   const mime = rec.mimeType || 'video/webm';
   if (timer) clearInterval(timer);
@@ -109,7 +161,7 @@ async function stopAndSend(): Promise<void> {
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
   recorder = null;
-  emit('send', blob, dur);
+  emit('send', blob, dur, poster);
 }
 
 function cancel(): void {
@@ -187,6 +239,36 @@ onBeforeUnmount(teardown);
   border-radius: 50%;
   object-fit: cover;
   background: #000;
+}
+/* Mirror the front (selfie) camera preview so it behaves like a mirror. */
+.vn-video.mirror {
+  transform: scaleX(-1);
+}
+/* Countdown: a black disc over the preview that fades out over the 3s, revealing the
+   footage, with the count drawn on top. */
+.vn-fade {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: #000;
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity 3s linear;
+}
+.vn-fade.go {
+  opacity: 0;
+}
+.vn-count {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 76px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
 }
 .vn-flip {
   position: absolute;

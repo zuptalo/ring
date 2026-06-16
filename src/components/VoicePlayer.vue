@@ -29,13 +29,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, pause, mic } from 'ionicons/icons';
 import SpeedPill from '@/components/SpeedPill.vue';
-import { nextRate, playWhenReady } from '@/utils/playback';
+import {
+  audioCurId, audioPlaying, audioProgress, audioRate,
+  playAudio, seekAudioFrac, cycleAudioRate,
+} from '@/composables/useAudioPlayer';
 
 const props = defineProps<{
+  mid: string; // message id — this voice message's id in the global player
+  sender: string; // who it's from (shown in the hovering controller)
   src: string;
   outgoing: boolean;
   avatar?: string;
@@ -45,16 +50,16 @@ const props = defineProps<{
 const BAR_COUNT = 44;
 // Flat placeholder until decoded (and the fallback if decoding isn't supported).
 const bars = ref<number[]>(Array.from({ length: BAR_COUNT }, () => 0.25));
-const playing = ref(false);
-const progress = ref(0); // 0..1
 const total = ref(props.durationSec ?? 0);
-const elapsed = ref(0);
-const rate = ref(1);
 
-const audio = new Audio(props.src);
-// 'auto' (not 'metadata'): buffer the audio data eagerly so the FIRST tap isn't silent
-// — a metadata-only element starts the clock before any sound has decoded.
-audio.preload = 'auto';
+// Playback runs through the global single-source player; this view just reflects it
+// when this voice message is the active one (so audio persists across navigation and
+// only one source ever plays — spec 1007).
+const isActive = computed(() => audioCurId.value === props.mid);
+const playing = computed(() => isActive.value && audioPlaying.value);
+const progress = computed(() => (isActive.value ? audioProgress.value : 0)); // 0..1
+const elapsed = computed(() => progress.value * total.value);
+const rate = computed(() => audioRate.value);
 
 const barHeight = (h: number) => `${Math.round(3 + h * 17)}px`;
 
@@ -92,58 +97,25 @@ async function decodeWaveform(): Promise<void> {
   }
 }
 
-function onTime(): void {
-  elapsed.value = audio.currentTime;
-  progress.value = total.value ? Math.min(1, audio.currentTime / total.value) : 0;
-}
-function onEnded(): void {
-  playing.value = false;
-  progress.value = 0;
-  elapsed.value = 0;
-  audio.currentTime = 0;
-}
-
+// Play this voice message (or toggle it if it's already the active one) through the
+// global player, which replaces any other audio and keeps playing across navigation.
 function toggle(): void {
-  if (playing.value) audio.pause();
-  else void playWhenReady(audio); // 'play'/'pause' listeners sync `playing`
+  playAudio({ id: props.mid, url: props.src, title: 'Voice message', subtitle: props.sender, isVoice: true });
 }
 function cycleRate(): void {
-  rate.value = nextRate(rate.value);
-  audio.playbackRate = rate.value;
+  cycleAudioRate();
 }
 
 const waveEl = ref<HTMLElement>();
 function seek(ev: MouseEvent): void {
   const el = waveEl.value;
-  if (!el || !total.value) return;
+  if (!el || !total.value || !isActive.value) return;
   const rect = el.getBoundingClientRect();
-  const ratio = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
-  audio.currentTime = ratio * total.value;
-  onTime();
+  seekAudioFrac(Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width)));
 }
 
-const onPlay = (): void => {
-  playing.value = true;
-};
-const onPause = (): void => {
-  playing.value = false;
-};
 onMounted(() => {
-  audio.addEventListener('timeupdate', onTime);
-  audio.addEventListener('ended', onEnded);
-  audio.addEventListener('play', onPlay);
-  audio.addEventListener('pause', onPause);
-  audio.addEventListener('loadedmetadata', () => {
-    if (Number.isFinite(audio.duration) && audio.duration > 0) total.value = audio.duration;
-  });
   void decodeWaveform();
-});
-onBeforeUnmount(() => {
-  audio.pause();
-  audio.removeEventListener('timeupdate', onTime);
-  audio.removeEventListener('ended', onEnded);
-  audio.removeEventListener('play', onPlay);
-  audio.removeEventListener('pause', onPause);
 });
 </script>
 

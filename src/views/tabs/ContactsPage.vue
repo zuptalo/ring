@@ -37,56 +37,34 @@
         </ion-item>
       </ion-list>
 
-      <ion-list v-if="incomingRequests.length">
+      <!-- Friend requests: incoming (Accept/Decline) + outgoing pending (Cancel),
+           one section, sourced from the connections store with timestamps (0002). -->
+      <ion-list v-if="incomingRequests.length || pendingOutgoing.length">
         <ion-list-header>
-          <ion-label>Connection requests</ion-label>
+          <ion-label>Friend requests</ion-label>
         </ion-list-header>
-        <ion-item v-for="req in incomingRequests" :key="req.userId" :detail="false">
+        <ion-item v-for="req in incomingRequests" :key="`in-${req.userId}`" :detail="false">
           <ion-avatar slot="start">
             <img :src="req.avatar || initialsAvatar(req.name)" :alt="req.name" />
           </ion-avatar>
           <ion-label class="ion-text-wrap">
             <h2>{{ req.name }}</h2>
-            <p>wants to connect</p>
+            <p>wants to be friends · {{ formatStamp(req.updatedMs) }}</p>
           </ion-label>
           <ion-button slot="end" fill="solid" size="small" @click="acceptConn(req.userId)">Accept</ion-button>
-          <ion-button slot="end" fill="clear" size="small" color="medium" @click="rejectConn(req)">Reject</ion-button>
+          <ion-button slot="end" fill="clear" size="small" color="medium" @click="rejectConn(req)">Decline</ion-button>
         </ion-item>
-      </ion-list>
-
-      <ion-list v-if="outgoingRequests.length">
-        <ion-list-header>
-          <ion-label>Sent</ion-label>
-        </ion-list-header>
-        <ion-item v-for="req in outgoingRequests" :key="req.userId" :detail="false">
+        <ion-item v-for="req in pendingOutgoing" :key="`out-${req.userId}`" :detail="false">
           <ion-avatar slot="start">
             <img :src="req.avatar || initialsAvatar(req.name)" :alt="req.name" />
           </ion-avatar>
           <ion-label class="ion-text-wrap">
             <h2>{{ req.name }}</h2>
-            <p>{{ req.state === 'rejected' ? 'Declined' : 'Request sent' }}</p>
+            <p>Requested · {{ formatStamp(req.updatedMs) }}</p>
           </ion-label>
-        </ion-item>
-      </ion-list>
-
-      <ion-list v-if="requests.length">
-        <ion-list-header>
-          <ion-label>Requests</ion-label>
-        </ion-list-header>
-        <ion-item v-for="req in requests" :key="req.id" :detail="false">
-          <ion-avatar slot="start">
-            <img :src="req.avatar" :alt="req.name" />
-          </ion-avatar>
-          <ion-label>
-            <h2>{{ req.name }}</h2>
-            <p>wants to connect</p>
-          </ion-label>
-          <ion-button slot="end" fill="solid" size="small" @click="accept(req.id)">
-            Accept
-          </ion-button>
-          <ion-button slot="end" fill="clear" size="small" color="medium" @click="reject(req.id)">
-            Reject
-          </ion-button>
+          <!-- Cancel → confirm → server withdraw, retracting it from their inbox
+               (spec 0002 FR-008). -->
+          <ion-button slot="end" fill="clear" size="small" color="medium" @click="cancelConn(req)">Cancel</ion-button>
         </ion-item>
       </ion-list>
 
@@ -107,24 +85,6 @@
           </ion-button>
           <ion-button slot="end" fill="clear" size="small" color="medium" @click="declineInvite(inv.groupId)">
             Decline
-          </ion-button>
-        </ion-item>
-      </ion-list>
-
-      <ion-list v-if="sent.length">
-        <ion-list-header>
-          <ion-label>Requested</ion-label>
-        </ion-list-header>
-        <ion-item v-for="req in sent" :key="req.id" :detail="false">
-          <ion-avatar slot="start">
-            <img :src="req.avatar" :alt="req.name" />
-          </ion-avatar>
-          <ion-label>
-            <h2>{{ req.name }}</h2>
-            <p>Request sent</p>
-          </ion-label>
-          <ion-button slot="end" fill="clear" size="small" color="medium" @click="cancel(req.id)">
-            Cancel
           </ion-button>
         </ion-item>
       </ion-list>
@@ -155,6 +115,9 @@
       </ion-list>
 
       <ion-list>
+        <ion-list-header v-if="friends.length">
+          <ion-label>Friends</ion-label>
+        </ion-list-header>
         <template v-for="group in groups" :key="group.letter">
           <ion-item-divider sticky>
             <ion-label>{{ group.letter }}</ion-label>
@@ -179,17 +142,42 @@
             </ion-item-options>
           </ion-item-sliding>
         </template>
+
+        <!-- Blocked contacts live at the bottom, out of the way and easy to spot.
+             Tapping opens the contact where they can be unblocked. -->
+        <template v-if="blockedContacts.length">
+          <ion-list-header>
+            <ion-label>Blocked</ion-label>
+          </ion-list-header>
+          <ion-item
+            v-for="person in blockedContacts"
+            :key="`blocked-${person.id}`"
+            button
+            :detail="false"
+            class="blocked-row"
+            @click="open(person.id)"
+          >
+            <ion-avatar slot="start">
+              <img :src="person.avatar" :alt="person.name" />
+            </ion-avatar>
+            <ion-label>
+              <h2>{{ capitalizeFirst(person.name) }}</h2>
+              <p>Blocked</p>
+            </ion-label>
+            <ion-icon slot="end" :icon="banOutline" color="medium" />
+          </ion-item>
+        </template>
       </ion-list>
 
       <ion-infinite-scroll
-        :disabled="visible >= contacts.length"
+        :disabled="visible >= friends.length"
         @ion-infinite="loadMore"
       >
         <ion-infinite-scroll-content />
       </ion-infinite-scroll>
 
       <div v-if="loaded && contacts.length === 0" class="empty">
-        <ion-note>No contacts found</ion-note>
+        <ion-note>No friends yet</ion-note>
       </div>
     </ion-content>
   </ion-page>
@@ -204,17 +192,17 @@ import {
   IonItemDivider, IonAvatar, IonLabel, IonNote,
   IonInfiniteScroll, IonInfiniteScrollContent,
   IonItemSliding, IonItemOptions, IonItemOption,
-  actionSheetController, toastController, onIonViewWillEnter,
+  actionSheetController, alertController, toastController, onIonViewWillEnter,
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
-import { personAddOutline, trashOutline, ellipsisHorizontal, compassOutline } from 'ionicons/icons';
+import { personAddOutline, trashOutline, ellipsisHorizontal, compassOutline, banOutline } from 'ionicons/icons';
 import {
-  incomingRequests, outgoingRequests, acceptConnect, rejectConnect, refreshConnections,
+  incomingRequests, outgoingRequests, acceptConnect, rejectConnect, withdrawConnect, refreshConnections,
   type ConnItem,
 } from '@/services/connections';
+import { formatStamp } from '@/utils/time';
 import {
-  acceptRequest, cancelSentRequest, deleteContact,
-  listContacts, listPendingRequests, listSentRequests, rejectRequest,
+  deleteContact, listContacts,
   listPendingInvites, cancelSentInvite, type PendingInvite,
   listGroupInvites, acceptGroupInvite, declineGroupInvite,
 } from '@/db/queries';
@@ -233,7 +221,7 @@ const open = (id: string) => router.push(`/contact/${id}`);
 const removeContact = (id: string) => deleteContact(id);
 
 // Shared add-contact flow (also used by the New-chat modal).
-const { connect, requireProfile } = useConnect();
+const { connect } = useConnect();
 
 const search = ref('');
 const visible = ref(PAGE);
@@ -252,24 +240,9 @@ const loaded = contacts.loaded;
 // Reset the page window when the search term changes.
 watch(search, () => (visible.value = PAGE));
 
-const requests = useLiveQuery(
-  () => listPendingRequests(),
-  ['requests'],
-  [] as FriendRequest[],
-);
-// Outgoing requests we've sent, awaiting the peer's acceptance.
-const sent = useLiveQuery(
-  () => listSentRequests(),
-  ['requests'],
-  [] as FriendRequest[],
-);
-// Accepting also sends your contact card back, so require a profile first.
-async function accept(id: string): Promise<void> {
-  if (!(await requireProfile())) return;
-  await acceptRequest(id);
-}
-const reject = (id: string) => rejectRequest(id);
-const cancel = (id: string) => cancelSentRequest(id);
+// Outgoing friend requests still awaiting a response (pending only). Rejected ones
+// drop out of the list — the person becomes discoverable in the directory again.
+const pendingOutgoing = computed(() => outgoingRequests.value.filter((r) => r.state === 'pending'));
 
 // Incoming group invitations (accept-first): accepting creates the group chat and
 // starts receiving from that point; declining tells the inviter and clears it.
@@ -374,6 +347,19 @@ async function doCancel(code: string): Promise<void> {
 async function acceptConn(userId: string): Promise<void> {
   await acceptConnect(userId);
 }
+// Cancel an outgoing request → confirm first, then authoritative server withdraw
+// (retracts it from the other party's incoming list, spec 0002 FR-008).
+async function cancelConn(req: ConnItem): Promise<void> {
+  const alert = await alertController.create({
+    header: 'Cancel friend request?',
+    message: `Withdraw your request to ${req.name}? They won't see it anymore.`,
+    buttons: [
+      { text: 'Keep', role: 'cancel' },
+      { text: 'Cancel request', role: 'destructive', handler: () => void withdrawConnect(req.userId) },
+    ],
+  });
+  await alert.present();
+}
 async function rejectConn(req: ConnItem): Promise<void> {
   const sheet = await actionSheetController.create({
     header: req.name,
@@ -403,9 +389,13 @@ function loadMore(ev: InfiniteScrollCustomEvent) {
 }
 
 // Group the visible (already sorted) contacts by first letter for the headers.
+// Active friends (alphabetical groups) vs. blocked contacts, which drop to their own
+// section at the bottom so they're easy to find and out of the way.
+const friends = computed(() => contacts.value.filter((c) => !c.blocked));
+const blockedContacts = computed(() => contacts.value.filter((c) => c.blocked));
 const groups = computed(() => {
   const map = new Map<string, Contact[]>();
-  for (const c of contacts.value.slice(0, visible.value)) {
+  for (const c of friends.value.slice(0, visible.value)) {
     const letter = (c.name[0] ?? '#').toUpperCase();
     if (!map.has(letter)) map.set(letter, []);
     map.get(letter)!.push(c);

@@ -51,6 +51,14 @@ func (m *memRelay) block(blocker, blocked string) {
 	m.blocks[blocker][blocked] = true
 }
 
+func (m *memRelay) unblock(blocker, blocked string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.blocks[blocker] != nil {
+		delete(m.blocks[blocker], blocked)
+	}
+}
+
 func (m *memRelay) EnqueueRelay(_ context.Context, recipient, sender, msgID string, payload []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -346,7 +354,7 @@ func TestRelayDropsClientForgedSentReceipt(t *testing.T) {
 	}
 }
 
-func TestRelayDropsBlockedSender(t *testing.T) {
+func TestRelayHoldsBlockedSenderUntilUnblock(t *testing.T) {
 	srv, relay := newRelayServer()
 	defer srv.Close()
 	relay.block("user-b", "user-a") // B has blocked A
@@ -354,25 +362,34 @@ func TestRelayDropsBlockedSender(t *testing.T) {
 	a := dial(t, srv, "tokA")
 	defer a.Close()
 	b := dial(t, srv, "tokB")
-	defer b.Close()
 	time.Sleep(50 * time.Millisecond)
 
-	// A (blocked) sends to B. The message must be dropped: not delivered live, not
-	// queued - but A still gets a 'sent' receipt so the block stays invisible.
+	// A (blocked) sends to B. The message is HELD: not delivered live, but durably
+	// queued - and A still gets a 'sent' receipt so the block stays invisible.
 	if err := a.WriteJSON(map[string]any{"t": "msg", "id": "mb", "to": "user-b", "ciphertext": "X"}); err != nil {
 		t.Fatalf("A send: %v", err)
 	}
 	if sent := readFrame(t, a); sent["t"] != "receipt" || sent["status"] != "sent" {
 		t.Fatalf("A expected sent receipt, got: %v", sent)
 	}
-	// B must receive nothing.
+	// B (still blocking) must receive nothing live...
 	_ = b.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	if _, _, err := b.ReadMessage(); err == nil {
-		t.Fatalf("B should have received nothing from a blocked sender")
+		t.Fatalf("B should have received nothing while still blocking A")
 	}
-	// Nothing queued either.
-	if pending, _ := relay.PendingForRecipient(context.Background(), "user-b"); len(pending) != 0 {
-		t.Fatalf("expected 0 queued frames for B, got %d", len(pending))
+	// ...but the message IS queued, held until unblock.
+	if pending, _ := relay.PendingForRecipient(context.Background(), "user-b"); len(pending) != 1 {
+		t.Fatalf("expected 1 held frame for B, got %d", len(pending))
+	}
+
+	// B unblocks A and reconnects → the held message flushes on connect.
+	b.Close()
+	relay.unblock("user-b", "user-a")
+	b2 := dial(t, srv, "tokB")
+	defer b2.Close()
+	got := readFrame(t, b2)
+	if got["t"] != "msg" || got["id"] != "mb" {
+		t.Fatalf("after unblock B expected the held msg, got: %v", got)
 	}
 }
 
