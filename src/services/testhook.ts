@@ -43,6 +43,7 @@ import {
   editMessage as dbEditMessage,
   deleteMessageForEveryone as dbDeleteMessageForEveryone,
   reactToMessage as dbReactToMessage,
+  quickReactEmojis as dbQuickReactEmojis,
   getMessage as dbGetMessage,
   sendLocation as dbSendLocation,
   sendPoll as dbSendPoll,
@@ -313,6 +314,9 @@ export function installTestHook(): void {
     },
     /** Add/toggle the local user's emoji reaction on a message. */
     reactToMessage: (messageId: string, emoji: string) => dbReactToMessage(messageId, emoji),
+    /** The most-used-first quick-react set (the menu's emoji row order). Lets e2e
+     *  assert usage-based reordering (spec 1004 FR-006). */
+    quickReactEmojis: (limit?: number) => dbQuickReactEmojis(limit),
 
     /* ---- location / poll / contact ---- */
     sendLocation: (chatId: string, lat: number, lng: number, label?: string) =>

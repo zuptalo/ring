@@ -166,7 +166,7 @@
               </span>
             <div
               class="bubble"
-              :class="{ out: m.outgoing, 'bubble-plain': m.videoNote && !m.deleted, 'bubble-media': mediaBubble(m) }"
+              :class="{ out: m.outgoing, 'bubble-plain': m.videoNote && !m.deleted, 'bubble-media': mediaBubble(m), 'menu-focus': menuFocusId === m.id }"
               :data-mid="m.id"
               :style="swipeStyle(m.id)"
               @touchstart.passive="onSwipeStart($event, m)"
@@ -205,7 +205,9 @@
               >
 
               <template v-if="m.mediaId && mediaInfo[m.mediaId]">
-                <div v-if="m.kind === 'image'" class="media-wrap" @click.stop="openMediaViewer(m.id)">
+                <!-- A tap anywhere on the image opens the action menu (the whole
+                     bubble is the hit target); "View" in the menu opens the viewer. -->
+                <div v-if="m.kind === 'image'" class="media-wrap">
                   <img class="bubble-image" :src="mediaInfo[m.mediaId].url" alt="photo" loading="lazy" decoding="async" />
                   <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                 </div>
@@ -217,10 +219,11 @@
                   :duration-sec="m.durationSec"
                   @menu="(ev) => openMenu(m, ev)"
                 />
-                <!-- Video: a still thumbnail with a play button; tapping opens the
-                     full-screen viewer (falls back to inline if no thumbnail). -->
+                <!-- Video: a still thumbnail with a play button. Tapping the poster
+                     opens the action menu (whole bubble is the hit target); the play
+                     button is the direct affordance to the full-screen viewer. -->
                 <template v-else-if="m.kind === 'video'">
-                  <div class="video-poster" @click.stop="openMediaViewer(m.id)">
+                  <div class="video-poster">
                     <img
                       v-if="m.posterData || mediaInfo[m.mediaId].posterUrl"
                       class="bubble-image"
@@ -230,7 +233,13 @@
                       decoding="async"
                     />
                     <div v-else class="bubble-image video-noposter" />
-                    <ion-icon class="play-overlay" :icon="playCircle" />
+                    <ion-icon
+                      class="play-overlay"
+                      :icon="playCircle"
+                      role="button"
+                      aria-label="Play video"
+                      @click.stop="openMediaViewer(m.id)"
+                    />
                     <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                   </div>
                 </template>
@@ -446,7 +455,7 @@
             <div
               v-else
               class="bubble album-bubble"
-              :class="{ out: item.messages[0].outgoing }"
+              :class="{ out: item.messages[0].outgoing, 'menu-focus': item.messages.some((mm) => mm.id === menuFocusId) }"
               :data-mid="item.messages[0].id"
               :style="swipeStyle(item.messages[0].id)"
               @touchstart.passive="onSwipeStart($event, item.messages[0])"
@@ -470,12 +479,14 @@
               </button>
               <span v-if="item.messages[0].albumName" class="album-name">{{ item.messages[0].albumName }}</span>
               <div class="album-grid">
+                <!-- A tap on a cell opens the menu for that specific image/video
+                     (FR-001 covers the album area); "View" opens the viewer at it. -->
                 <button
                   v-for="(am, idx) in albumCells(item.messages)"
                   :key="am.id"
                   type="button"
                   class="album-cell"
-                  @click.stop="openMediaViewer(am.id)"
+                  @click.stop="openMenu(am, $event)"
                 >
                   <template v-if="am.mediaId && mediaInfo[am.mediaId]">
                     <img :src="mediaInfo[am.mediaId].posterUrl || mediaInfo[am.mediaId].url" alt="" loading="lazy" decoding="async" />
@@ -1036,6 +1047,8 @@ const chatMediaMsgs = computed(() =>
   ),
 );
 const viewer = ref<{ open: boolean; start: number }>({ open: false, start: 0 });
+// The bubble whose action menu is open, so it can be subtly emphasised (FR-008).
+const menuFocusId = ref<string | null>(null);
 const viewerItems = computed(() =>
   chatMediaMsgs.value.map((m) => {
     const mi = mediaInfo.value[m.mediaId!];
@@ -1173,18 +1186,24 @@ async function openMenu(m: Message, ev: Event) {
   const SAVE_KINDS = ['image', 'video', 'file', 'audio', 'voice'];
   const canSaveAll = !!m.albumId;
   const canSave = !canSaveAll && SAVE_KINDS.includes(m.kind) && (!!m.mediaId || !!m.pendingMedia);
+  // A single tap on a media bubble now opens this menu (the whole bubble is the hit
+  // target), so the full-screen viewer is reached from here via "View".
+  const canView = (m.kind === 'image' || m.kind === 'video') && !m.videoNote && !!m.mediaId;
+  // Briefly emphasise the tapped bubble so it's clear which message the menu acts on.
+  menuFocusId.value = m.id;
   const popover = await popoverController.create({
     component: MessageActions,
     cssClass: 'reaction-popover',
     componentProps: {
       isOutgoing: m.outgoing,
       canCopy: !!m.body,
+      canView,
       canEdit: m.outgoing && m.kind === 'text' && !m.deleted,
       canSave,
       canSaveAll,
       myEmojis: myEmojisFor(m),
       reactionCount: m.reactions?.length ?? 0,
-      quick: await quickReactEmojis(4),
+      quick: await quickReactEmojis(12),
     },
     event: ev,
     reference: 'event',
@@ -1193,8 +1212,10 @@ async function openMenu(m: Message, ev: Event) {
   });
   await popover.present();
   const { data } = await popover.onWillDismiss();
+  menuFocusId.value = null;
   if (!data) return;
   if (data.action === 'react') await onReact(m.id, data.emoji);
+  else if (data.action === 'view') openMediaViewer(m.id);
   else if (data.action === 'more') await openEmojiPicker(m);
   else if (data.action === 'details') await openReactionDetails(m);
   else if (data.action === 'reply') void startReply(m);
@@ -3013,6 +3034,16 @@ function cancelRecording() {
 .bubble.out {
   background: var(--app-bubble-out);
 }
+/* While its action menu is open, the bubble lifts slightly so it's clear which
+   message the menu acts on (FR-008). A cheap transform-only emphasis — no blur of
+   the rest, which would risk jank on long chats (the optional FR-011 effect). */
+.bubble.menu-focus {
+  transform: scale(1.04);
+  transform-origin: center;
+  transition: transform 0.15s ease;
+  position: relative;
+  z-index: 2;
+}
 /* A round video note has no chat bubble behind it; instead the circle gets a
    thin frame ring and its timestamp sits in a small pill, both matching the
    in/out bubble colour. */
@@ -3614,6 +3645,11 @@ function cancelRecording() {
   font-size: 48px;
   color: #fff;
   filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.5));
+  cursor: pointer;
+  /* The poster opens the menu; only this play button opens the viewer, so give it
+     a comfortable hit area distinct from the surrounding bubble. */
+  padding: 6px;
+  border-radius: 50%;
 }
 .bubble-audio {
   width: 240px;
