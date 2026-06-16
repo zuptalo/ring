@@ -62,6 +62,31 @@ test('the reaction button shows 7 emoji + "+" (all visible) and applies one', as
   await ctxB.close();
 });
 
+test('the reaction button hides once the 3-reaction cap is reached', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'QREACT5');
+  const b = await createAccount(ctxB, 'QREACT6');
+  await pair(a, b);
+
+  const aChat = (await chatWith(a, b.id)) as string;
+  await send(a, aChat, 'cap me');
+  const mid = ((await messages(a, aChat)) as any[]).find((m) => m.body === 'cap me').id as string;
+  const bubble = await openChatAt(a, aChat, mid);
+
+  // Button is present with room to react.
+  await expect(bubble.locator('.react-btn')).toHaveCount(1);
+
+  // Use all 3 allowed reactions → the button disappears for this message.
+  for (const e of ['👍', '❤️', '😂']) {
+    await a.page.evaluate((args: [string, string]) => (window as any).__ringTest.reactToMessage(args[0], args[1]), [mid, e]);
+  }
+  await expect(bubble.locator('.react-btn')).toHaveCount(0);
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
 test('an open popover is dismissed when leaving the chat', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();

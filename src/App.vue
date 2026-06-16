@@ -243,6 +243,12 @@ body.keyboard-open ion-tab-bar {
     --background: #2c2c2e;
   }
 }
+/* The quick-react bar spans (almost) the full viewport width so all 7 emoji + "+"
+   are spread out and visible at once — never a horizontal scroll (spec 1008). */
+ion-popover.quick-react-popover {
+  --width: calc(100vw - 16px);
+  --max-width: 560px;
+}
 
 body.keyboard-open ion-footer {
   --ion-safe-area-bottom: 0px;

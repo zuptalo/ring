@@ -380,7 +380,13 @@
               <!-- Direction-aware foot: react button opposite the timestamp; sent →
                    time+tick right / react left, received → time left / react right. -->
               <div class="msg-foot" :class="m.outgoing ? 'out' : 'in'">
-                <button type="button" class="react-btn" aria-label="React" @click.stop="openQuickReact(m, $event)">
+                <button
+                  v-if="myEmojisFor(m).length < MAX_REACTIONS_PER_USER"
+                  type="button"
+                  class="react-btn"
+                  aria-label="React"
+                  @click.stop="openQuickReact(m, $event)"
+                >
                   <ion-icon :icon="logoReact" />
                 </button>
                 <span class="time">
@@ -505,7 +511,13 @@
                 </button>
               </div>
               <div class="msg-foot" :class="item.messages[0].outgoing ? 'out' : 'in'">
-                <button type="button" class="react-btn" aria-label="React" @click.stop="openQuickReact(item.messages[0], $event)">
+                <button
+                  v-if="myEmojisFor(item.messages[0]).length < MAX_REACTIONS_PER_USER"
+                  type="button"
+                  class="react-btn"
+                  aria-label="React"
+                  @click.stop="openQuickReact(item.messages[0], $event)"
+                >
                   <ion-icon :icon="logoReact" />
                 </button>
                 <span class="time">
@@ -814,6 +826,7 @@ import {
   reactToMessage, deleteMessage, softDeleteMessage, deleteMessageForEveryone, editMessage,
   toggleFavorite, setCaption, forwardMessage,
   quickReactEmojis,
+  MAX_REACTIONS_PER_USER,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
@@ -1225,7 +1238,7 @@ async function openQuickReact(m: Message, ev: Event): Promise<void> {
   await dismissOpenPopovers();
   const popover = await popoverController.create({
     component: QuickReactBar,
-    cssClass: 'reaction-popover',
+    cssClass: 'reaction-popover quick-react-popover',
     componentProps: { myEmojis: myEmojisFor(m), quick: await quickReactEmojis(7) },
     event: ev,
     reference: 'event',
@@ -3552,15 +3565,19 @@ function cancelRecording() {
   margin-top: 2px;
   padding-top: 4px;
 }
-/* React button and timestamp sit at the two ends of the row. Sent (normal order):
-   react far-left, time+tick far-right. Received (reversed order): time far-left,
-   react far-right — so an incoming message's timestamp is on the LEFT. */
-.msg-foot.out {
-  justify-content: space-between;
+/* React button and timestamp sit at opposite ends. The timestamp is pinned to its
+   side with an auto margin so it STAYS there even when the react button is hidden
+   (once the 3-reaction cap is reached). Sent: react left, time right. Received: time
+   left, react right (via order). */
+.msg-foot.out .time {
+  margin-left: auto;
 }
-.msg-foot.in {
-  justify-content: space-between;
-  flex-direction: row-reverse;
+.msg-foot.in .time {
+  order: 1;
+  margin-right: auto;
+}
+.msg-foot.in .react-btn {
+  order: 2;
 }
 .msg-foot .time {
   align-self: center;
@@ -3602,10 +3619,10 @@ function cancelRecording() {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 1px 7px;
-  height: 24px;
+  padding: 1px 9px;
+  height: 30px;
   border: 1px solid var(--ion-color-step-150, rgba(0, 0, 0, 0.1));
-  border-radius: 12px;
+  border-radius: 15px;
   background: var(--ion-background-color, #fff);
   cursor: pointer;
   line-height: 1;
@@ -3615,7 +3632,7 @@ function cancelRecording() {
   background: color-mix(in srgb, var(--ion-color-primary) 14%, var(--ion-background-color, #fff));
 }
 .r-emoji {
-  font-size: 14px;
+  font-size: 19px;
 }
 .r-count {
   font-size: 12px;

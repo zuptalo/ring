@@ -43,8 +43,12 @@ const choose = (action: string) => void popoverController.dismiss({ action });
 .qr {
   display: flex;
   align-items: center;
+  /* Spread the 7 emoji + "+" evenly across the full-width popover — all visible at
+     once, no horizontal scrolling. */
+  justify-content: space-around;
+  width: 100%;
   gap: 2px;
-  padding: 6px;
+  padding: 6px 4px;
 }
 .qr-emoji {
   flex: 0 0 auto;
