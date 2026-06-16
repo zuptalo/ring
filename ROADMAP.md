@@ -14,7 +14,7 @@ Specs are grouped by category band; status moves
 | Spec | Title | Status |
 |------|-------|--------|
 | [0001](specs/0001-show-what-changed/spec.md) | Show what changed in the update toast (release-note delta) | 🟢 shipped |
-| [0002](specs/0002-connections-and-friendship/spec.md) | Connections & Friendship | 🟡 in-progress |
+| [0002](specs/0002-connections-and-friendship/spec.md) | Connections & Friendship | 🔵 in-review |
 
 ## ⚡ Ad-hoc (1001–1999)
 
