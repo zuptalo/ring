@@ -208,7 +208,8 @@
                 <!-- Tap the image → open the viewer directly; tap the empty/footer area
                      of the bubble → the action menu. -->
                 <div v-if="m.kind === 'image'" class="media-wrap" @click.stop="openMediaViewer(m.id)">
-                  <img class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl" :style="mediaAspect(m)" alt="photo" loading="lazy" decoding="async" />
+                  <img v-if="mediaInfo[m.mediaId].posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl" alt="photo" loading="lazy" decoding="async" />
+                  <ion-icon v-else class="media-ph" :icon="imageOutline" />
                   <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                 </div>
                 <!-- Round video note: plays inline on tap; the action menu opens from
@@ -229,15 +230,13 @@
                       v-if="m.posterData || mediaInfo[m.mediaId].posterUrl"
                       class="bubble-image"
                       :src="m.posterData || mediaInfo[m.mediaId].posterUrl"
-                      :style="mediaAspect(m)"
                       alt="video"
                       loading="lazy"
                       decoding="async"
                     />
-                    <div v-else class="bubble-image video-noposter" :style="mediaAspect(m)" />
+                    <ion-icon v-else class="media-ph" :icon="videocamOutline" />
                     <!-- Visual play affordance only; a tap anywhere on the poster opens
-                         the viewer via the bubble's tap handler (pointer-events: none so
-                         it never double-handles after a long-press). -->
+                         the viewer via the bubble's tap handler. -->
                     <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />
                     <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
                   </div>
@@ -286,7 +285,7 @@
                 @click.stop="downloadVideo(m.id)"
               >
                 <img v-if="m.posterData" class="bubble-image" :src="m.posterData" alt="video" />
-                <div v-else class="bubble-image video-noposter" />
+                <ion-icon v-else class="media-ph" :icon="videocamOutline" />
                 <span class="dl-btn">
                   <ion-spinner v-if="downloadingVideo[m.id]" name="crescent" />
                   <ion-icon v-else :icon="downloadOutline" />
@@ -994,13 +993,6 @@ async function downloadVideo(id: string): Promise<void> {
 // Badge on a photo/video bubble (same facts both sides), e.g. for a video
 // "HD · 720p · 0:34 · 4.2 MB", for a photo "HD · 1.2 MB".
 const QUALITY_LABEL: Record<string, string> = { sd: 'SD', hd: 'HD', original: 'Original' };
-// Reserve the media box's height from the stored pixel dimensions, so a row is the
-// right height BEFORE the image/poster decodes. Without this the box is ~0 tall
-// until load, then grows — shifting everything below and making scroll-back jump
-// past messages (spec 1005). Returns an aspect-ratio style, or {} if unknown.
-function mediaAspect(m: Message): Record<string, string> {
-  return m.mediaWidth && m.mediaHeight ? { aspectRatio: `${m.mediaWidth} / ${m.mediaHeight}` } : {};
-}
 function mediaMetaLabel(m: Message): string {
   const parts: string[] = [];
   if (m.mediaQuality) parts.push(QUALITY_LABEL[m.mediaQuality] ?? '');
@@ -3392,10 +3384,28 @@ function cancelRecording() {
   font-variant-numeric: tabular-nums;
 }
 /* Wrapper so a photo can overlay its quality/size badge. */
-.media-wrap {
+/* Fixed media frame: image/video bubbles are a constant square, so every media row
+   has a predictable height — the thumbnail fills it (cover) and a placeholder icon
+   shows until it loads. No reflow → fluid history scrolling. The full media opens in
+   the viewer on tap. */
+.media-wrap,
+.video-poster {
   position: relative;
-  display: inline-block;
+  width: 240px;
+  max-width: 100%;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(127, 127, 127, 0.15);
   cursor: pointer;
+}
+.media-ph {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 40px;
+  color: var(--app-text-muted, #8e8e93);
 }
 /* Failed send → red retry button in front of the bubble. */
 .retry-btn {
@@ -3417,13 +3427,6 @@ function cancelRecording() {
 /* Not-yet-downloaded video: thumbnail + a tappable download button. */
 .video-poster.pending {
   cursor: pointer;
-}
-.video-noposter {
-  width: 220px;
-  max-width: 100%;
-  aspect-ratio: 16 / 10;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.2);
 }
 .dl-btn {
   position: absolute;
@@ -3793,14 +3796,11 @@ function cancelRecording() {
   color: #34b7f1;
 }
 .bubble-image {
-  border-radius: 12px;
-  width: 220px;
-  max-width: 100%;
+  /* Fills the fixed media frame (cropped to cover). */
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
-}
-.video-poster {
-  position: relative;
-  display: inline-block;
 }
 /* Play affordance over a video thumbnail. A translucent dark scrim disc behind the
    white glyph guarantees legibility on ANY thumbnail — dark or bright (spec 1007
