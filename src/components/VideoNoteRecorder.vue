@@ -39,7 +39,7 @@ const MAX = 60; // seconds
 const CIRC = 2 * Math.PI * 48;
 
 const props = defineProps<{ open: boolean }>();
-const emit = defineEmits<{ (e: 'send', blob: Blob, dur: number): void; (e: 'cancel'): void }>();
+const emit = defineEmits<{ (e: 'send', blob: Blob, dur: number, poster?: string): void; (e: 'cancel'): void }>();
 
 const preview = ref<HTMLVideoElement>();
 const elapsed = ref(0);
@@ -95,9 +95,32 @@ function teardown(): void {
   recorder = null;
 }
 
+// Grab a still from the live preview as a thumbnail — reliable (we always have real
+// frames here), unlike decoding the recorded blob, which can fail on some devices.
+// drawImage reads the raw frame (the CSS mirror doesn't apply), so it matches the
+// recorded, un-mirrored video.
+function capturePoster(): string | undefined {
+  const v = preview.value;
+  if (!v || !v.videoWidth) return undefined;
+  try {
+    const maxEdge = 320;
+    const scale = Math.min(1, maxEdge / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(v.videoWidth * scale));
+    c.height = Math.max(1, Math.round(v.videoHeight * scale));
+    const cx = c.getContext('2d');
+    if (!cx) return undefined;
+    cx.drawImage(v, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.6);
+  } catch {
+    return undefined;
+  }
+}
+
 async function stopAndSend(): Promise<void> {
   if (!recorder) return;
   const dur = Math.max(1, Math.round(elapsed.value));
+  const poster = capturePoster(); // capture while the preview stream is still live
   const rec = recorder;
   const mime = rec.mimeType || 'video/webm';
   if (timer) clearInterval(timer);
@@ -109,7 +132,7 @@ async function stopAndSend(): Promise<void> {
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
   recorder = null;
-  emit('send', blob, dur);
+  emit('send', blob, dur, poster);
 }
 
 function cancel(): void {

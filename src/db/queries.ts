@@ -1274,6 +1274,9 @@ export async function sendMediaMessage(
     videoNote?: boolean;
     audio?: AudioMeta;
     quality?: 'sd' | 'hd' | 'original';
+    /** A ready-made thumbnail (data URL) to embed, e.g. a frame captured live by the
+     *  video-note recorder — more reliable than decoding the recorded blob. */
+    poster?: string;
     /** Caption typed alongside the media (the message body); receivers render it
      *  under the photo/video. Clamped to CAPTION_MAX. */
     caption?: string;
@@ -1324,6 +1327,9 @@ export async function sendMediaMessage(
     albumName: opts?.albumName,
     videoNote: opts?.videoNote,
     audio: opts?.audio,
+    // A caller-provided thumbnail (video-note recorder); runMediaJob may later replace
+    // it with a first-frame poster if it can decode one, but this guarantees one.
+    posterData: opts?.poster,
     updatedAt: ts,
   };
   await put('messages', message);

@@ -2419,12 +2419,12 @@ function camCancel(): void {
   if (camTimer) clearTimeout(camTimer);
   camTimer = undefined;
 }
-async function onVideoNoteSend(blob: Blob, dur: number): Promise<void> {
+async function onVideoNoteSend(blob: Blob, dur: number, poster?: string): Promise<void> {
   videoNoteOpen.value = false;
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
-  await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply });
+  await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply, poster });
 }
 
 // Ask for an optional album name; defaults to the album's date (the earliest of the
