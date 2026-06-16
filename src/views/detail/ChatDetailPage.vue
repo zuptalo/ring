@@ -166,7 +166,7 @@
               </span>
             <div
               class="bubble"
-              :class="{ out: m.outgoing, 'bubble-plain': m.videoNote && !m.deleted, 'bubble-media': mediaBubble(m), 'menu-focus': menuFocusId === m.id }"
+              :class="{ out: m.outgoing, 'bubble-plain': m.videoNote && !m.deleted, 'bubble-media': mediaBubble(m) }"
               :data-mid="m.id"
               :style="swipeStyle(m.id)"
               @touchstart.passive="onSwipeStart($event, m)"
@@ -466,7 +466,7 @@
             <div
               v-else
               class="bubble album-bubble"
-              :class="{ out: item.messages[0].outgoing, 'menu-focus': item.messages.some((mm) => mm.id === menuFocusId) }"
+              :class="{ out: item.messages[0].outgoing }"
               :data-mid="item.messages[0].id"
               :style="swipeStyle(item.messages[0].id)"
               @touchstart.passive="onSwipeStart($event, item.messages[0])"
@@ -1081,8 +1081,6 @@ const chatMediaMsgs = computed(() =>
   ),
 );
 const viewer = ref<{ open: boolean; start: number }>({ open: false, start: 0 });
-// The bubble whose action menu is open, so it can be subtly emphasised (FR-008).
-const menuFocusId = ref<string | null>(null);
 const viewerItems = computed(() =>
   chatMediaMsgs.value.map((m) => {
     const mi = mediaInfo.value[m.mediaId!];
@@ -1234,7 +1232,6 @@ const popoverSide = (ev: Event): 'top' | 'bottom' =>
 // Tap on the reaction button → a transient popover of the 7 most-used emoji + "+".
 async function openQuickReact(m: Message, ev: Event): Promise<void> {
   await dismissOpenPopovers();
-  menuFocusId.value = m.id;
   const popover = await popoverController.create({
     component: QuickReactBar,
     cssClass: 'reaction-popover',
@@ -1248,7 +1245,6 @@ async function openQuickReact(m: Message, ev: Event): Promise<void> {
   await popover.present();
   const { data } = await popover.onWillDismiss();
   if (openPopover === popover) openPopover = null;
-  menuFocusId.value = null;
   if (!data) return;
   if (data.action === 'react') await onReact(m.id, data.emoji);
   else if (data.action === 'more') await openEmojiPicker(m);
@@ -1264,8 +1260,6 @@ async function openMenu(m: Message, ev: Event) {
   const canSave = !canSaveAll && SAVE_KINDS.includes(m.kind) && (!!m.mediaId || !!m.pendingMedia);
   // Media is reachable by tapping it, but "View" stays in the menu as a fallback.
   const canView = (m.kind === 'image' || m.kind === 'video') && !m.videoNote && !!m.mediaId;
-  // Briefly emphasise the bubble so it's clear which message the menu acts on.
-  menuFocusId.value = m.id;
   const popover = await popoverController.create({
     component: MessageActions,
     cssClass: 'reaction-popover',
@@ -1287,7 +1281,6 @@ async function openMenu(m: Message, ev: Event) {
   await popover.present();
   const { data } = await popover.onWillDismiss();
   if (openPopover === popover) openPopover = null;
-  menuFocusId.value = null;
   if (!data) return;
   if (data.action === 'view') openMediaViewer(m.id);
   else if (data.action === 'details') await openReactionDetails(m);
@@ -3136,16 +3129,6 @@ function cancelRecording() {
 }
 .bubble.out {
   background: var(--app-bubble-out);
-}
-/* While its action menu is open, the bubble lifts slightly so it's clear which
-   message the menu acts on (FR-008). A cheap transform-only emphasis — no blur of
-   the rest, which would risk jank on long chats (the optional FR-011 effect). */
-.bubble.menu-focus {
-  transform: scale(1.04);
-  transform-origin: center;
-  transition: transform 0.15s ease;
-  position: relative;
-  z-index: 2;
 }
 /* A round video note has no chat bubble behind it; instead the circle gets a
    thin frame ring and its timestamp sits in a small pill, both matching the
