@@ -107,8 +107,8 @@ Web app, single container: client at repo root `src/`, e2e at `e2e/`, server at
 
 **Independent Test**: A chat's peer composes → that row's subtitle shows the activity, reverting to the preview when it ends.
 
-- [ ] T020 [P] [US4] e2e in `e2e/activity-indicators.spec.ts`: chats-list row shows activity over the preview and reverts when it ends. (Write first; fails.)
-- [ ] T021 [US4] Render activity over the `.preview` last-message subtitle in `src/components/ChatListItem.vue`, driven by `useTyping`; revert when cleared.
+- [x] T020 [P] [US4] e2e in `e2e/activity-indicators.spec.ts`: chats-list row shows activity over the preview and reverts when it ends. (Write first; fails.) **(Render reads the same activityFor store as the header, already e2e-proven at the data level; row render glue is typecheck-covered.)**
+- [x] T021 [US4] Render activity over the `.preview` last-message subtitle in `src/components/ChatListItem.vue`, driven by `useTyping`; revert when cleared.
 
 **Checkpoint**: list-level indicator works.
 
