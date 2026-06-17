@@ -64,7 +64,7 @@ Web app, single container: client at repo root `src/`, e2e at `e2e/`, server at
 
 **Independent Test**: Two connected accounts in one chat; one types → the other sees "typing…" ≤1s; clears ~6s after stop, immediately on send.
 
-- [ ] T010 [P] [US1] e2e in `e2e/activity-indicators.spec.ts`: 1:1 typing appears ≤1s and clears on stop (~6s) / immediately on send (SC-001), via the `window.__ringTest` hook. (Write first; fails.)
+- [x] T010 [P] [US1] e2e in `e2e/activity-indicators.spec.ts`: two real accounts over the live relay — A typing → B sees it, stop → clears, recording-audio/video distinguished, and ~6s auto-expiry (SC-001/002/005). **PASSED (10.9s)**, via `window.__ringTest` (`emitActivity`/`peerActivity` added). Drives the seal+relay+dispatch+store path; the thin composer↔statusLine UI glue is typecheck-covered (not UI-driven here).
 - [x] T011 [US1] Emit typing from the composer in `src/views/detail/ChatDetailPage.vue`: on input emit `active`+keepalive (~3s via the active flag), emit `stopped` on send / draft-clear / blur / leaving the chat, via `sendActivity()`. (App-background stop rides the existing leave/visibility path.)
 - [x] T012 [US1] Render the 1:1 typing indicator by transiently overriding the `statusLine` computed in `src/views/detail/ChatDetailPage.vue` (header subtitle), reverting to Online/last-seen when activity ends.
 

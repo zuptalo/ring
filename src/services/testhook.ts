@@ -102,8 +102,10 @@ import {
   refreshConnections as storeRefreshConnections,
   incomingRequests as storeIncomingRequests,
 } from '@/services/connections';
-import { subscribePresence } from '@/composables/useSync';
+import { subscribePresence, sendActivity } from '@/composables/useSync';
 import { peerPresence } from '@/composables/usePresence';
+import { activityFor } from '@/composables/useTyping';
+import type { ActivityKind, ActivityState } from '@/services/transport';
 import { setSecret } from '@/db/secrets';
 import { getAll, put } from '@/db/idb';
 import { uid } from '@/utils/uid';
@@ -417,6 +419,16 @@ export function installTestHook(): void {
     peerOnline: (id: string): boolean | null => {
       const p = peerPresence(id);
       return p ? p.online : null;
+    },
+
+    /* ---- activity indicators (spec 1009) ---- */
+    /** Emit an ephemeral activity signal to a peer (drives the real seal+relay path). */
+    emitActivity: (peerId: string, kind: ActivityKind, state: ActivityState) =>
+      sendActivity({ peerUserId: peerId, kind, state }),
+    /** A peer's current activity kind in a conversation (1:1 keyed by peer id), or null. */
+    peerActivity: (conversationKey: string): ActivityKind | null => {
+      const list = activityFor(conversationKey);
+      return list.length ? list[0].kind : null;
     },
 
     /* ---- media storage cleanup ---- */
