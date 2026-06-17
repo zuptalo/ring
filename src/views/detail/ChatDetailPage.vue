@@ -893,9 +893,9 @@ import {
   type AudioTrackMeta,
 } from '@/composables/useAudioPlayer';
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
-import { sendReadReceipts, sendDownloadedReceipts, sendActivity } from '@/composables/useSync';
+import { sendReadReceipts, sendDownloadedReceipts, sendActivity, sendGroupActivity } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
-import { activityFor, activityKindLabel } from '@/composables/useTyping';
+import { activityFor, activityKindLabel, coalescedActivityLabel } from '@/composables/useTyping';
 import { ACTIVITY, type ActivityKind, type ActivityState } from '@/services/transport';
 import { startDirectCall, startGroupCall } from '@/composables/useCall';
 import { ensureProfile } from '@/composables/useProfileGate';
@@ -911,7 +911,12 @@ const chatId = route.params.id as string;
 // "recording audio…", "recording video…") OVERRIDES the presence line (spec 1009).
 const statusLine = computed(() => {
   const c = chat.value;
-  if (!c || c.isGroup) return '';
+  if (!c) return '';
+  if (c.isGroup) {
+    // Groups have no presence line; show per-sender activity only while someone's
+    // composing — "Alice is typing…" / "Alice, Bob…" / "several people…" (US5).
+    return coalescedActivityLabel(c.id, (id) => contactsMap.value.get(id)?.name ?? 'Someone');
+  }
   const peer = c.participantIds[0];
   if (!peer) return '';
   const active = activityFor(peer); // reactive: peer's current activity (1:1 keyed by peer id)
@@ -1825,13 +1830,19 @@ let activeKind: ActivityKind | null = null;
 let activityKeepalive: ReturnType<typeof setInterval> | null = null;
 
 function emitActivitySignal(kind: ActivityKind, state: ActivityState): void {
-  const peer = peerId.value;
-  if (!peer) return; // peerId is undefined for groups → 1:1 only here
-  void sendActivity({ peerUserId: peer, kind, state });
+  const c = chat.value;
+  if (!c) return;
+  if (c.isGroup) {
+    const members = (c.participantIds ?? []).filter((id) => id && id !== selfId);
+    if (members.length) void sendGroupActivity({ members, conversationId: c.id, kind, state });
+  } else {
+    const peer = c.participantIds?.[0];
+    if (peer) void sendActivity({ peerUserId: peer, kind, state });
+  }
 }
 
 function startActivity(kind: ActivityKind): void {
-  if (!peerId.value || activeKind === kind) return;
+  if (!chat.value || activeKind === kind) return;
   activeKind = kind;
   emitActivitySignal(kind, 'active');
   if (activityKeepalive) clearInterval(activityKeepalive);

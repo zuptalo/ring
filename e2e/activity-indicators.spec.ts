@@ -13,6 +13,16 @@ const emit = (p: any, peerId: string, kind: string, state: string): Promise<void
     [peerId, kind, state] as [string, string, string],
   );
 
+const emitTo = (p: any, peerId: string, conv: string, kind: string, state: string): Promise<void> =>
+  p.page.evaluate(
+    (args: [string, string, string, string]) =>
+      (window as any).__ringTest.emitActivity(args[0], args[2], args[3], args[1]),
+    [peerId, conv, kind, state] as [string, string, string, string],
+  );
+
+const activityCount = (p: any, conv: string): Promise<number> =>
+  p.page.evaluate((c: string) => (window as any).__ringTest.activityCount(c), conv);
+
 const setSetting = (p: any, key: string, value: unknown): Promise<void> =>
   p.page.evaluate(
     (args: [string, unknown]) => (window as any).__ringTest.setSetting(args[0], args[1]),
@@ -90,4 +100,38 @@ test('privacy toggle off suppresses activity in both directions (reciprocity)', 
 
   await ctxA.close();
   await ctxB.close();
+});
+
+/**
+ * Spec 1009 §US5: group activity is keyed by the shared group id, so a recipient
+ * coalesces multiple concurrent senders. Here two real senders (B, C) signal
+ * activity in the same group to A, who sees two distinct active senders.
+ */
+test('group activity from two senders coalesces on the recipient', async ({ browser }) => {
+  test.setTimeout(90_000);
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'ACTVTY05');
+  const b = await createAccount(ctxB, 'ACTVTY06');
+  const c = await createAccount(ctxC, 'ACTVTY07');
+  // Pair A with both B and C so their bundles are fetchable (sealing needs them).
+  await pair(a, b);
+  await pair(a, c);
+
+  const GROUP = 'grp-activity-test';
+  // B and C both signal typing in the same group to A.
+  await emitTo(b, a.id, GROUP, 'typing', 'active');
+  await emitTo(c, a.id, GROUP, 'typing', 'active');
+
+  // A coalesces both senders under the one group key (two distinct active senders).
+  await expect.poll(() => activityCount(a, GROUP), { timeout: 15_000 }).toBe(2);
+
+  // C stops → A is left with one active sender.
+  await emitTo(c, a.id, GROUP, 'typing', 'stopped');
+  await expect.poll(() => activityCount(a, GROUP), { timeout: 10_000 }).toBe(1);
+
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
 });

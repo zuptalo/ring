@@ -13,6 +13,7 @@ import { subscribe } from '@/db/idb';
 import { isAuthenticated, getToken, verifySessionOrReset, getPendingInviter } from '@/services/auth';
 import {
   WebSocketTransport,
+  ACTIVITY,
   type Frame,
   type ActivityFrame,
   type ActivityKind,
@@ -555,6 +556,28 @@ export async function sendActivity(opts: {
   });
   if (!env) return;
   void sendLive({ t: 'activity', to: opts.peerUserId, ciphertext: env });
+}
+
+/**
+ * Emit a group activity signal: one sealed frame per recipient member (spec 1009
+ * §US5). The server has no group object, so the client fans out — bounded by
+ * GROUP_FANOUT_CAP and naturally rate-limited by the caller's ~3s keepalive
+ * cadence. Members are sealed individually (per-pair key); the shared group id
+ * rides in the sealed payload so each recipient keys the activity by group.
+ * Blocked recipients are dropped server-side. No-op when disabled.
+ */
+export async function sendGroupActivity(opts: {
+  members: string[]; // recipient member ids (self already excluded by the caller)
+  conversationId: string; // the shared group id
+  kind: ActivityKind;
+  state: ActivityState;
+}): Promise<void> {
+  if (!activityIndicatorsEnabled()) return;
+  const recipients = opts.members.slice(0, ACTIVITY.GROUP_FANOUT_CAP);
+  for (const member of recipients) {
+    const env = await sealActivity(member, { c: opts.conversationId, k: opts.kind, s: opts.state });
+    if (env) void sendLive({ t: 'activity', to: member, ciphertext: env });
+  }
 }
 
 /**

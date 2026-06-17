@@ -120,9 +120,9 @@ Web app, single container: client at repo root `src/`, e2e at `e2e/`, server at
 
 **Independent Test**: 3-account group, two typers → up to two names then "several people are typing…"; an offline member shows nothing.
 
-- [ ] T022 [P] [US5] e2e in `e2e/activity-indicators.spec.ts`: 3 accounts, concurrent typers coalesce (≤2 names → "several people…"); offline member produces no indicator (SC-006). (Write first; fails.)
-- [ ] T023 [US5] Client-driven group fan-out in the `sendActivity()` group path (`src/composables/useSync.ts` / `ChatDetailPage.vue`): one frame per recipient member, excluding self + blocked, capped at GROUP_FANOUT_CAP and rate-limited (≤1/~3s/recipient). Server learns no membership.
-- [ ] T024 [US5] Per-sender coalescing in the group header indicator (`src/views/detail/ChatDetailPage.vue`): up to two names then "several people are typing…", reusing `senderName`/`senderAvatar`/per-sender colour.
+- [x] T022 [P] [US5] e2e in `e2e/activity-indicators.spec.ts`: 3 accounts, concurrent typers coalesce (≤2 names → "several people…"); offline member produces no indicator (SC-006). (Write first; fails.)
+- [x] T023 [US5] Client-driven group fan-out in the `sendActivity()` group path (`src/composables/useSync.ts` / `ChatDetailPage.vue`): one frame per recipient member, excluding self + blocked, capped at GROUP_FANOUT_CAP and rate-limited (≤1/~3s/recipient). Server learns no membership.
+- [x] T024 [US5] Per-sender coalescing in the group header indicator (`src/views/detail/ChatDetailPage.vue`): up to two names then "several people are typing…", reusing `senderName`/`senderAvatar`/per-sender colour.
 
 **Checkpoint**: groups complete; all five stories shippable.
 

@@ -422,14 +422,17 @@ export function installTestHook(): void {
     },
 
     /* ---- activity indicators (spec 1009) ---- */
-    /** Emit an ephemeral activity signal to a peer (drives the real seal+relay path). */
-    emitActivity: (peerId: string, kind: ActivityKind, state: ActivityState) =>
-      sendActivity({ peerUserId: peerId, kind, state }),
+    /** Emit an ephemeral activity signal to a peer (drives the real seal+relay path).
+     *  Pass `conversationId` to scope it to a shared group id (1:1 omits it). */
+    emitActivity: (peerId: string, kind: ActivityKind, state: ActivityState, conversationId?: string) =>
+      sendActivity({ peerUserId: peerId, conversationId, kind, state }),
     /** A peer's current activity kind in a conversation (1:1 keyed by peer id), or null. */
     peerActivity: (conversationKey: string): ActivityKind | null => {
       const list = activityFor(conversationKey);
       return list.length ? list[0].kind : null;
     },
+    /** Number of distinct active senders in a conversation (for group coalescing tests). */
+    activityCount: (conversationKey: string): number => activityFor(conversationKey).length,
 
     /* ---- media storage cleanup ---- */
     /** Seed a fake media blob + a message linking it (for storage tests). */
