@@ -209,7 +209,8 @@ and coalescing add complexity beyond the 1:1 case, so it follows the P1 slices.
   recording audio (voice message), and recording video (video note).
 - **FR-002**: The indicator MUST appear promptly after the peer begins an
   activity (target: about one second while both are connected) and MUST clear
-  promptly when the peer stops, sends, or cancels.
+  immediately when the peer sends or cancels, and otherwise auto-expire when the
+  peer stops (per FR-007, ~6s).
 - **FR-003**: In a 1:1 chat the indicator MUST transiently replace the
   online/last-seen status line in the chat header; when activity ends the prior
   status line MUST return.
