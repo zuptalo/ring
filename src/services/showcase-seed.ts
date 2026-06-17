@@ -79,7 +79,7 @@ function message(
     kind: 'text',
     timestamp: Date.now() - ageMs,
     outgoing,
-    status: 'read',
+    status: 'seen',
     updatedAt: Date.now(),
     ...extra,
   };
@@ -126,12 +126,12 @@ export async function seedShowcase(): Promise<void> {
   const aliceImg = message('sc-alice', 'me', 'Sunrise from the hike this morning ⛰️', 40 * MIN, {
     kind: 'image',
     mediaId: photoId,
-    status: 'read',
+    status: 'seen',
     reactions: [{ userId: 'sc-alice', emoji: '❤️', at: now - 35 * MIN }],
   });
   messages.push(
     message('sc-alice', 'sc-alice', 'Morning! Did you try the new Ring update? 🎉', 2 * HOUR),
-    message('sc-alice', 'me', 'Yes! The "What’s new" sheet is such a nice touch', 110 * MIN, { status: 'read' }),
+    message('sc-alice', 'me', 'Yes! The "What’s new" sheet is such a nice touch', 110 * MIN, { status: 'seen' }),
     message('sc-alice', 'sc-alice', 'Voice message', 90 * MIN, { kind: 'voice', mediaId: voiceId, durationSec: 12 }),
     aliceImg,
     message('sc-alice', 'sc-alice', 'Gorgeous! Where is this?', 30 * MIN, {
@@ -160,7 +160,7 @@ export async function seedShowcase(): Promise<void> {
   // --- Group: Weekend Trip ---
   const groupMembers = ['sc-alice', 'sc-daniel', 'sc-sofia'];
   const myMsg = message('sc-trip', 'me', "Perfect, I’ll bring snacks 🍫", 4 * HOUR, {
-    status: 'read',
+    status: 'seen',
     reactions: [{ userId: 'sc-sofia', emoji: '👍', at: now - 3.5 * HOUR }],
   });
   messages.push(

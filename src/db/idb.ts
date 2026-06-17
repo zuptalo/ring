@@ -26,15 +26,61 @@ export const STORES = [
 export type StoreName = (typeof STORES)[number];
 
 const DB_NAME = 'ring';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
+
+/**
+ * Pure forward transform for the v5→v6 "read → seen" rename (spec 1010): a stored
+ * message row gets `status 'read'→'seen'`, the scalar `readAt→seenAt`, and each
+ * `receipts[].readAt→seenAt`. Every other field is preserved and status never
+ * regresses ('read' and 'seen' share the same rank). Returns a NEW row when it
+ * changed anything, or `null` when the row already speaks "seen" (so the migration
+ * skips a needless write) — never mutates the input. Exported so it's unit-tested
+ * without an IndexedDB (see idb.migration.test.ts); the onupgradeneeded cursor
+ * below applies it inside the versionchange transaction.
+ */
+export function migrateMessageToV6(
+  row: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!row || typeof row !== 'object') return null;
+  let changed = false;
+  const next: Record<string, unknown> = { ...row };
+
+  if (row.status === 'read') {
+    next.status = 'seen';
+    changed = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(row, 'readAt')) {
+    if (row.readAt !== undefined) next.seenAt = row.readAt;
+    delete next.readAt;
+    changed = true;
+  }
+  if (Array.isArray(row.receipts)) {
+    let recChanged = false;
+    const recs = (row.receipts as Array<Record<string, unknown>>).map((r) => {
+      if (r && typeof r === 'object' && Object.prototype.hasOwnProperty.call(r, 'readAt')) {
+        recChanged = true;
+        const nr: Record<string, unknown> = { ...r };
+        if (r.readAt !== undefined) nr.seenAt = r.readAt;
+        delete nr.readAt;
+        return nr;
+      }
+      return r;
+    });
+    if (recChanged) {
+      next.receipts = recs;
+      changed = true;
+    }
+  }
+  return changed ? next : null;
+}
 
 export function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
       if (!db.objectStoreNames.contains('contacts'))
         db.createObjectStore('contacts', { keyPath: 'id' });
@@ -61,6 +107,27 @@ export function openDB(): Promise<IDBDatabase> {
       // v5: user-defined chat filter lists.
       if (!db.objectStoreNames.contains('chatlists'))
         db.createObjectStore('chatlists', { keyPath: 'id' });
+      // v6 (spec 1010): rename "read" → "seen" on every stored message
+      // (status 'read'→'seen', readAt→seenAt, receipts[].readAt→seenAt). Runs inside
+      // THIS versionchange transaction over the existing rows: a cursor rewrites each
+      // row via the pure migrateMessageToV6 transform. It's a no-op on a fresh DB (the
+      // store was just created empty). Crucially, any cursor/update error bubbles to
+      // the transaction, which aborts the whole upgrade atomically — leaving existing
+      // message data intact at v5 and retried on the next open (Edge: upgrade failure),
+      // never partially migrated.
+      if (event.oldVersion > 0 && event.oldVersion < 6 && db.objectStoreNames.contains('messages')) {
+        const tx = req.transaction; // the active versionchange transaction
+        const cursorReq = tx?.objectStore('messages').openCursor();
+        if (cursorReq) {
+          cursorReq.onsuccess = () => {
+            const cursor = cursorReq.result;
+            if (!cursor) return;
+            const migrated = migrateMessageToV6(cursor.value as Record<string, unknown>);
+            if (migrated) cursor.update(migrated); // an update error aborts the upgrade txn
+            cursor.continue();
+          };
+        }
+      }
     };
     req.onsuccess = () => {
       const db = req.result;

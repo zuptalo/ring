@@ -10,7 +10,7 @@
 import { register, getSelfUserId, getSelfUsername } from '@/services/auth';
 import { syncDirectory, importDirectoryUser, searchDirectory, publishOwnProfile } from '@/services/directory';
 import { previewPending } from '@/services/sw-inbox';
-import { disconnectTransport, nudgeReconnect, forceReconnect, sendDownloadedReceipts } from '@/composables/useSync';
+import { disconnectTransport, nudgeReconnect, forceReconnect, sendDownloadedReceipts, sendSeenReceipts, applySeenPref } from '@/composables/useSync';
 import {
   ensureIdentity,
   isUnlocked,
@@ -315,6 +315,17 @@ export function installTestHook(): void {
         preview: m.body || m.kind,
       });
     },
+    /* ---- seen receipts (spec 1010) ---- */
+    /** Send 'seen' receipts for a chat's incoming messages (what the UI does when the
+     *  chat is viewed). A no-op when the "Seen receipts" privacy toggle is off. */
+    markSeen: (chatId: string) => sendSeenReceipts(chatId),
+    /** Re-read the privacy.seenReceipts toggle into the emit gate (deterministic
+     *  alternative to waiting for the settings-change reaction in tests). */
+    applySeenPref: () => applySeenPref(),
+    /** A message's per-member receipts roster {contactId, deliveredAt, seenAt,
+     *  downloadedAt}, for asserting "Seen X/N" group progress + the info-page lists. */
+    messageReceipts: async (messageId: string) => (await dbGetMessage(messageId))?.receipts ?? [],
+
     /** Add/toggle the local user's emoji reaction on a message. */
     reactToMessage: (messageId: string, emoji: string) => dbReactToMessage(messageId, emoji),
     /** The most-used-first quick-react set (the menu's emoji row order). Lets e2e

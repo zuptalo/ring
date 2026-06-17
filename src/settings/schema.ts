@@ -258,9 +258,9 @@ export const SETTINGS: Record<string, SettingNode> = {
         footer: 'Start new chats with disappearing messages set to your timer.',
       },
       {
-        items: [{ type: 'toggle', title: 'Read receipts', key: 'privacy.readReceipts', default: true }],
+        items: [{ type: 'toggle', title: 'Seen receipts', key: 'privacy.seenReceipts', default: true }],
         footer:
-          'If you turn off read receipts, you won’t be able to see read receipts from other people. Read receipts are always sent for group chats.',
+          'If you turn off seen receipts, you won’t send them and you won’t see when other people have seen your messages either. This applies to both one-to-one and group chats.',
       },
       {
         items: [

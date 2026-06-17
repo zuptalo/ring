@@ -176,16 +176,16 @@ export interface SharedContact {
  *  - compressing: media is being (re-)compressed in the background, not yet sealed
  *  - pending:     sealed + queued for relay, awaiting the server's 'sent' ack
  *  - sent:        the server accepted it (the real "sent" time → sentAt)
- *  - delivered / read: peer receipts
+ *  - delivered / seen: peer receipts
  *  - failed:      the background job failed its retry budget → shows a retry button
  */
-export type MessageStatus = 'compressing' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type MessageStatus = 'compressing' | 'pending' | 'sent' | 'delivered' | 'seen' | 'failed';
 
-/** Per-recipient receipt, drives group "Read by" / "Delivered to" info. */
+/** Per-recipient receipt, drives group "Seen by" / "Delivered to" info. */
 export interface Receipt {
   contactId: string;
   deliveredAt?: number;
-  readAt?: number;
+  seenAt?: number;
   downloadedAt?: number; // when this member confirmed it has the media bytes (blob cleanup)
 }
 
@@ -227,7 +227,7 @@ export interface Message {
   jobAttempts?: number; // background-job (compress + seal/upload) failure count
   failReason?: 'too-large'; // why a send failed permanently (drives a specific toast)
   deliveredAt?: number; // 1:1: when the peer's device confirmed delivery
-  readAt?: number; // 1:1: when the peer opened/read it
+  seenAt?: number; // 1:1: when the peer opened/saw it
   receipts?: Receipt[]; // group messages only
   reactions?: Reaction[]; // emoji reactions, by user
   replyTo?: ReplyRef; // the message this one is a reply to

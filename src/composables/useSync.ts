@@ -23,7 +23,7 @@ import {
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
 import { getChat, listChats, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing } from '@/db/queries';
-import { checkDeliveries } from '@/services/api';
+import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
 import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
@@ -47,6 +47,13 @@ import { isInitialized, isUnlocked } from '@/services/crypto/identity';
 const syncState = ref<TransportState>('offline');
 let transport: Transport | null = null;
 let started = false;
+
+// Cached "Seen receipts" privacy preference (default on), the EMIT side of the
+// reciprocal gate (spec 1010 FR-008). When false, sendSeenReceipts is a no-op so
+// no seen confirmation ever leaves this device. Kept in sync by applySeenPref()
+// on start + on any settings change (mirrors 1009's activity-indicators flag). The
+// DISPLAY side of reciprocity lives in the chat/info views (they read the setting).
+let seenReceiptsEnabled = true;
 
 /* ---- presence ---- */
 
@@ -137,6 +144,37 @@ async function reconcileDeliveries(): Promise<void> {
   }
 }
 
+/**
+ * Reconcile durable SEEN receipts on reconnect (spec 1010), the symmetric twin of
+ * reconcileDeliveries. A member's live 'seen' receipt is dropped if the sender is
+ * offline at that instant, so "Seen X/N" would never reflect it. The server now
+ * records seen durably (the `seen` table); here we ask which of our still-
+ * unconfirmed outgoing messages have been seen and replay each as a synthetic
+ * `{status:'seen', from: recipient}` frame through the normal receipt path (so the
+ * group aggregation + monotonic clamp hold). Best-effort: retried on next reconnect.
+ */
+async function reconcileSeen(): Promise<void> {
+  if (!isUnlocked.value) return; // messages are unreadable while locked; nothing to reconcile
+  try {
+    const ids = await collectUnconfirmedOutgoing();
+    if (!ids.length) return;
+    const seen = await checkSeen(ids);
+    for (const s of seen) {
+      // `from` = the member who saw it → applyGroupReceipt stamps that member's seenAt
+      // (mirrors a live 'seen' receipt's shape).
+      await handleIncomingFrame({
+        t: 'receipt',
+        messageId: s.messageId,
+        status: 'seen',
+        at: s.at,
+        from: s.recipient,
+      });
+    }
+  } catch {
+    /* retried on next reconnect */
+  }
+}
+
 /** We count as "active" (online to peers) only when the app is foregrounded AND
  *  unlocked, so a device sitting at the passcode gate shows offline even though
  *  the relay is connected (for delivery receipts). */
@@ -201,6 +239,7 @@ function start(): void {
       cancelSessionCheck(); // the WS auth passed → our token is valid
       void drainOutbox(transport); // flush what queued offline
       void reconcileDeliveries(); // recover any 'delivered' receipt dropped while we were offline
+      void reconcileSeen(); // recover any 'seen' receipt dropped while we were offline (spec 1010)
       void sendDownloadedReceipts(); // confirm media we hold so senders can free the blobs
       void resumePendingMediaJobs(); // re-attempt any interrupted/failed-but-retryable media
       // Publish our bundle (so peers can start sessions), then top up the
@@ -346,8 +385,10 @@ function start(): void {
     void sendPresencePrefs();
     void applyPushPreference();
     void applyActivityPref(); // reflect the activity-indicators toggle (spec 1009)
+    void applySeenPref(); // reflect the seen-receipts toggle (spec 1010)
   });
   void applyActivityPref(); // apply the saved toggle once at startup
+  void applySeenPref(); // apply the saved seen-receipts toggle once at startup
 
   // Back up own data (contacts/chats + profile/prefs snapshot) shortly after any
   // change, not only on reconnect. Debounced so a burst of writes coalesces.
@@ -432,22 +473,28 @@ function start(): void {
   );
 }
 
-// Message ids we've already sent a read receipt for (avoid resending on every
-// chat open). In-memory is fine, a duplicate read receipt is idempotent.
-const readReceiptsSent = new Set<string>();
+// Message ids we've already sent a seen receipt for (avoid resending on every
+// chat open). In-memory is fine, a duplicate seen receipt is idempotent.
+const seenReceiptsSent = new Set<string>();
 
 /**
- * Send 'read' receipts for the incoming messages of a chat (called when the user
+ * Send 'seen' receipts for the incoming messages of a chat (called when the user
  * opens it). The server routes each receipt to its target and stamps `from` = the
- * reader, advancing that message's status to 'read' on the sender's side.
+ * viewer, advancing that message's status to 'seen' on the sender's side, and
+ * durably records it so "Seen X/N" survives the sender being offline (spec 1010).
+ *
+ * Privacy emit gate (FR-008): when "Seen receipts" is off this is a NO-OP — you
+ * can't leak what you don't send, so the server never relays or records it and
+ * the sender keeps you counted as merely delivered. Mirrors sendActivity (1009).
  *
  * 1:1: every unseen message goes to the single peer. Group: each message is
  * addressed to its OWN author (m.senderId); a group has N independent 1:1 relay
  * paths, not one peer, so the original sender's per-recipient receipt for us is
- * the one that gets stamped read (see applyReceipt's group aggregation).
+ * the one that gets stamped seen (see applyReceipt's group aggregation).
  */
-export async function sendReadReceipts(chatId: string): Promise<void> {
+export async function sendSeenReceipts(chatId: string): Promise<void> {
   if (!transport || transport.state !== 'online') return;
+  if (!seenReceiptsEnabled) return; // privacy: off ⇒ never send a seen confirmation
   const chat = await getChat(chatId);
   if (!chat) return;
   const peerUserId = chat.isGroup ? null : chat.participantIds[0];
@@ -455,15 +502,15 @@ export async function sendReadReceipts(chatId: string): Promise<void> {
 
   const msgs = await listMessages(chatId, '');
   for (const m of msgs) {
-    if (m.outgoing || readReceiptsSent.has(m.id)) continue;
+    if (m.outgoing || seenReceiptsSent.has(m.id)) continue;
     // In a group the recipient is the message's author; in 1:1 it's the peer.
     const to = chat.isGroup ? m.senderId : peerUserId;
     if (!to || to === 'me') continue;
-    readReceiptsSent.add(m.id);
+    seenReceiptsSent.add(m.id);
     try {
-      await transport.send({ t: 'receipt', messageId: m.id, status: 'read', at: Date.now(), to });
+      await transport.send({ t: 'receipt', messageId: m.id, status: 'seen', at: Date.now(), to });
     } catch {
-      readReceiptsSent.delete(m.id); // retry next time if the send failed
+      seenReceiptsSent.delete(m.id); // retry next time if the send failed
     }
   }
 }
@@ -473,7 +520,7 @@ const downloadedReceiptsSent = new Set<string>();
 
 /**
  * Tell the SENDER we now hold an incoming media message's bytes (status 'downloaded'), so
- * they can delete the server blob once every recipient has it. Distinct from 'read': it's
+ * they can delete the server blob once every recipient has it. Distinct from 'seen': it's
  * about having the file on-device, not having opened it, and never affects the UI ticks.
  * Scans incoming messages whose media we've downloaded (mediaId set). Best-effort and
  * idempotent; cleanup falls back to the server's age sweep if these never arrive.
@@ -588,6 +635,17 @@ export async function sendGroupActivity(opts: {
  */
 export async function applyActivityPref(): Promise<void> {
   setActivityIndicatorsEnabled(await getSetting<boolean>('privacy.activityIndicators', true));
+}
+
+/**
+ * Reflect the `privacy.seenReceipts` toggle (default on) into the emit gate (spec
+ * 1010 FR-008/010). When off, the client sends no seen confirmation (the server
+ * never learns the preference and never holds an opted-out seen). The reciprocity
+ * DISPLAY gate (not rendering others' seen on your own messages) is enforced in the
+ * views. Applied on start and on any settings change (mirrors applyActivityPref).
+ */
+export async function applySeenPref(): Promise<void> {
+  seenReceiptsEnabled = await getSetting<boolean>('privacy.seenReceipts', true);
 }
 
 // Poll redeemed invitations only when there's something to resolve (outstanding

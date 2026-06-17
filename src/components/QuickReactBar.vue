@@ -14,7 +14,7 @@
     >
       <emoji :emoji="e" />
     </button>
-    <button type="button" class="qr-emoji qr-more" aria-label="More emoji" @click="choose('more')">
+    <button v-if="!atEmojiCap" type="button" class="qr-emoji qr-more" aria-label="More emoji" @click="choose('more')">
       <ion-icon :icon="addCircleOutline" />
     </button>
   </div>
@@ -29,11 +29,19 @@ import Emoji from '@/components/Emoji.vue';
 const props = defineProps<{
   myEmojis?: string[]; // the user's current reactions on this message (to highlight)
   quick?: string[]; // most-used-first quick-react set (from the caller)
+  existing?: string[]; // the distinct emojis already on this message
+  atEmojiCap?: boolean; // message at the distinct-emoji cap → offer only `existing`
 }>();
 
 // The 5 most-used emoji, all shown at once (no scroll). Falls back to a default set.
+// At the per-message distinct-emoji cap we instead show exactly the emojis already on
+// the message (≤ cap), so the only thing you can do is react with one of those.
 const DEFAULT_QUICK = ['👍', '❤️', '😂', '😮', '🙏'];
-const quickSet = computed(() => (props.quick && props.quick.length ? props.quick : DEFAULT_QUICK).slice(0, 5));
+const quickSet = computed(() =>
+  props.atEmojiCap && props.existing && props.existing.length
+    ? props.existing.slice(0, 5)
+    : (props.quick && props.quick.length ? props.quick : DEFAULT_QUICK).slice(0, 5),
+);
 
 const pick = (emoji: string) => void popoverController.dismiss({ action: 'react', emoji });
 const choose = (action: string) => void popoverController.dismiss({ action });

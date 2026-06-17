@@ -108,3 +108,48 @@ func TestDeliveriesReconcile(t *testing.T) {
 		t.Fatalf("cross-user delivered = %+v, want none", got.Delivered)
 	}
 }
+
+// TestSeenReconcile proves the spec-1010 sender-side SEEN reconcile (the twin of
+// TestDeliveriesReconcile): once a member's 'seen' is durably recorded, the SENDER
+// can recover it via POST /v1/seen/check even if the live receipt was dropped while
+// the sender was offline — and the lookup is scoped to the querying sender.
+func TestSeenReconcile(t *testing.T) {
+	as := newFakeStore()
+	srv := NewRouter(&Handlers{
+		Store: as, Directory: as, Blocks: as, Relay: as, Hub: ws.NewHub(),
+		Keys: newFakeKeysStore(), Blobs: newFakeBlobStore(),
+		Sync: newFakeSyncStore(), Push: newFakePushStore(), Invites: as,
+		PublicURL: "https://ring.example",
+	}, []string{"http://localhost:5173"})
+
+	senderTok, senderUID, _ := registerNamed(t, srv, "seensender")
+	recipTok, recipUID, _ := registerNamed(t, srv, "seenrecip")
+
+	// A member's 'seen' for the sender's message is recorded durably (as the relay's
+	// receipt case does when it relays a client 'seen').
+	_ = as.RecordSeen(context.Background(), senderUID, recipUID, "mx")
+
+	// Sender reconciles on reconnect: asks which of its ids have been seen.
+	rr := do(t, srv, http.MethodPost, "/v1/seen/check", senderTok, `{"ids":["mx","never"]}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("seen check = %d (%s)", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		Seen []struct {
+			MessageID string `json:"messageId"`
+			Recipient string `json:"recipient"`
+			At        int64  `json:"at"`
+		} `json:"seen"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if len(got.Seen) != 1 || got.Seen[0].MessageID != "mx" || got.Seen[0].Recipient != recipUID {
+		t.Fatalf("seen = %+v, want exactly mx -> %s", got.Seen, recipUID)
+	}
+
+	// Scoped to the caller: the recipient sees none of the sender's seen rows.
+	rr = do(t, srv, http.MethodPost, "/v1/seen/check", recipTok, `{"ids":["mx"]}`)
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if len(got.Seen) != 0 {
+		t.Fatalf("cross-user seen = %+v, want none", got.Seen)
+	}
+}

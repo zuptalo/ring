@@ -415,6 +415,11 @@ async function sendGroupCard(members: string[], card: GroupCard): Promise<void> 
 /** Up to 3 reactions per person on a single message (Teams-style). */
 export const MAX_REACTIONS_PER_USER = 3;
 
+/** Cap on how many DIFFERENT emojis a single message can carry across everyone. Once
+ *  a message has this many distinct emojis, no one can introduce a new one — they can
+ *  only pile onto an existing emoji. Keeps a message's reaction set bounded/sane. */
+export const MAX_DISTINCT_REACTIONS = 5;
+
 /** Apply a reaction change to a message in place (shared by local + inbound).
  *  Up to MAX_REACTIONS_PER_USER per user, toggled per emoji; `at` resolves
  *  out-of-order updates so a stale frame can't override a newer choice. */
@@ -447,13 +452,23 @@ function applyReaction(
 export async function reactToMessage(
   messageId: string,
   emoji: string,
-): Promise<'added' | 'removed' | 'limit'> {
+): Promise<'added' | 'removed' | 'limit' | 'limit-emojis'> {
   const message = await getMessage(messageId);
   if (!message) return 'removed';
   const self = getSelfUserId() ?? '';
   const mine = (message.reactions ?? []).filter((r) => r.userId === self);
   const has = mine.some((r) => r.emoji === emoji);
-  if (!has && mine.length >= MAX_REACTIONS_PER_USER) return 'limit'; // already at the cap
+  if (!has) {
+    // Adding (not toggling off): enforce both caps client-side at the emit site.
+    if (mine.length >= MAX_REACTIONS_PER_USER) return 'limit'; // your own 3-reaction cap
+    // Per-message distinct-emoji cap: a brand-new emoji is blocked once the message
+    // already carries MAX_DISTINCT_REACTIONS different ones; piling onto an existing
+    // emoji is always allowed. Every up-to-date client gates its own user this way,
+    // so nobody contributes a 6th distinct emoji (kept as an emit gate, not an
+    // inbound drop, so reaction state stays convergent across devices).
+    const distinct = new Set((message.reactions ?? []).map((r) => r.emoji));
+    if (!distinct.has(emoji) && distinct.size >= MAX_DISTINCT_REACTIONS) return 'limit-emojis';
+  }
   const remove = has; // tapping one of your existing emoji clears just that one
   const at = now();
   applyReaction(message, self, emoji, remove, at);
@@ -1594,7 +1609,7 @@ export async function retryAllFailed(): Promise<void> {
 export async function markSendFailed(messageId: string): Promise<void> {
   const m = await getMessage(messageId);
   if (!m || !m.outgoing) return;
-  if (m.status === 'sent' || m.status === 'delivered' || m.status === 'read') return;
+  if (m.status === 'sent' || m.status === 'delivered' || m.status === 'seen') return;
   m.status = 'failed';
   m.updatedAt = now();
   await put('messages', m);
@@ -2084,7 +2099,7 @@ async function resendRecentOutgoing(chatId: string): Promise<void> {
   if (!chat || chat.isGroup) return;
   const peerId = chat.participantIds[0];
   const recent = (await getByIndex<Message>('messages', 'chatId', chatId))
-    .filter((m) => m.outgoing && m.status !== 'read')
+    .filter((m) => m.outgoing && m.status !== 'seen')
     .sort((x, y) => x.timestamp - y.timestamp)
     .slice(-REKEY_RESEND_LIMIT);
   for (const m of recent) {
@@ -2101,11 +2116,12 @@ const RECONCILE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 const RECONCILE_ID_CAP = 500;
 
 /**
- * Collect the ids of our recent OUTGOING messages whose delivery isn't confirmed
- * yet - 1:1 messages still at 'sent', and group messages with any member not yet
- * 'delivered'. On reconnect these are handed to the server (checkDeliveries) so a
- * 'delivered' receipt that was dropped because WE were offline when the recipient
- * acked is recovered. Bounded by a recency window + a hard cap so the check is cheap.
+ * Collect the ids of our recent OUTGOING messages whose delivery/seen isn't
+ * confirmed yet - 1:1 messages still at 'sent', and group messages with any member
+ * not yet 'delivered' OR not yet 'seen'. On reconnect these are handed to the
+ * server (checkDeliveries + checkSeen, spec 1010) so a 'delivered'/'seen' receipt
+ * that was dropped because WE were offline when the recipient acked/opened it is
+ * recovered. Bounded by a recency window + a hard cap so the check is cheap.
  */
 export async function collectUnconfirmedOutgoing(): Promise<string[]> {
   const since = now() - RECONCILE_WINDOW_MS;
@@ -2115,7 +2131,9 @@ export async function collectUnconfirmedOutgoing(): Promise<string[]> {
     if (!m.outgoing || m.timestamp < since) continue;
     const recs = m.receipts;
     if (recs && recs.length) {
-      if (recs.some((r) => !r.deliveredAt)) ids.push(m.id);
+      // Group: any member not yet delivered (→ checkDeliveries) or not yet seen
+      // (→ checkSeen) keeps this message in the reconcile set.
+      if (recs.some((r) => !r.deliveredAt || !r.seenAt)) ids.push(m.id);
     } else if (m.status === 'sent') {
       ids.push(m.id);
     }
@@ -3405,7 +3423,7 @@ export async function logCallToChat(chatId: string, log: CallLog): Promise<void>
     kind: 'call',
     timestamp: ts,
     outgoing: log.direction === 'outgoing',
-    status: 'read', // informational; never enqueued, no receipts
+    status: 'seen', // informational; never enqueued, no receipts
     callLog: log,
     updatedAt: ts,
   };

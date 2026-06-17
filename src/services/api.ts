@@ -335,6 +335,30 @@ export async function checkDeliveries(ids: string[]): Promise<DeliveredEntry[]> 
   return ((await res.json()) as { delivered?: DeliveredEntry[] }).delivered ?? [];
 }
 
+/** One reconciled seen receipt: a message we sent was seen by `recipient` (a group
+ *  message reports one entry per member who saw it). */
+export interface SeenEntry {
+  messageId: string;
+  recipient: string;
+  at: number;
+}
+
+/**
+ * Reconcile our seen state on reconnect (spec 1010): ask the server which of the
+ * given message ids it has recorded as seen (so a 'seen' receipt dropped while we
+ * were offline is recovered). Mirrors checkDeliveries. Returns the seen entries.
+ */
+export async function checkSeen(ids: string[]): Promise<SeenEntry[]> {
+  if (!ids.length) return [];
+  const res = await fetch(`${apiBaseUrl()}/v1/seen/check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error(`seen check failed: ${res.status}`);
+  return ((await res.json()) as { seen?: SeenEntry[] }).seen ?? [];
+}
+
 /* ---- connect-request lifecycle (directory-initiated 1:1 connections) ---- */
 
 export interface ConnReq {

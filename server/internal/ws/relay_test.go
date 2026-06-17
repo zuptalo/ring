@@ -25,6 +25,8 @@ type memRelay struct {
 	blocks  map[string]map[string]bool   // blocker -> blocked -> true
 	deliv   []store.Delivery             // recorded deliveries (sender-scoped lookup)
 	delivBy map[string]string            // msgID -> sender, for the lookup
+	seen    []store.Seen                 // recorded seen receipts (sender-scoped lookup)
+	seenBy  map[string]string            // msgID -> sender, for the lookup
 }
 
 func newMemRelay() *memRelay {
@@ -33,6 +35,7 @@ func newMemRelay() *memRelay {
 		senders: map[string]map[string]string{},
 		blocks:  map[string]map[string]bool{},
 		delivBy: map[string]string{},
+		seenBy:  map[string]string{},
 	}
 }
 
@@ -127,6 +130,38 @@ func (m *memRelay) DeliveriesFor(_ context.Context, sender string, msgIDs []stri
 	for _, d := range m.deliv {
 		if want[d.MsgID] && m.delivBy[d.MsgID] == sender {
 			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func (m *memRelay) RecordSeen(_ context.Context, sender, recipient, msgID string) error {
+	if sender == "" || recipient == "" || msgID == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.seen {
+		if s.MsgID == msgID && s.Recipient == recipient {
+			return nil // idempotent
+		}
+	}
+	m.seen = append(m.seen, store.Seen{MsgID: msgID, Recipient: recipient, SeenMs: 1})
+	m.seenBy[msgID] = sender
+	return nil
+}
+
+func (m *memRelay) SeenFor(_ context.Context, sender string, msgIDs []string) ([]store.Seen, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := map[string]bool{}
+	for _, id := range msgIDs {
+		want[id] = true
+	}
+	var out []store.Seen
+	for _, s := range m.seen {
+		if want[s.MsgID] && m.seenBy[s.MsgID] == sender {
+			out = append(out, s)
 		}
 	}
 	return out, nil
@@ -271,25 +306,10 @@ func TestRelayOfflineQueueDrainsOnConnect(t *testing.T) {
 	}
 }
 
-func TestRelayRoutesReadReceipt(t *testing.T) {
-	srv, _ := newRelayServer()
-	defer srv.Close()
-
-	a := dial(t, srv, "tokA")
-	defer a.Close()
-	b := dial(t, srv, "tokB")
-	defer b.Close()
-	time.Sleep(50 * time.Millisecond)
-
-	// B (recipient) reports it read message m1 → routed to A (the sender).
-	if err := b.WriteJSON(map[string]any{"t": "receipt", "messageId": "m1", "status": "read", "to": "user-a"}); err != nil {
-		t.Fatalf("B send read receipt: %v", err)
-	}
-	got := readFrame(t, a)
-	if got["t"] != "receipt" || got["messageId"] != "m1" || got["status"] != "read" || got["from"] != "user-b" {
-		t.Fatalf("A expected read receipt from user-b, got: %v", got)
-	}
-}
+// The client-originated SEEN receipt relay (replacing the old 'read' relay,
+// post-cutover) is covered in seen_test.go: TestRelaySeenReceiptRelayedAndRecorded
+// (relayed + recorded) and TestRelayDropsClientReadReceiptPostCutover (a now-stale
+// 'read' is dropped).
 
 func TestRelayRoutesDownloadedReceipt(t *testing.T) {
 	srv, _ := newRelayServer()

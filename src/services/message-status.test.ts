@@ -7,6 +7,7 @@ import {
   applyGroupReceipt,
   applyStatusReceipt,
   applyDownloadedReceipt,
+  groupProgress,
 } from './message-status';
 
 // Minimal outgoing-message factory. The reducers only read status/receipts/*At/
@@ -31,18 +32,18 @@ function recipients(ids: string[]): Receipt[] {
 }
 
 describe('STATUS_ORDER', () => {
-  it('ranks pre-send states below sent and read at the top, and excludes downloaded', () => {
+  it('ranks pre-send states below sent and seen at the top, and excludes downloaded', () => {
     expect(statusRank('pending')).toBeLessThan(statusRank('sent'));
     expect(statusRank('compressing')).toBeLessThan(statusRank('sent'));
     expect(statusRank('failed')).toBeLessThan(statusRank('sent'));
     expect(statusRank('sent')).toBeLessThan(statusRank('delivered'));
-    expect(statusRank('delivered')).toBeLessThan(statusRank('read'));
+    expect(statusRank('delivered')).toBeLessThan(statusRank('seen'));
     expect('downloaded' in STATUS_ORDER).toBe(false);
   });
 });
 
 describe('applyScalarReceipt (1:1)', () => {
-  it('advances pending → sent → delivered → read and stamps timeline', () => {
+  it('advances pending → sent → delivered → seen and stamps timeline', () => {
     let m = msg({ status: 'pending' });
     m = applyScalarReceipt(m, 'sent', 10);
     expect(m.status).toBe('sent');
@@ -50,24 +51,24 @@ describe('applyScalarReceipt (1:1)', () => {
     m = applyScalarReceipt(m, 'delivered', 20);
     expect(m.status).toBe('delivered');
     expect(m.deliveredAt).toBe(20);
-    m = applyScalarReceipt(m, 'read', 30);
-    expect(m.status).toBe('read');
-    expect(m.readAt).toBe(30);
-    expect(m.deliveredAt).toBe(20); // unchanged by read
+    m = applyScalarReceipt(m, 'seen', 30);
+    expect(m.status).toBe('seen');
+    expect(m.seenAt).toBe(30);
+    expect(m.deliveredAt).toBe(20); // unchanged by seen
   });
 
-  it('read implies delivered when delivered was skipped', () => {
-    const m = applyScalarReceipt(msg({ status: 'sent' }), 'read', 30);
-    expect(m.status).toBe('read');
+  it('seen implies delivered when delivered was skipped', () => {
+    const m = applyScalarReceipt(msg({ status: 'sent' }), 'seen', 30);
+    expect(m.status).toBe('seen');
     expect(m.deliveredAt).toBe(30);
-    expect(m.readAt).toBe(30);
+    expect(m.seenAt).toBe(30);
   });
 
   it('never regresses and returns the SAME reference on a no-op', () => {
-    const m = msg({ status: 'read', readAt: 30, deliveredAt: 20, sentAt: 10 });
+    const m = msg({ status: 'seen', seenAt: 30, deliveredAt: 20, sentAt: 10 });
     expect(applyScalarReceipt(m, 'delivered', 99)).toBe(m); // same ref → no write
     expect(applyScalarReceipt(m, 'sent', 99)).toBe(m);
-    expect(applyScalarReceipt(m, 'read', 99).status).toBe('read');
+    expect(applyScalarReceipt(m, 'seen', 99).status).toBe('seen');
   });
 
   it('does not mutate the input', () => {
@@ -90,13 +91,13 @@ describe('applyGroupReceipt', () => {
     expect(m.deliveredAt).toBe(12);
   });
 
-  it('does not reach read until EVERY member has read', () => {
+  it('does not reach seen until EVERY member has seen', () => {
     let m = msg({ status: 'delivered', sentAt: 5, receipts: recipients(['a', 'b']) });
-    m = applyGroupReceipt(m, 'read', 20, 'a');
+    m = applyGroupReceipt(m, 'seen', 20, 'a');
     expect(m.status).toBe('delivered');
-    m = applyGroupReceipt(m, 'read', 21, 'b');
-    expect(m.status).toBe('read');
-    expect(m.readAt).toBe(21);
+    m = applyGroupReceipt(m, 'seen', 21, 'b');
+    expect(m.status).toBe('seen');
+    expect(m.seenAt).toBe(21);
   });
 
   it('is order-independent: any permutation yields the same aggregate', () => {
@@ -104,39 +105,39 @@ describe('applyGroupReceipt', () => {
     const inOrder = [
       ['delivered', 10, 'a'],
       ['delivered', 11, 'b'],
-      ['read', 20, 'a'],
-      ['read', 21, 'b'],
+      ['seen', 20, 'a'],
+      ['seen', 21, 'b'],
     ] as const;
     const shuffled = [
-      ['read', 21, 'b'],
+      ['seen', 21, 'b'],
       ['delivered', 10, 'a'],
-      ['read', 20, 'a'],
+      ['seen', 20, 'a'],
       ['delivered', 11, 'b'],
     ] as const;
     const run = (steps: readonly (readonly [string, number, string])[]) =>
       steps.reduce((m, [s, at, who]) => applyGroupReceipt(m, s as never, at, who), base());
     const A = run(inOrder);
     const B = run(shuffled);
-    // Terminal status and the all-read time are order-independent. (The aggregate
-    // deliveredAt can differ when a member reads before it delivers — "read implies
-    // delivered" stamps that member's deliveredAt to the read time — which is the
+    // Terminal status and the all-seen time are order-independent. (The aggregate
+    // deliveredAt can differ when a member sees before it delivers — "seen implies
+    // delivered" stamps that member's deliveredAt to the seen time — which is the
     // existing, intentional behavior; we only guarantee monotonic, stable status.)
-    expect(A.status).toBe('read');
-    expect(B.status).toBe('read');
-    expect(A.readAt).toBe(B.readAt);
-    expect(A.readAt).toBe(21);
+    expect(A.status).toBe('seen');
+    expect(B.status).toBe('seen');
+    expect(A.seenAt).toBe(B.seenAt);
+    expect(A.seenAt).toBe(21);
     expect(A.deliveredAt).toBeDefined();
     expect(B.deliveredAt).toBeDefined();
   });
 
-  it('a late member delivered never regresses an all-read message', () => {
-    let m = msg({ status: 'read', sentAt: 5, receipts: recipients(['a', 'b']) });
+  it('a late member delivered never regresses an all-seen message', () => {
+    let m = msg({ status: 'seen', sentAt: 5, receipts: recipients(['a', 'b']) });
     m.receipts = [
-      { contactId: 'a', deliveredAt: 10, readAt: 20 },
-      { contactId: 'b', deliveredAt: 11, readAt: 21 },
+      { contactId: 'a', deliveredAt: 10, seenAt: 20 },
+      { contactId: 'b', deliveredAt: 11, seenAt: 21 },
     ];
     const out = applyGroupReceipt(m, 'delivered', 99, 'a');
-    expect(out.status).toBe('read'); // clamped
+    expect(out.status).toBe('seen'); // clamped
   });
 
   it('returns the SAME reference when a receipt adds nothing', () => {
@@ -160,19 +161,19 @@ describe('applyDownloadedReceipt — status independence (the bug)', () => {
     expect(out.status).toBe('sent'); // UNCHANGED
     expect(out.sentAt).toBe(10);
     expect(out.deliveredAt).toBeUndefined();
-    expect(out.readAt).toBeUndefined();
+    expect(out.seenAt).toBeUndefined();
     expect(out.downloadedBy).toEqual(['peer']);
   });
 
   it('group: allDownloaded only once every member confirms; status untouched', () => {
-    let m = msg({ status: 'read', sentBlobId: 'blob1', receipts: recipients(['a', 'b']) });
+    let m = msg({ status: 'seen', sentBlobId: 'blob1', receipts: recipients(['a', 'b']) });
     let r = applyDownloadedReceipt(m, 'a', 50);
     expect(r.allDownloaded).toBe(false);
-    expect(r.msg.status).toBe('read');
+    expect(r.msg.status).toBe('seen');
     m = r.msg;
     r = applyDownloadedReceipt(m, 'b', 51);
     expect(r.allDownloaded).toBe(true);
-    expect(r.msg.status).toBe('read'); // STILL untouched
+    expect(r.msg.status).toBe('seen'); // STILL untouched
     expect(r.msg.receipts?.every((x) => x.downloadedAt)).toBe(true);
   });
 
@@ -184,7 +185,7 @@ describe('applyDownloadedReceipt — status independence (the bug)', () => {
   });
 
   it('does not mutate the input message or its receipts', () => {
-    const m = msg({ status: 'read', receipts: recipients(['a', 'b']) });
+    const m = msg({ status: 'seen', receipts: recipients(['a', 'b']) });
     applyDownloadedReceipt(m, 'a', 50);
     expect(m.receipts?.find((x) => x.contactId === 'a')?.downloadedAt).toBeUndefined();
   });
@@ -200,5 +201,62 @@ describe('applyStatusReceipt dispatch', () => {
       'a',
     );
     expect(g.status).toBe('sent'); // group: not all delivered yet
+  });
+});
+
+describe('groupProgress (complete-the-tier counter, spec 1010 FR-004/005)', () => {
+  // Build a roster of N recipients with the given delivered/seen flags.
+  function roster(specs: Array<{ d?: boolean; s?: boolean }>): Receipt[] {
+    return specs.map((x, i) => ({
+      contactId: String.fromCharCode(97 + i),
+      deliveredAt: x.d ? 10 + i : undefined,
+      seenAt: x.s ? 20 + i : undefined,
+    }));
+  }
+
+  it('returns null for a non-group message (no receipts roster)', () => {
+    expect(groupProgress(msg({}))).toBeNull();
+    expect(groupProgress(msg({ receipts: [] }))).toBeNull();
+  });
+
+  it('N from the roster: 0 delivered → Sent tier, no fraction', () => {
+    const p = groupProgress(msg({ receipts: roster([{}, {}, {}]) }));
+    expect(p).toEqual({ tier: 'sent', label: null });
+  });
+
+  it('partial delivered → "Delivered X/N"', () => {
+    const p = groupProgress(msg({ receipts: roster([{ d: true }, {}, {}]) }));
+    expect(p).toEqual({ tier: 'delivered', label: '1/3' });
+  });
+
+  it('all delivered, none seen → delivered tier, no fraction', () => {
+    const p = groupProgress(msg({ receipts: roster([{ d: true }, { d: true }]) }));
+    expect(p).toEqual({ tier: 'delivered', label: null });
+  });
+
+  it('all delivered, partial seen → "Seen X/N"', () => {
+    const p = groupProgress(msg({ receipts: roster([{ d: true, s: true }, { d: true }, { d: true }]) }));
+    expect(p).toEqual({ tier: 'seen', label: '1/3' });
+  });
+
+  it('all seen → "Seen", no fraction', () => {
+    const p = groupProgress(msg({ receipts: roster([{ d: true, s: true }, { d: true, s: true }]) }));
+    expect(p).toEqual({ tier: 'seen', label: null });
+  });
+
+  it('N=1 never shows a fraction (renders like a 1:1)', () => {
+    expect(groupProgress(msg({ receipts: roster([{ d: true }]) }))).toEqual({ tier: 'delivered', label: null });
+    expect(groupProgress(msg({ receipts: roster([{ d: true, s: true }]) }))).toEqual({ tier: 'seen', label: null });
+  });
+
+  it('reciprocity: seenEnabled=false caps at the delivered tier (seen ignored)', () => {
+    const m = msg({ receipts: roster([{ d: true, s: true }, { d: true, s: true }]) });
+    // With seen on, this is fully seen; with it off it must cap at delivered.
+    expect(groupProgress(m, true)).toEqual({ tier: 'seen', label: null });
+    expect(groupProgress(m, false)).toEqual({ tier: 'delivered', label: null });
+    // A partially-seen group with seen off shows the delivered tier (here all
+    // delivered → plain), never a "Seen X/N".
+    const partial = msg({ receipts: roster([{ d: true, s: true }, { d: true }]) });
+    expect(groupProgress(partial, false)).toEqual({ tier: 'delivered', label: null });
   });
 });
