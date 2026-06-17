@@ -29,6 +29,7 @@ Specs are grouped by category band; status moves
 | [1007](specs/1007-media-playback-and/spec.md) | Media Playback & Embedded Thumbnails | 🟢 shipped |
 | [1008](specs/1008-one-tap-media/spec.md) | One-Tap Media Open & Inline Quick-React Bar | 🟢 shipped |
 | [1009](specs/1009-activity-indicators/spec.md) | Ephemeral Activity Indicators (Typing & Recording) | 🟢 shipped |
+| [1010](specs/1010-group-seen-receipts/spec.md) | Group "Seen" Receipts — Durable, Private, and Counted | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
