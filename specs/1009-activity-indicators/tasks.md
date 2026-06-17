@@ -93,9 +93,9 @@ Web app, single container: client at repo root `src/`, e2e at `e2e/`, server at
 
 **Independent Test**: Toggle off on A → B sees nothing from A and A sees nothing from B; two other accounts with it on still see each other.
 
-- [ ] T017 [P] [US3] e2e in `e2e/activity-indicators.spec.ts`: toggle off ⇒ both-direction suppression; other accounts unaffected (SC-004). (Write first; fails.)
-- [ ] T018 [US3] Add the combined toggle `privacy.activityIndicators` (default `true`) with a reciprocity footer to the `privacy` node in `src/settings/schema.ts` (data edit; renderer is `SettingDetailPage.vue`).
-- [ ] T019 [US3] Enforce gating both directions: `sendActivity()` is a no-op when the toggle is off (emit nothing), and `useTyping.applyActivity()` is a no-op when off (render nothing from others) — in `src/composables/useSync.ts` / `src/composables/useTyping.ts`.
+- [x] T017 [P] [US3] e2e in `e2e/activity-indicators.spec.ts`: toggle off ⇒ both-direction suppression; other accounts unaffected (SC-004). (Write first; fails.)
+- [x] T018 [US3] Add the combined toggle `privacy.activityIndicators` (default `true`) with a reciprocity footer to the `privacy` node in `src/settings/schema.ts` (data edit; renderer is `SettingDetailPage.vue`).
+- [x] T019 [US3] Enforce gating both directions: `sendActivity()` is a no-op when the toggle is off (emit nothing), and `useTyping.applyActivity()` is a no-op when off (render nothing from others) — in `src/composables/useSync.ts` / `src/composables/useTyping.ts`.
 
 **Checkpoint**: consent + reciprocity enforced; P1 set complete.
 

@@ -33,7 +33,12 @@ import { refreshConnections, onConnectionAccepted } from '@/services/connections
 import { notifyIncoming } from '@/services/notify';
 import { runInviteSync } from '@/services/invites';
 import { clearPresence } from '@/composables/usePresence';
-import { clearTyping, applyActivity, activityIndicatorsEnabled } from '@/composables/useTyping';
+import {
+  clearTyping,
+  applyActivity,
+  activityIndicatorsEnabled,
+  setActivityIndicatorsEnabled,
+} from '@/composables/useTyping';
 import { sealActivity, openActivity, clearActivityKeys } from '@/services/crypto/activity-seal';
 import type { Envelope } from '@/services/crypto/envelope';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
@@ -339,7 +344,9 @@ function start(): void {
   subscribe(['settings'], () => {
     void sendPresencePrefs();
     void applyPushPreference();
+    void applyActivityPref(); // reflect the activity-indicators toggle (spec 1009)
   });
+  void applyActivityPref(); // apply the saved toggle once at startup
 
   // Back up own data (contacts/chats + profile/prefs snapshot) shortly after any
   // change, not only on reconnect. Debounced so a burst of writes coalesces.
@@ -548,6 +555,16 @@ export async function sendActivity(opts: {
   });
   if (!env) return;
   void sendLive({ t: 'activity', to: opts.peerUserId, ciphertext: env });
+}
+
+/**
+ * Reflect the `privacy.activityIndicators` toggle (default on) into the runtime
+ * gate (spec 1009). When off, the client emits nothing AND renders nothing from
+ * others (reciprocity) — enforced entirely client-side. Applied on start and on
+ * any settings change.
+ */
+export async function applyActivityPref(): Promise<void> {
+  setActivityIndicatorsEnabled(await getSetting<boolean>('privacy.activityIndicators', true));
 }
 
 // Poll redeemed invitations only when there's something to resolve (outstanding
