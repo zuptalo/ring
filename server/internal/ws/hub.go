@@ -1044,6 +1044,26 @@ func (c *Client) handleFrame(data []byte) {
 			c.hub.Send(f.To, payload)
 		}
 
+	case "activity":
+		// Ephemeral "is typing / recording" indicator (spec 1009). Modeled on the
+		// read-receipt relay, NOT on presence: the kind + conversation ride in the
+		// sealed Ciphertext (the server sees only who→whom), and the frame is
+		// relayed LIVE ONLY — never durably queued, never pushed, never persisted,
+		// and dropped if the peer has no live socket (an indicator is only
+		// meaningful right now). Stamp From = the authenticated sender so a client
+		// cannot signal activity "as" someone else (the receipt anti-forgery rule),
+		// and drop if the recipient has blocked the sender.
+		if f.To == "" {
+			return
+		}
+		if blocked, err := c.store.IsBlocked(ctx, f.To, c.userID); err == nil && blocked {
+			return
+		}
+		out := frame{T: "activity", From: c.userID, Ciphertext: f.Ciphertext}
+		if payload, err := json.Marshal(out); err == nil {
+			c.hub.Send(f.To, payload)
+		}
+
 	case "presence-prefs":
 		// Client uploaded its visibility tiers (derived from privacy settings) and
 		// its per-contact allow/deny overrides.

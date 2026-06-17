@@ -76,3 +76,6 @@ or improvise crypto. This is a requirements-quality gate, not an implementation 
   anchor (derive from a session-stable secret, not the rotating root), acceptance of
   no per-message forward secrecy for this ephemeral signal, and per-send random nonce.
   This sign-off must land before T007/T029 (implementation/merge).
+- **D3 maintainer sign-off received 2026-06-17** — all three residual points accepted
+  (session-stable key anchor; no per-message forward secrecy for this ephemeral
+  signal; per-send random nonce). T007 sealing is unblocked.
