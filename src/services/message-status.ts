@@ -27,7 +27,7 @@ export const STATUS_ORDER: Record<Message['status'], number> = {
   pending: 0,
   sent: 1,
   delivered: 2,
-  read: 3,
+  seen: 3,
 };
 
 export function statusRank(s: Message['status']): number {
@@ -37,7 +37,7 @@ export function statusRank(s: Message['status']): number {
 /** Statuses a receipt can carry for the *displayed* timeline. `downloaded` is
  *  handled by a separate reducer and is intentionally excluded here, so the
  *  compiler prevents it from ever being assigned to `Message.status`. */
-export type ReceiptStatus = Extract<Message['status'], 'sent' | 'delivered' | 'read'>;
+export type ReceiptStatus = Extract<Message['status'], 'sent' | 'delivered' | 'seen'>;
 
 /** Apply a status receipt to a message, dispatching on whether it's a group
  *  message (has a per-member `receipts[]` roster) or a 1:1 message. Returns the
@@ -59,11 +59,11 @@ export function applyScalarReceipt(msg: Message, status: ReceiptStatus, at: numb
   const next: Message = { ...msg, status };
   // The real "sent" time is when the server accepted it (not when composed).
   if (status === 'sent') next.sentAt ??= at;
-  // Record when delivery/read happened so Message info can show a timeline.
+  // Record when delivery/seen happened so Message info can show a timeline.
   if (status === 'delivered') next.deliveredAt ??= at;
-  if (status === 'read') {
+  if (status === 'seen') {
     next.deliveredAt ??= at;
-    next.readAt = at;
+    next.seenAt = at;
   }
   return next;
 }
@@ -71,9 +71,9 @@ export function applyScalarReceipt(msg: Message, status: ReceiptStatus, at: numb
 /** Group message: every fan-out copy is confirmed independently and the server
  *  stamps each receipt with the member who confirmed it (`recipient`). Record
  *  ONLY that member's row, then derive the message-level status from the whole
- *  roster, WhatsApp-style: delivered only once every member's device has it, read
+ *  roster, WhatsApp-style: delivered only once every member's device has it, seen
  *  only once every member has opened it. (The pre-fix code marked everyone
- *  delivered/read on a single member's receipt.) Returns the same reference when
+ *  delivered/seen on a single member's receipt.) Returns the same reference when
  *  nothing changes. */
 export function applyGroupReceipt(
   msg: Message,
@@ -90,17 +90,17 @@ export function applyGroupReceipt(
     sentAt = at;
     touched = true;
   }
-  if (recipient && (status === 'delivered' || status === 'read')) {
+  if (recipient && (status === 'delivered' || status === 'seen')) {
     const r = recs.find((x) => x.contactId === recipient);
     if (r) {
       if (status === 'delivered' && r.deliveredAt == null) {
         r.deliveredAt = at;
         touched = true;
       }
-      if (status === 'read') {
+      if (status === 'seen') {
         if (r.deliveredAt == null) r.deliveredAt = at;
-        if (r.readAt !== at) {
-          r.readAt = at;
+        if (r.seenAt !== at) {
+          r.seenAt = at;
           touched = true;
         }
       }
@@ -108,30 +108,30 @@ export function applyGroupReceipt(
   }
 
   const allDelivered = recs.length > 0 && recs.every((r) => r.deliveredAt);
-  const allRead = recs.length > 0 && recs.every((r) => r.readAt);
+  const allSeen = recs.length > 0 && recs.every((r) => r.seenAt);
 
   let deliveredAt = msg.deliveredAt;
-  let readAt = msg.readAt;
+  let seenAt = msg.seenAt;
   // Message-level timestamps only once the WHOLE group reaches that state.
   if (allDelivered && deliveredAt == null) deliveredAt = Math.max(...recs.map((r) => r.deliveredAt ?? 0));
-  if (allRead && readAt == null) readAt = Math.max(...recs.map((r) => r.readAt ?? 0));
+  if (allSeen && seenAt == null) seenAt = Math.max(...recs.map((r) => r.seenAt ?? 0));
 
-  const agg: Message['status'] = allRead ? 'read' : allDelivered ? 'delivered' : sentAt ? 'sent' : msg.status;
+  const agg: Message['status'] = allSeen ? 'seen' : allDelivered ? 'delivered' : sentAt ? 'sent' : msg.status;
   // Monotonic clamp: a late member's 'delivered' must never regress an already-
-  // all-read message, and an out-of-order frame can only raise status.
+  // all-seen message, and an out-of-order frame can only raise status.
   const nextStatus = STATUS_ORDER[agg] > STATUS_ORDER[msg.status] ? agg : msg.status;
 
   if (
     !touched &&
     nextStatus === msg.status &&
     deliveredAt === msg.deliveredAt &&
-    readAt === msg.readAt &&
+    seenAt === msg.seenAt &&
     sentAt === msg.sentAt
   ) {
     return msg; // nothing changed
   }
 
-  return { ...msg, receipts: recs, status: nextStatus, sentAt, deliveredAt, readAt };
+  return { ...msg, receipts: recs, status: nextStatus, sentAt, deliveredAt, seenAt };
 }
 
 /** A recipient confirmed they hold our media's bytes. Stamps the cleanup
@@ -158,4 +158,40 @@ export function applyDownloadedReceipt(
   if (already) return { msg, allDownloaded: true };
   const downloadedBy = [...new Set([...(msg.downloadedBy ?? []), recipient])];
   return { msg: { ...msg, downloadedBy }, allDownloaded: true };
+}
+
+/** Which tier's icon/colour a group bubble shows. `sent` = single tick; `delivered`
+ *  and `seen` = the double tick (seen tinted "seen-blue"). */
+export type GroupTier = 'sent' | 'delivered' | 'seen';
+
+/** Derived progress of an outgoing GROUP message, for the compact bubble counter
+ *  (spec 1010 FR-004/005). `complete-the-tier`: N = the recipient roster (the
+ *  embedded `receipts[]`, which already excludes the sender); the indicator climbs
+ *  "Delivered X/N" until all N delivered, then "Seen X/N" until all N seen, then
+ *  settles to a plain "Seen". The fraction (`label`) is shown ONLY while a tier is
+ *  partial (1 ≤ X < N) — so an N=1 group never shows one (it renders like a 1:1).
+ *
+ *  `seenEnabled` is the local reciprocity gate (privacy.seenReceipts): when off,
+ *  the caller doesn't get to see others' seen state on their own messages, so the
+ *  seen tier is suppressed and the indicator caps at delivered.
+ *
+ *  Returns `null` for a non-group message (no `receipts[]`) — the caller renders
+ *  the plain 1:1 tick. Pre-send states (compressing/pending/failed) are the
+ *  caller's concern; here `delivered == 0` simply yields the `sent` tier. */
+export function groupProgress(
+  msg: Pick<Message, 'receipts'>,
+  seenEnabled = true,
+): { tier: GroupTier; label: string | null } | null {
+  const recs = msg.receipts;
+  if (!recs || recs.length === 0) return null;
+  const n = recs.length;
+  const delivered = recs.reduce((acc, r) => acc + (r.deliveredAt ? 1 : 0), 0);
+  const seen = seenEnabled ? recs.reduce((acc, r) => acc + (r.seenAt ? 1 : 0), 0) : 0;
+
+  if (delivered === 0) return { tier: 'sent', label: null };
+  if (delivered < n) return { tier: 'delivered', label: `${delivered}/${n}` };
+  // All delivered → the seen tier governs from here.
+  if (seen === 0) return { tier: 'delivered', label: null };
+  if (seen < n) return { tier: 'seen', label: `${seen}/${n}` };
+  return { tier: 'seen', label: null };
 }

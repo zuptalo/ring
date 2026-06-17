@@ -32,6 +32,7 @@ type fakeStore struct {
 	relaySeq  int64
 	contacts  map[string][]string         // owner -> contact ids
 	deliv     map[string][]store.Delivery // sender -> recorded deliveries
+	seen      map[string][]store.Seen     // sender -> recorded seen receipts
 }
 
 func newFakeStore() *fakeStore {
@@ -269,6 +270,38 @@ func (f *fakeStore) DeliveriesFor(_ context.Context, sender string, msgIDs []str
 	for _, d := range f.deliv[sender] {
 		if want[d.MsgID] {
 			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+func (f *fakeStore) RecordSeen(_ context.Context, sender, recipient, msgID string) error {
+	if sender == "" || recipient == "" || msgID == "" {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.seen == nil {
+		f.seen = map[string][]store.Seen{}
+	}
+	for _, s := range f.seen[sender] {
+		if s.MsgID == msgID && s.Recipient == recipient {
+			return nil // idempotent
+		}
+	}
+	f.seen[sender] = append(f.seen[sender], store.Seen{MsgID: msgID, Recipient: recipient, SeenMs: 1})
+	return nil
+}
+func (f *fakeStore) SeenFor(_ context.Context, sender string, msgIDs []string) ([]store.Seen, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	want := map[string]bool{}
+	for _, id := range msgIDs {
+		want[id] = true
+	}
+	var out []store.Seen
+	for _, s := range f.seen[sender] {
+		if want[s.MsgID] {
+			out = append(out, s)
 		}
 	}
 	return out, nil

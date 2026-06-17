@@ -6,7 +6,7 @@
  * At-least-once delivery: an entry is NOT removed when it's written to the socket
  * (a write only means the bytes left this device; the server may still crash /
  * restart before durably queuing it). It's removed only when the server confirms
- * receipt (a 'sent'/'delivered'/'read' receipt → removeByFrameId), and re-sent on
+ * receipt (a 'sent'/'delivered'/'seen' receipt → removeByFrameId), and re-sent on
  * reconnect until then. The relay's EnqueueRelay is idempotent on
  * (recipient, msg_id), so re-sends never duplicate.
  */

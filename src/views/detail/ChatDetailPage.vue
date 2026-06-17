@@ -401,12 +401,19 @@
                 </button>
                 <span class="time">
                   <span v-if="m.editedAt" class="edited">edited</span>
+                  <!-- Group "X/N" sits to the LEFT of the clock so it grows/shrinks into the
+                       footer's floating edge (like the "edited" tag) — the clock + tick stay a
+                       stable right-anchored unit and never slide as the count appears/disappears. -->
+                  <span
+                    v-if="m.outgoing && m.status !== 'failed' && m.receipts && m.receipts.length > 1"
+                    class="tick-count"
+                  >{{ tickInfo(m).fraction }}</span>
                   {{ formatClock(m.sentAt ?? m.timestamp) }}
                   <ion-icon
                     v-if="m.outgoing && m.status !== 'failed'"
                     class="tick"
-                    :class="{ read: m.status === 'read' }"
-                    :icon="statusIcon(m.status)"
+                    :class="{ seen: tickInfo(m).seen }"
+                    :icon="tickInfo(m).icon"
                   />
                 </span>
               </div>
@@ -539,12 +546,17 @@
                   <ion-icon :icon="happyOutline" />
                 </button>
                 <span class="time">
+                  <!-- Count to the LEFT of the clock so the clock + tick stay put as it toggles. -->
+                  <span
+                    v-if="item.messages[0].outgoing && item.messages[item.messages.length - 1].status !== 'failed' && item.messages[item.messages.length - 1].receipts && item.messages[item.messages.length - 1].receipts!.length > 1"
+                    class="tick-count"
+                  >{{ tickInfo(item.messages[item.messages.length - 1]).fraction }}</span>
                   {{ formatClock(item.messages[item.messages.length - 1].timestamp) }}
                   <ion-icon
-                    v-if="item.messages[0].outgoing"
+                    v-if="item.messages[0].outgoing && item.messages[item.messages.length - 1].status !== 'failed'"
                     class="tick"
-                    :class="{ read: item.messages[item.messages.length - 1].status === 'read' }"
-                    :icon="statusIcon(item.messages[item.messages.length - 1].status)"
+                    :class="{ seen: tickInfo(item.messages[item.messages.length - 1]).seen }"
+                    :icon="tickInfo(item.messages[item.messages.length - 1]).icon"
                   />
                 </span>
               </div>
@@ -846,12 +858,13 @@ import {
   reactToMessage, deleteMessage, softDeleteMessage, deleteMessageForEveryone, editMessage,
   toggleFavorite, setCaption, forwardMessage,
   quickReactEmojis,
-  MAX_REACTIONS_PER_USER,
+  MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
-  CAPTION_MAX,
+  CAPTION_MAX, getSetting,
 } from '@/db/queries';
+import { groupProgress } from '@/services/message-status';
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
 import QuickReactBar from '@/components/QuickReactBar.vue';
@@ -893,7 +906,7 @@ import {
   type AudioTrackMeta,
 } from '@/composables/useAudioPlayer';
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
-import { sendReadReceipts, sendDownloadedReceipts, sendActivity, sendGroupActivity } from '@/composables/useSync';
+import { sendSeenReceipts, sendDownloadedReceipts, sendActivity, sendGroupActivity } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
 import { activityFor, activityKindLabel, coalescedActivityLabel } from '@/composables/useTyping';
 import { ACTIVITY, type ActivityKind, type ActivityState } from '@/services/transport';
@@ -1050,7 +1063,37 @@ function jobPct(id: string, phase: 'compress' | 'upload'): string {
 function statusIcon(status: MessageStatus) {
   if (status === 'compressing' || status === 'pending') return timeOutline;
   if (status === 'sent') return checkmark;
-  return checkmarkDone; // delivered & read
+  return checkmarkDone; // delivered & seen
+}
+
+// The "Seen receipts" privacy preference (default on), reactive. Drives the
+// reciprocity DISPLAY gate (spec 1010 FR-009): when off we don't render the seen
+// tier on our own sent messages (it caps at delivered), mirroring the emit gate in
+// useSync.
+const seenReceiptsOn = useLiveQuery(
+  () => getSetting<boolean>('privacy.seenReceipts', true),
+  ['settings'],
+  true,
+);
+
+// Compact per-bubble status for an outgoing message: the tick icon, whether to
+// tint it "seen-blue", and the optional GROUP "X/N" fraction (spec 1010 FR-004/005).
+// Groups derive complete-the-tier progress from receipts[] (N = recipients); 1:1
+// shows the plain tick. The fraction appears only while a tier is partial — so a
+// fully-seen group, an N=1 group, and every 1:1 render with no fraction.
+function tickInfo(m: Message): { icon: string; seen: boolean; fraction: string | null } {
+  if (m.status === 'compressing' || m.status === 'pending') {
+    return { icon: timeOutline, seen: false, fraction: null };
+  }
+  if (chat.value?.isGroup && m.receipts?.length) {
+    const p = groupProgress(m, seenReceiptsOn.value);
+    return {
+      icon: p && p.tier === 'sent' ? checkmark : checkmarkDone,
+      seen: p?.tier === 'seen',
+      fraction: p?.label ?? null,
+    };
+  }
+  return { icon: statusIcon(m.status), seen: seenReceiptsOn.value && m.status === 'seen', fraction: null };
 }
 
 const selfId = getSelfUserId() ?? '';
@@ -1080,9 +1123,13 @@ const myEmojisFor = (m: Message) =>
 
 // React, surfacing the 3-reaction cap if it's hit (tapping a chip or a quick emoji).
 async function onReact(messageId: string, emoji: string): Promise<void> {
-  if ((await reactToMessage(messageId, emoji)) === 'limit') {
+  const result = await reactToMessage(messageId, emoji);
+  if (result === 'limit' || result === 'limit-emojis') {
     const t = await toastController.create({
-      message: 'You can add up to 3 reactions.',
+      message:
+        result === 'limit-emojis'
+          ? `This message already has ${MAX_DISTINCT_REACTIONS} different reactions — tap one of those instead.`
+          : `You can add up to ${MAX_REACTIONS_PER_USER} reactions.`,
       duration: 1600,
       position: 'top',
     });
@@ -1271,10 +1318,15 @@ const popoverSide = (ev: Event): 'top' | 'bottom' =>
 // Tap on the reaction button → a transient popover of the 7 most-used emoji + "+".
 async function openQuickReact(m: Message, ev: Event): Promise<void> {
   await dismissOpenPopovers();
+  // When the message is at the distinct-emoji cap, offer ONLY its existing emojis
+  // (and drop the "+ more" picker) — you can react with what's there but can't add a
+  // new one (spec: max MAX_DISTINCT_REACTIONS different emojis per message).
+  const existing = [...new Set((m.reactions ?? []).map((r) => r.emoji))];
+  const atEmojiCap = existing.length >= MAX_DISTINCT_REACTIONS;
   const popover = await popoverController.create({
     component: QuickReactBar,
     cssClass: 'reaction-popover quick-react-popover',
-    componentProps: { myEmojis: myEmojisFor(m), quick: await quickReactEmojis(5) },
+    componentProps: { myEmojis: myEmojisFor(m), quick: await quickReactEmojis(5), existing, atEmojiCap },
     event: ev,
     reference: 'event',
     side: popoverSide(ev),
@@ -1943,7 +1995,7 @@ const peerGhosted = computed(
 const peerBlocked = computed(() => peerContact.value?.blocked === true);
 
 // Opening the conversation clears its unread count (and the Chats badge) and
-// sends 'read' receipts to the sender (the blue "seen" checks on their side).
+// sends 'seen' receipts to the sender (the blue "seen" checks on their side).
 // viewActive tracks whether the chat is actually on-screen, so we only mark
 // messages seen while it's visible (Ionic keeps pages alive in the background).
 const viewActive = ref(false);
@@ -2002,15 +2054,16 @@ onUnmounted(() => {
   clearTimeout(listReadyFallback);
   resizeObs?.disconnect();
 });
-// Send 'read' ("seen") receipts ONLY when the user is genuinely looking at this
-// chat: its view is the active one AND the app is foregrounded (document visible).
-// A message that arrives via push while the app is backgrounded (screen off /
-// another app) must NOT be marked seen just because the chat view is still mounted
-// so the sender would see a false "seen". The receipt is sent instead when the user
-// returns to the foregrounded chat (onVisibilityChange) or opens it.
+// Send 'seen' receipts ONLY when the user is genuinely looking at this chat: its
+// view is the active one AND the app is foregrounded (document visible). A message
+// that arrives via push while the app is backgrounded (screen off / another app)
+// must NOT be marked seen just because the chat view is still mounted, or the
+// sender would see a false "seen". The receipt is sent instead when the user
+// returns to the foregrounded chat (onVisibilityChange) or opens it. (sendSeenReceipts
+// is itself a no-op when the "Seen receipts" privacy toggle is off.)
 function markChatSeenIfVisible(): void {
   if (viewActive.value && document.visibilityState === 'visible') {
-    void sendReadReceipts(chatId);
+    void sendSeenReceipts(chatId);
     void sendDownloadedReceipts(chatId); // free server blobs once we hold the media
   }
 }
@@ -3260,6 +3313,15 @@ function cancelRecording() {
 .bubble.out {
   background: var(--app-bubble-out);
 }
+/* Reserve a minimum bubble width that fits ~3 reaction pills side by side, so a
+   short message NEVER (a) shrinks when the react button hides at the 3-reaction cap,
+   nor (b) ends up narrower than its own reactions row (which would overhang to the
+   side). Applies to every text bubble regardless of content length; media / video-
+   note bubbles size to their media and are excluded. Logical prop → RTL-correct. A
+   long message exceeds this floor, so it's unaffected. */
+.bubble:not(.bubble-media):not(.bubble-plain) {
+  min-inline-size: 9.75rem;
+}
 /* A round video note has no chat bubble behind it; instead the circle gets a
    thin frame ring and its timestamp sits in a small pill, both matching the
    in/out bubble colour. */
@@ -3910,8 +3972,28 @@ function cancelRecording() {
   font-size: 16px;
 }
 /* WhatsApp-style blue "seen" double-check. */
-.tick.read {
+.tick.seen {
   color: #34b7f1;
+}
+/* Compact group progress count ("3/5") (spec 1010). Rendered just to the inline-start
+   of the timestamp (not between clock and tick): the clock + tick form a stable
+   right-anchored unit, and the count — like the "edited" tag — grows into the footer's
+   floating edge, so it can appear/disappear without ever shifting the timestamp.
+
+   The slot is RESERVED (min-inline-size) on every group-with-≥2-recipients outgoing
+   message for its whole lifecycle, even when the fraction is absent (sent / all-
+   delivered / all-seen). That keeps the footer — and therefore a short bubble whose
+   width the footer drives — a CONSTANT width, so the bubble doesn't resize as the
+   count toggles. text-align:end keeps the digits hugging the timestamp; the reserved
+   blank sits to their inline-start. tabular-nums steadies a given count's width;
+   logical properties mirror in RTL. */
+.tick-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+  margin-inline-end: 2px;
+  min-inline-size: 2.6em; /* fits up to ~2-digit "NN/NN" so the bubble never jumps */
+  text-align: end;
 }
 .bubble-image {
   /* Fills the fixed media frame (cropped to cover). */

@@ -27,11 +27,11 @@ export interface MsgFrame {
 export interface ReceiptFrame {
   t: 'receipt';
   messageId: string;
-  // 'downloaded' is recipient-originated like 'read', but signals the media bytes are on
+  // 'downloaded' is recipient-originated like 'seen', but signals the media bytes are on
   // their device (not a UI tick) so the sender can delete the server blob.
-  status: 'sent' | 'delivered' | 'read' | 'downloaded';
+  status: 'sent' | 'delivered' | 'seen' | 'downloaded';
   at: number;
-  to?: string; // recipient (for client-originated read receipts; routed by the server)
+  to?: string; // recipient (for client-originated seen receipts; routed by the server)
   from?: string; // server 'sent'/'delivered' receipts: WHICH recipient confirmed it
   // (scopes the sender's outbox removal: a group message has one copy per member,
   // all sharing the message id, so a receipt must only clear the confirmed copy).
@@ -365,7 +365,7 @@ export class MockTransport implements Transport {
       // removal works if this loopback is ever swapped back in for the real transport.
       this.schedule(SENT_MS, () => this.emit({ t: 'receipt', messageId: frame.id, status: 'sent', at: Date.now(), from: frame.to }));
       this.schedule(DELIVERED_MS, () => this.emit({ t: 'receipt', messageId: frame.id, status: 'delivered', at: Date.now(), from: frame.to }));
-      this.schedule(READ_MS, () => this.emit({ t: 'receipt', messageId: frame.id, status: 'read', at: Date.now(), from: frame.to }));
+      this.schedule(READ_MS, () => this.emit({ t: 'receipt', messageId: frame.id, status: 'seen', at: Date.now(), from: frame.to }));
     } else if (frame.t === 'tombstone') {
       this.emit({ t: 'ack', refId: `${frame.store}:${frame.recordId}` });
     } else if (frame.t === 'pull') {

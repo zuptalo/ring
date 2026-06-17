@@ -31,7 +31,7 @@ export function setSyncCursor(cursor: string): Promise<void> {
 /* ---- push ---- */
 
 let draining = false;
-// An outbox entry stays until the server CONFIRMS it (a 'sent'/'delivered'/'read'
+// An outbox entry stays until the server CONFIRMS it (a 'sent'/'delivered'/'seen'
 // receipt removes it). Until then it's re-sent on reconnect and on a periodic
 // grace tick; re-sends are idempotent server-side (relay_queue is unique on
 // recipient,msg_id). This is what closes the loss window where the server received
@@ -56,7 +56,7 @@ export async function drainOutbox(transport: Transport): Promise<number> {
       if (entry.sentAt && now - entry.sentAt < ACK_GRACE_MS) continue;
       // Sent repeatedly but never confirmed → give up so the user sees it failed.
       // (Idempotency means no duplicate was created; if it HAD reached the server, a
-      // later delivered/read receipt advances it past 'failed' on its own.)
+      // later delivered/seen receipt advances it past 'failed' on its own.)
       if (entry.attempts >= MAX_SENDS) {
         if (entry.frame.t === 'msg' && entry.frame.id) await markSendFailed(entry.frame.id);
         await removeOutbox(entry.id);
@@ -122,7 +122,7 @@ export async function handleIncomingFrame(frame: Frame): Promise<void> {
       return;
     case 'msg':
       // Inbound relayed message: decrypt + store under the SENDER's message id
-      // (so read receipts we send back correlate on their side). The ack (which
+      // (so seen receipts we send back correlate on their side). The ack (which
       // clears the server queue and triggers the sender's delivered receipt) is
       // sent by useSync after this resolves.
       await receiveIncoming(frame.from ?? '', frame.id, frame.ciphertext);
@@ -181,7 +181,7 @@ async function applyReceipt(
   // Scoped to `recipient` so one group member's receipt never evicts the still-unsent
   // copies addressed to the other members. Done before the local-message lookup so it
   // still fires for a message row that's since been pruned locally.
-  if (status === 'sent' || status === 'delivered' || status === 'read') {
+  if (status === 'sent' || status === 'delivered' || status === 'seen') {
     await removeOutboxByFrameId(messageId, recipient);
   }
   // Status derivation is a pure reducer (see message-status.ts, fully unit-tested);

@@ -63,6 +63,11 @@ type RelayStore interface {
 	// sender can reconcile a dropped 'delivered' receipt on reconnect.
 	RecordDelivery(ctx context.Context, sender, recipient, msgID string) error
 	DeliveriesFor(ctx context.Context, sender string, msgIDs []string) ([]store.Delivery, error)
+	// RecordSeen durably notes msgID (from sender) was seen by recipient (spec 1010),
+	// so the sender can reconcile a dropped 'seen' receipt on reconnect — the
+	// symmetric twin of RecordDelivery.
+	RecordSeen(ctx context.Context, sender, recipient, msgID string) error
+	SeenFor(ctx context.Context, sender string, msgIDs []string) ([]store.Seen, error)
 	SetPresencePrefs(ctx context.Context, userID, onlineTier, lastSeenTier string) error
 	TouchLastSeen(ctx context.Context, userID string) error
 	GetPresence(ctx context.Context, ids []string) (map[string]store.PresenceInfo, error)
@@ -1030,18 +1035,29 @@ func (c *Client) handleFrame(data []byte) {
 
 	case "receipt":
 		// Client-originated receipt addressed to another user. Clients may ONLY
-		// originate 'read' and 'downloaded' (the recipient confirming it has the media
-		// bytes, so the sender can delete the blob); 'sent'/'delivered' are
-		// server-authoritative, so a client claiming them is dropped (otherwise a peer
-		// could forge a 'delivered' for a victim's group message id and make the sender
-		// evict its other unsent copies). Stamp From = the authenticated sender so the
-		// recipient can scope it.
-		if f.To == "" || (f.Status != "read" && f.Status != "downloaded") {
+		// originate 'seen' (the viewer opened the message) and 'downloaded' (the
+		// recipient confirming it has the media bytes, so the sender can delete the
+		// blob); 'sent'/'delivered' are server-authoritative, so a client claiming them
+		// is dropped (otherwise a peer could forge a 'delivered' for a victim's group
+		// message id and make the sender evict its other unsent copies). 'read' is no
+		// longer accepted post-cutover (spec 1010). Stamp From = the authenticated
+		// sender so the recipient can scope it.
+		if f.To == "" || (f.Status != "seen" && f.Status != "downloaded") {
 			return
 		}
 		out := frame{T: "receipt", MessageID: f.MessageID, Status: f.Status, At: f.At, From: c.userID}
 		if payload, err := json.Marshal(out); err == nil {
 			c.hub.Send(f.To, payload)
+		}
+		// Durably record a 'seen' so a group's "Seen X/N" survives the sender being
+		// offline at the moment a member opened it (spec 1010) — the parallel of how
+		// 'ack' calls RecordDelivery. f.To is the message author (the reconciling
+		// sender); c.userID is the member who saw it. 'downloaded' is a media-cleanup
+		// signal and is NOT recorded (unchanged).
+		if f.Status == "seen" {
+			if err := c.store.RecordSeen(ctx, f.To, c.userID, f.MessageID); err != nil {
+				slog.Error("record seen", "err", err)
+			}
 		}
 
 	case "activity":

@@ -252,6 +252,7 @@ func run() error {
 				"CALLSPK1", "CALLSPK2",
 				"CHATFLT1", "CHATFLT2", "CHATFLT3",
 				"NAVTERM1", "PASTECP1", "PASTECP2", "EDITDEL1", "EDITDEL2",
+				"RINGSEEN1", "RINGSEEN2", "RINGSEEN3", "RINGSEEN4", "RINGSEEN5",
 			}
 			if err := st.SeedDevInvites(ctx, e2eCodes); err != nil {
 				return err
@@ -455,6 +456,14 @@ func run() error {
 					slog.Error("deliveries sweep", "err", derr)
 				} else if dn > 0 {
 					slog.Info("deliveries sweep", "removed", dn)
+				}
+				// Seen records (spec 1010) shadow the same relay queue with the same
+				// retention — swept here for parity with deliveries.
+				sn, serr := st.SweepSeenOlderThan(sctx, relayRetention)
+				if serr != nil {
+					slog.Error("seen sweep", "err", serr)
+				} else if sn > 0 {
+					slog.Info("seen sweep", "removed", sn)
 				}
 				// Backstop blob sweep, batched: keep removing the oldest aged-out blobs
 				// until a batch comes back short (so the first run grinds through any

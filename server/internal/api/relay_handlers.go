@@ -27,7 +27,7 @@ import (
 // Fetching them proves the device received them (the push woke the SW and it
 // pulled the queue), so each frame's sender gets a "delivered" receipt - WITHOUT
 // dequeuing, so the page can still drain + persist them durably. Idempotent: the
-// later WS ack re-sends the same receipt and clients never regress 'read' back to
+// later WS ack re-sends the same receipt and clients never regress 'seen' back to
 // 'delivered'.
 func (h *Handlers) relayPending(w http.ResponseWriter, r *http.Request) {
 	uid, _ := auth.UserID(r.Context())
@@ -149,4 +149,39 @@ func (h *Handlers) deliveriesCheck(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{"messageId": d.MsgID, "recipient": d.Recipient, "at": d.DeliveredMs})
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"delivered": out})
+}
+
+type seenCheckRequest struct {
+	IDs []string `json:"ids"`
+}
+
+// seenCheck (POST /v1/seen/check) lets a sender reconcile its not-yet-seen messages
+// on reconnect (spec 1010, the twin of deliveriesCheck): given a list of message ids
+// it originated, it returns the durably-recorded seen receipts (one entry per member
+// who has seen it, so a group message can report each). This recovers a 'seen'
+// receipt that was dropped because the sender was offline at the moment a member
+// opened it.
+func (h *Handlers) seenCheck(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	var req seenCheckRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Bound the query the same way the client bounds what it asks about.
+	const maxIDs = 500
+	if len(req.IDs) > maxIDs {
+		req.IDs = req.IDs[:maxIDs]
+	}
+	rows, err := h.Relay.SeenFor(r.Context(), uid, req.IDs)
+	if err != nil {
+		slog.Error("seen check failed", "err", err, "user", uid)
+		httpx.Error(w, http.StatusInternalServerError, "could not load seen")
+		return
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, s := range rows {
+		out = append(out, map[string]any{"messageId": s.MsgID, "recipient": s.Recipient, "at": s.SeenMs})
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"seen": out})
 }

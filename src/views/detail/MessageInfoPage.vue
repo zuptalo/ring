@@ -20,55 +20,82 @@
             <ion-icon
               class="tick"
               :icon="statusIcon(message.status)"
-              :color="message.status === 'read' ? 'primary' : undefined"
+              :color="seenReceiptsOn && message.status === 'seen' ? 'primary' : undefined"
             />
           </ion-note>
         </ion-item>
       </ion-list>
 
-      <!-- Group: per-recipient read / delivered lists -->
+      <!-- Group: per-member Seen by / Delivered / Not yet delivered, covering every
+           member of the roster (spec 1010 FR-006). Each tier shows a capped avatar
+           stack (5 + "+N") plus the members' names. -->
       <template v-if="isGroup">
-        <ion-list :inset="true">
+        <!-- Seen by — suppressed entirely when "Seen receipts" is off (reciprocity:
+             you don't get to see others' seen on your own messages). -->
+        <ion-list :inset="true" v-if="seenReceiptsOn">
           <ion-list-header>
             <ion-icon :icon="checkmarkDone" color="primary" />
-            <ion-label>Read by</ion-label>
+            <ion-label>Seen by</ion-label>
           </ion-list-header>
-          <ion-item v-for="r in readBy" :key="r.contactId">
-            <ion-avatar slot="start">
-              <img :src="avatarFor(r.contactId)" :alt="nameFor(r.contactId)" />
-            </ion-avatar>
-            <ion-label>{{ nameFor(r.contactId) }}</ion-label>
-            <ion-note slot="end">{{ formatTime(r.readAt!) }}</ion-note>
-          </ion-item>
-          <ion-item v-if="readBy.length === 0" lines="none">
-            <ion-note>No one yet</ion-note>
+          <ion-item lines="none">
+            <div class="tier" v-if="seenByIds.length">
+              <div class="avatar-stack">
+                <ion-avatar v-for="id in stackIds(seenByIds)" :key="id">
+                  <img :src="avatarFor(id)" :alt="nameFor(id)" />
+                </ion-avatar>
+                <span v-if="overflowCount(seenByIds)" class="stack-more">+{{ overflowCount(seenByIds) }}</span>
+              </div>
+              <ion-label class="ion-text-wrap names">{{ namesLine(seenByIds) }}</ion-label>
+            </div>
+            <ion-note v-else>No one yet</ion-note>
           </ion-item>
         </ion-list>
 
         <ion-list :inset="true">
           <ion-list-header>
             <ion-icon :icon="checkmarkDone" />
-            <ion-label>Delivered to</ion-label>
+            <ion-label>Delivered</ion-label>
           </ion-list-header>
-          <ion-item v-for="r in deliveredTo" :key="r.contactId">
-            <ion-avatar slot="start">
-              <img :src="avatarFor(r.contactId)" :alt="nameFor(r.contactId)" />
-            </ion-avatar>
-            <ion-label>{{ nameFor(r.contactId) }}</ion-label>
-            <ion-note slot="end">{{ formatTime(r.deliveredAt!) }}</ion-note>
+          <ion-item lines="none">
+            <div class="tier" v-if="deliveredIds.length">
+              <div class="avatar-stack">
+                <ion-avatar v-for="id in stackIds(deliveredIds)" :key="id">
+                  <img :src="avatarFor(id)" :alt="nameFor(id)" />
+                </ion-avatar>
+                <span v-if="overflowCount(deliveredIds)" class="stack-more">+{{ overflowCount(deliveredIds) }}</span>
+              </div>
+              <ion-label class="ion-text-wrap names">{{ namesLine(deliveredIds) }}</ion-label>
+            </div>
+            <ion-note v-else>No one yet</ion-note>
           </ion-item>
-          <ion-item v-if="deliveredTo.length === 0" lines="none">
-            <ion-note>No one yet</ion-note>
+        </ion-list>
+
+        <ion-list :inset="true">
+          <ion-list-header>
+            <ion-icon :icon="checkmark" />
+            <ion-label>Not yet delivered</ion-label>
+          </ion-list-header>
+          <ion-item lines="none">
+            <div class="tier" v-if="notDeliveredIds.length">
+              <div class="avatar-stack">
+                <ion-avatar v-for="id in stackIds(notDeliveredIds)" :key="id">
+                  <img :src="avatarFor(id)" :alt="nameFor(id)" />
+                </ion-avatar>
+                <span v-if="overflowCount(notDeliveredIds)" class="stack-more">+{{ overflowCount(notDeliveredIds) }}</span>
+              </div>
+              <ion-label class="ion-text-wrap names">{{ namesLine(notDeliveredIds) }}</ion-label>
+            </div>
+            <ion-note v-else>Everyone has it</ion-note>
           </ion-item>
         </ion-list>
       </template>
 
       <!-- 1:1: simple status timeline -->
       <ion-list :inset="true" v-else-if="message">
-        <ion-item v-if="reached('read')">
+        <ion-item v-if="seenReceiptsOn && reached('seen')">
           <ion-icon slot="start" :icon="checkmarkDone" color="primary" />
-          <ion-label>Read</ion-label>
-          <ion-note v-if="message.readAt" slot="end">{{ formatTime(message.readAt) }}</ion-note>
+          <ion-label>Seen</ion-label>
+          <ion-note v-if="message.seenAt" slot="end">{{ formatTime(message.seenAt) }}</ion-note>
         </ion-item>
         <ion-item v-if="reached('delivered')">
           <ion-icon slot="start" :icon="checkmarkDone" />
@@ -93,8 +120,8 @@ import {
   IonContent, IonList, IonListHeader, IonItem, IonAvatar, IonLabel,
   IonNote, IonIcon,
 } from '@ionic/vue';
-import { timeOutline, checkmark, checkmarkDone } from 'ionicons/icons';
-import { getMessage, getChat, listContacts } from '@/db/queries';
+import { checkmark, checkmarkDone, timeOutline } from 'ionicons/icons';
+import { getMessage, getChat, listContacts, getSetting } from '@/db/queries';
 import { initialsAvatar } from '@/db/avatars';
 import type { Chat, Contact, Message, MessageStatus } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
@@ -112,9 +139,18 @@ const message = useLiveQuery<Message | undefined>(
 const chat = useLiveQuery<Chat | undefined>(() => getChat(chatId), ['chats'], undefined);
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
 
-// Per-recipient (Read by / Delivered to) lists are a group concept; branch on the
-// chat being a group rather than on the message carrying a receipts array, so the
-// right panel shows even for an edge-case row and never shows for a stray 1:1 one.
+// "Seen receipts" privacy preference (default on), reactive. Reciprocity DISPLAY
+// gate (spec 1010 FR-009): when off, we don't render the seen tier on our own
+// messages — seen members fall back into "Delivered" and the top tick isn't blue.
+const seenReceiptsOn = useLiveQuery(
+  () => getSetting<boolean>('privacy.seenReceipts', true),
+  ['settings'],
+  true,
+);
+
+// Per-member lists are a group concept; branch on the chat being a group rather
+// than on the message carrying a receipts array, so the right panel shows even for
+// an edge-case row and never shows for a stray 1:1 one.
 const isGroup = computed(() => chat.value?.isGroup === true && !!message.value?.receipts);
 
 const contactMap = computed(
@@ -125,18 +161,47 @@ const nameFor = (id: string) => contactMap.value.get(id)?.name ?? 'Unknown';
 // members whose contact row was pruned (e.g. someone who left the group).
 const avatarFor = (id: string) => contactMap.value.get(id)?.avatar || initialsAvatar(nameFor(id));
 
-const readBy = computed(() =>
-  (message.value?.receipts ?? [])
-    .filter((r) => r.readAt)
-    .sort((a, b) => (a.readAt ?? 0) - (b.readAt ?? 0)),
+const receipts = computed(() => message.value?.receipts ?? []);
+const participantIds = computed(() => chat.value?.participantIds ?? []);
+
+// Seen by — only when seen receipts are on (otherwise the tier is suppressed and
+// these members show as merely Delivered). Sorted by when they saw it.
+const seenByIds = computed(() =>
+  seenReceiptsOn.value
+    ? receipts.value
+        .filter((r) => r.seenAt)
+        .sort((a, b) => (a.seenAt ?? 0) - (b.seenAt ?? 0))
+        .map((r) => r.contactId)
+    : [],
 );
-const deliveredTo = computed(() =>
-  (message.value?.receipts ?? [])
-    .filter((r) => r.deliveredAt && !r.readAt)
-    .sort((a, b) => (a.deliveredAt ?? 0) - (b.deliveredAt ?? 0)),
+// Delivered but not (shown as) seen. With seen receipts off, every delivered
+// member lands here (the seen tier is hidden).
+const deliveredIds = computed(() =>
+  receipts.value
+    .filter((r) => r.deliveredAt && !(seenReceiptsOn.value && r.seenAt))
+    .sort((a, b) => (a.deliveredAt ?? 0) - (b.deliveredAt ?? 0))
+    .map((r) => r.contactId),
+);
+// Not yet delivered = every roster member with no delivered receipt (FR-011), so
+// the three tiers together account for every member.
+const notDeliveredIds = computed(() =>
+  participantIds.value.filter(
+    (id) => !receipts.value.some((r) => r.contactId === id && r.deliveredAt),
+  ),
 );
 
-const order: MessageStatus[] = ['pending', 'sent', 'delivered', 'read'];
+// Capped avatar stack (FR-006 / large-group edge case): show up to 5 avatars then
+// a "+N" overflow, with the names listed alongside.
+const STACK_CAP = 5;
+const stackIds = (ids: string[]): string[] => ids.slice(0, STACK_CAP);
+const overflowCount = (ids: string[]): number => Math.max(0, ids.length - STACK_CAP);
+const namesLine = (ids: string[]): string => {
+  const shown = ids.slice(0, STACK_CAP).map(nameFor);
+  const extra = ids.length - shown.length;
+  return extra > 0 ? `${shown.join(', ')} +${extra} more` : shown.join(', ');
+};
+
+const order: MessageStatus[] = ['pending', 'sent', 'delivered', 'seen'];
 const reached = (s: MessageStatus) =>
   !!message.value && order.indexOf(message.value.status) >= order.indexOf(s);
 
@@ -160,5 +225,36 @@ function mediaLabel(kind: Message['kind']) {
   font-size: 15px;
   vertical-align: -2px;
   margin-inline-start: 3px;
+}
+/* Overlapping avatar stack for each per-member tier; logical margins so it mirrors
+   correctly in RTL. */
+.tier {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 4px 0;
+}
+.avatar-stack {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.avatar-stack ion-avatar {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--ion-background-color, #fff);
+  margin-inline-start: -8px;
+}
+.avatar-stack ion-avatar:first-child {
+  margin-inline-start: 0;
+}
+.stack-more {
+  margin-inline-start: 6px;
+  font-size: 13px;
+  opacity: 0.7;
+}
+.names {
+  font-size: 14px;
 }
 </style>
