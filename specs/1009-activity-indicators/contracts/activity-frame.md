@@ -26,8 +26,10 @@ hand-mirrored and MUST stay in sync.
   { "kind": "typing" | "recording-audio" | "recording-video",
     "state": "active" | "stopped" }
   ```
-  Sealed via the existing libsodium control-payload sealing (no new primitive, no
-  Double-Ratchet advance — see research.md D3). The server never sees `kind`/`state`.
+  Sealed with the existing AEAD (`envelope.seal` / XChaCha20-Poly1305) under a
+  per-peer "activity key" derived once from the session secret via the existing
+  `hkdf` — **no new primitive and no Double-Ratchet advance** (see research.md D3;
+  pending security sign-off). The server never sees `kind`/`state`.
 
 ## Direction & roles
 

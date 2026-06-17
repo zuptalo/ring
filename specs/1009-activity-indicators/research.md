@@ -36,34 +36,62 @@ dispatch, `usePresence.ts` ephemeral state, the read-receipt relay path).
   "X is typing" frames.
 - **Alternatives rejected**: Trusting client `from` — forgeable.
 
-## D3 — Sealing the activity kind without Double-Ratchet churn
+## D3 — Sealing the activity kind without Double-Ratchet churn  [RESOLVED 2026-06-17 — recommendation pinned, pending human security sign-off]
 
-- **Decision**: The activity **kind** (`typing` | `recording-audio` |
-  `recording-video`) and on/off state ride inside a **sealed `ciphertext`** that
-  the server relays opaquely, the same way the Hub already forwards opaque
-  peer-to-peer control payloads (e.g. the sealed group-key / stream-id frames).
-  Seal it with the existing libsodium sealing reused for those control payloads
-  — a **stateless seal that does NOT advance the Double Ratchet** (so frequent
-  ephemeral signals cannot desync or churn the message ratchet).
-- **Rationale**: Keeps even the activity *kind* opaque to the server (only `{t,
-  to, from}` are visible), satisfying metadata minimization, while reusing the
-  existing crypto core (Principle IV — no hand-rolled primitive). Decoupling
-  from the message ratchet avoids skipped-key/out-of-order interactions with real
-  messages and avoids per-keystroke ratchet cost.
+- **Decision**: Seal the `{kind, state}` payload with the **existing AEAD**
+  (`src/services/crypto/envelope.ts:seal` / XChaCha20-Poly1305, fresh random nonce
+  per send) under a **dedicated per-peer "activity key" derived once** via the
+  existing `src/services/crypto/primitives.ts:hkdf` from the established 1:1
+  session's stable shared secret (HKDF label `ring/activity/v1`), cached in memory.
+  The server relays the ciphertext verbatim (like call-key) and sees only
+  `{t, to, from}`.
+  - **No new primitive**: reuses only `hkdf` + `envelope.seal`/`aeadSeal` — the
+    module's existing building blocks (Principle IV: reuse, don't hand-roll). The
+    crypto core has no `crypto_box`/sealed-box wrapper; we do not add one.
+  - **No Double-Ratchet advance**: it does NOT call `sealForChat`/`ratchetEncrypt`;
+    deriving from the session secret is read-only, so frequent typing/keepalive
+    frames never consume ratchet message slots or bloat the receiver's
+    skipped-message-key cache.
+  - **Mutually authenticated**: only the two session parties hold the derived key,
+    so the kind is authenticated peer-to-peer; this complements the server
+    `from`-stamp (D2). (A sealed-box-to-identity-key alternative would be anonymous.)
+  - **Groups**: derive per-recipient and seal once per member (the existing
+    `call/mesh.ts` / `signalling.ts` fan-out pattern). Do **not** use sender keys —
+    `senderkeys.ts:groupEncrypt` mutates/advances the group message chain, which is
+    wrong for an ephemeral signal.
+  - **Fail closed**: if no session exists and no peer bundle is fetchable, suppress
+    (the existing `sealForChat`/`fetchPeerBundle` path already fails closed when
+    `fetchPeerBundle` returns null; reuse that gate). Never send unsealed.
+- **Why NOT mirror the call-key precedent exactly** (corrects an earlier
+  assumption): call-key / stream-id seal via the Double Ratchet
+  (`signalling.ts → sealForChat → ratchetEncrypt`), which **advances the ratchet on
+  every send**. That is fine for call-key (≈once per roster epoch per member) but
+  wrong for ~3s typing keepalives — it would burn ratchet message numbers,
+  interleave with real chat messages on the same sending chain, and bloat the
+  receiver's skipped-key map. So we reuse the same *primitives* but **not** the
+  ratchet path.
 - **Alternatives considered**:
-  - *Encrypt via the message Double Ratchet* — rejected: advancing the ratchet on
-    every typing/keepalive frame churns ratchet state, risks desync with real
-    messages, and is wasteful for a high-frequency low-value signal.
-  - *Send the kind as plaintext in a new frame field* — rejected: leaks
-    "typing vs recording" metadata to the server beyond what relaying requires.
-- **Fail closed**: if no encryption session/keys exist with the peer yet, the
-  client **suppresses** the activity signal rather than sending it unsealed. An
-  indicator is never worth leaking a plaintext kind.
-- **Open for checklist/security review**: the exact sealing primitive and key
-  (sealed-box to the peer's identity public key vs. a derived per-contact key)
-  is validated in the required `/speckit-checklist` and security review. The
-  invariant the design fixes now: **server sees no plaintext kind; no new
-  primitive; no ratchet advance.**
+  - *Double Ratchet (mirror call-key)* — rejected for frequency (ratchet churn /
+    skipped-key bloat), per above.
+  - *libsodium `crypto_box_seal` to the peer's X25519 identity key* — viable and
+    stateless, but anonymous (leans entirely on the server `from`-stamp) and
+    stylistically foreign (this codebase uses no `crypto_box`). Kept as the
+    **fallback** if the security review prefers one standard sealed-box primitive
+    over a derived key.
+  - *Plaintext kind in a new frame field* — rejected: leaks typing-vs-recording to
+    the server beyond what relaying requires.
+- **Open items for human security sign-off (CHK007)**:
+  1. **Stable key anchor** — HKDF from a session-stable secret captured at
+     establishment (e.g. the X3DH-derived root), **not** the live-rotating root
+     key, so the activity key stays in sync across DH-ratchet steps; derivation
+     read-only, must not weaken the ratchet.
+  2. Confirm **no per-message forward secrecy** is acceptable for this ephemeral,
+     never-stored, low-sensitivity signal (or add periodic re-derivation).
+  3. Confirm **random 24-byte XChaCha nonce per send** (safe under one key at this
+     volume).
+- **Invariant fixed regardless of final choice**: server sees no plaintext kind;
+  no new/hand-rolled primitive; no ratchet advance; fail-closed when unsealing
+  isn't possible.
 
 ## D4 — Emission cadence: debounce + keepalive + explicit stop
 

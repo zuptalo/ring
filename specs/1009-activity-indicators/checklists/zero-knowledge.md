@@ -16,10 +16,10 @@ or improvise crypto. This is a requirements-quality gate, not an implementation 
 
 ## Sealing & Crypto Discipline (Principle IV)
 
-- [ ] CHK005 Is the sealing of the activity payload specified as reusing the existing libsodium control-payload mechanism, with no new/hand-rolled primitive? [Clarity, research.md D3; Principle IV]
-- [ ] CHK006 Do the requirements explicitly forbid advancing the Double Ratchet for activity frames (no ratchet churn / desync with real messages)? [Completeness, research.md D3]
-- [ ] CHK007 Is the open D3 decision (exact sealing primitive/key) flagged for security-review sign-off before implementation, with the ZK invariant it must satisfy stated? [Traceability, research.md D3]
-- [ ] CHK008 Do the requirements define behavior when the kind cannot yet be sealed (no established session/keys with the peer)? [Edge Case, Gap]
+- [x] CHK005 Is the sealing of the activity payload specified as reusing existing primitives (AEAD + HKDF), with no new/hand-rolled primitive? [Clarity, research.md D3; Principle IV] — RESOLVED: per-peer activity key via `hkdf`, sealed with `envelope.seal` (XChaCha20-Poly1305); no `crypto_box`/new primitive added.
+- [x] CHK006 Do the requirements explicitly forbid advancing the Double Ratchet for activity frames (no ratchet churn / desync with real messages)? [Completeness, research.md D3] — RESOLVED: D3 mandates a read-only derived key; does NOT call `sealForChat`/`ratchetEncrypt`.
+- [x] CHK007 Is the D3 decision (exact sealing primitive/key) pinned with the ZK invariant stated and the residual flagged for security-review sign-off? [Traceability, research.md D3] — RESOLVED (recommendation pinned 2026-06-17); **human security sign-off still required** on the 3 listed open items (stable key anchor, no-FS acceptance, nonce).
+- [x] CHK008 Do the requirements define behavior when the kind cannot yet be sealed (no established session/keys with the peer)? [Edge Case] — RESOLVED: fail-closed (suppress, never send unsealed); reuses the existing `sealForChat`/`fetchPeerBundle` null-path.
 
 ## Ephemerality & No Persistence
 
@@ -60,7 +60,7 @@ or improvise crypto. This is a requirements-quality gate, not an implementation 
 
 ## Ambiguities & Conflicts
 
-- [ ] CHK028 Is D3 (exact sealing primitive/key) the ONLY remaining ZK/crypto ambiguity, and is it explicitly tracked to this checklist / security-review gate? [Ambiguity, research.md D3]
+- [x] CHK028 Is D3 (exact sealing primitive/key) the ONLY remaining ZK/crypto ambiguity, and is it explicitly tracked to this checklist / security-review gate? [Ambiguity, research.md D3] — RESOLVED: D3 recommendation pinned (derived-key AEAD); the only residual is human security sign-off on the 3 listed open items.
 - [ ] CHK029 Is the "relay, not server-computed presence" decision stated consistently across the ZK Impact section, the contract, and research (no conflicting framing)? [Conflict, Spec §Zero-Knowledge Impact / research.md D1 / contracts/activity-frame.md]
 
 ## Notes
@@ -68,6 +68,11 @@ or improvise crypto. This is a requirements-quality gate, not an implementation 
 - Check items off as resolved: `[x]`. Per Constitution II/§Governance, this checklist
   must be clean — or each open finding explicitly waived in writing — before
   `/speckit-implement`.
-- CHK007/CHK028 (D3 sealing primitive) is an intentionally tracked open item for the
-  security review; it is not a blocker to `/speckit-tasks` but MUST be resolved before
-  implementation.
+- **D3 sealing primitive — RESOLVED 2026-06-17** (research.md D3): seal `{kind,state}`
+  with the existing AEAD (`envelope.seal`) under a per-peer activity key derived via
+  `hkdf` from the session secret — no new primitive, no Double-Ratchet advance,
+  fail-closed, mutually authenticated; `crypto_box_seal` kept as the documented
+  fallback. **Residual = human security sign-off** on three points: the stable key
+  anchor (derive from a session-stable secret, not the rotating root), acceptance of
+  no per-message forward secrecy for this ephemeral signal, and per-send random nonce.
+  This sign-off must land before T007/T029 (implementation/merge).
