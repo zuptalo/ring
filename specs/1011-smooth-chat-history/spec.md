@@ -22,18 +22,37 @@ newest messages and tries to keep the viewport anchored when older ones load, bu
 older messages are only fetched the moment the user hits the top of what's loaded —
 so a quick upward flick can outrun the load and produce a brief stall followed by a
 snap, and the load can momentarily fight the device's own scroll momentum. The
-result is occasional jumping/unsmoothness when scrolling up.
+result is occasional jumping/unsmoothness when scrolling up. The whole conversation
+is also held in memory and re-read on every change, so very long histories get heavy.
 
-This feature makes scroll-up **smooth and continuous**: older messages are prepared
-ahead of need, and they appear without moving the content under the user's view. To
-prove it — and to give us a repeatable, realistic confidence check on the whole
-messaging experience — it also delivers a **multi-user end-to-end exercise** that
-spins up several users, connects them, holds real 1:1 and group conversations across
-every message kind (text, voice/audio, video messages, image and video uploads),
-builds a lengthy history, and then scrolls back through it to validate the smoothness.
+This feature makes scroll-up **smooth and continuous at any history length**: only the
+rows around the viewport are rendered (older/newer rows are prepared ahead of need and
+evicted when far off-screen), history is read in bounded batches rather than all at
+once, and pages appear without moving the content under the user's view. To prove it —
+and to give us a repeatable, realistic confidence check on the whole messaging
+experience — it also delivers a **multi-user end-to-end exercise** that spins up
+several users, connects them, holds real 1:1 and group conversations across every
+message kind (text, voice/audio, video messages, image and video uploads), builds a
+lengthy history, and then scrolls back through it to validate the smoothness.
 
-This is a **client-only** change (chat view + its verification harness). It does not
-touch the wire, the server, or any stored ciphertext.
+This is a **client-only** change (chat view + data-access + its verification harness).
+It does not touch the wire, the server, or any stored ciphertext.
+
+## Clarifications
+
+### Session 2026-06-17
+
+- Q: How large must a conversation stay perfectly smooth on a mid-range device? →
+  A: **~5,000+ messages** — adopt true virtual scrolling (render only on-screen rows
+  plus a small buffer) backed by bounded/cursor reads of history, so the whole chat is
+  never held in the view or memory at once.
+- Q: Include jump-to-older navigation (tap a reply-quote / starred message above the
+  loaded window → smoothly scroll to it)? → A: **Yes** — in scope (User Story 3).
+- Q: What counts as "no jump" for the anchored message when older content loads? →
+  A: **≤ 2px** of drift.
+- Q: On very long scroll-backs, should older rendered rows be evicted to bound
+  memory/DOM? → A: **Yes** — evict far-off-screen rows (both directions) so the
+  rendered DOM and memory stay flat regardless of scroll distance.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -43,21 +62,21 @@ A user opens a conversation with a long history and scrolls upward to re-read ol
 messages. As they scroll, older messages are already prepared, so the scroll never
 stalls at a loading boundary; and as those older messages take their place above, the
 message the user was looking at stays put — the view never jumps, snaps, or stutters.
-This holds whether they scroll slowly or flick quickly, and in both 1:1 and group
-chats (where avatars and grouped media can change row heights).
+This holds whether they scroll slowly or flick quickly, in both 1:1 and group chats
+(where avatars and grouped media can change row heights), and at any history length.
 
 **Why this priority**: This is the headline value and the explicit ask — scrolling up
 through history must feel continuous and natural. Everything else verifies or supports it.
 
-**Independent Test**: Open a chat with a few hundred messages, scroll/flick upward
-across several pages of history, and observe that the anchored message stays in place
-(no jump) and the scroll never halts waiting for older messages to load.
+**Independent Test**: Open a chat with several hundred messages, scroll/flick upward
+across many pages of history, and observe that the anchored message stays in place
+(≤2px) and the scroll never halts waiting for older messages to load.
 
 **Acceptance Scenarios**:
 
 1. **Given** a conversation longer than one screen of history, **When** the user
    scrolls up so older messages load, **Then** the message they were viewing remains
-   at the same on-screen position (no visible jump).
+   at the same on-screen position (≤2px drift; no visible jump).
 2. **Given** the user flicks upward quickly, **When** they approach the top of the
    currently loaded messages, **Then** the next batch of older messages is already in
    place so the scroll continues without stalling or snapping.
@@ -70,6 +89,8 @@ across several pages of history, and observe that the anchored message stays in 
 5. **Given** a group chat where older runs introduce sender avatars or collapsed
    media albums, **When** those older messages load, **Then** the resulting row-height
    differences do not cause a jump.
+6. **Given** a 5,000-message history, **When** the user scrolls far back and forth,
+   **Then** the app stays responsive and memory/rendered-row count stays bounded.
 
 ---
 
@@ -139,9 +160,11 @@ loaded window and confirm the view scrolls to that message rather than showing a
   viewport; the rendered list updating must not visibly re-shuffle or jump.
 - **Anchored message deleted/edited** between frames during a load: must degrade
   gracefully (still no jump) rather than mis-correct the position.
+- **Evicted anchor**: if the row used to preserve position is evicted while off-screen,
+  the mechanism must still keep the viewport stable (use a still-rendered reference).
+- **Scrolling back DOWN after scrolling far up**: returning toward the newest must be
+  smooth too, re-rendering evicted newer rows without a jump.
 - **Keyboard opens / view resizes** during scroll: must not fight the user's gesture.
-- **Very long histories**: memory and rendered-DOM growth must stay bounded enough to
-  remain smooth on a mid-range device.
 - **Group vs 1:1**: avatars and album collapsing change row heights as older runs
   mount — both must stay smooth.
 - **Backgrounded / locked chat**: scroll side-effects must not run while the view
@@ -152,7 +175,7 @@ loaded window and confirm the view scrolls to that message rather than showing a
 ### Functional Requirements
 
 - **FR-001**: When older messages load during an upward scroll, the message currently
-  in view MUST remain at the same on-screen position (no perceptible jump).
+  in view MUST remain at the same on-screen position (≤2px drift; no perceptible jump).
 - **FR-002**: Older messages MUST be prepared ahead of need so that scrolling upward
   — including a fast flick — does not stall waiting at a loading boundary.
 - **FR-003**: Any automatic scroll adjustment performed while loading older messages
@@ -176,23 +199,31 @@ loaded window and confirm the view scrolls to that message rather than showing a
 - **FR-009**: The exercise MUST drive the real application UI/flows (not bypass them),
   be runnable repeatedly with no manual setup, and leave the environment clean afterward.
 - **FR-010**: Smoothness MUST be verifiable automatically — e.g. asserting that the
-  anchored message's on-screen position is preserved within the agreed tolerance and
-  that the next older page is present before the top edge is reached.
+  anchored message's on-screen position is preserved within 2px and that the next older
+  page is present before the top edge is reached.
 - **FR-011**: All existing chat behaviors (sending, receipts/seen, reactions,
   disappearing messages, jump-to-newest on send, search) MUST continue to work
-  unchanged; this feature only changes how older history is prepared and how the
+  unchanged; this feature only changes how history is prepared/rendered and how the
   viewport is preserved.
+- **FR-012**: The rendered rows and memory MUST stay bounded regardless of how far the
+  user scrolls — only rows near the viewport (plus a buffer) are rendered; far
+  off-screen rows are evicted. Scrolling a 5,000+ message history MUST stay responsive.
+- **FR-013**: Reading history MUST NOT require loading the entire conversation into
+  memory at once; messages are read in bounded batches (by recency/position) as the
+  user scrolls.
 
 ### Key Entities *(include if feature involves data)*
 
 - **Conversation history**: the full ordered set of a chat's messages (oldest →
-  newest); the source the rendered window draws from. No change to how it's stored.
-- **Rendered window**: the contiguous slice of the newest N messages currently shown;
-  grows toward older messages as the user scrolls up.
-- **Older-message page**: a batch of older messages added to the rendered window when
-  scrolling up; its arrival must be invisible to the viewport (position-preserving).
+  newest); now read in bounded batches rather than all at once. No change to how it's
+  stored at rest.
+- **Rendered window**: the bounded set of rows currently rendered around the viewport
+  (on-screen plus a small buffer); rows far off-screen (in either direction) are
+  evicted so the rendered DOM and memory stay bounded.
+- **Older-message page**: a bounded batch of older messages prepared/added as the user
+  scrolls up; its arrival must be invisible to the viewport (position-preserving).
 - **Scroll anchor**: the reference message used to keep the viewport stable across a
-  page load.
+  page load; must remain valid even if some rows are evicted.
 
 ## Success Criteria *(mandatory)*
 
@@ -202,8 +233,7 @@ loaded window and confirm the view scrolls to that message rather than showing a
   conversation of at least 200 messages in continuous gestures with no visible jump
   and no stall at a loading boundary. Verified by an automated exercise.
 - **SC-002**: When an older page loads during scroll-up, the anchored message's
-  on-screen position changes by no more than a small, imperceptible tolerance
-  (see Assumptions) — effectively "stays put". Verified.
+  on-screen position changes by no more than **2px** — effectively "stays put". Verified.
 - **SC-003**: The next older page is present before the user reaches the top edge of
   the loaded content (there is never a frame at the top with more history unrendered).
   Verified.
@@ -218,40 +248,27 @@ loaded window and confirm the view scrolls to that message rather than showing a
 - **SC-007**: Scrolling up across several pages on a mobile-emulated device shows
   continuous content — no blank flash, no snap, day-dividers and avatars rendering in
   place. Verified by inspection (screenshots) via the UI-driving harness.
+- **SC-008**: Scrolling through a 5,000-message history keeps the rendered row count
+  and memory bounded (they do not grow with scroll distance) and the app stays
+  responsive throughout. Verified.
 
 ## Assumptions
 
-- Builds on the existing approach (a windowed render of the newest messages with an
-  anchor-and-restore on prepend) rather than introducing a new list/virtualization
-  subsystem; the change prepares older pages earlier and hardens the position-preserve.
+- Adopts virtual scrolling (render only on-screen rows plus a small buffer, evicting
+  off-screen rows in both directions) backed by bounded/cursor reads of history —
+  extending the current windowed render + anchor-and-restore rather than loading the
+  whole chat into the view/memory (per Clarifications: ~5,000+ messages must stay smooth).
 - The verification exercise is realized through the project's existing UI-driving
   capability (the `drive/` harness + the dev-only test hook) and automated end-to-end
   coverage where practical; media uses test fixtures.
-- "Lengthy chat" means at least ~200 messages for the scroll exercise; smoothness is
-  targeted for typical histories up to ~1,000 messages on a mid-range device. Larger
-  histories (5,000+) may warrant additional optimization treated as out of scope here.
-- "No jump" is interpreted as ≤ ~2px of anchor drift (imperceptible); the exact
-  tolerance is confirmed during clarification.
+- "Lengthy chat" means at least ~200 messages for the scroll exercise; smoothness with
+  bounded memory is targeted up to 5,000+ messages on a mid-range device.
+- "No jump" means ≤ 2px of anchor drift (per Clarifications).
+- The rendered set is bounded by evicting off-screen rows (both directions), so DOM and
+  memory stay flat regardless of scroll distance (per Clarifications).
 - Older pages are prepared on scroll proximity (look-ahead) by default; proactive
-  idle-time preloading is an optional enhancement, not required for v1.
-- The rendered window grows toward older messages for the session and is not required
-  to shrink/evict older rows in v1 (bounded-DOM eviction is a possible later refinement).
+  idle-time preloading is an optional enhancement, not required.
 - Roster, receipts, reactions, and all other messaging behaviors are unchanged; this
-  is purely about history preparation and viewport stability.
+  is purely about history preparation/rendering and viewport stability.
 - Client-only: no server, wire, or stored-ciphertext change — zero-knowledge boundary
   untouched (no `/speckit-checklist` required on that basis).
-
-## Open product decisions (for `/speckit-clarify`)
-
-These have reasonable defaults above but materially affect scope and should be confirmed:
-
-1. The largest history that must stay smooth on a low-end device (decides whether
-   windowing + look-ahead is sufficient or whether bounded/cursor reads + true virtual
-   scrolling are needed).
-2. The exact "no jump" tolerance (0px vs ≤2px) — sets the acceptance threshold.
-3. Whether jump-to-older navigation (reply/starred above the window, User Story 3) is
-   in scope here or a separate spec.
-4. Whether older rendered rows should ever be evicted to bound DOM on very long
-   scroll-backs.
-5. Whether older pages should also be preloaded proactively while idle, or only on
-   scroll proximity.
