@@ -78,10 +78,10 @@ Web app, single container: client at repo root `src/`, e2e at `e2e/`, server at
 
 **Independent Test**: Peer records a voice message → "recording audio…"; a video note → "recording video…"; each clears on send/cancel.
 
-- [ ] T013 [P] [US2] e2e in `e2e/activity-indicators.spec.ts`: voice recording → "recording audio…"; video note → "recording video…"; clears on send/cancel; typing→recording replaces (SC-002). (Write first; fails.)
-- [ ] T014 [US2] Emit `recording-audio` around `startRecording()` / `stopAndSendRecording()` / `cancelRecording()` in `src/views/detail/ChatDetailPage.vue`.
-- [ ] T015 [US2] Emit `recording-video` around the video-note flow (`onVideoNoteSend`, `camDown`/`camUp` open/cancel) in `src/views/detail/ChatDetailPage.vue`.
-- [ ] T016 [US2] Render distinct "recording audio…/recording video…" labels in the header indicator slot (reuse the US1 render path); switching activity replaces rather than stacks.
+- [x] T013 [P] [US2] e2e in `e2e/activity-indicators.spec.ts`: voice recording → "recording audio…"; video note → "recording video…"; clears on send/cancel; typing→recording replaces (SC-002). (Write first; fails.)
+- [x] T014 [US2] Emit `recording-audio` around `startRecording()` / `stopAndSendRecording()` / `cancelRecording()` in `src/views/detail/ChatDetailPage.vue`.
+- [x] T015 [US2] Emit `recording-video` around the video-note flow (`onVideoNoteSend`, `camDown`/`camUp` open/cancel) in `src/views/detail/ChatDetailPage.vue`.
+- [x] T016 [US2] Render distinct "recording audio…/recording video…" labels in the header indicator slot (reuse the US1 render path); switching activity replaces rather than stacks.
 
 **Checkpoint**: US2 functional; 1:1 indicators complete for all three kinds.
 
