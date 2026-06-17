@@ -11,7 +11,15 @@
 import { ref, watch } from 'vue';
 import { subscribe } from '@/db/idb';
 import { isAuthenticated, getToken, verifySessionOrReset, getPendingInviter } from '@/services/auth';
-import { WebSocketTransport, type Frame, type Transport, type TransportState } from '@/services/transport';
+import {
+  WebSocketTransport,
+  type Frame,
+  type ActivityFrame,
+  type ActivityKind,
+  type ActivityState,
+  type Transport,
+  type TransportState,
+} from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
 import { getChat, listChats, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing } from '@/db/queries';
 import { checkDeliveries } from '@/services/api';
@@ -25,7 +33,9 @@ import { refreshConnections, onConnectionAccepted } from '@/services/connections
 import { notifyIncoming } from '@/services/notify';
 import { runInviteSync } from '@/services/invites';
 import { clearPresence } from '@/composables/usePresence';
-import { clearTyping } from '@/composables/useTyping';
+import { clearTyping, applyActivity, activityIndicatorsEnabled } from '@/composables/useTyping';
+import { sealActivity, openActivity, clearActivityKeys } from '@/services/crypto/activity-seal';
+import type { Envelope } from '@/services/crypto/envelope';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
 
 const syncState = ref<TransportState>('offline');
@@ -254,6 +264,13 @@ function start(): void {
       else void refreshConnections();
       return;
     }
+    if (f.t === 'activity') {
+      // Ephemeral typing/recording indicator (spec 1009): unseal → apply to the
+      // in-memory store. Live fast-path — bypasses the serialized inboundChain
+      // (it touches no IndexedDB) and is never persisted or acked.
+      void handleActivityFrame(f);
+      return;
+    }
     const live = f.t.startsWith('call-') || f.t.startsWith('sfu-') || f.t === 'presence';
     if (live) {
       void handleIncomingFrame(f);
@@ -400,6 +417,7 @@ function start(): void {
         void disablePush(); // drop the push subscription on sign-out
         clearPresence();
         clearTyping();
+        clearActivityKeys(); // drop derived per-peer activity keys on sign-out
       }
     },
     { immediate: true },
@@ -494,6 +512,42 @@ export async function sendLive(frame: Frame): Promise<boolean> {
 /** Whether the relay is currently connected (for call pre-flight checks). */
 export function isTransportOnline(): boolean {
   return !!transport && transport.state === 'online';
+}
+
+/** Unseal an inbound activity frame and apply it to the ephemeral store (spec 1009). */
+async function handleActivityFrame(f: ActivityFrame): Promise<void> {
+  if (!f.from || f.ciphertext == null) return;
+  const payload = await openActivity(f.from, f.ciphertext as Envelope);
+  if (!payload) return; // undecryptable, or indicators disabled (applyActivity is a no-op then too)
+  applyActivity({
+    // 1:1: key by the peer (the sender, from our side); group: the shared id in `c`.
+    conversationId: payload.c || f.from,
+    senderId: f.from,
+    kind: payload.k,
+    state: payload.s,
+  });
+}
+
+/**
+ * Emit an ephemeral activity signal to a peer (spec 1009). Sealed peer-to-peer
+ * and sent live-only (never queued). No-op when indicators are disabled
+ * (reciprocity — you can't leak what you don't send) or when it can't be sealed
+ * (fail-closed). For groups, call once per recipient member.
+ */
+export async function sendActivity(opts: {
+  peerUserId: string;
+  conversationId?: string; // shared group id; omit/'' for 1:1
+  kind: ActivityKind;
+  state: ActivityState;
+}): Promise<void> {
+  if (!activityIndicatorsEnabled()) return;
+  const env = await sealActivity(opts.peerUserId, {
+    c: opts.conversationId ?? '',
+    k: opts.kind,
+    s: opts.state,
+  });
+  if (!env) return;
+  void sendLive({ t: 'activity', to: opts.peerUserId, ciphertext: env });
 }
 
 // Poll redeemed invitations only when there's something to resolve (outstanding

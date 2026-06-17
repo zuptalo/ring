@@ -720,6 +720,7 @@
             :spellcheck="true"
             enterkeyhint="enter"
             @ion-input="onComposerInput"
+            @ion-blur="onComposerBlur"
             @keydown.enter="onComposerEnter"
             @paste="onComposerPaste"
           />
@@ -892,8 +893,10 @@ import {
   type AudioTrackMeta,
 } from '@/composables/useAudioPlayer';
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
-import { sendReadReceipts, sendDownloadedReceipts } from '@/composables/useSync';
+import { sendReadReceipts, sendDownloadedReceipts, sendActivity } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
+import { activityFor, activityKindLabel } from '@/composables/useTyping';
+import { ACTIVITY, type ActivityState } from '@/services/transport';
 import { startDirectCall, startGroupCall } from '@/composables/useCall';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { setActiveChat } from '@/services/notify';
@@ -904,11 +907,16 @@ const router = useRouter();
 const chatId = route.params.id as string;
 
 // Online / last-seen line under the contact name (1:1 only; '' when unknown).
+// While the peer is composing, a transient activity indicator ("typing…",
+// "recording audio…", "recording video…") OVERRIDES the presence line (spec 1009).
 const statusLine = computed(() => {
   const c = chat.value;
   if (!c || c.isGroup) return '';
   const peer = c.participantIds[0];
-  return peer ? presenceLabel(peerPresence(peer)) : '';
+  if (!peer) return '';
+  const active = activityFor(peer); // reactive: peer's current activity (1:1 keyed by peer id)
+  if (active.length) return activityKindLabel(active[0].kind);
+  return presenceLabel(peerPresence(peer));
 });
 
 // Tapping the header avatar/name opens the info sub-page: group info for groups,
@@ -1807,10 +1815,47 @@ const draft = ref('');
 // the caret in view within that native element, not the host. So a fresh bottom
 // line ends up clipped just below the fold until you nudge it up. Pin the host to
 // the bottom on input so the newest line stays fully visible.
+// --- typing indicator emit (spec 1009; US1 = 1:1 only — groups are US5) ---
+// Emit "typing" on composer input (debounced via the active flag, with a periodic
+// keepalive so a long compose stays "typing…" without a per-keystroke storm), and
+// "stopped" on send / clearing the draft / blur / leaving. sendActivity is a no-op
+// when the privacy toggle is off (reciprocity) or it can't be sealed (fail-closed).
+let typingActive = false;
+let typingKeepalive: ReturnType<typeof setInterval> | null = null;
+
+function emitTyping(state: ActivityState): void {
+  const peer = peerId.value;
+  if (!peer) return; // peerId is undefined for groups → 1:1 only here
+  void sendActivity({ peerUserId: peer, kind: 'typing', state });
+}
+
+function startTyping(): void {
+  if (typingActive || !peerId.value) return;
+  typingActive = true;
+  emitTyping('active');
+  typingKeepalive = setInterval(() => emitTyping('active'), ACTIVITY.KEEPALIVE_MS);
+}
+
+function stopTyping(): void {
+  if (!typingActive) return;
+  typingActive = false;
+  if (typingKeepalive) {
+    clearInterval(typingKeepalive);
+    typingKeepalive = null;
+  }
+  emitTyping('stopped');
+}
+
 function onComposerInput(e: CustomEvent): void {
   draft.value = (e.detail as { value?: string | null }).value ?? '';
+  if (draft.value.trim()) startTyping();
+  else stopTyping(); // cleared the draft → no longer typing
   const host = composerEl.value?.$el;
   if (host) requestAnimationFrame(() => { host.scrollTop = host.scrollHeight; });
+}
+
+function onComposerBlur(): void {
+  stopTyping(); // leaving the field ends the indicator
 }
 
 // Block Return while the composer is empty (or only whitespace) so a message can't
@@ -2022,6 +2067,7 @@ function dismissShareHintToast(): void {
 onIonViewWillLeave(() => {
   viewActive.value = false;
   setActiveChat(null);
+  stopTyping(); // leaving the chat ends our outgoing typing indicator (spec 1009)
   clearTimeout(shareHintTimer);
   dismissShareHintToast(); // don't let the hint linger on other pages
   void dismissOpenPopovers(); // a quick-react/menu popover must not linger after leaving
@@ -2340,6 +2386,7 @@ async function send() {
   const text = normalizeOutgoing(draft.value);
   if (!text && !pendingImages.value.length) return;
   if (peerGhosted.value || peerBlocked.value) return; // composer is hidden anyway; backstop
+  stopTyping(); // the message is going out → no longer "typing" (spec 1009)
 
   // Editing: Send rewrites the original message instead of creating a new one.
   if (editingMsg.value && text) {
