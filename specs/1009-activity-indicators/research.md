@@ -36,7 +36,7 @@ dispatch, `usePresence.ts` ephemeral state, the read-receipt relay path).
   "X is typing" frames.
 - **Alternatives rejected**: Trusting client `from` — forgeable.
 
-## D3 — Sealing the activity kind without Double-Ratchet churn  [RESOLVED 2026-06-17 — recommendation pinned, pending human security sign-off]
+## D3 — Sealing the activity kind without Double-Ratchet churn  [RESOLVED + MAINTAINER-SIGNED-OFF 2026-06-17]
 
 - **Decision**: Seal the `{kind, state}` payload with the **existing AEAD**
   (`src/services/crypto/envelope.ts:seal` / XChaCha20-Poly1305, fresh random nonce
@@ -80,14 +80,15 @@ dispatch, `usePresence.ts` ephemeral state, the read-receipt relay path).
     over a derived key.
   - *Plaintext kind in a new frame field* — rejected: leaks typing-vs-recording to
     the server beyond what relaying requires.
-- **Open items for human security sign-off (CHK007)**:
+- **Signed off by maintainer 2026-06-17 (CHK007)** — all three accepted as the
+  implementation contract:
   1. **Stable key anchor** — HKDF from a session-stable secret captured at
      establishment (e.g. the X3DH-derived root), **not** the live-rotating root
      key, so the activity key stays in sync across DH-ratchet steps; derivation
      read-only, must not weaken the ratchet.
-  2. Confirm **no per-message forward secrecy** is acceptable for this ephemeral,
-     never-stored, low-sensitivity signal (or add periodic re-derivation).
-  3. Confirm **random 24-byte XChaCha nonce per send** (safe under one key at this
+  2. **No per-message forward secrecy** is accepted for this ephemeral,
+     never-stored, low-sensitivity signal (no periodic re-derivation required).
+  3. **Random 24-byte XChaCha nonce per send** (safe under one key at this
      volume).
 - **Invariant fixed regardless of final choice**: server sees no plaintext kind;
   no new/hand-rolled primitive; no ratchet advance; fail-closed when unsealing

@@ -25,6 +25,7 @@ import { refreshConnections, onConnectionAccepted } from '@/services/connections
 import { notifyIncoming } from '@/services/notify';
 import { runInviteSync } from '@/services/invites';
 import { clearPresence } from '@/composables/usePresence';
+import { clearTyping } from '@/composables/useTyping';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
 
 const syncState = ref<TransportState>('offline');
@@ -221,6 +222,7 @@ function start(): void {
       void sendPresenceSelf(selfActive()); // correct the server's connect-default if we're locked
     } else if (s === 'offline') {
       clearPresence(); // don't show stale online status while disconnected
+      clearTyping(); // ephemeral activity indicators don't survive a disconnect (spec 1009)
       scheduleSessionCheck(); // a rejected token would keep us stuck here
       // A foreground drop can mean the server restarted for a new deploy, so check
       // for a new version here too (throttled). Covers it alongside open + foreground.
@@ -397,6 +399,7 @@ function start(): void {
         transport.disconnect();
         void disablePush(); // drop the push subscription on sign-out
         clearPresence();
+        clearTyping();
       }
     },
     { immediate: true },
