@@ -264,6 +264,13 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
       {
         items: [
+          { type: 'toggle', title: 'Typing & recording indicators', key: 'privacy.activityIndicators', default: true },
+        ],
+        footer:
+          'Show people when you’re typing or recording. If you turn this off, you won’t see when other people are typing or recording either.',
+      },
+      {
+        items: [
           { type: 'link', id: 'privacy-app-lock', title: 'App lock', icon: 'key' },
           { type: 'link', id: 'privacy-chat-lock', title: 'Chat lock', icon: 'lock' },
         ],

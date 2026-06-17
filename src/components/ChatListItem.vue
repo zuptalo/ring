@@ -27,13 +27,18 @@
       <ion-label>
         <h2>{{ capitalizeFirst(chat.name) }}</h2>
         <p class="preview-row">
-          <ion-icon
-            v-if="previewIcon"
-            :icon="previewIcon"
-            class="preview-ico"
-            aria-hidden="true"
-          />
-          <span class="preview">{{ chat.lastMessage }}</span>
+          <template v-if="activityLabel">
+            <span class="preview activity">{{ activityLabel }}</span>
+          </template>
+          <template v-else>
+            <ion-icon
+              v-if="previewIcon"
+              :icon="previewIcon"
+              class="preview-ico"
+              aria-hidden="true"
+            />
+            <span class="preview">{{ chat.lastMessage }}</span>
+          </template>
         </p>
       </ion-label>
       <div class="meta" slot="end">
@@ -78,6 +83,7 @@ import {
   markChatRead, markChatUnread, setChatPinned, setChatArchived, MAX_PINNED_CHATS,
 } from '@/db/queries';
 import { peerPresence } from '@/composables/usePresence';
+import { activityFor, activityKindLabel } from '@/composables/useTyping';
 import { formatTime } from '@/utils/time';
 import { capitalizeFirst } from '@/utils/text';
 import type { Chat } from '@/db/types';
@@ -103,6 +109,16 @@ const muted = computed(() => !!props.chat.mutedUntil && props.chat.mutedUntil > 
 const isOnline = computed(
   () => !props.chat.isGroup && !!peerPresence(props.chat.participantIds?.[0] ?? '')?.online,
 );
+// While the 1:1 peer is composing, the row shows their activity ("typing…",
+// "recording audio…", …) in place of the last-message preview (spec 1009).
+// Group rows keep the preview (per-sender group activity is US5).
+const activityLabel = computed(() => {
+  if (props.chat.isGroup) return '';
+  const peer = props.chat.participantIds?.[0];
+  if (!peer) return '';
+  const list = activityFor(peer);
+  return list.length ? activityKindLabel(list[0].kind) : '';
+});
 
 async function toggleRead(): Promise<void> {
   if (unread.value) await markChatRead(props.chat.id);
@@ -185,6 +201,9 @@ ion-item-option ion-icon {
   font-size: 16px;
   margin-top: 2px;
   color: var(--app-text-muted);
+}
+.preview.activity {
+  color: var(--ion-color-primary, #10b981);
 }
 .preview {
   flex: 1;

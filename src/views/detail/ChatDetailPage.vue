@@ -720,6 +720,7 @@
             :spellcheck="true"
             enterkeyhint="enter"
             @ion-input="onComposerInput"
+            @ion-blur="onComposerBlur"
             @keydown.enter="onComposerEnter"
             @paste="onComposerPaste"
           />
@@ -892,8 +893,10 @@ import {
   type AudioTrackMeta,
 } from '@/composables/useAudioPlayer';
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
-import { sendReadReceipts, sendDownloadedReceipts } from '@/composables/useSync';
+import { sendReadReceipts, sendDownloadedReceipts, sendActivity, sendGroupActivity } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
+import { activityFor, activityKindLabel, coalescedActivityLabel } from '@/composables/useTyping';
+import { ACTIVITY, type ActivityKind, type ActivityState } from '@/services/transport';
 import { startDirectCall, startGroupCall } from '@/composables/useCall';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { setActiveChat } from '@/services/notify';
@@ -904,11 +907,21 @@ const router = useRouter();
 const chatId = route.params.id as string;
 
 // Online / last-seen line under the contact name (1:1 only; '' when unknown).
+// While the peer is composing, a transient activity indicator ("typing…",
+// "recording audio…", "recording video…") OVERRIDES the presence line (spec 1009).
 const statusLine = computed(() => {
   const c = chat.value;
-  if (!c || c.isGroup) return '';
+  if (!c) return '';
+  if (c.isGroup) {
+    // Groups have no presence line; show per-sender activity only while someone's
+    // composing — "Alice is typing…" / "Alice, Bob…" / "several people…" (US5).
+    return coalescedActivityLabel(c.id, (id) => contactsMap.value.get(id)?.name ?? 'Someone');
+  }
   const peer = c.participantIds[0];
-  return peer ? presenceLabel(peerPresence(peer)) : '';
+  if (!peer) return '';
+  const active = activityFor(peer); // reactive: peer's current activity (1:1 keyed by peer id)
+  if (active.length) return activityKindLabel(active[0].kind);
+  return presenceLabel(peerPresence(peer));
 });
 
 // Tapping the header avatar/name opens the info sub-page: group info for groups,
@@ -1807,10 +1820,58 @@ const draft = ref('');
 // the caret in view within that native element, not the host. So a fresh bottom
 // line ends up clipped just below the fold until you nudge it up. Pin the host to
 // the bottom on input so the newest line stays fully visible.
+// --- activity indicator emit (spec 1009): typing + recording (1:1 only here; groups are US5) ---
+// One emitter for all kinds: emit `active` plus a ~3s keepalive (so a long compose
+// or recording stays shown without a per-event storm), and `stopped` when it ends.
+// Switching kind (typing → recording) just replaces — the recipient keys by sender,
+// so a fresh `active` of a new kind overwrites the old one. sendActivity is a no-op
+// when the privacy toggle is off (reciprocity) or it can't be sealed (fail-closed).
+let activeKind: ActivityKind | null = null;
+let activityKeepalive: ReturnType<typeof setInterval> | null = null;
+
+function emitActivitySignal(kind: ActivityKind, state: ActivityState): void {
+  const c = chat.value;
+  if (!c) return;
+  if (c.isGroup) {
+    const members = (c.participantIds ?? []).filter((id) => id && id !== selfId);
+    if (members.length) void sendGroupActivity({ members, conversationId: c.id, kind, state });
+  } else {
+    const peer = c.participantIds?.[0];
+    if (peer) void sendActivity({ peerUserId: peer, kind, state });
+  }
+}
+
+function startActivity(kind: ActivityKind): void {
+  if (!chat.value || activeKind === kind) return;
+  activeKind = kind;
+  emitActivitySignal(kind, 'active');
+  if (activityKeepalive) clearInterval(activityKeepalive);
+  activityKeepalive = setInterval(() => emitActivitySignal(kind, 'active'), ACTIVITY.KEEPALIVE_MS);
+}
+
+// `only` guards against stopping a different in-progress activity (e.g. a composer
+// blur must not cancel an ongoing recording indicator).
+function stopActivity(only?: ActivityKind): void {
+  if (!activeKind || (only && activeKind !== only)) return;
+  const kind = activeKind;
+  activeKind = null;
+  if (activityKeepalive) {
+    clearInterval(activityKeepalive);
+    activityKeepalive = null;
+  }
+  emitActivitySignal(kind, 'stopped');
+}
+
 function onComposerInput(e: CustomEvent): void {
   draft.value = (e.detail as { value?: string | null }).value ?? '';
+  if (draft.value.trim()) startActivity('typing');
+  else stopActivity('typing'); // cleared the draft → no longer typing
   const host = composerEl.value?.$el;
   if (host) requestAnimationFrame(() => { host.scrollTop = host.scrollHeight; });
+}
+
+function onComposerBlur(): void {
+  stopActivity('typing'); // blurring the field ends typing (not a recording)
 }
 
 // Block Return while the composer is empty (or only whitespace) so a message can't
@@ -2022,6 +2083,7 @@ function dismissShareHintToast(): void {
 onIonViewWillLeave(() => {
   viewActive.value = false;
   setActiveChat(null);
+  stopActivity(); // leaving the chat ends any outgoing activity indicator (spec 1009)
   clearTimeout(shareHintTimer);
   dismissShareHintToast(); // don't let the hint linger on other pages
   void dismissOpenPopovers(); // a quick-react/menu popover must not linger after leaving
@@ -2340,6 +2402,7 @@ async function send() {
   const text = normalizeOutgoing(draft.value);
   if (!text && !pendingImages.value.length) return;
   if (peerGhosted.value || peerBlocked.value) return; // composer is hidden anyway; backstop
+  stopActivity(); // the message is going out → end any activity indicator (spec 1009)
 
   // Editing: Send rewrites the original message instead of creating a new one.
   if (editingMsg.value && text) {
@@ -2453,6 +2516,12 @@ function triggerCamera() {
 
 /* ---- video note: hold the camera button to record a round clip ---- */
 const videoNoteOpen = ref(false);
+// The video-note recorder being open is the "recording video" activity window
+// (spec 1009): emit on open, stop on close (send / cancel / dismiss).
+watch(videoNoteOpen, (open) => {
+  if (open) startActivity('recording-video');
+  else stopActivity('recording-video');
+});
 let camTimer: number | undefined;
 let camHeld = false;
 function camDown(): void {
@@ -2828,6 +2897,7 @@ async function startRecording() {
     recElapsed.value = '0:00';
     recTimer = window.setInterval(tickElapsed, 200);
     startSampler();
+    startActivity('recording-audio'); // tell the peer we're recording a voice message (spec 1009)
   } catch {
     const t = await toastController.create({ message: 'Microphone unavailable', duration: 1500, position: 'top' });
     await t.present();
@@ -2868,6 +2938,7 @@ function togglePause(): void {
 
 async function stopAndSendRecording() {
   if (!recorder) return;
+  stopActivity('recording-audio'); // recording done → clear the peer's indicator (spec 1009)
   const durationSec = Math.max(1, Math.round(recActiveMs() / 1000));
   const rec = recorder;
   const mime = rec.mimeType || 'audio/webm';
@@ -2888,6 +2959,7 @@ async function stopAndSendRecording() {
 }
 
 function cancelRecording() {
+  stopActivity('recording-audio'); // cancelled → clear the peer's indicator (spec 1009)
   if (recorder) {
     recorder.onstop = null;
     if (recPaused.value) recorder.resume();

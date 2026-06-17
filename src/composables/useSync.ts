@@ -11,7 +11,16 @@
 import { ref, watch } from 'vue';
 import { subscribe } from '@/db/idb';
 import { isAuthenticated, getToken, verifySessionOrReset, getPendingInviter } from '@/services/auth';
-import { WebSocketTransport, type Frame, type Transport, type TransportState } from '@/services/transport';
+import {
+  WebSocketTransport,
+  ACTIVITY,
+  type Frame,
+  type ActivityFrame,
+  type ActivityKind,
+  type ActivityState,
+  type Transport,
+  type TransportState,
+} from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
 import { getChat, listChats, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing } from '@/db/queries';
 import { checkDeliveries } from '@/services/api';
@@ -25,6 +34,14 @@ import { refreshConnections, onConnectionAccepted } from '@/services/connections
 import { notifyIncoming } from '@/services/notify';
 import { runInviteSync } from '@/services/invites';
 import { clearPresence } from '@/composables/usePresence';
+import {
+  clearTyping,
+  applyActivity,
+  activityIndicatorsEnabled,
+  setActivityIndicatorsEnabled,
+} from '@/composables/useTyping';
+import { sealActivity, openActivity, clearActivityKeys } from '@/services/crypto/activity-seal';
+import type { Envelope } from '@/services/crypto/envelope';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
 
 const syncState = ref<TransportState>('offline');
@@ -221,6 +238,7 @@ function start(): void {
       void sendPresenceSelf(selfActive()); // correct the server's connect-default if we're locked
     } else if (s === 'offline') {
       clearPresence(); // don't show stale online status while disconnected
+      clearTyping(); // ephemeral activity indicators don't survive a disconnect (spec 1009)
       scheduleSessionCheck(); // a rejected token would keep us stuck here
       // A foreground drop can mean the server restarted for a new deploy, so check
       // for a new version here too (throttled). Covers it alongside open + foreground.
@@ -250,6 +268,13 @@ function start(): void {
       // reconcile the lists.
       if (f.state === 'accepted') void onConnectionAccepted(f.from);
       else void refreshConnections();
+      return;
+    }
+    if (f.t === 'activity') {
+      // Ephemeral typing/recording indicator (spec 1009): unseal → apply to the
+      // in-memory store. Live fast-path — bypasses the serialized inboundChain
+      // (it touches no IndexedDB) and is never persisted or acked.
+      void handleActivityFrame(f);
       return;
     }
     const live = f.t.startsWith('call-') || f.t.startsWith('sfu-') || f.t === 'presence';
@@ -320,7 +345,9 @@ function start(): void {
   subscribe(['settings'], () => {
     void sendPresencePrefs();
     void applyPushPreference();
+    void applyActivityPref(); // reflect the activity-indicators toggle (spec 1009)
   });
+  void applyActivityPref(); // apply the saved toggle once at startup
 
   // Back up own data (contacts/chats + profile/prefs snapshot) shortly after any
   // change, not only on reconnect. Debounced so a burst of writes coalesces.
@@ -397,6 +424,8 @@ function start(): void {
         transport.disconnect();
         void disablePush(); // drop the push subscription on sign-out
         clearPresence();
+        clearTyping();
+        clearActivityKeys(); // drop derived per-peer activity keys on sign-out
       }
     },
     { immediate: true },
@@ -491,6 +520,74 @@ export async function sendLive(frame: Frame): Promise<boolean> {
 /** Whether the relay is currently connected (for call pre-flight checks). */
 export function isTransportOnline(): boolean {
   return !!transport && transport.state === 'online';
+}
+
+/** Unseal an inbound activity frame and apply it to the ephemeral store (spec 1009). */
+async function handleActivityFrame(f: ActivityFrame): Promise<void> {
+  if (!f.from || f.ciphertext == null) return;
+  const payload = await openActivity(f.from, f.ciphertext as Envelope);
+  if (!payload) return; // undecryptable, or indicators disabled (applyActivity is a no-op then too)
+  applyActivity({
+    // 1:1: key by the peer (the sender, from our side); group: the shared id in `c`.
+    conversationId: payload.c || f.from,
+    senderId: f.from,
+    kind: payload.k,
+    state: payload.s,
+  });
+}
+
+/**
+ * Emit an ephemeral activity signal to a peer (spec 1009). Sealed peer-to-peer
+ * and sent live-only (never queued). No-op when indicators are disabled
+ * (reciprocity — you can't leak what you don't send) or when it can't be sealed
+ * (fail-closed). For groups, call once per recipient member.
+ */
+export async function sendActivity(opts: {
+  peerUserId: string;
+  conversationId?: string; // shared group id; omit/'' for 1:1
+  kind: ActivityKind;
+  state: ActivityState;
+}): Promise<void> {
+  if (!activityIndicatorsEnabled()) return;
+  const env = await sealActivity(opts.peerUserId, {
+    c: opts.conversationId ?? '',
+    k: opts.kind,
+    s: opts.state,
+  });
+  if (!env) return;
+  void sendLive({ t: 'activity', to: opts.peerUserId, ciphertext: env });
+}
+
+/**
+ * Emit a group activity signal: one sealed frame per recipient member (spec 1009
+ * §US5). The server has no group object, so the client fans out — bounded by
+ * GROUP_FANOUT_CAP and naturally rate-limited by the caller's ~3s keepalive
+ * cadence. Members are sealed individually (per-pair key); the shared group id
+ * rides in the sealed payload so each recipient keys the activity by group.
+ * Blocked recipients are dropped server-side. No-op when disabled.
+ */
+export async function sendGroupActivity(opts: {
+  members: string[]; // recipient member ids (self already excluded by the caller)
+  conversationId: string; // the shared group id
+  kind: ActivityKind;
+  state: ActivityState;
+}): Promise<void> {
+  if (!activityIndicatorsEnabled()) return;
+  const recipients = opts.members.slice(0, ACTIVITY.GROUP_FANOUT_CAP);
+  for (const member of recipients) {
+    const env = await sealActivity(member, { c: opts.conversationId, k: opts.kind, s: opts.state });
+    if (env) void sendLive({ t: 'activity', to: member, ciphertext: env });
+  }
+}
+
+/**
+ * Reflect the `privacy.activityIndicators` toggle (default on) into the runtime
+ * gate (spec 1009). When off, the client emits nothing AND renders nothing from
+ * others (reciprocity) — enforced entirely client-side. Applied on start and on
+ * any settings change.
+ */
+export async function applyActivityPref(): Promise<void> {
+  setActivityIndicatorsEnabled(await getSetting<boolean>('privacy.activityIndicators', true));
 }
 
 // Poll redeemed invitations only when there's something to resolve (outstanding

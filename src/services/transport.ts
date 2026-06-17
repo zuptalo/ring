@@ -271,6 +271,38 @@ export interface ConnectUpdateFrame {
   state: string; // 'accepted' | 'rejected'
 }
 
+/* ---- ephemeral activity indicators (spec 1009): typing / recording ---- */
+
+/** What a peer is doing in a conversation right now (sealed on the wire). */
+export type ActivityKind = 'typing' | 'recording-audio' | 'recording-video';
+
+/** Whether the activity just started/continues (`active`) or ended (`stopped`). */
+export type ActivityState = 'active' | 'stopped';
+
+/** Activity tunables — one source of truth (see specs/1009-activity-indicators). */
+export const ACTIVITY = {
+  /** Re-emit cadence while continuously composing (must be < EXPIRY_MS). */
+  KEEPALIVE_MS: 3000,
+  /** Auto-clear a peer's indicator this long after its last signal. */
+  EXPIRY_MS: 6000,
+  /** Max recipients a single client fans group activity out to. */
+  GROUP_FANOUT_CAP: 50,
+} as const;
+
+/**
+ * Ephemeral "is typing / recording" indicator (spec 1009). A live-only relay
+ * frame modeled on read receipts: client-originated and addressed {to: peer};
+ * the server stamps `from` and relays only to the peer's live sockets — never
+ * durably queued, persisted, or pushed. The activity KIND + conversation ride
+ * sealed in `ciphertext`, so the server sees only {t, to, from}.
+ */
+export interface ActivityFrame {
+  t: 'activity';
+  to?: string; // recipient (client→server); omitted server→client
+  from?: string; // server stamps the authenticated sender (server→client)
+  ciphertext?: unknown; // sealed { conversationId, kind, state } — opaque to the server
+}
+
 export type Frame =
   | MsgFrame
   | ReceiptFrame
@@ -282,6 +314,7 @@ export type Frame =
   | PresenceSubFrame
   | PresenceSelfFrame
   | PresenceFrame
+  | ActivityFrame
   | ConnectReqFrame
   | ConnectUpdateFrame
   | CallFrame;
