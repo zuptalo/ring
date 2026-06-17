@@ -16,7 +16,7 @@ SERVER_DIR := server
 GOBIN := $(shell go env GOPATH)/bin
 AIR := $(GOBIN)/air
 
-.PHONY: start stop db-up db-down tools backend frontend deploy-dev hooks roadmap spec
+.PHONY: start stop db-up db-down db-reset tools backend frontend deploy-dev hooks roadmap spec
 
 ## start: database (if needed) + backend hot reload + frontend hot reload
 start: db-up tools
@@ -34,6 +34,16 @@ db-up:
 ## db-down: stop local PostgreSQL (keeps the data volume)
 db-down:
 	@cd $(SERVER_DIR) && docker compose down
+
+## db-reset: wipe the dev database (drops all local accounts/messages; keeps the volume).
+##   Use after investigation runs leave throwaway accounts behind. Stop `make start`
+##   first (ringd holds connections); ringd re-migrates + re-seeds INVITE01..10 on the
+##   next start. The hermetic e2e/drive harnesses use a separate DB and aren't affected.
+db-reset: db-up
+	@echo "▶ Resetting dev DB 'ring' (all local accounts/messages will be dropped)…"
+	@cd $(SERVER_DIR) && docker compose exec -T db psql -U ring -d postgres \
+		-c "DROP DATABASE IF EXISTS ring WITH (FORCE)" -c "CREATE DATABASE ring"
+	@echo "  Done — run \`make start\`; ringd re-migrates + re-seeds invite codes."
 
 ## stop: tear everything down (db + any stray air/vite processes)
 stop:

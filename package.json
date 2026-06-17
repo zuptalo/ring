@@ -19,6 +19,7 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "showcase": "playwright test --config showcase/showcase.config.ts",
+    "drive": "node",
     "release:patch": "npm version patch --no-git-tag-version",
     "release:minor": "npm version minor --no-git-tag-version",
     "release:major": "npm version major --no-git-tag-version"

@@ -3,6 +3,11 @@
  * register an account, pair two accounts (friend-request handshake → E2EE
  * session), and introspect call state. Each account is a separate browser
  * context (isolated IndexedDB / localStorage).
+ *
+ * Sibling: `drive/driver.mjs` is the standalone (no test-runner) variant of
+ * `createAccount`/`pair` that ATTACHES to the running `make start` dev stack for
+ * ad-hoc UI investigation. If you change the registration/pairing handshake here,
+ * update it there too.
  */
 import type { BrowserContext, Page } from '@playwright/test';
 

@@ -29,9 +29,14 @@ coverage
 .tmp_verify
 .cc-tmp-search
 .rtmp
-.claude
 .m
 .grep_out2.txt
+
+# Claude Code project setup is TRACKED (skills, shared settings) so a fresh clone
+# has the full workflow and we can pick up exactly where we left off on any machine.
+# Only machine-local / ephemeral bits stay out.
+.claude/settings.local.json
+.claude/*.lock
 
 # Server runtime state + secrets are also covered by server/.gitignore
 server/data

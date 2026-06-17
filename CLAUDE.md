@@ -100,6 +100,32 @@ npm run test:e2e              # Playwright e2e (needs `make db-up`; spins its ow
   `window.__ringTest` hook (`src/services/testhook.ts`), which is stripped from
   production builds. It does NOT touch your `make start` stack (different ports + DB).
 
+### Driving the dev app for investigation (`drive/`)
+
+When you need to actually *see* the UI behave — reproduce a bug, watch a multi-user
+flow, screenshot a state — drive the **already-running** `make start` app with the
+`drive/` harness instead of hand-rolling a script. It attaches to the live dev stack
+(Vite `:5173` → ringd `:8080`) and drives several throwaway test users through the
+same `window.__ringTest` hook the e2e suite uses; a scenario is ~10 lines.
+
+```sh
+make start                                   # (in another terminal) dev stack up
+node drive/scenarios/group-conversation.mjs  # or: HEADED=1 node drive/scenarios/dm-and-react.mjs
+```
+
+`drive/driver.mjs` exports `createAccount` / `pair` / `group` / `say` /
+`waitForMessage` / `react` / `chatWith` / `shot` / `sweep` / `done`. Screenshots land
+in `.tmp/drive/*.png` (gitignored) — read them to inspect the UI; ids + console
+stream to stdout. **Gotchas (the driver handles them; don't undo them):** use the
+driver's `poll()`/`waitForMessage`, never `page.waitForFunction(() => promise.then(…))`
+(it resolves spuriously in a standalone node script); 1:1 chat ids differ per device
+(`chatWith` each side) but group ids are shared; accounts use minted dev codes;
+`mobile: true` is iPhone-under-chromium. End scenarios with `sweep([...])`, or wipe
+the dev DB with `make db-reset` (stop ringd first). Full guide: `drive/README.md`.
+
+This shares the dev DB and is the fast, interactive complement to the hermetic
+`npm run test:e2e` / `npm run showcase` (which boot their own isolated backend).
+
 ## Key architectural conventions
 
 **Zero-knowledge boundary.** All message/media/profile plaintext is encrypted
