@@ -58,7 +58,7 @@ Web app, single container: client `src/`, e2e `e2e/`, server `server/`.
 
 - [ ] T007 [P] [US1] Server seen-store test in `server/internal/ws/seen_test.go` (+ store fake): `RecordSeen` idempotent; `SeenFor` returns one row per member; a client `seen` receipt is relayed (from-stamped) AND recorded; `read`/`sent`/`delivered` from a client are dropped; `downloaded` relays but is NOT recorded. (Write first; fails.)
 - [ ] T008 [P] [US1] e2e in `e2e/group-seen-receipts.spec.ts`: a member sees a message while the sender is offline; on the sender's reconnect the seen state is reflected (SC-002). (Write first; fails.)
-- [ ] T009 [US1] New server migration `server/internal/db/migrations/NNNN_seen.sql` — `seen` table `(sender, recipient, msg_id, seen_at)`, PK `(sender, recipient, msg_id)` — plus `server/internal/store/seen.go` `RecordSeen` (upsert ON CONFLICT DO NOTHING) + `SeenFor(sender, msgIds)`. Retention mirrors `deliveries`.
+- [ ] T009 [US1] New server migration `server/internal/db/migrations/NNNN_seen.sql` — `seen` table `(sender, recipient, msg_id, seen_at)`, PK `(sender, recipient, msg_id)` — plus `server/internal/store/seen.go` `RecordSeen` (upsert ON CONFLICT DO NOTHING) + `SeenFor(sender, msgIds)` + **`SweepSeenOlderThan(age)`** (DELETE older than age, mirroring `SweepDeliveriesOlderThan`). Register the seen sweep on the **same schedule** that runs the deliveries sweep so the table doesn't grow unbounded (retention parity with `deliveries`).
 - [ ] T010 [US1] Wire `hub.go` "receipt" case to `RecordSeen` when `status=='seen'` (durable, like `ack→RecordDelivery`). Makes T007 pass.
 - [ ] T011 [US1] `POST /v1/seen/check` in `server/internal/api/relay_handlers.go` (mirror `deliveriesCheck`) + router; client `src/services/api.ts checkSeen()`.
 - [ ] T012 [US1] Client reconcile in `src/composables/useSync.ts` — on 'online', check seen for unconfirmed outgoing and replay synthetic `{t:'receipt',status:'seen',from:recipient}`; extend `collectUnconfirmedOutgoing` (queries.ts) to flag group msgs missing `seenAt`. Makes T008 pass.
@@ -104,7 +104,7 @@ Web app, single container: client `src/`, e2e `e2e/`, server `server/`.
 **Independent Test**: open a group message's info → every member appears under exactly one list.
 
 - [ ] T021 [P] [US4] e2e in `e2e/group-seen-receipts.spec.ts`: info lists partition all members into Seen by / Delivered / Not yet delivered (SC-004). (Write first; fails.)
-- [ ] T022 [US4] In `src/views/detail/MessageInfoPage.vue`: add the **"Not yet delivered"** list (`chat.participantIds` minus members with `deliveredAt`); rename "Read by"→"Seen by"; render an avatar stack (cap ~5 + "+N") for each tier, reusing `contactMap`/`nameFor`/`avatarFor`/`initialsAvatar`.
+- [ ] T022 [US4] In `src/views/detail/MessageInfoPage.vue`: add the **"Not yet delivered"** list (`chat.participantIds` minus members with `deliveredAt`); rename "Read by"→"Seen by"; render an avatar stack (cap 5 + "+N") for each tier, reusing `contactMap`/`nameFor`/`avatarFor`/`initialsAvatar`.
 
 **Checkpoint**: full per-member detail.
 

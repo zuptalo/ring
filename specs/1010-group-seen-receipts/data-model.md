@@ -48,7 +48,7 @@ For a group message, partition `chat.participantIds` (recipients):
 - **Delivered** = receipts with `deliveredAt` and no `seenAt`.
 - **Not yet delivered** = participantIds with no receipt `deliveredAt` (NEW).
 - Each row resolves name/avatar via the existing `contactMap` + `nameFor` /
-  `avatarFor` / `initialsAvatar`. Avatar stack caps at ~5 then "+N".
+  `avatarFor` / `initialsAvatar`. Avatar stack caps at 5 then "+N".
 
 ## New: `seen` table (server, Postgres)
 

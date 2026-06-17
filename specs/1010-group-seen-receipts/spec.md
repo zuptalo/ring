@@ -306,5 +306,5 @@ migration).
   retroactively added to past messages).
 - A single combined "Seen receipts" toggle governs both 1:1 and groups (no
   separate group rule); default on.
-- The avatar stack is capped (about five) with a "+N" overflow; "Seen X/N" stays
+- The avatar stack is capped at five with a "+N" overflow; "Seen X/N" stays
   compact on the bubble and defers the per-member detail to message info.
