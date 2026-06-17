@@ -130,11 +130,11 @@ Web app, single container: client at repo root `src/`, e2e at `e2e/`, server at
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T025 [P] e2e in `e2e/activity-indicators.spec.ts`: peer disconnects mid-typing → indicator auto-clears within ~6s (SC-005).
-- [ ] T026 [P] No-persistence assertions: confirm no IndexedDB object store added (no `DB_VERSION` bump), no Postgres migration, and activity never enters message history (SC-003/SC-007) — assert in the relevant unit/e2e tests.
-- [ ] T027 [P] LTR/RTL + light/dark correctness for the indicator text in the chat header and list row, and confirm strings are localizable (FR-015).
-- [ ] T028 [P] Fail-closed assertion: with no encryption session to the peer, no activity frame is sent (unit/integration) — guards CHK008.
-- [ ] T029 Run all gates and fix to green: `npm run build` (vue-tsc + vite), `cd server && go build ./... && go vet ./... && go test ./...`, vitest (+ coverage floors), `npm run test:e2e`. Then run the `quickstart.md` manual smoke.
+- [x] T025 [P] e2e in `e2e/activity-indicators.spec.ts`: peer disconnects mid-typing → indicator auto-clears within ~6s (SC-005).
+- [x] T026 [P] No-persistence assertions: confirm no IndexedDB object store added (no `DB_VERSION` bump), no Postgres migration, and activity never enters message history (SC-003/SC-007) — assert in the relevant unit/e2e tests.
+- [x] T027 [P] LTR/RTL + light/dark correctness for the indicator text in the chat header and list row, and confirm strings are localizable (FR-015).
+- [x] T028 [P] Fail-closed assertion: with no encryption session to the peer, no activity frame is sent (unit/integration) — guards CHK008.
+- [x] T029 Run all gates and fix to green: `npm run build` (vue-tsc + vite), `cd server && go build ./... && go vet ./... && go test ./...`, vitest (+ coverage floors), `npm run test:e2e`. Then run the `quickstart.md` manual smoke.
 
 ---
 
