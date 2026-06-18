@@ -30,6 +30,7 @@ Specs are grouped by category band; status moves
 | [1008](specs/1008-one-tap-media/spec.md) | One-Tap Media Open & Inline Quick-React Bar | 🟢 shipped |
 | [1009](specs/1009-activity-indicators/spec.md) | Ephemeral Activity Indicators (Typing & Recording) | 🟢 shipped |
 | [1010](specs/1010-group-seen-receipts/spec.md) | Group "Seen" Receipts — Durable, Private, and Counted | 🟢 shipped |
+| [1011](specs/1011-smooth-chat-history/spec.md) | Smooth Chat-History Scroll-Up (verified by a multi-user end-to-end exercise) | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

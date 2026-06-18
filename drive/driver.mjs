@@ -224,6 +224,47 @@ export async function shot(client, name, { route, fullPage = false } = {}) {
   return file;
 }
 
+/* ---- media sends (spec 1011 lengthy-chat exercise) ---- */
+
+/** Send a voice/music audio message. */
+export const sendAudio = (c, chatId, name = 'song.mp3', title = 'Song', artist = 'Artist') =>
+  c.page.evaluate(([id, n, t, a]) => window.__ringTest.sendAudio(id, n, t, a), [chatId, name, title, artist]);
+/** Send a round video-note ("video message"). */
+export const sendVideoNote = (c, chatId, name = 'note.mp4') =>
+  c.page.evaluate(([id, n]) => window.__ringTest.sendVideoNote(id, n), [chatId, name]);
+/** Upload a photo (background-compressed at the given quality). */
+export const sendImage = (c, chatId, name = 'photo.png', quality = 'hd') =>
+  c.page.evaluate(([id, n, q]) => window.__ringTest.sendMediaQuality(id, 'image', n, q), [chatId, name, quality]);
+/** Upload a video (background-compressed at the given quality). */
+export const sendVideo = (c, chatId, name = 'clip.mp4', quality = 'hd') =>
+  c.page.evaluate(([id, n, q]) => window.__ringTest.sendMediaQuality(id, 'video', n, q), [chatId, name, quality]);
+
+/** Bulk-seed a chat to `n` messages instantly (spec 1011 dev hook) — builds a lengthy chat
+ *  without the real send pipeline. `opts.mediaEvery` mixes in images for height variety. */
+export const seedHistory = (c, chatId, n, opts = {}) =>
+  c.page.evaluate(([id, count, o]) => window.__ringTest.seedMessages(id, count, o), [chatId, n, opts]);
+
+/** Open a chat and flick up through `steps` look-ahead pages, screenshotting along the way
+ *  so the captures can be Read back to confirm continuous content (no blank flash/snap). */
+export async function scrollUpPass(client, chatId, name, { steps = 8, dy = 1400 } = {}) {
+  await client.page.goto(`${BASE_URL}/chat/${chatId}`);
+  await client.page.waitForTimeout(1000); // let the newest window render + pin to bottom
+  // Wheel events scroll the element under the cursor — center it OVER the message list,
+  // not the header (a wheel at the default (0,0) scrolls nothing / the wrong element).
+  const vp = client.page.viewportSize() ?? { width: 640, height: 720 };
+  await client.page.mouse.move(Math.floor(vp.width / 2), Math.floor(vp.height / 2));
+  const shots = [await shot(client, `${name}-00-bottom`, {})];
+  for (let i = 1; i <= steps; i++) {
+    await client.page.mouse.wheel(0, -dy);
+    await client.page.waitForTimeout(280); // let the older page load + anchor settle
+    shots.push(await shot(client, `${name}-${String(i).padStart(2, '0')}-up`, {}));
+  }
+  return shots;
+}
+
+/** Count the rendered message bubbles (to confirm the DOM stays bounded while scrolling). */
+export const bubbleCount = (c) => c.page.locator('.bubble[data-mid]').count();
+
 /** Self-delete the given accounts (leave-no-trace cleanup of the dev directory). */
 export const sweep = (clients) =>
   Promise.all(clients.map((c) => c.page.evaluate(() => window.__ringTest.deleteAccount()).catch(() => {})));

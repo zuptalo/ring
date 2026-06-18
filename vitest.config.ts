@@ -56,6 +56,12 @@ export default defineConfig({
         'src/utils/emoji.ts',
         'src/utils/notify-preview.ts',
         'src/utils/time.ts',
+        // Pure chat-history window/pagination/anchor/group-edge math (spec 1011). Each
+        // directly unit-tested; gated so their coverage can't regress.
+        'src/utils/chat-pagination.ts',
+        'src/utils/chat-window.ts',
+        'src/utils/scroll-anchor.ts',
+        'src/utils/chat-grouping.ts',
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 80 },
     },
