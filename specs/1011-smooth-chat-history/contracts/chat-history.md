@@ -47,8 +47,14 @@ useChatHistory(chatId: Ref<string> | string, q?: Ref<string>): {
 - A new inbound message appends only when the loaded run includes the newest message
   (otherwise it's beyond the loaded run and surfaced via `hasNewer`/badge, not injected).
 - Switching `chatId`/`q` resets the run to a fresh newest batch.
+- `loadOlder`/`loadNewer` read a fixed internal `BATCH_SIZE` (suggested `≈ ½ × ROW_CAP`)
+  so one batch comfortably fills the look-ahead buffer without overshooting `ROW_CAP`.
 
 ## 3. Scroll/anchor behavior contract (`ChatDetailPage.vue`)
+
+The rendered slice is a **RenderWindow** `{ start: index, end: index }` into the loaded
+`rows` (data-model.md), bounded so `end - start ≤ ROW_CAP`. The invariants below constrain
+that window's behavior.
 
 Observable invariants the implementation MUST hold (these are what e2e asserts):
 
@@ -88,8 +94,10 @@ seedMessages(chatId: string, n: number, opts?: {
 - **vitest** (pure, no IndexedDB): window math (`computeWindow` never exceeds `ROW_CAP`,
   always covers viewport+buffer, evicts the correct edge); pagination cursor math (correct
   slice for `beforeTs`/`afterTs`/`limit`, oldest-first, seam dedupe); anchor-delta math
-  (|residual| ≤2px, evicted-anchor falls back to next id); group-run/day across a window
-  boundary with a preserved leading row.
+  (|residual| ≤2px, evicted-anchor falls back to next id); the momentum/echo guard
+  predicates (INV-5: defer a `scrollTop` write while a fling is in flight, mark the
+  post-correction scroll as self-echo — exercised with fake timers); group-run/day across a
+  window boundary with a preserved leading row.
 - **e2e** (`e2e/chat-media-scroll.spec.ts`, real ringd, mobile emulation): seed 5,000 via
   `__ringTest.seedMessages`, then assert INV-1 (≤2px), INV-2 (page-before-top), INV-3
   (bounded rendered/media count after scrolling far up+down), INV-4 (no-yank), INV-6
@@ -97,3 +105,7 @@ seedMessages(chatId: string, n: number, opts?: {
 - **drive/** exercise (`drive/scenarios/lengthy-chat-scroll.mjs`): 5 users connect (request
   +accept) → 1:1 + group → exchange text/voice/video/image-upload/video-upload → build a
   lengthy chat → open + scroll up, screenshot pass for visual confirmation.
+- **manual / real-device** (not in CI): **INV-5** fling feel (writing `scrollTop` during
+  native iOS WebKit inertia — emulation can't fully prove it) and **INV-7** group-row
+  flicker are confirmed by hand (T032). Their deterministic *logic* is unit-tested above
+  (INV-5 via the guard predicates; INV-7 via the predecessor-included group-run/day math).

@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-17
 
-**Status**: planned
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
@@ -37,6 +37,28 @@ lengthy history, and then scrolls back through it to validate the smoothness.
 
 This is a **client-only** change (chat view + data-access + its verification harness).
 It does not touch the wire, the server, or any stored ciphertext.
+
+## Zero-Knowledge Impact
+
+This feature is **client-only** and leaves the zero-knowledge boundary untouched
+(Constitution Principle I):
+
+- **What crosses the wire**: nothing new. No request, payload, header, or metadata is
+  added or changed. History is already on the device; this feature only changes how the
+  existing local rows are read (bounded batches), rendered (a bounded window), and kept
+  in place during scroll.
+- **What is encrypted / decrypted**: nothing new. Messages remain stored as they are
+  today; the bounded reads return the same already-decrypted-for-render `Message` rows
+  the chat view already uses. No new key use, and no new plaintext is produced or persisted.
+- **What metadata is unavoidably visible to the server**: none introduced. The server
+  sees no read positions, scroll state, window bounds, or batch sizes — all of that is
+  local-only in-memory / IndexedDB state.
+- **Why**: the change lives entirely in the client render / data-access layer
+  (`ChatDetailPage.vue`, a new `useChatHistory` composable, bounded reads in `queries.ts`,
+  and a dev-only test hook). It never touches `messaging.ts`, the wire, the server, or any
+  stored ciphertext, and makes no `DB_VERSION`/schema change. The `/speckit-checklist`
+  zero-knowledge gate has been run for this spec (checklists/zero-knowledge.md) and confirms
+  Principle I is unaffected.
 
 ## Clarifications
 
@@ -84,13 +106,15 @@ across many pages of history, and observe that the anchored message stays in pla
    the older messages are inserted, **Then** the momentum is not interrupted — no
    stutter, teleport, or abrupt stop.
 4. **Given** a new message or reaction arrives while the user is reading history,
-   **When** it is applied, **Then** the user's viewport is not yanked (auto-follow to
-   the newest only happens when they were already at the bottom).
+   **When** it is applied, **Then** the user keeps reading from exactly the same place —
+   their view does not jump to the newest message. (The normative rule is FR-004,
+   verified by SC-004.)
 5. **Given** a group chat where older runs introduce sender avatars or collapsed
    media albums, **When** those older messages load, **Then** the resulting row-height
    differences do not cause a jump.
 6. **Given** a 5,000-message history, **When** the user scrolls far back and forth,
-   **Then** the app stays responsive and memory/rendered-row count stays bounded.
+   **Then** the app stays responsive throughout, no matter how far back they scroll.
+   (The bounded-rendering mechanism behind this is FR-012, measured by SC-008.)
 
 ---
 
@@ -138,8 +162,8 @@ the message isn't available.
 secondary to the primary scroll gesture; valuable polish that completes the story.
 
 **Independent Test**: In a long chat, tap a reply that quotes a message far above the
-loaded window and confirm the view scrolls to that message rather than showing a
-"not available" message.
+loaded window and confirm the view scrolls to that message (within ~1.0s) rather than
+showing a "not available" message.
 
 **Acceptance Scenarios**:
 
@@ -152,8 +176,9 @@ loaded window and confirm the view scrolls to that message rather than showing a
 
 ### Edge Cases
 
-- **Fast upward fling** on a very long chat: the next page must already be present
-  before the top is reached (no stall, no snap).
+- **Fast upward fling** on a very long chat: a quick flick must not outrun the
+  look-ahead — the prefetch distance has to absorb fling velocity so there is no
+  stall/snap at the boundary (the requirement itself is FR-002, verified by SC-003).
 - **Media decoding mid-load**: an image/video poster in or near the anchored row
   decoding (and growing) between frames must not skew the anchor and cause a jump.
 - **New message / reaction / status update while reading history**: must not move the
@@ -164,11 +189,13 @@ loaded window and confirm the view scrolls to that message rather than showing a
   the mechanism must still keep the viewport stable (use a still-rendered reference).
 - **Scrolling back DOWN after scrolling far up**: returning toward the newest must be
   smooth too, re-rendering evicted newer rows without a jump.
-- **Keyboard opens / view resizes** during scroll: must not fight the user's gesture.
+- **Keyboard opens / view resizes** during scroll: must not fight the user's gesture
+  (relies on the existing Ionic keyboard/resize handling — no new logic; manually
+  smoke-checked mid-flick in T032).
 - **Group vs 1:1**: avatars and album collapsing change row heights as older runs
   mount — both must stay smooth.
 - **Backgrounded / locked chat**: scroll side-effects must not run while the view
-  isn't visible.
+  isn't visible (normative requirement FR-014).
 
 ## Requirements *(mandatory)*
 
@@ -211,6 +238,11 @@ loaded window and confirm the view scrolls to that message rather than showing a
 - **FR-013**: Reading history MUST NOT require loading the entire conversation into
   memory at once; messages are read in bounded batches (by recency/position) as the
   user scrolls.
+- **FR-014**: Scroll side-effects (look-ahead / load-older / load-newer, eviction, and
+  any anchor-driven scroll-position correction or reactive list update) MUST NOT run
+  while the chat view is not visible (backgrounded tab, locked screen, or navigated
+  away) — preserving the app's existing visibility-gated behavior so the view is never
+  silently scrolled while the user cannot see it.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -243,14 +275,29 @@ loaded window and confirm the view scrolls to that message rather than showing a
   (text, voice/audio, video message, image upload, video upload) is delivered to and
   renders for all participants across 1:1 and group chats. Verified.
 - **SC-006**: Tapping a reply/starred reference older than the loaded window brings the
-  target into view within ~1 second, with no "not available" outcome for an on-device
-  message. Verified.
+  target into view within **1.0 second** (on a mid-range device), with no "not available"
+  outcome for an on-device message. Verified.
 - **SC-007**: Scrolling up across several pages on a mobile-emulated device shows
   continuous content — no blank flash, no snap, day-dividers and avatars rendering in
-  place. Verified by inspection (screenshots) via the UI-driving harness.
+  place. This is a **supplementary** visual check (screenshots via the UI-driving
+  harness), not a blocking CI gate; the blocking acceptance is the measurable invariants
+  in SC-002/003/004/008. Verified by inspection.
 - **SC-008**: Scrolling through a 5,000-message history keeps the rendered row count
   and memory bounded (they do not grow with scroll distance) and the app stays
   responsive throughout. Verified.
+
+*Mapping* (SC are the user-facing outcomes; INV are the implementation contracts in
+contracts/chat-history.md §3 that the tests assert). The direct pairs:
+SC-002 = INV-1 (≤2px anchor), SC-003 = INV-2 (page-before-top), SC-004 = INV-4 (no-yank),
+SC-006 = INV-6 (seek), SC-008 = INV-3 (bounded DOM/memory). The remainder are intentionally
+not 1:1:
+- **SC-001** is composite — a continuous-scroll exercise that confirms INV-1 + INV-2 + INV-3
+  + INV-4 together end-to-end (verified by the US2 exercise T023/T024).
+- **SC-005** is orthogonal to scroll mechanics — it is the multi-user delivery/render proof
+  (US2) and maps to no scroll INV.
+- **SC-007** verifies **INV-7** (group-row edge — avatars/day-dividers do not flicker).
+- **INV-5** (no momentum fight) is a defensive guard with no primary user-facing SC; its
+  *logic* is unit-tested (T005/T010) and its *fling feel* is confirmed manually (T032).
 
 ## Assumptions
 
@@ -258,6 +305,8 @@ loaded window and confirm the view scrolls to that message rather than showing a
   off-screen rows in both directions) backed by bounded/cursor reads of history —
   extending the current windowed render + anchor-and-restore rather than loading the
   whole chat into the view/memory (per Clarifications: ~5,000+ messages must stay smooth).
+  The full approach rationale and the adversarial comparison of alternatives are the
+  source of truth in research.md (decisions D1–D9); this section only summarizes them.
 - The verification exercise is realized through the project's existing UI-driving
   capability (the `drive/` harness + the dev-only test hook) and automated end-to-end
   coverage where practical; media uses test fixtures.
@@ -271,4 +320,16 @@ loaded window and confirm the view scrolls to that message rather than showing a
 - Roster, receipts, reactions, and all other messaging behaviors are unchanged; this
   is purely about history preparation/rendering and viewport stability.
 - Client-only: no server, wire, or stored-ciphertext change — zero-knowledge boundary
-  untouched (no `/speckit-checklist` required on that basis).
+  untouched. The `/speckit-checklist` zero-knowledge gate was run (checklists/zero-knowledge.md);
+  see Complexity & Exceptions.
+
+## Complexity & Exceptions
+
+- **`/speckit-checklist` gate (Constitution gate-sequencing + Principle I).** The
+  constitution requires `/speckit-checklist` for any spec *touching* Principle I or IV.
+  Although this feature is client-only and asserts the zero-knowledge boundary is
+  **untouched**, the gate has been **run** (not waived) —
+  [checklists/zero-knowledge.md](./checklists/zero-knowledge.md) — matching the precedent of
+  the client-only specs 1009 and 1010. All 14 checklist items pass: nothing new crosses or
+  changes the client↔server boundary, no new plaintext / keys / server-visible metadata, and
+  no schema change. Principle IV (crypto) is untouched, so no crypto checklist applies.

@@ -63,20 +63,21 @@ a new composable + a few `queries.ts` reads + a dev testhook + the verification 
 
 | Principle | Verdict | Notes |
 |---|---|---|
-| I. Zero-Knowledge Boundary (NON-NEGOTIABLE) | ✅ PASS | Client-only. Reads existing on-device plaintext for rendering only; nothing new crosses the wire or is stored. No `/speckit-checklist` required (applies to client↔server boundary changes). |
+| I. Zero-Knowledge Boundary (NON-NEGOTIABLE) | ✅ PASS | Client-only. Reads existing on-device plaintext for rendering only; nothing new crosses the wire or is stored. The `/speckit-checklist` zero-knowledge gate has been run and is clean (`checklists/zero-knowledge.md`, 14/14 pass), matching the 1009/1010 precedent. |
 | II. Spec-Driven Development | ✅ PASS | specify → clarify → plan → … ; spec id 1011. |
 | III. Test-Driven Development | ✅ PASS | tasks.md will order failing tests first: vitest pure helpers (window/pagination/anchor/group-edge) + e2e (anchor ≤2px, page-before-top, bounded count, no-yank, jump-to-older) before implementation. |
 | IV. Crypto Discipline | ✅ PASS (untouched) | No crypto/messaging change; `messaging.ts` and the ratchet are not touched. |
 | V. Offline-First Data Integrity | ✅ PASS | IndexedDB is read-only here; **no schema change, no `DB_VERSION` bump** (research D2). Bounded reads slice existing rows; no data dropped or migrated. |
 | VI. Stateless Server & Forward-Only Migrations | ✅ PASS | No server change; **no migration** (the optional future compound index is documented as additive/forward-only and out of scope). |
-| VII. Quality Gates | ✅ PASS | `npm run build`, `go build/vet/test` (unchanged, runs clean), `vitest`, `npm run test:e2e` are the definition of done. |
+| VII. Quality Gates | ✅ PASS | `npm run build`, `go build/vet/test` (unchanged, runs clean), `vitest`, `npm run test:e2e` are the definition of done. The new pure helpers (`chat-pagination`, `chat-window`, `scroll-anchor`, `chat-grouping`) and the pure parts of `useChatHistory` are added to `vitest.config.ts` coverage and meet the existing **80% gated-module floor** (a ratchet — raised, never regressed). |
 | VIII. Traceable, Auto-Closing Delivery | ✅ PASS | `/speckit-taskstoissues` → `Closes #N` on the PR. |
 | IX. Privacy & Data Minimization | ✅ PASS | No new data; bounded reads/eviction reduce in-memory/DOM footprint. The `seedMessages` testhook is dev-only (stripped from prod, like the rest of `__ringTest`). |
 | X. Accessibility & Internationalization | ✅ PASS | Natural top→bottom order preserved (no `column-reverse`); LTR/RTL + light/dark unaffected; virtualization keeps semantic order and existing labels. |
 | XI. Ionic-First UI | ✅ PASS (custom justified) | Hand-rolled windowing because **no Ionic primitive fits** variable-height chat virtual scroll (`ion-virtual-scroll` removed in Ionic 7+). XI permits custom where no primitive fits. Still uses `ion-content`/`ion-infinite-scroll` + theme tokens; no bespoke design system. |
 
-**Result**: No violations. `/speckit-checklist` not required (client-only). See Complexity
-Tracking for the one justified custom choice + the deferred index.
+**Result**: No violations. The `/speckit-checklist` zero-knowledge gate has been run and is
+clean (`checklists/zero-knowledge.md`). See Complexity Tracking for the one justified custom
+choice + the deferred index.
 
 ## Project Structure
 
@@ -140,3 +141,51 @@ harness + the existing e2e scroll spec. No new subsystem, no new object store, n
 | Hand-rolled bidirectional virtual window (vs an Ionic primitive or a library) | Ionic 8 has no variable-height virtual scroll; the ≤2px bar under async media decode/avatar/album reflow needs a measured-rect anchor, which `@tanstack/vue-virtual`'s index/estimate model fails (judged: anchor-unstable, not Ionic-safe, swipe rewrite required). | A library (`@tanstack/vue-virtual`) was evaluated and scored 5/8.5 — high risk, "spike required", forces a swipe-gesture + ion-content bridge rewrite. CSS `content-visibility` (1.5) doesn't bound DOM/memory at all. |
 | New `useChatHistory` composable (vs adapting `useLiveQuery`) | Incremental updates (append/patch/remove) avoid the full-array replace that re-allocates the whole list on every reaction/seen/tick — the churn that lands layout work around a load. | `useLiveQuery` is intentionally stateless/atomic-replace; pagination + incremental diff don't fit its callback model and changing it would risk every other caller. |
 | Deferred (OUT of scope): compound `[chatId,timestamp]` index + `DB_VERSION 6→7` | Not needed at ≤5-10k (in-memory sort is sub-10ms); would be a forward-only additive index migration only if a chat reaches ~50k+. | Adding it now is migration cost with no real-world payoff; documented so the future path is clear and stays within forward-only rules. |
+
+**Escalation trigger for the deferred index**: if a real chat approaches ~20k+ messages,
+or a user reports scroll sluggishness on a very long chat, treat that as the signal to
+spike the `[chatId,timestamp]` compound index + `DB_VERSION 6→7` forward-only migration
+(research D2). Until then, `getAll` + in-memory sort stays within budget at target sizes.
+
+## Implementation Notes (as built)
+
+The shipped design evolved over two rounds of real-iPhone testing. The final architecture is
+a **spacer-based virtual list that never writes `scrollTop` during scrolling** — the key to
+not interrupting iOS momentum (a `scrollTop` write mid-fling halts the inertia; iOS has no
+`overflow-anchor`, confirmed via caniuse, so CSS scroll anchoring isn't an option either).
+
+- **Bounded run, rendered whole, framed by spacers.** `useChatHistory` holds a bounded run
+  (`MAX_ROWS=200`, trimming the far edge on each batch). `ChatDetailPage` renders the WHOLE
+  run (no separate `{start,end}` window — `MAX_ROWS` already bounds the DOM) between a TOP and
+  BOTTOM spacer (`.vscroll-pad`). The spacers reserve the height of the older/newer messages
+  not held in `rows` (`olderUnloaded`/`newerUnloaded` × measured avg row height), so the
+  scroll range reflects the whole chat.
+- **Position is held by the spacer, never `scrollTop`.** On a prepend/append/trim,
+  `withScrollAnchor` measures how far the anchored bubble moved and cancels it by adjusting
+  the TOP spacer's height (a layout change applied imperatively *before paint* → no flash),
+  instead of writing `scrollTop`. Because no `scrollTop` write happens, native fling momentum
+  is never interrupted. The bottom spacer is purely cosmetic (below the viewport). Only the
+  rare very-top case (spacer exhausted) and the deliberate jumps (open / send / jump-to-date /
+  reply-seek) write `scrollTop` — none of which happen mid-fling.
+- **Media bubbles reserve their height at mount.** The image/non-note-video frame
+  (`.media-wrap`/`.video-poster`, fixed `240px` `aspect-ratio:1`) renders as soon as
+  `m.mediaId` exists (skeleton until the poster decodes), rather than being gated behind
+  `mediaInfo` resolution — so a prepended media batch has its FINAL height immediately and
+  doesn't reflow 0→240px when the blob resolves async (that reflow was the blank-frame + jump
+  on the media-heavy region; invisible to 1×1-PNG e2e seeds).
+- **Direction-gated look-ahead.** Two IntersectionObserver sentinels (rootMargin
+  `LOOK_AHEAD_PX`) trigger `loadOlder`/`loadNewer`; each is honored only in the matching
+  scroll direction so the opposite sentinel can't tug the window mid-fling. `overflow-anchor:
+  none` on `.msg-list` keeps the browser from double-correcting against the spacer change
+  (inert on iOS, prevents jitter on Chrome/Android).
+- **Whole-chat media viewer + audio playlist keep a whole-chat source** (`listChatMediaAll`
+  → `allMedia`); forward-selection reads the loaded run (`rows`). FR-011 behavioral
+  equivalence preserved while the list's full-array churn is gone (D3).
+- **Trade-off vs the spec's strict ≤2px (INV-1):** position is held precisely by the measured
+  spacer correction, but spacer *sizing* uses an estimated avg row height, so the scrollbar
+  proportion is approximate and there can be minor drift at extreme media↔text composition
+  changes — accepted in favour of uninterrupted native momentum (the user's explicit
+  priority). The pure `chat-window.ts` window/anchor math (`computeWindow` etc.) remains
+  unit-tested and available but is no longer wired into the view.
+- **Constants:** `BATCH_SIZE=50`, `MAX_ROWS=200`, `LOOK_AHEAD_PX=1200`
+  (`src/utils/chat-window.ts`); media LRU `MAX_MEDIA=60` unchanged.

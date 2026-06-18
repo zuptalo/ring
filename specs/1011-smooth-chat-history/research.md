@@ -24,9 +24,11 @@ judged comparison of three virtualization approaches. No `NEEDS CLARIFICATION` r
   screens + buffer). Every window mutation runs through one shared `withScrollAnchor()`
   helper (D4) so prepend AND eviction restore position identically. Optionally layer
   CSS `content-visibility` on rendered rows later if paint cost shows up.
-- **Rationale**: This preserves the one mechanism already proven to hold ≤2px in this
-  codebase — anchoring on a real, still-rendered `.bubble[data-mid]` and correcting
-  `scrollTop` by its measured rect delta *after* layout (`loadOlder` 2218-2225). That
+- **Rationale**: This preserves the one mechanism this codebase already relies on for
+  prepend anchoring — anchoring on a real, still-rendered `.bubble[data-mid]` and
+  correcting `scrollTop` by its measured rect delta *after* layout (`loadOlder`
+  ~2218-2225), generalized here and **verified to hold ≤2px by the T015 e2e assertions**
+  (not merely assumed). That
   post-layout rect read absorbs late poster decode, group-avatar toggles, album
   collapsing, and reaction reflow — exactly what defeats an estimate/index-based
   virtualizer. It keeps the entire existing chat surface (receipts, reactions,
@@ -86,8 +88,9 @@ judged comparison of three virtualization approaches. No `NEEDS CLARIFICATION` r
 ## D5 — Prefetch-ahead (page before the boundary)
 
 - **Decision**: Load older batches **look-ahead** via a sentinel/threshold positioned
-  well before the top edge (~1.5-2 screens of buffer above the viewport), so the older
-  batch is present BEFORE the top is reached. Keep `ion-infinite-scroll` (or an
+  well before the top edge (`LOOK_AHEAD_PX ≈ 1200`, ~1.5-2 mobile screens of buffer above
+  the viewport), so the older batch is present BEFORE the top is reached. Keep
+  `ion-infinite-scroll` (or an
   IntersectionObserver sentinel) as the backstop.
 - **Rationale**: FR-002/SC-003. Today `ion-infinite-scroll` fires at `threshold=25%`
   (line 98) and `loadOlder` only THEN grows the window — a fast flick outruns it (stall
@@ -155,8 +158,12 @@ judged comparison of three virtualization approaches. No `NEEDS CLARIFICATION` r
 
 ## Open risks (carry into implementation)
 
+These implementation-level risks correspond to the product-level scenarios in spec.md
+§Edge Cases (same concerns, two audiences: scenarios for product clarity, risks for
+implementation vigilance).
+
 - Eviction BELOW the viewport + downward re-entry is the genuinely new, unproven part
-  (prepend anchoring is proven; bottom-edge trim/re-mount at ≤2px has no precedent here).
+  (prepend anchoring is proven; bottom-edge eviction/re-mount at ≤2px has no precedent here).
 - Media LRU (`MAX_MEDIA=60`) can revoke a poster URL for an off-screen row that later
   re-enters — re-entry must re-resolve media AND re-anchor in the same frame.
 - Incremental-apply (D3) is a behavioral-equivalence risk: every full-array-replace

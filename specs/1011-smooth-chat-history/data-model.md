@@ -36,6 +36,10 @@ messages around the rendered window — not the whole chat.
 | `hasOlder` / `hasNewer` | boolean | whether more exists beyond the loaded run (vs `countChatMessages` / position) |
 | `total` | number | `countChatMessages(chatId)` |
 
+> `rows` is exposed as `Readonly<Ref<Message[]>>` (per contracts/chat-history.md §2):
+> script-side callers and unit/e2e tests read `rows.value`; Vue templates unwrap it
+> automatically — the same convention as `useLiveQuery`.
+
 **Operations** (incremental — no full-array replace):
 - `loadOlder()` → prepend a `listMessagesOlder` batch to `rows`; update `oldestLoadedTs`/`hasOlder`.
 - `loadNewer()` → append a `listMessagesNewer` batch; update `newestLoadedTs`/`hasNewer`.
@@ -51,7 +55,7 @@ Replaces `visible: ref(PAGE)` + `slice(-visible)`.
 |---|---|---|
 | `start` / `end` | index into `rows` | the rendered half-open slice `rows.slice(start, end)` |
 | `ROW_CAP` | const (~80-120) | max rendered rows; eviction keeps `end - start ≤ ROW_CAP` |
-| `BUFFER` | const (rows/px) | look-ahead distance kept beyond the viewport in each direction |
+| `BUFFER` | const — `LOOK_AHEAD_PX ≈ 1200` (≈ 1.5–2 mobile screens) | look-ahead distance kept beyond the viewport in each direction; doubles as the prefetch sentinel's `rootMargin` (D5) |
 
 - Grows `start` ↓ (older) on top look-ahead; grows `end` ↑ (newer) on downward re-entry.
 - Evicts by advancing `start` / retreating `end` once `end - start > ROW_CAP`.

@@ -42,7 +42,7 @@ Then verify (automated in `e2e/chat-media-scroll.spec.ts`):
 - **SC-004 / INV-4**: seed an extra inbound message/reaction while scrolled up → `scrollTop`
   unchanged (no yank).
 - **SC-006 / INV-6**: tap a reply-quote whose target is older than the window → it mounts
-  and centers within ~1s (no "not available").
+  and centers within 1.0s (no "not available").
 
 ## Manual smoke
 
@@ -60,4 +60,5 @@ cd server && go build ./... && go vet ./... && go test ./...   # unchanged, must
 make db-up && npm run test:e2e   # incl. the 5k-seeded scroll assertions
 ```
 
-All green = done (Constitution VII). No `/speckit-checklist` (client-only, Principle I).
+All green = done (Constitution VII). The `/speckit-checklist` zero-knowledge gate was run and
+passed (checklists/zero-knowledge.md, 14/14) — confirming Principle I is unaffected.
