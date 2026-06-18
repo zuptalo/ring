@@ -8,6 +8,7 @@ import { enqueue, removeOutboxByFrameId } from './outbox';
 import { recordTombstone } from './tombstones';
 import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
+import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
@@ -231,6 +232,48 @@ export async function listMessages(chatId: string, q = ''): Promise<Message[]> {
 
 export function getMessage(id: string): Promise<Message | undefined> {
   return get<Message>('messages', id);
+}
+
+/* ---- bounded chat-history reads (spec 1011, research D2) ----
+   The chat view sources its window from these batches instead of holding the whole
+   chat (the churn root behind the old `useLiveQuery(listMessages)`). They reuse the
+   existing single `chatId` index (one getByIndex) + an in-memory sort/slice — no new
+   index, no DB_VERSION bump. `listMessages` (loads-all) stays for search and the other
+   callers (media/docs/links browsers, exports). Ordering is deterministic by
+   (timestamp, id); the slice helpers dedupe the seam so adjacent batches never return
+   the cursor row twice. The optional `q` keeps the existing substring filter. */
+
+/** The `limit` messages immediately OLDER than `beforeTs` (the newest `limit` when
+ *  null), oldest→newest. */
+export async function listMessagesOlder(
+  chatId: string,
+  beforeTs: number | null,
+  limit: number,
+  q = '',
+): Promise<Message[]> {
+  const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
+  const filtered = q ? msgs.filter((m) => matches(m.body, q)) : msgs;
+  filtered.sort(compareByTimeId);
+  return sliceOlder(filtered, beforeTs, limit);
+}
+
+/** The `limit` messages immediately NEWER than `afterTs`, oldest→newest (scroll-down
+ *  re-entry after eviction). */
+export async function listMessagesNewer(
+  chatId: string,
+  afterTs: number,
+  limit: number,
+  q = '',
+): Promise<Message[]> {
+  const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
+  const filtered = q ? msgs.filter((m) => matches(m.body, q)) : msgs;
+  filtered.sort(compareByTimeId);
+  return sliceNewer(filtered, afterTs, limit);
+}
+
+/** Total messages in a chat (for "more above" detection + affordances). */
+export async function countChatMessages(chatId: string): Promise<number> {
+  return (await getByIndex<Message>('messages', 'chatId', chatId)).length;
 }
 
 /** Append a locally-authored message (starts `pending`) and update the chat.
@@ -922,6 +965,16 @@ const URL_RE = /\bhttps?:\/\/[^\s]+/i;
 export async function listChatMedia(chatId: string): Promise<Message[]> {
   const all = await listMessages(chatId);
   return all.filter((m) => m.kind === 'image' || m.kind === 'video').reverse();
+}
+/** All blob-backed media messages in a chat (image/video/voice/audio), oldest→newest.
+ *  The chat list is windowed (useChatHistory) but the media viewer + audio playlist span
+ *  the WHOLE chat (spec 1005/1007), so they source from this whole-chat media subset —
+ *  far smaller than every message, and not the scroll hot path. */
+export async function listChatMediaAll(chatId: string): Promise<Message[]> {
+  const all = await listMessages(chatId);
+  return all.filter(
+    (m) => m.kind === 'image' || m.kind === 'video' || m.kind === 'voice' || m.kind === 'audio',
+  );
 }
 /** All file (document) messages in a chat, newest-first. */
 export async function listChatDocs(chatId: string): Promise<Message[]> {

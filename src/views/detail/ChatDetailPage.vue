@@ -89,17 +89,27 @@
          top→bottom flash on open. -->
     <ion-content ref="contentEl" :fullscreen="true" class="chat-content" :scroll-events="true" @ionScroll="onContentScroll">
       <div ref="listEl" class="msg-list" :style="{ visibility: listReady ? 'visible' : 'hidden' }">
+      <!-- Top spacer: reserves the height of the older messages NOT held in `rows`, so the
+           scroll range reflects the whole chat. Prepends shrink it (and evictions grow it) to
+           keep the read position fixed WITHOUT writing scrollTop — the only way to not stall
+           iOS momentum (spec 1011). Height is set imperatively before paint by withScrollAnchor. -->
+      <div ref="topSpacer" class="vscroll-pad" :style="{ height: topPadPx + 'px' }" aria-hidden="true"></div>
       <!-- Top of the list: pull up to load earlier messages (older pages). -->
       <!-- Page older messages well before the very top is reached (look-ahead), so
            scrolling back never stalls at the load boundary (spec 1005 FR-001). -->
       <ion-infinite-scroll
-        :disabled="!listReady || visible >= messages.length"
+        :disabled="!listReady || !hasOlder"
         position="top"
         threshold="25%"
         @ion-infinite="loadOlder"
       >
         <ion-infinite-scroll-content loading-text="Loading earlier messages…" />
       </ion-infinite-scroll>
+      <!-- Look-ahead sentinel: an IntersectionObserver with rootMargin = LOOK_AHEAD_PX fires
+           loadOlder well BEFORE the top edge is reached, so the older page is in the DOM
+           before scrollTop hits 0 (page-before-top, INV-2). ion-infinite-scroll above is the
+           backstop. (spec 1011 D5) -->
+      <div ref="topSentinel" class="scroll-sentinel" aria-hidden="true"></div>
 
       <template v-for="(item, i) in renderItems" :key="item.key">
         <!-- Day divider sits ABOVE the first message of each day. -->
@@ -214,43 +224,54 @@
                 >{{ m.senderName }}</span
               >
 
-              <template v-if="m.mediaId && mediaInfo[m.mediaId]">
-                <!-- Tap the image → open the viewer directly; tap the empty/footer area
-                     of the bubble → the action menu. -->
-                <div v-if="m.kind === 'image'" class="media-wrap" @click.stop="openMediaViewer(m.id)">
-                  <img v-if="mediaInfo[m.mediaId].posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId].posterUrl" alt="photo" loading="lazy" decoding="async" />
-                  <ion-skeleton-text v-else :animated="true" class="media-skel" />
-                  <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
-                </div>
+              <!-- Fixed-square media frames (image + non-note video) render their 240px
+                   box IMMEDIATELY — even before mediaInfo resolves — so a row prepended
+                   while scrolling up already has its FINAL height. Gating the whole frame
+                   on mediaInfo (as voice/audio/file below still do) inserted ~0-height rows
+                   that expanded to 240px once IndexedDB resolved, breaking the scroll anchor
+                   and flashing the list blank mid-scroll on iOS (spec 1011). The skeleton
+                   inside the frame covers the gap until the poster decodes. -->
+              <!-- Tap the image → open the viewer directly; tap the empty/footer area
+                   of the bubble → the action menu. -->
+              <div v-if="m.kind === 'image' && m.mediaId" class="media-wrap" @click.stop="openMediaViewer(m.id)">
+                <img v-if="mediaInfo[m.mediaId]?.posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId]!.posterUrl" alt="photo" loading="lazy" decoding="async" />
+                <ion-skeleton-text v-else :animated="true" class="media-skel" />
+                <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
+              </div>
+              <!-- Video: a still thumbnail with a play button. Tapping the poster opens the
+                   action menu (whole bubble is the hit target); the play button is the
+                   direct affordance to the full-screen viewer. The sender-embedded
+                   posterData shows even before mediaInfo resolves. -->
+              <div v-else-if="m.kind === 'video' && !m.videoNote && m.mediaId" class="video-poster" @click.stop="openMediaViewer(m.id)">
+                <img
+                  v-if="m.posterData || mediaInfo[m.mediaId]?.posterUrl"
+                  class="bubble-image"
+                  :src="m.posterData || mediaInfo[m.mediaId]!.posterUrl"
+                  alt="video"
+                  loading="lazy"
+                  decoding="async"
+                />
+                <ion-skeleton-text v-else :animated="true" class="media-skel" />
+                <!-- Visual play affordance only; a tap anywhere on the poster opens
+                     the viewer via the bubble's tap handler. -->
+                <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />
+                <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
+              </div>
+
+              <!-- Non-square media (round note / voice / audio card / file chip) stays gated
+                   on mediaInfo: these are text-height cards with no fixed-square frame, so
+                   they don't cause the 0→240px reflow above, and they need the resolved
+                   blob URL to render at all. -->
+              <template v-else-if="m.mediaId && mediaInfo[m.mediaId]">
                 <!-- Round video note: plays inline on tap; the action menu opens from
                      the bubble footer below. -->
                 <video-note
-                  v-else-if="m.kind === 'video' && m.videoNote"
+                  v-if="m.kind === 'video' && m.videoNote"
                   :mid="m.id"
                   :src="mediaInfo[m.mediaId].url"
                   :poster="mediaInfo[m.mediaId].posterUrl"
                   :duration-sec="m.durationSec"
                 />
-                <!-- Video: a still thumbnail with a play button. Tapping the poster
-                     opens the action menu (whole bubble is the hit target); the play
-                     button is the direct affordance to the full-screen viewer. -->
-                <template v-else-if="m.kind === 'video'">
-                  <div class="video-poster" @click.stop="openMediaViewer(m.id)">
-                    <img
-                      v-if="m.posterData || mediaInfo[m.mediaId].posterUrl"
-                      class="bubble-image"
-                      :src="m.posterData || mediaInfo[m.mediaId].posterUrl"
-                      alt="video"
-                      loading="lazy"
-                      decoding="async"
-                    />
-                    <ion-skeleton-text v-else :animated="true" class="media-skel" />
-                    <!-- Visual play affordance only; a tap anywhere on the poster opens
-                         the viewer via the bubble's tap handler. -->
-                    <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />
-                    <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
-                  </div>
-                </template>
                 <voice-player
                   v-else-if="m.kind === 'voice'"
                   :mid="m.id"
@@ -591,7 +612,15 @@
 
       </template>
 
-      <div v-if="messages.length === 0" class="empty">
+      <!-- Look-ahead sentinel for downward re-entry: fires loadNewer before the bottom edge
+           is reached so trimmed newer rows re-mount ahead of need (spec 1011). -->
+      <div ref="bottomSentinel" class="scroll-sentinel" aria-hidden="true"></div>
+      <!-- Bottom spacer: reserves the height of newer messages trimmed while scrolling up.
+           It's below the viewport, so its size never shifts what the user sees (cosmetic
+           scroll range only); shrinks to 0 at the true bottom. -->
+      <div class="vscroll-pad" :style="{ height: botPadPx + 'px' }" aria-hidden="true"></div>
+
+      <div v-if="rows.length === 0" class="empty">
         <ion-note>{{ search ? 'No matching messages' : 'No messages yet' }}</ion-note>
       </div>
       </div>
@@ -854,7 +883,7 @@ import {
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
 } from 'ionicons/icons';
 import {
-  getChat, getContact, listContacts, listMessages, markChatRead, sendMediaMessage, sendMessage,
+  getChat, getContact, listContacts, markChatRead, sendMediaMessage, sendMessage,
   reactToMessage, deleteMessage, softDeleteMessage, deleteMessageForEveryone, editMessage,
   toggleFavorite, setCaption, forwardMessage,
   quickReactEmojis,
@@ -862,7 +891,7 @@ import {
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
-  CAPTION_MAX, getSetting,
+  CAPTION_MAX, getSetting, listChatMediaAll, getMessage,
 } from '@/db/queries';
 import { groupProgress } from '@/services/message-status';
 import { getSelfUserId } from '@/services/auth';
@@ -900,6 +929,10 @@ import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
 import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { useChatHistory } from '@/composables/useChatHistory';
+import { LOOK_AHEAD_PX } from '@/utils/chat-window';
+import { pickAnchor, resolveAnchorDelta, shouldDeferScrollWrite, isSelfEcho } from '@/utils/scroll-anchor';
+import { isRunStart as isRunStartEdge, showDay as showDayEdge } from '@/utils/chat-grouping';
 import {
   audioCurId, audioPlaying, audioProgress, audioRate,
   playAudio, seekAudioFrac, cycleAudioRate, stopAudio, detachAudioEnded,
@@ -913,7 +946,7 @@ import { ACTIVITY, type ActivityKind, type ActivityState } from '@/services/tran
 import { startDirectCall, startGroupCall } from '@/composables/useCall';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { setActiveChat } from '@/services/notify';
-import { formatClock, dayLabel, sameDay, formatStamp, formatFull } from '@/utils/time';
+import { formatClock, dayLabel, formatStamp, formatFull } from '@/utils/time';
 
 const route = useRoute();
 const router = useRouter();
@@ -1007,12 +1040,10 @@ async function onPickDate(ev: CustomEvent): Promise<void> {
   }
   showSearch.value = false;
   search.value = '';
-  let tries = 0;
-  const tryJump = (): void => {
-    if (document.querySelector(`[data-mid="${id}"]`)) scrollToMessage(id);
-    else if (tries++ < 20) setTimeout(tryJump, 150);
-  };
-  void nextTick(tryJump);
+  // scrollToMessage now seeks (loads intervening history) when the target is older than
+  // the loaded window, so a jump-to-date far above the window lands correctly (D7).
+  await nextTick();
+  await scrollToMessage(id);
 }
 
 function closeSearch() {
@@ -1137,12 +1168,24 @@ async function onReact(messageId: string, emoji: string): Promise<void> {
   }
 }
 
+// The true predecessor message of render-item i: the previous rendered item's last message.
+// The whole loaded run is rendered, so for i > 0 the predecessor is always present; the very
+// first rendered item is the oldest loaded row (its day-divider/avatar is correct for the
+// top of the loaded run, and recomputes naturally when older rows prepend).
+function prevMsgFor(i: number): Message | null {
+  if (i <= 0) return null;
+  const prev = renderItems.value[i - 1];
+  if (!prev) return null;
+  return prev.kind === 'msg' ? prev.message : prev.messages[prev.messages.length - 1];
+}
+
 // Whether an item starts a new day (the divider renders above it). True for the
 // oldest loaded item too.
 function showDay(i: number): boolean {
   const cur = renderItems.value[i];
-  const prev = renderItems.value[i - 1];
-  return !!cur && (!prev || !sameDay(itemTime(cur), itemTime(prev)));
+  if (!cur) return false;
+  const prev = prevMsgFor(i);
+  return showDayEdge(prev ? { timestamp: prev.timestamp } : null, { timestamp: itemTime(cur) });
 }
 
 /* ---- media viewer (over ALL the chat's media) ---- */
@@ -1153,7 +1196,7 @@ function showDay(i: number): boolean {
 // around the current item (resolveViewerWindow), never the whole set at once — that
 // all-at-once decode was crashing the web view (OOM) on media-heavy chats.
 const chatMediaMsgs = computed(() =>
-  messages.value.filter((m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId),
+  allMedia.value.filter((m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && m.mediaId),
 );
 const viewer = ref<{ open: boolean; start: number }>({ open: false, start: 0 });
 const viewerItems = computed(() => {
@@ -1203,10 +1246,10 @@ function onViewerDismiss(id: string): void {
   viewerPins.value = new Set();
   evictMedia();
   // Album members render under one bubble keyed by the first message's id.
-  const m = messages.value.find((x) => x.id === id);
+  const m = allMedia.value.find((x) => x.id === id);
   let target = id;
   if (m?.albumId) {
-    const first = messages.value
+    const first = allMedia.value
       .filter((x) => x.albumId === m.albumId)
       .sort((a, b) => a.timestamp - b.timestamp)[0];
     if (first) target = first.id;
@@ -1214,7 +1257,7 @@ function onViewerDismiss(id: string): void {
   void nextTick(() => scrollToMessage(target));
 }
 
-const viewerMsg = (id: string) => messages.value.find((m) => m.id === id);
+const viewerMsg = (id: string) => allMedia.value.find((m) => m.id === id);
 function onViewerReact(id: string, emoji: string): void {
   void reactToMessage(id, emoji);
 }
@@ -1247,7 +1290,7 @@ function onViewerSave(id: string): void {
 // All message ids in an album (oldest first), for "Save all".
 function albumMessageIds(m: Message): string[] {
   if (!m.albumId) return [m.id];
-  return messages.value
+  return allMedia.value
     .filter((x) => x.albumId === m.albumId && !x.deleted)
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((x) => x.id);
@@ -1526,9 +1569,10 @@ function exitSelect(): void {
   selecting.value = false;
   selected.value = [];
 }
-// The selected messages in conversation order, so bulk forwards arrive in order.
+// The selected messages in conversation order, so bulk forwards arrive in order. Selection
+// happens on rendered bubbles, so the chosen ids live within the loaded run (`rows`).
 const selectedMessages = computed(() =>
-  messages.value
+  rows.value
     .filter((m) => selected.value.includes(m.id))
     .sort((a, b) => a.timestamp - b.timestamp),
 );
@@ -1606,10 +1650,9 @@ function groupRunStart(i: number): boolean {
   if (!chat.value?.isGroup) return false;
   const cur = renderItems.value[i];
   if (cur?.kind !== 'msg' || cur.message.outgoing) return false;
-  const prev = renderItems.value[i - 1];
-  if (!prev) return true;
-  const prevMsg = prev.kind === 'msg' ? prev.message : prev.messages[prev.messages.length - 1];
-  return prevMsg.outgoing || prevMsg.senderId !== cur.message.senderId;
+  // Predecessor-included (the prior rendered row) so the avatar/name doesn't
+  // toggle as the window's leading row changes on load (D8/INV-7).
+  return isRunStartEdge(prevMsgFor(i), cur.message, true);
 }
 
 /* ---- edit one of your own messages ----
@@ -1670,19 +1713,55 @@ function smallThumb(url: string): Promise<string | undefined> {
   });
 }
 
-// Tapping a quote scrolls to the original message if it's currently loaded.
-function scrollToMessage(id: string): void {
-  const el = document.querySelector(`[data-mid="${id}"]`);
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    return;
-  }
-  // The quoted message isn't on this device, e.g. a reply to a message sent
-  // before we joined this group. The quote bubble still renders from its embedded
-  // snapshot; there's just nothing to scroll to.
+function notAvailableToast(): void {
+  // The quoted message isn't on this device, e.g. a reply to a message sent before we
+  // joined this group. The quote bubble still renders from its embedded snapshot; there's
+  // just nothing to scroll to.
   void toastController
     .create({ message: 'Original message not available', duration: 1400, position: 'top' })
     .then((t) => t.present());
+}
+// Poll briefly for the target row to mount, then center it (it may need a tick after a
+// window change). Returns true once it scrolled to it.
+async function centerWhenRendered(id: string, tries: number): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    const el = document.querySelector(`[data-mid="${id}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: i === 0 ? 'smooth' : 'auto', block: 'center' });
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 80));
+    await nextTick();
+  }
+  return false;
+}
+// Seek to a message and center it (INV-6 / US3, research D7). If it's already rendered we
+// just center it. Otherwise, for an on-device message older/newer than the loaded window,
+// load batches toward it (bounded loop) until it falls within the run, move the render
+// window to include it, and center it — instead of the old "not available" dead end.
+async function scrollToMessage(id: string): Promise<void> {
+  if (document.querySelector(`[data-mid="${id}"]`)) {
+    await centerWhenRendered(id, 1);
+    return;
+  }
+  const target = await getMessage(id);
+  if (!target || target.chatId !== chatId) {
+    notAvailableToast();
+    return;
+  }
+  // Load a window centered on the target in one read-pair (fast even for a target 5,000
+  // messages back — vs paging batch-by-batch, which is O(n²) reads and janky). D7.
+  if (rows.value.findIndex((r) => r.id === id) < 0) await history.seekTo(target.timestamp);
+  if (rows.value.findIndex((r) => r.id === id) < 0) {
+    notAvailableToast();
+    return;
+  }
+  // The whole loaded run is rendered, so the target now mounts; re-seed the spacers for the
+  // new window and center it on screen (a tap-driven scroll, not a fling, so scrollIntoView
+  // is fine here).
+  await nextTick();
+  reseedTopPad();
+  if (!(await centerWhenRendered(id, 20))) notAvailableToast();
 }
 
 // Drag-to-swipe a bubble (touch only): drag right past the threshold to reply,
@@ -1758,7 +1837,7 @@ function onSwipeEnd(): void {
   }
 }
 async function confirmDelete(m: Message): Promise<void> {
-  const targets = m.albumId ? messages.value.filter((x) => x.albumId === m.albumId) : [m];
+  const targets = m.albumId ? allMedia.value.filter((x) => x.albumId === m.albumId) : [m];
   await presentDeleteSheet(targets);
 }
 /* Delete options (single message, album, or a whole selection):
@@ -2025,14 +2104,43 @@ function observeScroll(): void {
   if (!resizeObs && 'ResizeObserver' in window) {
     resizeObs = new ResizeObserver(() => {
       // Re-pin to newest as media grows / the keyboard opens — but never mid-fling
-      // (that fights iOS momentum). Wait until the user's scroll has settled.
-      if (stickBottom && Date.now() - lastScrollAt > MOMENTUM_QUIET_MS) void scrollToNewest();
+      // (that fights iOS momentum). Wait until the user's scroll has settled (this is the
+      // ONE path that legitimately defers on momentum; the prepend anchor corrects live).
+      if (stickBottom && !shouldDeferScrollWrite(Date.now(), lastScrollAt, MOMENTUM_QUIET_MS))
+        void scrollToNewest();
     });
   }
   if (resizeObs && listEl.value) resizeObs.observe(listEl.value); // content height (media)
   void ensureScrollEl().then((el) => {
     if (el && resizeObs) resizeObs.observe(el); // viewport height (keyboard)
+    setupWindowSentinels(el);
   });
+}
+
+// Look-ahead prefetch: an IntersectionObserver rooted on the scroll element with
+// rootMargin = LOOK_AHEAD_PX fires loadOlder/loadNewer well before the top/bottom edge is
+// reached, so the next page is in the DOM ahead of need (page-before-top, INV-2; D5). The
+// ion-infinite-scroll above is the backstop.
+let windowObs: IntersectionObserver | null = null;
+function setupWindowSentinels(root: HTMLElement | null): void {
+  if (!root || !('IntersectionObserver' in window)) return;
+  windowObs?.disconnect();
+  windowObs = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        // Honor only the sentinel in the CURRENT scroll direction. On a bounded window both
+        // sentinels can sit inside their LOOK_AHEAD margins at once; letting the bottom
+        // sentinel fire loadNewer during an up-fling would tug the window back toward newer
+        // content (the spec-1011 "lands on newer content" symptom). Direction gates it.
+        if (e.target === topSentinel.value && scrollDir !== 'down') void loadOlder();
+        else if (e.target === bottomSentinel.value && scrollDir !== 'up') void loadNewer();
+      }
+    },
+    { root, rootMargin: `${LOOK_AHEAD_PX}px 0px ${LOOK_AHEAD_PX}px 0px`, threshold: 0 },
+  );
+  if (topSentinel.value) windowObs.observe(topSentinel.value);
+  if (bottomSentinel.value) windowObs.observe(bottomSentinel.value);
 }
 
 onMounted(() => {
@@ -2053,6 +2161,7 @@ onUnmounted(() => {
   clearTimeout(headerReadyFallback);
   clearTimeout(listReadyFallback);
   resizeObs?.disconnect();
+  windowObs?.disconnect();
 });
 // Send 'seen' receipts ONLY when the user is genuinely looking at this chat: its
 // view is the active one AND the app is foregrounded (document visible). A message
@@ -2078,19 +2187,11 @@ onIonViewDidEnter(() => {
   scheduleShareHint();
   // Entered with ?search=1 (from the contact-info "Search" action) → open search.
   if (route.query.search) showSearch.value = true;
-  // Entered with ?jump=<id> (e.g. from the Starred list) → scroll to that message,
-  // retrying briefly until it has rendered.
+  // Entered with ?jump=<id> (e.g. from the Starred list) → seek to that message; for a
+  // starred message older than the loaded window, scrollToMessage loads the intervening
+  // history and centers it (INV-6 / US3) rather than failing.
   if (route.query.jump) {
-    const id = String(route.query.jump);
-    let tries = 0;
-    const tryJump = (): void => {
-      if (document.querySelector(`[data-mid="${id}"]`)) {
-        scrollToMessage(id);
-      } else if (tries++ < 20) {
-        setTimeout(tryJump, 150);
-      }
-    };
-    void nextTick(tryJump);
+    void nextTick(() => void scrollToMessage(String(route.query.jump)));
   }
 });
 
@@ -2142,44 +2243,86 @@ onIonViewWillLeave(() => {
   void dismissOpenPopovers(); // a quick-react/menu popover must not linger after leaving
 });
 
-const messages = useLiveQuery(
-  () => listMessages(chatId, search.value),
-  ['messages'],
-  [],
-  () => search.value,
-);
+// ---- bounded, incrementally-updated history (spec 1011) ----
+// The rendered list is sourced from a bounded run (useChatHistory bounds it to MAX_ROWS)
+// instead of the whole chat, keeping the mounted DOM bounded however far you scroll
+// (FR-012/013). Older/newer pages are read in batches; the read position is held by the
+// top/bottom spacers (NOT scrollTop) so native momentum is never interrupted. The whole-chat
+// media viewer + audio playlist keep their own whole-chat source (allMedia) — they span the
+// entire chat by design (spec 1005/1007).
+const history = useChatHistory(chatId, search);
+const rows = history.rows;
+const hasOlder = history.hasOlder;
+const olderUnloaded = history.olderUnloaded;
+const newerUnloaded = history.newerUnloaded;
+// Whole-chat media subset (image/video/voice/audio) for the viewer + audio playlist; the
+// list spans the loaded run, but those features span the whole chat.
+const allMedia = useLiveQuery(() => listChatMediaAll(chatId), ['messages'], [] as Message[]);
 
-// A new message marks the chat seen (only when foregrounded; markChatSeenIfVisible
-// no-ops otherwise) and auto-follows to the bottom, but only when we were already
-// pinned there (stickBottom) or it's our own send, never while reading history.
-// The FIRST load also reveals the list (listReady) once it's scrolled to newest, so
-// opening a long chat doesn't flash the oldest message first.
+// The list renders the WHOLE loaded run — useChatHistory already bounds it to MAX_ROWS, so
+// no separate render-window is needed. Messages older/newer than the run are represented by
+// top/bottom SPACERS so the scroll range reflects the whole chat without holding it.
+//
+// CRUCIAL (spec 1011): a prepend/eviction is compensated by changing the TOP SPACER's height
+// (a layout change applied imperatively BEFORE paint), NEVER by writing scrollTop. Writing
+// scrollTop mid-fling stops iOS momentum dead (the fling halts at the load point); iOS also
+// has no `overflow-anchor`, so the spacer is the only way to keep the read position stable
+// without fighting the native scroller. The bottom spacer is purely cosmetic (it's below the
+// viewport, so its size never shifts what the user sees).
+const visibleMessages = computed(() => rows.value);
+const topSpacer = ref<HTMLElement | null>(null);
+const topPadPx = ref(0); // older-unloaded headroom; withScrollAnchor adjusts it live
+const avgRowH = ref(64); // measured average rendered row height (for spacer sizing)
+const botPadPx = computed(() => Math.round(newerUnloaded.value * avgRowH.value));
+
+// Set the top spacer height. We write the DOM imperatively (synchronous, before the next
+// paint) so a prepend + its compensation land in the same frame — no flash — while the ref
+// keeps Vue's binding in sync. Clamped ≥ 0.
+function setTopPad(px: number): void {
+  const v = Math.max(0, Math.round(px));
+  topPadPx.value = v;
+  if (topSpacer.value) topSpacer.value.style.height = `${v}px`;
+}
+// Average rendered bubble height — drives spacer sizing (an estimate; positions are kept
+// exact by the measured spacer correction, this only affects the scrollbar proportion).
+function measureAvgRowH(): void {
+  const r = renderedRows();
+  if (r.length < 2) return;
+  const span = r[r.length - 1].top - r[0].top;
+  if (span > 0) avgRowH.value = Math.max(24, span / (r.length - 1));
+}
+// Re-seed the top spacer from the older-unloaded estimate (first load / chat / search switch).
+// During scrolling, withScrollAnchor owns topPadPx precisely.
+function reseedTopPad(): void {
+  measureAvgRowH();
+  setTopPad(olderUnloaded.value * avgRowH.value);
+}
+
+// A new bottom message marks the chat seen + auto-follows to the newest — but only when
+// already pinned there (stickBottom) or it's our own send, never while reading history. The
+// first populated load reveals the list once scrolled to newest (no flash of the oldest).
 let didInitialLoad = false;
-watch(messages, async (list, prev) => {
-  markChatSeenIfVisible();
-  if (!didInitialLoad) {
-    didInitialLoad = true;
-    if (!search.value && list.length) {
-      stickBottom = true;
-      await scrollToNewest();
+watch(
+  () => rows.value[rows.value.length - 1]?.id,
+  async (newestId, prevId) => {
+    markChatSeenIfVisible();
+    if (!didInitialLoad) {
+      didInitialLoad = true;
+      if (!search.value && rows.value.length) {
+        stickBottom = true;
+        await scrollToNewest();
+        reseedTopPad();
+      }
+      listReady.value = true;
+      return;
     }
-    listReady.value = true;
-    return;
-  }
-  if (search.value) return; // searching filters the list, don't yank the view
-  if (list.length <= (prev?.length ?? 0)) return; // reaction/status update, not new
-  const newest = list[list.length - 1]; // listMessages is oldest-first
-  if (newest?.outgoing || stickBottom) void scrollToNewest();
-});
-
-// Paginate: render the newest `visible` messages (natural order); pulling up at the
-// top loads older ones. Kept modest so each pull-up mounts a sub-frame-budget batch
-// (a big batch is one long task that hitches mid-drag); the 25% look-ahead threshold
-// means smaller, more frequent loads instead of one stutter.
-const PAGE = 14;
-const visible = ref(PAGE);
-const visibleMessages = computed(() => messages.value.slice(-visible.value));
-watch(search, () => (visible.value = PAGE));
+    if (search.value || !newestId || newestId === prevId) return; // not a new bottom message
+    const newest = rows.value[rows.value.length - 1];
+    if (newest?.outgoing || stickBottom) await scrollToNewest();
+  },
+);
+// Search reloads the run; re-seed the spacer for the fresh result set.
+watch(search, () => void nextTick(reseedTopPad));
 
 // Collapse consecutive media messages that share an albumId into one album item
 // (rendered as a grid). Everything else stays a single message. The list is
@@ -2209,22 +2352,74 @@ const itemTime = (it: RenderItem) => (it.kind === 'msg' ? it.message.timestamp :
 const albumCells = (msgs: Message[]) => msgs.slice(0, 4);
 const albumOverlay = (msgs: Message[]) => (msgs.length > 4 ? msgs.length - 3 : 0);
 
-async function loadOlder(ev: InfiniteScrollCustomEvent) {
-  // Prepending older messages grows the list above the viewport. Anchor on the
-  // topmost rendered bubble and keep it at the same screen position afterwards — this
-  // is robust to the loading spinner's height and any late layout (unlike a total
-  // scrollHeight delta, which skews and makes the view jump).
+// ---- spacer-anchored loading (keeps the read position WITHOUT touching scrollTop) ----
+// The list's [data-mid] bubbles, top→bottom, as {id, top} for the anchor math.
+function renderedRows(): { id: string; top: number }[] {
+  const nodes = listEl.value?.querySelectorAll<HTMLElement>('.bubble[data-mid]');
+  if (!nodes) return [];
+  return Array.from(nodes).map((n) => ({ id: n.dataset.mid!, top: n.getBoundingClientRect().top }));
+}
+// Run a rows mutation (prepend older / append newer / trim) while keeping the message under
+// the user's eye stationary — by adjusting the TOP SPACER's height, never scrollTop. Capture
+// the topmost rendered bubble, mutate, re-measure: the anchor moved by exactly the height
+// added/removed above it (the mutation happened in one task, so the user's fling didn't move
+// it in between). Shrinking/growing the spacer by that delta cancels the shift. Because it's a
+// layout change (not a scroll write) applied imperatively BEFORE the next paint, the native
+// fling is never interrupted (no iOS momentum stall) and there's no visible jump. If the
+// spacer can't absorb it all (at the very top, where momentum is ending anyway), the small
+// remainder falls back to scrollTop. Gated on the view being active/foregrounded (FR-014).
+async function withScrollAnchor(mutate: () => void | Promise<void>): Promise<void> {
   const el = await ensureScrollEl();
-  const anchor = listEl.value?.querySelector<HTMLElement>('.bubble[data-mid]') ?? null;
-  const anchorMid = anchor?.dataset.mid ?? null;
-  const beforeTop = anchor?.getBoundingClientRect().top ?? 0;
-  visible.value += PAGE;
+  const active = () => viewActive.value && document.visibilityState === 'visible';
+  const anchor = el && active() ? pickAnchor(renderedRows()) : null;
+  await mutate();
   await nextTick();
-  if (el && anchorMid) {
-    const a2 = listEl.value?.querySelector<HTMLElement>(`.bubble[data-mid="${anchorMid}"]`) ?? null;
-    if (a2) el.scrollTop += a2.getBoundingClientRect().top - beforeTop;
+  measureAvgRowH();
+  if (!el || !anchor || !active()) return;
+  const delta = resolveAnchorDelta(anchor, renderedRows()); // how far the anchor moved
+  if (delta == null || delta === 0) return;
+  const target = topPadPx.value - delta; // shrink spacer when content was added above, etc.
+  if (target < 0) {
+    el.scrollTop += -target; // spacer exhausted (very top): take the remainder on scrollTop
+    setTopPad(0);
+  } else {
+    setTopPad(target);
   }
-  void ev.target.complete();
+}
+
+let loadingOlder = false;
+let loadingNewer = false;
+// Page older content before the top edge is reached (look-ahead). Prepend a batch via
+// useChatHistory; the spacer absorbs the height it adds so the read position holds and the
+// fling keeps going. When there's no more older, snap the spacer to 0 (we're at the top).
+async function loadOlder(ev?: InfiniteScrollCustomEvent): Promise<void> {
+  if (loadingOlder || !history.hasOlder.value) {
+    void ev?.target.complete();
+    return;
+  }
+  loadingOlder = true;
+  try {
+    await withScrollAnchor(async () => {
+      await history.loadOlder();
+    });
+    if (!history.hasOlder.value) setTopPad(0); // reached the oldest message → no headroom left
+  } finally {
+    loadingOlder = false;
+    void ev?.target.complete();
+  }
+}
+// Downward re-entry: re-append newer rows that were trimmed while scrolling up. The head-trim
+// removes rows above the viewport; withScrollAnchor grows the spacer to compensate.
+async function loadNewer(): Promise<void> {
+  if (loadingNewer || !history.hasNewer.value) return;
+  loadingNewer = true;
+  try {
+    await withScrollAnchor(async () => {
+      await history.loadNewer();
+    });
+  } finally {
+    loadingNewer = false;
+  }
 }
 
 // Resolve on-device media (Blobs) to object URLs for rendering.
@@ -2369,8 +2564,8 @@ function evictMedia(): void {
 // Resolve media for the rendered window as it grows/changes (look-ahead paging
 // extends `visibleMessages` before the user reaches the top), then evict far LRU.
 // Keyed on the visible MEDIA SET (mediaIds), not the array identity — so a status
-// tick or reaction (which reassigns messages.value to fresh objects every time) does
-// NOT re-run IndexedDB reads + URL allocation + eviction on the scroll hot path.
+// tick or reaction (which patches a row in place via useChatHistory) does NOT re-run
+// IndexedDB reads + URL allocation + eviction on the scroll hot path.
 watch(
   () => visibleMessages.value.map((m) => m.mediaId ?? '').join('|'),
   async () => {
@@ -2399,6 +2594,10 @@ watch(viewerItems, (items) => {
 // sending, including a reply when scrolled up to the quoted message.
 const contentEl = ref<{ $el: HTMLElement } | null>(null);
 const listEl = ref<HTMLElement | null>(null);
+// Look-ahead sentinels (spec 1011 D5): observed by an IntersectionObserver rooted on the
+// scroll element with rootMargin = LOOK_AHEAD_PX, so older/newer pages load before an edge.
+const topSentinel = ref<HTMLElement | null>(null);
+const bottomSentinel = ref<HTMLElement | null>(null);
 // Hidden until the first pin to bottom, so opening a long chat doesn't flash the
 // oldest message before jumping to the newest.
 const listReady = ref(false);
@@ -2417,6 +2616,11 @@ let suppressStickUntil = 0;
 // fling has settled (no user scroll for a beat).
 let lastScrollAt = 0;
 const MOMENTUM_QUIET_MS = 220;
+// Scroll direction of the last genuine user scroll — gates the look-ahead sentinels so the
+// opposite-direction one can't fire mid-fling (spec 1011: prevents the bottom sentinel from
+// tugging the window toward newer content during an up-fling). -1 = not yet measured.
+let lastScrollTop = -1;
+let scrollDir: 'up' | 'down' = 'up';
 // Cache ion-content's inner scroll element so we can read scroll metrics
 // synchronously and pin without an async hop each message.
 let scrollEl: HTMLElement | null = null;
@@ -2429,10 +2633,15 @@ async function ensureScrollEl(): Promise<HTMLElement | null> {
   return scrollEl;
 }
 async function scrollToNewest(): Promise<void> {
+  // If we trimmed the newest rows while scrolling up (hasNewer), `rows` no longer holds the
+  // bottom of the chat — reload the newest batch so the newest message is actually rendered
+  // before we pin to it.
+  if (history.hasNewer.value) await history.reload();
+  setTopPad(olderUnloaded.value * avgRowH.value); // older content sits above; bottom spacer is 0
   await nextTick();
   const el = await ensureScrollEl();
   if (!el) return;
-  el.scrollTop = el.scrollHeight;
+  el.scrollTop = el.scrollHeight; // now lands on the newest row (botPad is 0 at the bottom)
   stickBottom = true;
   suppressStickUntil = Date.now() + 250;
 }
@@ -2446,8 +2655,11 @@ function nearBottom(): boolean {
 // history (so a new message / media load doesn't yank them down). Skip the echo of
 // our own programmatic pin so late-loading media can't flip the pin off mid-settle.
 function onContentScroll(): void {
-  if (Date.now() < suppressStickUntil) return;
+  if (isSelfEcho(Date.now(), suppressStickUntil)) return; // our own pin/correction echo
   lastScrollAt = Date.now(); // genuine user scroll (the pin echo is suppressed above)
+  const top = scrollEl?.scrollTop ?? 0;
+  if (lastScrollTop >= 0 && top !== lastScrollTop) scrollDir = top < lastScrollTop ? 'up' : 'down';
+  lastScrollTop = top;
   stickBottom = nearBottom();
 }
 
@@ -2722,14 +2934,14 @@ onUnmounted(detachAudioEnded);
 
 // Audio messages in chronological order, the implicit playlist.
 const audioOrder = computed(() =>
-  [...messages.value]
+  [...allMedia.value]
     .filter((m) => m.kind === 'audio' && !m.deleted && m.mediaId)
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((m) => m.id),
 );
 // Build the now-playing metadata (for the hovering controller) from a message.
 function audioMetaFor(id: string): AudioTrackMeta | undefined {
-  const m = messages.value.find((x) => x.id === id);
+  const m = allMedia.value.find((x) => x.id === id);
   if (!m?.mediaId) return undefined;
   const url = mediaInfo.value[m.mediaId]?.url;
   if (!url) return undefined;
@@ -3234,6 +3446,11 @@ function cancelRecording() {
   flex-direction: column;
   gap: 6px;
   min-height: 100%;
+  /* This list owns its scroll anchoring in JS (withScrollAnchor adjusts the spacers). Disable
+     the browser's native scroll anchoring so it can't ALSO compensate for the same prepend
+     and double-correct against the spacer change — that two-engine fight is what makes scrollTop
+     jitter back-and-forth as older pages load on iOS (spec 1011). One anchor source only. */
+  overflow-anchor: none;
 }
 /* Bottom-anchor: the first child soaks up the free space above it, so a short
    conversation sits at the bottom while a long one stays fully scrollable to the
@@ -3912,6 +4129,25 @@ function cancelRecording() {
 }
 .album-bubble .time {
   padding-inline: 4px;
+}
+/* Zero-height look-ahead sentinels (spec 1011): real boxes the IntersectionObserver can
+   watch, but they take no layout space and are invisible. */
+.scroll-sentinel {
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+  visibility: hidden;
+  overflow-anchor: none;
+}
+/* Virtual-scroll spacers (spec 1011): reserve the height of older/newer messages not held
+   in the rendered run. flex-shrink:0 so the flex column keeps their exact height. */
+.vscroll-pad {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+  overflow-anchor: none;
 }
 /* Centered day divider between message groups. */
 .day-sep {

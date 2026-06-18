@@ -45,6 +45,7 @@ import {
   reactToMessage as dbReactToMessage,
   quickReactEmojis as dbQuickReactEmojis,
   getMessage as dbGetMessage,
+  firstMessageOnOrAfter as dbFirstMessageOnOrAfter,
   sendLocation as dbSendLocation,
   sendPoll as dbSendPoll,
   sendContact as dbSendContact,
@@ -107,7 +108,7 @@ import { peerPresence } from '@/composables/usePresence';
 import { activityFor } from '@/composables/useTyping';
 import type { ActivityKind, ActivityState } from '@/services/transport';
 import { setSecret } from '@/db/secrets';
-import { getAll, put } from '@/db/idb';
+import { getAll, put, bulkPut } from '@/db/idb';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
 import type { FriendRequest, Media, Message } from '@/db/types';
@@ -304,6 +305,9 @@ export function installTestHook(): void {
      *  receipt the UI sends on view), so they delete the server blob now rather than at the tick. */
     confirmDownloads: (chatId: string): Promise<void> => sendDownloadedReceipts(chatId),
 
+    /** The oldest message id in a chat (for the jump-to-older seek test, spec 1011). */
+    firstMessageId: (chatId: string): Promise<string | null> => dbFirstMessageOnOrAfter(chatId, 0),
+
     /** Send `body` as a reply quoting the message `quotedId`. */
     sendReply: async (chatId: string, body: string, quotedId: string): Promise<void> => {
       const m = await dbGetMessage(quotedId);
@@ -343,6 +347,11 @@ export function installTestHook(): void {
     sendAudio: (chatId: string, name: string, title: string, artist: string) =>
       dbSendMediaMessage(chatId, 'audio', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/mpeg' }), name, 12, {
         audio: { title, artist },
+      }),
+    /** Send a round video-note ("video message"). */
+    sendVideoNote: (chatId: string, name: string) =>
+      dbSendMediaMessage(chatId, 'video', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'video/mp4' }), name, 8, {
+        videoNote: true,
       }),
     /** Send a photo/video at a quality → exercises the background compression job. */
     sendMediaQuality: (chatId: string, kind: 'image' | 'video', name: string, quality: 'sd' | 'hd' | 'original') =>
@@ -471,6 +480,66 @@ export function installTestHook(): void {
         status: 'sent',
         updatedAt: Date.now(),
       });
+    },
+
+    /** Bulk-seed `n` messages into a chat in ONE transaction (spec 1011, research D9).
+     *  A 5,000-message scroll test through the real send pipeline is impractical
+     *  (minutes/run, hits crypto/relay); this writes spread-timestamp rows with a single
+     *  bulkPut so the smoothness assertions run instantly + deterministically.
+     *  - `fromIds` rotates senders (group histories); defaults to self + one peer.
+     *  - `mediaEvery` makes every Nth row an image (height variety + media-LRU pressure).
+     *  Dev-only — stripped from prod with the rest of __ringTest. */
+    seedMessages: async (
+      chatId: string,
+      n: number,
+      opts: { fromIds?: string[]; mediaEvery?: number } = {},
+    ): Promise<void> => {
+      const self = getSelfUserId() ?? 'me';
+      const senders = opts.fromIds && opts.fromIds.length ? opts.fromIds : [self, 'seed-peer-1'];
+      const mediaEvery = opts.mediaEvery && opts.mediaEvery > 0 ? Math.floor(opts.mediaEvery) : 0;
+      const step = 60_000; // 1 min apart → realistic day-divider variety over a long chat
+      const base = Date.now() - n * step;
+      // A 1×1 PNG — the same tiny decodable image the e2e paste flow uses.
+      const pngB64 =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      const pngBytes = Uint8Array.from(atob(pngB64), (c) => c.charCodeAt(0));
+
+      const media: Media[] = [];
+      const rows: Message[] = [];
+      for (let i = 0; i < n; i++) {
+        const senderId = senders[i % senders.length];
+        const outgoing = senderId === self || senderId === 'me';
+        const ts = base + i * step;
+        const isMedia = mediaEvery > 0 && (i + 1) % mediaEvery === 0;
+        let mediaId: string | undefined;
+        if (isMedia) {
+          mediaId = uid();
+          media.push({
+            id: mediaId,
+            kind: 'image',
+            mime: 'image/png',
+            name: `seed-${i}.png`,
+            size: pngBytes.byteLength,
+            blob: new Blob([pngBytes], { type: 'image/png' }),
+            updatedAt: ts,
+          });
+        }
+        rows.push({
+          id: uid(),
+          chatId,
+          senderId,
+          senderName: outgoing ? 'You' : senderId,
+          body: isMedia ? '' : `Seeded message ${i + 1} of ${n}`,
+          kind: isMedia ? 'image' : 'text',
+          mediaId,
+          timestamp: ts,
+          outgoing,
+          status: outgoing ? 'seen' : 'seen',
+          updatedAt: ts,
+        });
+      }
+      if (media.length) await bulkPut<Media>('media', media);
+      await bulkPut<Message>('messages', rows); // ONE write for all messages
     },
 
     /** Inject the curated showcase demo dataset (contacts, chats, messages, media,
