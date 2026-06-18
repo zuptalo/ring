@@ -19,9 +19,15 @@ This is the *fast, attach-to-what's-running* complement to the hermetic harnesse
 ```sh
 node drive/scenarios/group-conversation.mjs      # or: npm run drive drive/scenarios/<name>.mjs
 HEADED=1 node drive/scenarios/dm-and-react.mjs    # watch it in a real window
+node drive/scenarios/lengthy-chat-scroll.mjs      # spec 1011: 5 users, all kinds, 5k-msg scroll-up
 SLOWMO=400 HEADED=1 node drive/scenarios/...      # slow each action down
 VERBOSE=1 node drive/scenarios/...                # forward ALL page console logs
 ```
+
+`lengthy-chat-scroll.mjs` (spec 1011) connects 5 users, exchanges every message kind in a
+1:1 + a group, bulk-seeds a 5,000-message chat (`seedHistory`/`__ringTest.seedMessages`),
+then flicks up through it capturing each look-ahead page to `.tmp/drive/lengthy-chat-*.png` —
+Read those back to confirm continuous, bounded, non-snapping content (smooth scroll-up).
 
 Screenshots are written to `.tmp/drive/*.png` (gitignored). Read them back to see the UI;
 account ids, the group id, and each `[shot] <path>` stream to stdout.
@@ -42,7 +48,9 @@ await sweep([a, b]); await done();          // self-delete the throwaway account
 
 Driver exports (`drive/driver.mjs`): `createAccount`, `pair`, `group`, `say`, `waitForMessage`,
 `messageId`, `react`, `chatWith`, `shot`, `poll`, `sweep`, `done`, plus `newClient`/`browser`
-and `BASE_URL`/`SHOT_DIR`.
+and `BASE_URL`/`SHOT_DIR`. For long-chat work (spec 1011): `sendAudio`, `sendVideoNote`,
+`sendImage`, `sendVideo`, `seedHistory` (bulk-seed N messages), `scrollUpPass` (flick up +
+screenshot each page), and `bubbleCount` (assert the DOM stays bounded).
 
 ## Gotchas (already handled by the driver — don't re-hit them)
 
