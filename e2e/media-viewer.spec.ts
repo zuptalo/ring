@@ -317,3 +317,84 @@ test('closing the viewer returns to the prior all-media grid scroll position', a
   await ctxA.close();
   await ctxB.close();
 });
+
+/* ---- US5: accessibility + RTL (FR-021 labels, FR-022 RTL direction) ---- */
+
+/** Spec 1014 US5 FR-021 — viewer images and controls have meaningful accessible names. */
+test('viewer images and controls have accessible names', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'A11YA1');
+  const b = await createAccount(ctxB, 'A11YB1');
+  await pair(a, b);
+  const aChat = (await chatWith(a, b.id)) as string;
+  for (let i = 0; i < 3; i++) {
+    await a.page.evaluate(([id, n]) => (window as any).__ringTest.sendImage(id, 800, 600, n), [aChat, `y${i}.png`]);
+  }
+  await a.page.goto(`/chat/${aChat}`);
+  const bubbles = a.page.locator('.bubble .bubble-image');
+  await expect(bubbles).toHaveCount(3, { timeout: 30_000 });
+  await bubbles.first().click();
+  await expect(a.page.locator('.viewer-track')).toBeVisible({ timeout: 10_000 });
+
+  // Main image has a non-empty alt.
+  const mainAlt = await a.page.locator('.viewer-slide img').first().getAttribute('alt');
+  expect((mainAlt ?? '').length).toBeGreaterThan(0);
+  // Every strip thumbnail img has a non-empty alt (FR-021: no empty alt — was alt="" pre-fix).
+  const stripAlts = await a.page.locator('.v-strip .v-thumb img').evaluateAll((els) =>
+    els.map((e) => (e as HTMLImageElement).alt),
+  );
+  expect(stripAlts.length).toBe(3);
+  expect(stripAlts.every((alt) => alt && alt.length > 0)).toBe(true);
+  // Action buttons all carry aria-labels; the position indicator is a polite live region.
+  await expect(a.page.locator('.v-actions button[aria-label]')).toHaveCount(6);
+  await expect(a.page.locator('.v-count')).toHaveAttribute('aria-live', 'polite');
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+/** Spec 1014 US5 FR-022 — album navigation is correct in RTL (physical arrow keys map to the
+ *  visual layout: ← = visually-left = the NEXT item in RTL; → = back, clamped at the start). */
+test('viewer keyboard navigation is RTL-correct', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'RTLA1');
+  const b = await createAccount(ctxB, 'RTLB1');
+  await pair(a, b);
+  const aChat = (await chatWith(a, b.id)) as string;
+  for (let i = 0; i < 3; i++) {
+    await a.page.evaluate(([id, n]) => (window as any).__ringTest.sendImage(id, 800, 600, n), [aChat, `r${i}.png`]);
+  }
+  await a.page.goto(`/chat/${aChat}`);
+  const bubbles = a.page.locator('.bubble .bubble-image');
+  await expect(bubbles).toHaveCount(3, { timeout: 30_000 });
+
+  await a.page.evaluate(() => document.documentElement.setAttribute('dir', 'rtl'));
+  try {
+    await bubbles.first().click(); // opens on index 0
+    await expect(a.page.locator('.viewer-track')).toBeVisible({ timeout: 10_000 });
+    await a.page.waitForTimeout(500); // let did-present settle (US3)
+    await expect.poll(() => activeThumbIndex(a)).toBe('0');
+    // Strip DOM order is layout-only — indices stay 0,1,2 (CSS reverses the visual order).
+    for (let i = 0; i < 3; i++) {
+      await expect(a.page.locator(`.v-strip .v-thumb[data-i="${i}"]`)).toBeVisible();
+    }
+    // RTL: → is visually-back → clamped at the start.
+    await arrow(a, 'ArrowRight');
+    await a.page.waitForTimeout(150);
+    await expect.poll(() => activeThumbIndex(a)).toBe('0');
+    // RTL: ← is visually-forward → the next item.
+    await arrow(a, 'ArrowLeft');
+    await a.page.waitForTimeout(150);
+    await expect.poll(() => activeThumbIndex(a)).toBe('1');
+    await arrow(a, 'ArrowLeft');
+    await a.page.waitForTimeout(150);
+    await expect.poll(() => activeThumbIndex(a)).toBe('2');
+  } finally {
+    await a.page.evaluate(() => document.documentElement.setAttribute('dir', 'ltr'));
+  }
+
+  await ctxA.close();
+  await ctxB.close();
+});

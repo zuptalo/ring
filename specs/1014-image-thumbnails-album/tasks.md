@@ -314,22 +314,38 @@ mode not forced black; opening a large grid doesn't decode everything at once.
 
 ### Tests first (must fail)
 
-- [ ] T025 [P] [US5] Add e2e/assertions (in `e2e/media-viewer.spec.ts`) for meaningful `alt`/aria
-  labels on viewer images/controls and correct RTL carousel direction (e.g. set RTL and assert
-  next/prev moves the right way); note theme + screen-reader items for the quickstart manual pass.
+- [X] T025 [P] [US5] Added to `e2e/media-viewer.spec.ts`: (a11y) the main image + every strip thumbnail
+  have non-empty `alt`, the 6 action buttons carry `aria-label`, `.v-count` is `aria-live="polite"`;
+  (RTL) with `<html dir=rtl>`, → is visually-back (clamped at start) and ← advances (0→1→2). The strip
+  `alt=""` was the one TDD-red a11y assertion; the RTL assertions were all red pre-impl. Screen-reader
+  + theme-contrast remain a manual quickstart pass.
 
 ### Implementation
 
-- [ ] T026 [US5] In `src/components/MediaViewer.vue` (and grid cells in `AllMediaPage.vue` /
-  `ChatDetailPage.vue`), add meaningful `alt`/ARIA labels and make the viewer respect the app
-  light/dark theme via theme tokens instead of a hardcoded black background (FR-021/FR-023).
-- [ ] T027 [US5] Make the `MediaViewer.vue` carousel RTL-correct using direction-agnostic navigation
-  (`scrollIntoView` on the active slide / logical CSS) instead of physical `scrollLeft` (FR-022).
-- [ ] T028 [US5] In `src/views/detail/AllMediaPage.vue`, gate grid thumbnail decode on viewport
-  visibility (IntersectionObserver) and cap concurrent decodes via the image-thumb limiter (FR-024) to
-  pass T025.
+- [X] T026 [US5] FR-021: strip `<img>` gained `alt="Thumbnail N"` + the thumb button an `aria-label`
+  ("Photo N of M") and `aria-current`; the rest (action `aria-label`s, `.v-count` aria-live, main-img
+  alt, decorative `aria-hidden`) was already in place from US2/US3. FR-023: the viewer now follows the
+  app light/dark theme via new `--viewer-*` tokens in `variables.css` (surface / text / overlay scrims
+  / chrome / pill, light + dark) replacing every hardcoded `#000`/`#fff`/`#2a2a2a`/`rgba` in
+  `MediaViewer.vue`. **Per the spec owner's call, the viewer FULLY follows the theme** (light surface +
+  dark chrome in light mode; dark surface + light chrome in dark) — not the "stay dark" option.
+- [X] T027 [US5] FR-022: the carousel is direction-agnostic — `scrollToIndex` uses the slide's
+  `scrollIntoView({inline:'center'})` (not `scrollLeft = i*clientWidth`), `onScroll` derives the active
+  index from the slide nearest the track's centre (`getBoundingClientRect`, not `scrollLeft/clientWidth`),
+  the shrink-watch uses `scrollToIndex`, and arrow keys are physical (← = visually-left = next in RTL,
+  via the track's computed `direction`). All US3 hardening (suppress/positioning, clamp, momentum-swipe
+  honoring, posTimer cleanup) is preserved. `:data-i` added to slides.
+- [X] T028 [US5] FR-024: the all-media grid `<img>` gets `loading="lazy" decoding="async"` (browser
+  defers off-screen decode), thumbnail GENERATION for tier-less media is gated by an IntersectionObserver
+  (`ensureThumb` on a cell nearing the viewport, `rootMargin 400px`, one-shot + disconnect on unmount)
+  instead of the old eager all-at-once loop, and the image-thumb path now uses the correct
+  `makeImageThumb` (image-thumb limiter, cap 3) at the bubble tier.
 
-**Checkpoint**: T025 passes; the album view is accessible, RTL/theme-correct, and decodes lazily.
+**Checkpoint**: ✅ T025 passes; the viewer is accessible, RTL-correct, and theme-following, and the grid
+decodes lazily. Verified: `npm run build` green, `npx vitest run` 223/223, full media-viewer e2e (9: US2+
+US3+US5) green, media e2e regression (all-media-goto, media-cleanup, image-thumbnails, chat-media-scroll)
+green, and a drive run confirmed the viewer surface is `#ffffff` in light / `#000000` in dark with the
+chrome following.
 
 ---
 

@@ -29,10 +29,17 @@
               :key="m.id"
               type="button"
               class="media-cell"
+              :data-media-id="m.mediaId"
               :aria-label="m.mediaId && info[m.mediaId] ? (m.kind === 'video' ? 'Video' : 'Photo') : 'Media unavailable'"
               @click="openViewer(m.id)"
             >
-              <img v-if="m.mediaId && info[m.mediaId]" :src="info[m.mediaId].gridUrl || info[m.mediaId].posterUrl || info[m.mediaId].url" :alt="m.kind === 'video' ? 'Video' : 'Photo'" />
+              <img
+                v-if="m.mediaId && info[m.mediaId]"
+                :src="info[m.mediaId].gridUrl || info[m.mediaId].posterUrl || info[m.mediaId].url"
+                :alt="m.kind === 'video' ? 'Video' : 'Photo'"
+                loading="lazy"
+                decoding="async"
+              />
               <!-- Not-yet-resolved / cleared cell: a calm placeholder, not an empty tile or
                    broken <img>. FR-008. -->
               <div v-else class="cell-missing" data-state="missing"><ion-icon :icon="imageOutline" aria-hidden="true" /></div>
@@ -98,7 +105,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonButton, IonButtons, IonBackButton, IonSegment, IonSegmentButton,
@@ -114,7 +121,8 @@ import {
 } from '@/db/queries';
 import { formatBytes } from '@/utils/bytes';
 import { get, put } from '@/db/idb';
-import { generateVideoPoster, generateImageThumb } from '@/utils/media-meta';
+import { generateVideoPoster, makeImageThumb } from '@/utils/media-meta';
+import { THUMB_TIERS } from '@/utils/thumbs';
 import type { Chat, Media, Message } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { formatStamp, formatFull } from '@/utils/time';
@@ -244,14 +252,49 @@ watch(
             mime: md.mime,
             name: md.name,
           };
-          if (m.kind === 'video' && md.blob && !info.value[m.mediaId].posterUrl) void poster(md.blob, m.mediaId);
-          if (m.kind === 'image' && md.blob && !info.value[m.mediaId].posterUrl) void imageThumb(md.blob, m.mediaId);
+          // NB: thumbnail GENERATION for tier-less (legacy) media is NOT done here — it's gated on
+          // viewport visibility by the IntersectionObserver below, so opening a big library doesn't
+          // kick off N canvas decodes at once (FR-024).
         }
       }
     }
+    void nextTick(observeCells); // observe any newly-rendered cells
   },
   { immediate: true },
 );
+
+// Generate a missing thumbnail for ONE media item (called when its cell scrolls near the viewport).
+// Tiered media (gridUrl/posterUrl already set) needs nothing; only legacy items decode here.
+function ensureThumb(mediaId: string): void {
+  const rec = info.value[mediaId];
+  if (rec && (rec.gridUrl || rec.posterUrl)) return; // already has a small tier to show
+  void get<Media>('media', mediaId).then((md) => {
+    if (!md?.blob || (info.value[mediaId]?.gridUrl ?? info.value[mediaId]?.posterUrl)) return;
+    if (md.kind === 'video') void poster(md.blob, mediaId);
+    else if (md.kind === 'image') void imageThumb(md.blob, mediaId);
+  });
+}
+// Viewport-gated thumbnail decode (FR-024): generate a cell's thumbnail only as it nears the
+// viewport, capped by the image-thumb/video-poster limiters; once generated we stop observing it.
+let cellObserver: IntersectionObserver | undefined;
+function observeCells(): void {
+  if (!cellObserver) return;
+  document.querySelectorAll<HTMLElement>('.media-cell[data-media-id]').forEach((el) => cellObserver!.observe(el));
+}
+onMounted(() => {
+  cellObserver = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const id = (e.target as HTMLElement).dataset.mediaId;
+        if (id) ensureThumb(id);
+        cellObserver!.unobserve(e.target); // one-shot per cell
+      }
+    },
+    { rootMargin: '400px 0px' }, // prefetch a little below the fold for smooth scrolling
+  );
+  void nextTick(observeCells);
+});
 
 // Generate a video poster through the SHARED, concurrency-bounded helper (spec
 // 2002) instead of a bespoke per-cell <video> — so a media grid full of videos
@@ -276,7 +319,9 @@ async function poster(blob: Blob, mediaId: string): Promise<void> {
 // Small image thumbnail for the grid (the cells are tiny) so it doesn't decode the
 // full-resolution photo per cell. Persisted as posterBlob, shared with the chat view.
 async function imageThumb(blob: Blob, mediaId: string): Promise<void> {
-  const thumb = await generateImageThumb(blob);
+  // The image-thumb limiter (cap 3), separate from the video-poster queue, and the bubble tier (512)
+  // so it doubles as the persisted posterBlob shared with the chat view (spec 1014 / FR-024).
+  const thumb = await makeImageThumb(blob, THUMB_TIERS.bubble);
   if (!thumb) return;
   info.value[mediaId] = { ...info.value[mediaId], posterUrl: URL.createObjectURL(thumb) };
   try {
@@ -378,6 +423,7 @@ watch(viewerItems, (items) => {
 // Release all resolved object URLs when leaving the page so they don't leak across
 // visits (the info cache only lives for this view). FR-009.
 onBeforeUnmount(() => {
+  cellObserver?.disconnect();
   for (const rec of Object.values(info.value)) revokeInfo(rec);
 });
 

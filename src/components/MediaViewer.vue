@@ -49,7 +49,7 @@
         @mouseup="onMouseUp"
         @mouseleave="onMouseUp"
       >
-        <div v-for="(it, i) in items" :key="it.id" class="viewer-slide">
+        <div v-for="(it, i) in items" :key="it.id" class="viewer-slide" :data-i="i">
           <div class="zoom-layer" :style="i === index ? zoomStyle : undefined">
             <!-- Only the current slide and its neighbours render real media, so a
                  media-heavy chat never decodes everything at once (OOM). -->
@@ -159,11 +159,13 @@
             class="v-thumb"
             :class="{ on: i === index }"
             :data-i="i"
+            :aria-label="`Photo ${i + 1} of ${items.length}`"
+            :aria-current="i === index ? 'true' : undefined"
             @click="jump(i)"
           >
             <!-- An unresolved/cleared item has no thumbnail — show a neutral tile, never a
-                 broken <img>. FR-008. -->
-            <img v-if="it.thumb" :src="it.thumb" alt="" />
+                 broken <img>. FR-008. Alt is on the button (aria-label); the img is decorative. -->
+            <img v-if="it.thumb" :src="it.thumb" :alt="`Thumbnail ${i + 1}`" />
             <ion-icon v-else :icon="imageOutline" class="v-thumb-missing" aria-hidden="true" />
           </button>
         </div>
@@ -253,13 +255,19 @@ function suppressScrollSync(): void {
   clearTimeout(posTimer);
   posTimer = setTimeout(() => (positioning = false), 250);
 }
-// Position the track at slide i. The track may not be laid out yet on modal did-present
-// (clientWidth 0) — retry on the next frame so we never land on the wrong item.
+// Position the track at slide i. Uses scrollIntoView on the slide element (direction-agnostic) so
+// it's correct in both LTR and RTL — physical scrollLeft math would be reversed under dir=rtl
+// (FR-022). The track may not be laid out yet on modal did-present (clientWidth 0) — retry on the
+// next frame so we never land on the wrong item.
 function scrollToIndex(i: number, tries = 8): void {
   const el = track.value;
   if (!el) return;
   if (el.clientWidth) {
-    el.scrollLeft = i * el.clientWidth;
+    el.querySelector<HTMLElement>(`.viewer-slide[data-i="${i}"]`)?.scrollIntoView({
+      behavior: 'auto',
+      inline: 'center',
+      block: 'nearest',
+    });
     return;
   }
   if (tries > 0) requestAnimationFrame(() => scrollToIndex(i, tries - 1));
@@ -294,9 +302,21 @@ function onScroll(): void {
   if (positioning) return;
   const el = track.value;
   if (!el?.clientWidth) return;
-  const i = Math.round(el.scrollLeft / el.clientWidth);
-  if (i !== index.value) {
-    index.value = i;
+  // The active slide is the one nearest the track's horizontal centre — measured from element rects,
+  // not scrollLeft/clientWidth, so it's correct under RTL (where scrollLeft is reversed). FR-022.
+  const mid = el.getBoundingClientRect().left + el.clientWidth / 2;
+  let best = index.value;
+  let bestDist = Infinity;
+  el.querySelectorAll<HTMLElement>('.viewer-slide').forEach((slide) => {
+    const r = slide.getBoundingClientRect();
+    const d = Math.abs(r.left + r.width / 2 - mid);
+    if (d < bestDist) {
+      bestDist = d;
+      best = Number(slide.dataset.i);
+    }
+  });
+  if (best !== index.value) {
+    index.value = best;
     resetZoom();
     void scrollStrip();
   }
@@ -567,8 +587,8 @@ watch(() => props.items.length, (len) => {
   if (len === 0) return;
   if (index.value > len - 1) {
     index.value = len - 1;
-    const el = track.value;
-    if (el) el.scrollLeft = index.value * el.clientWidth;
+    suppressScrollSync();
+    scrollToIndex(index.value); // direction-agnostic (RTL-safe), replaces raw scrollLeft. FR-022.
   }
   for (const i of [...videoApis.keys()]) if (i > len - 1 || !nearby(i)) videoApis.delete(i);
   pauseOffscreenVideos();
@@ -580,13 +600,14 @@ watch(() => props.items.length, (len) => {
 // inside the modal; it's removed on unmount (FR-012). (Pattern mirrors PinPad.vue.)
 function onKeydown(e: KeyboardEvent): void {
   if (!props.open) return;
-  if (e.key === 'ArrowLeft') {
-    e.preventDefault();
-    jump(index.value - 1);
-  } else if (e.key === 'ArrowRight') {
-    e.preventDefault();
-    jump(index.value + 1);
-  }
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  // Physical arrow keys: ← always moves to the visually-left item, → to the visually-right one. In
+  // RTL the items are laid out right-to-left, so the visually-left item is the NEXT one (index+1) —
+  // flip the mapping by direction so the keys match the layout (and the swipe). FR-022.
+  const rtl = !!track.value && getComputedStyle(track.value).direction === 'rtl';
+  const back = rtl ? e.key === 'ArrowRight' : e.key === 'ArrowLeft';
+  jump(index.value + (back ? -1 : 1));
 }
 onMounted(() => document.addEventListener('keydown', onKeydown));
 onUnmounted(() => {
@@ -600,7 +621,7 @@ onUnmounted(() => {
 
 <style scoped>
 .viewer-content {
-  --background: #000;
+  --background: var(--viewer-surface);
 }
 .v-top {
   position: absolute;
@@ -611,8 +632,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   padding: max(env(safe-area-inset-top), 10px) 8px 10px;
-  background: linear-gradient(rgba(0, 0, 0, 0.55), transparent);
-  color: #fff;
+  background: linear-gradient(var(--viewer-overlay-top), transparent);
+  color: var(--viewer-text);
   transition: opacity 0.2s ease;
 }
 /* Distraction-free: fade the chrome out (kept in the layout so taps still land). */
@@ -660,8 +681,8 @@ onUnmounted(() => {
   height: 40px;
   border: none;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.5);
-  color: #fff;
+  background: var(--viewer-chrome-bg);
+  color: var(--viewer-text);
   font-size: 20px;
   display: flex;
   align-items: center;
@@ -673,7 +694,7 @@ onUnmounted(() => {
 .v-icon {
   background: none;
   border: none;
-  color: #fff;
+  color: var(--viewer-text);
   font-size: 24px;
   width: 40px;
   height: 36px;
@@ -689,11 +710,12 @@ onUnmounted(() => {
   position: absolute;
   top: 52px;
   right: 10px;
-  background: #2a2a2a;
+  background: var(--viewer-menu-bg);
+  border: 1px solid var(--app-border);
   border-radius: 12px;
   overflow: hidden;
   min-width: 180px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--viewer-shadow);
 }
 .v-menu button {
   display: flex;
@@ -703,7 +725,7 @@ onUnmounted(() => {
   padding: 12px 16px;
   background: none;
   border: none;
-  color: #fff;
+  color: var(--viewer-text);
   font-size: 15px;
   cursor: pointer;
 }
@@ -753,7 +775,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  color: #fff;
+  color: var(--viewer-text);
   opacity: 0.7;
   font-size: 14px;
 }
@@ -767,8 +789,8 @@ onUnmounted(() => {
   bottom: 0;
   z-index: 3;
   padding: 10px 10px max(env(safe-area-inset-bottom), 10px);
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
-  color: #fff;
+  background: linear-gradient(transparent, var(--viewer-overlay-bottom));
+  color: var(--viewer-text);
   transition: opacity 0.2s ease;
 }
 /* Video scrubber row, hosted in the chrome above the action buttons. */
@@ -777,7 +799,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 4px 2px 8px;
-  color: #fff;
+  color: var(--viewer-text);
 }
 .v-vidbtn {
   flex: none;
@@ -785,8 +807,8 @@ onUnmounted(() => {
   height: 34px;
   border: none;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
+  background: var(--viewer-pill-bg);
+  color: var(--viewer-text);
   font-size: 18px;
   display: flex;
   align-items: center;
@@ -817,7 +839,7 @@ onUnmounted(() => {
   width: 100%;
   height: 4px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--viewer-pill-bg);
 }
 .v-vidprog {
   height: 100%;
@@ -830,7 +852,7 @@ onUnmounted(() => {
   margin-bottom: 8px;
 }
 .v-react-pill {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--viewer-pill-bg);
   border-radius: 12px;
   padding: 2px 8px;
   font-size: 14px;
@@ -856,7 +878,7 @@ onUnmounted(() => {
   flex: 1;
   height: 40px;
   border: none;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--viewer-pill-bg);
   border-radius: 20px;
   font-size: 22px;
   cursor: pointer;
@@ -865,8 +887,8 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-around;
   align-items: center;
-  /* Dark translucent pill so the buttons read over a bright/tall image behind. */
-  background: rgba(0, 0, 0, 0.42);
+  /* Theme-tinted translucent pill so the buttons read over a bright/tall image behind. */
+  background: var(--viewer-chrome-bg);
   border-radius: 18px;
   padding: 2px 4px;
   backdrop-filter: blur(8px);
@@ -875,7 +897,7 @@ onUnmounted(() => {
 .v-actions button {
   background: none;
   border: none;
-  color: #fff;
+  color: var(--viewer-text);
   font-size: 25px;
   width: 46px;
   height: 44px;
@@ -905,12 +927,12 @@ onUnmounted(() => {
   border-radius: 6px;
   padding: 0;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--viewer-pill-bg);
   cursor: pointer;
   opacity: 0.6;
 }
 .v-thumb.on {
-  border-color: #fff;
+  border-color: var(--viewer-text);
   opacity: 1;
 }
 .v-thumb img {
@@ -925,6 +947,7 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   padding: 10px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--viewer-text);
+  opacity: 0.75; /* keeps the "unavailable" icon ≥ AA contrast over the light pill */
 }
 </style>
