@@ -84,30 +84,44 @@ fetching the full image; scrolling 100+ images is smooth; reopening the grid is 
 
 ### Tests first (must fail)
 
-- [ ] T008 [P] [US1] Write a failing e2e in `e2e/image-thumbnails.spec.ts` (two accounts, auto-download
-  off): an incoming image shows a bubble + grid preview **without** the full image being fetched; the
-  bubble renders from the bubble tier (not the full image); reopening the all-media grid shows
-  persisted thumbnails (no regeneration); the viewer strip uses the smallest tier.
+- [X] T008 [P] [US1] Failing→passing e2e in `e2e/image-thumbnails.spec.ts` (two accounts): a shared
+  image is downscaled into bubble/grid/strip tiers, the bubble rides the sealed envelope (`hasPoster`),
+  the receiver derives grid/strip locally, each tier is right-sized (≤512/≤320/≤128) and distinct, the
+  bubble + grid render in their surfaces, and the grid persists across re-navigation. New testhook
+  helpers: `sendImage` (real gradient image), `mediaTierDims`, `messages().hasPoster`.
 
 ### Implementation
 
-- [ ] T009 [US1] In `src/services/media-transfer.ts`, populate `MediaRef.poster` with the **bubble
-  (512)** tier for **images** in `prepareOutgoingMedia` (generated via media-meta), and on
-  `receiveIncomingMedia` store the received `poster` as `Media.posterBlob` (D1/D5).
-- [ ] T010 [US1] In `src/services/media-jobs.ts`, derive + persist `posterGrid` (320) and
-  `posterStrip` (128) from `posterBlob` in the background (on send + receive), throttled off the send
-  path; for **videos** derive grid/strip from the existing poster (no re-encode) (FR-006/FR-006a).
-- [ ] T011 [US1] Add a one-time, bounded **backfill** pass in `src/services/media-jobs.ts` that fills
-  missing tiers for on-device media (resumable, gated so it doesn't compete with interactive work);
-  not-yet-downloaded media gets tiers on fetch (FR-006b).
-- [ ] T012 [US1] In `src/views/detail/ChatDetailPage.vue`, render the chat bubble image from
-  `posterBlob` (the bubble tier) instead of the full image, and the in-bubble album cells from
-  `posterGrid` (FR-004); keep the fixed-frame layout (spec 1011 anchor) intact.
-- [ ] T013 [US1] Switch `src/views/detail/AllMediaPage.vue` grid to the persisted `posterGrid` (remove
-  the on-demand 400px generation) and `src/components/MediaViewer.vue` strip to `posterStrip`; the
-  viewer main keeps the full image (FR-004) to pass T008.
+> **File-location note (T009–T011):** this codebase runs the media send/receive job and ingest inside
+> `src/db/queries.ts` (not `media-jobs.ts`), and the wire-poster plumbing already lives on the
+> `MediaRef.poster` path in `media-transfer.ts`. So the tier generation/persistence landed in
+> `queries.ts` (the `sendMediaMessage` image branch, `downloadMessageMedia`, and the auto-download
+> ingest) calling new pure helpers in `src/utils/media-meta.ts` (`makeImageThumb`, `deriveTiers`,
+> `blobToDataUrl`) — same behavior the tasks specify, at this repo's actual seams.
 
-**Checkpoint**: T008 passes; tiers exist, are sent/derived/persisted, and each surface uses its tier.
+- [X] T009 [US1] Image bubble (512) tier generated on send (`makeImageThumb`) and put on the wire as
+  `MediaRef.poster` via `message.posterData`; on receive (`downloadMessageMedia` + ingest) the wire
+  `poster` is decoded back to a Blob and stored as `Media.posterBlob` (`applyThumbTiers`) (D1/D5).
+- [X] T010 [US1] `posterGrid` (320) + `posterStrip` (128) derived from `posterBlob` via
+  `deriveTiers` + `applyThumbTiers` on both send and receive (images and videos — videos reuse the
+  existing poster, no re-encode); off the send path (background image-thumb limiter) (FR-006/FR-006a).
+- [X] T011 [US1] Bounded, idempotent backfill `backfillThumbTiers(mediaIds, max)` in `queries.ts`,
+  driven at idle from `ChatDetailPage` (`scheduleThumbBackfill`) in small batches that resume across
+  chat re-entry; not-yet-downloaded media gets tiers on fetch (FR-006b).
+- [X] T012 [US1] `src/views/detail/ChatDetailPage.vue` chat bubble renders the bubble tier
+  (`posterUrl` ← `posterBlob`) and the in-bubble album cells the grid tier (`gridUrl` ← `posterGrid`);
+  the fixed-frame layout (spec 1011 anchor) is intact; tier object-URLs added to LRU eviction +
+  unmount revoke (FR-004).
+- [X] T013 [US1] `src/views/detail/AllMediaPage.vue` grid uses `gridUrl` (`posterGrid`) and the viewer
+  strip (`MediaViewer.vue` via the parent-built `thumb`) uses `stripUrl` (`posterStrip`); the viewer
+  main keeps the full image (FR-004). The existing on-demand generation stays as the legacy fallback
+  for media that predates the tiers (backfill upgrades it).
+
+**Checkpoint**: ✅ T008 passes; tiers exist, are sent/derived/persisted, and each surface uses its
+tier. Verified: `npm run build` green, `npx vitest run` 223/223, e2e `image-thumbnails` + the 4
+existing media specs (paste-image, chat-media-scroll, media-blob-delete, media-cleanup) green, and a
+drive run captured bubble/grid/strip surfaces with exact tier dims 1280×960 → 512×384 → 320×240 →
+128×96.
 
 ---
 

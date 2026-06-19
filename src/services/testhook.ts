@@ -108,7 +108,7 @@ import { peerPresence } from '@/composables/usePresence';
 import { activityFor } from '@/composables/useTyping';
 import type { ActivityKind, ActivityState } from '@/services/transport';
 import { setSecret } from '@/db/secrets';
-import { getAll, put, bulkPut } from '@/db/idb';
+import { get, getAll, put, bulkPut } from '@/db/idb';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
 import type { FriendRequest, Media, Message } from '@/db/types';
@@ -274,6 +274,7 @@ export function installTestHook(): void {
         body: m.body,
         kind: m.kind,
         status: m.status,
+        hasPoster: !!m.posterData, // spec 1014: the bubble-tier preview rode the sealed envelope
         seenReportedAt: m.seenReportedAt ?? null, // spec 1013: this device reported it Seen
         senderId: m.senderId,
         outgoing: m.outgoing,
@@ -364,6 +365,52 @@ export function installTestHook(): void {
         undefined,
         { quality },
       ),
+    /** Send a REAL, decodable image of the given pixel dimensions (a gradient, so JPEG
+     *  downscales produce genuinely different-sized tiers) at original quality — used to
+     *  exercise the spec-1014 bubble/grid/strip thumbnail tiers end-to-end. */
+    sendImage: async (chatId: string, w = 1024, h = 768, name = 'photo.png'): Promise<void> => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const cx = c.getContext('2d')!;
+      const g = cx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, '#1e3a8a');
+      g.addColorStop(1, '#f59e0b');
+      cx.fillStyle = g;
+      cx.fillRect(0, 0, w, h);
+      const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+      await dbSendMediaMessage(chatId, 'image', blob, name, undefined, { quality: 'original' });
+    },
+    /** Pixel dimensions of each persisted thumbnail tier for a message's media (null if the
+     *  tier or media is absent), so e2e can assert each tier is right-sized (spec 1014). */
+    mediaTierDims: async (
+      messageId: string,
+    ): Promise<{
+      full: { w: number; h: number } | null;
+      bubble: { w: number; h: number } | null;
+      grid: { w: number; h: number } | null;
+      strip: { w: number; h: number } | null;
+    }> => {
+      const m = await dbGetMessage(messageId);
+      const md = m?.mediaId ? await get<Media>('media', m.mediaId) : undefined;
+      const dims = async (b?: Blob): Promise<{ w: number; h: number } | null> => {
+        if (!b) return null;
+        try {
+          const bmp = await createImageBitmap(b);
+          const out = { w: bmp.width, h: bmp.height };
+          bmp.close?.();
+          return out;
+        } catch {
+          return null;
+        }
+      };
+      return {
+        full: await dims(md?.blob),
+        bubble: await dims(md?.posterBlob),
+        grid: await dims(md?.posterGrid),
+        strip: await dims(md?.posterStrip),
+      };
+    },
     /** A poll's per-option vote counts, for assertions. */
     pollCounts: async (messageId: string): Promise<number[]> => {
       const m = await dbGetMessage(messageId);

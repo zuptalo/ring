@@ -220,6 +220,16 @@ export async function deriveTiers(posterBlob: Blob): Promise<{ grid?: Blob; stri
   return { grid, strip };
 }
 
+/** Blob → data URL (used to put the bubble tier on the wire as MediaRef.poster, spec 1014). */
+export function blobToDataUrl(blob: Blob): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => resolve(typeof r.result === 'string' ? r.result : undefined);
+    r.onerror = () => resolve(undefined);
+    r.readAsDataURL(blob);
+  });
+}
+
 /** A short resolution label from pixel dimensions, e.g. 1280×720 → "720p". */
 export function resolutionLabel(width?: number, height?: number): string {
   if (!width || !height) return '';

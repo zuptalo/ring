@@ -19,7 +19,8 @@ import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive } from '@/services/notify';
 import { compressImage, compressVideo } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
-import { readVideoMeta, readImageMeta, generateVideoPoster } from '@/utils/media-meta';
+import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
+import { THUMB_TIERS } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview } from '@/services/link-preview';
 import type {
@@ -1561,6 +1562,19 @@ async function runMediaJob(messageId: string): Promise<void> {
         message.mediaHeight = meta.height;
         message.mediaSize = uploadBlob.size;
         await put('messages', message);
+        // Spec 1014: generate the bubble tier — it rides MediaRef.poster (so the recipient previews
+        // before downloading the full image) and seeds the local tiers (posterBlob + derived
+        // grid/strip). An image already within the bubble size IS its own bubble (small upload).
+        if (!message.posterData && message.mediaId) {
+          const big = Math.max(meta.width ?? 0, meta.height ?? 0);
+          let bubble = await makeImageThumb(uploadBlob, THUMB_TIERS.bubble);
+          if (!bubble && big > 0 && big <= THUMB_TIERS.bubble) bubble = uploadBlob;
+          if (bubble) {
+            message.posterData = await blobToDataUrl(bubble);
+            await put('messages', message);
+            await applyThumbTiers(message.mediaId, bubble);
+          }
+        }
       }
       // --- upload phase --- (only the upload/seal can fail the job → retry/failed)
       // Pre-check against the server's cap so an oversize attachment (e.g. an
@@ -1704,6 +1718,61 @@ async function shouldAutoDownloadVideo(): Promise<boolean> {
   return type === 'wifi' || type === 'ethernet';
 }
 
+/** Spec 1014: persist the thumbnail tiers on a Media record from its bubble-tier blob — store it as
+ *  `posterBlob` (bubble) and derive `posterGrid` (320) + `posterStrip` (128) locally. Works for both
+ *  images (bubble from the sender's MediaRef.poster) and videos (bubble = the existing poster), so
+ *  the grid + strip render right-sized for both. No-op when there's no bubble or the tiers exist. */
+async function applyThumbTiers(mediaId: string, bubble: Blob | undefined): Promise<void> {
+  if (!bubble) return;
+  const media = await get<Media>('media', mediaId);
+  if (!media || (media.posterGrid && media.posterStrip)) return; // gone or already derived
+  try {
+    const { grid, strip } = await deriveTiers(bubble);
+    media.posterBlob = bubble;
+    media.posterGrid = grid ?? bubble; // tiny source: reuse the larger tier
+    media.posterStrip = strip ?? grid ?? bubble;
+    media.updatedAt = now();
+    await put<Media>('media', media);
+  } catch (e) {
+    console.warn('[media-thumbs] tier derive failed', e);
+  }
+}
+
+/** Decode a poster data URL (MediaRef.poster) back to a Blob to seed the tiers on the receive side. */
+async function bubbleFromDataUrl(dataUrl: string | undefined): Promise<Blob | undefined> {
+  if (!dataUrl) return undefined;
+  try {
+    return await (await fetch(dataUrl)).blob();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Spec 1014 backfill: ensure the grid (320) + strip (128) tiers exist for media already on the
+ *  device that predates them (images + videos). Bounded per call (`max`) so it never hogs the main
+ *  thread, and idempotent — records that already carry both tiers are skipped. The bubble source is
+ *  an existing poster (video poster / image bubble) or, for a tier-less image, one derived from the
+ *  full blob. Returns how many records it upgraded. Callers pass the on-screen chat's mediaIds and
+ *  schedule it at idle, so the media you're actually looking at upgrades first. */
+export async function backfillThumbTiers(mediaIds: string[], max = 16): Promise<number> {
+  let upgraded = 0;
+  for (const id of mediaIds) {
+    if (upgraded >= max) break;
+    const media = await get<Media>('media', id);
+    if (!media || (media.posterGrid && media.posterStrip)) continue; // gone or already tiered
+    if (media.kind !== 'image' && media.kind !== 'video') continue;
+    let bubble = media.posterBlob;
+    if (!bubble && media.kind === 'image') {
+      // No poster yet: the bubble is a 512 downscale, or the (small) original itself.
+      bubble = (await makeImageThumb(media.blob, THUMB_TIERS.bubble)) ?? media.blob;
+    }
+    if (!bubble) continue; // a video whose poster hasn't been generated yet — leave for that path
+    await applyThumbTiers(id, bubble);
+    upgraded++;
+  }
+  return upgraded;
+}
+
 /** Download a deferred video's full clip (auto-download off, or manual tap). */
 export async function downloadMessageMedia(messageId: string): Promise<void> {
   const m = await getMessage(messageId);
@@ -1722,6 +1791,7 @@ export async function downloadMessageMedia(messageId: string): Promise<void> {
     durationSec: m.durationSec ?? ref.durationSec,
     updatedAt: now(),
   });
+  await applyThumbTiers(mediaId, await bubbleFromDataUrl(ref.poster)); // spec 1014 tiers from the sent poster
   m.mediaId = mediaId;
   m.pendingMedia = undefined;
   m.updatedAt = now();
@@ -3186,6 +3256,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
             durationSec,
             updatedAt: now(),
           });
+          await applyThumbTiers(mediaId, await bubbleFromDataUrl(payload.mediaRef.poster)); // spec 1014
         } else {
           pendingMedia = payload.mediaRef;
         }

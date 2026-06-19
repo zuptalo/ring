@@ -31,7 +31,7 @@
               class="media-cell"
               @click="openViewer(m.id)"
             >
-              <img v-if="m.mediaId && info[m.mediaId]" :src="info[m.mediaId].posterUrl || info[m.mediaId].url" alt="" />
+              <img v-if="m.mediaId && info[m.mediaId]" :src="info[m.mediaId].gridUrl || info[m.mediaId].posterUrl || info[m.mediaId].url" alt="" />
               <ion-icon v-if="m.kind === 'video'" class="cell-play" :icon="playCircle" />
             </button>
           </div>
@@ -164,7 +164,7 @@ const docs = useLiveQuery(() => listChatDocs(chatId), ['messages'], [] as Messag
 const links = useLiveQuery(() => listChatLinks(chatId), ['messages'], [] as Message[]);
 
 // Resolve media blobs to object URLs (+ video posters).
-interface Info { url: string; posterUrl?: string; mime: string; name: string }
+interface Info { url: string; posterUrl?: string; gridUrl?: string; stripUrl?: string; mime: string; name: string }
 const info = ref<Record<string, Info>>({});
 watch(
   [media, docs],
@@ -183,6 +183,10 @@ watch(
               : m.kind === 'video'
                 ? m.posterData
                 : undefined,
+            // Grid cells render the grid tier (320); the viewer strip the strip tier (128).
+            // Fall back to the bubble tier (posterUrl) for media that predates the tiers (spec 1014).
+            gridUrl: md.posterGrid ? URL.createObjectURL(md.posterGrid) : undefined,
+            stripUrl: md.posterStrip ? URL.createObjectURL(md.posterStrip) : undefined,
             mime: md.mime,
             name: md.name,
           };
@@ -273,7 +277,7 @@ const viewerItems = computed(() =>
       return {
         id: m.id,
         url: mi.url,
-        thumb: mi.posterUrl || mi.url,
+        thumb: mi.stripUrl || mi.posterUrl || mi.url, // strip tier (spec 1014)
         kind: mi.mime.startsWith('video/') ? 'video' : 'image',
         caption: m.body,
         senderName: m.outgoing ? 'You' : chat.value?.isGroup ? m.senderName : chat.value?.name ?? m.senderName,
