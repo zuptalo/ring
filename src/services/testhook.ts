@@ -384,6 +384,28 @@ export function installTestHook(): void {
       const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
       await dbSendMediaMessage(chatId, 'image', blob, name, undefined, { quality: 'original' });
     },
+    /** Send `count` real images sharing one albumId → they render as a single grouped album
+     *  bubble. Used to exercise "Go to message" on a non-first album photo (spec 1014 follow-up). */
+    sendAlbum: async (chatId: string, count = 3): Promise<void> => {
+      const albumId = uid();
+      for (let i = 0; i < count; i++) {
+        const c = document.createElement('canvas');
+        c.width = 800;
+        c.height = 600;
+        const cx = c.getContext('2d')!;
+        const g = cx.createLinearGradient(0, 0, 800, 600);
+        g.addColorStop(0, i % 2 ? '#0ea5e9' : '#7c3aed');
+        g.addColorStop(1, '#f59e0b');
+        cx.fillStyle = g;
+        cx.fillRect(0, 0, 800, 600);
+        const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+        await dbSendMediaMessage(chatId, 'image', blob, `album-${i}.png`, undefined, {
+          quality: 'original',
+          albumId,
+          albumName: 'Album',
+        });
+      }
+    },
     /** Pixel dimensions of each persisted thumbnail tier for a message's media (null if the
      *  tier or media is absent), so e2e can assert each tier is right-sized (spec 1014). */
     mediaTierDims: async (

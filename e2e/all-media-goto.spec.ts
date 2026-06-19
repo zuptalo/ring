@@ -63,3 +63,51 @@ test('all-media "Go to message" jumps to the message — viewer, links, and docs
   await a.page.context().close();
   await b.page.context().close();
 });
+
+/**
+ * Spec 1014 follow-up — "Go to message" on an ALBUM photo must not dead-end. Album photos render
+ * under one bubble keyed by the album's first message id, so jumping to a non-first member needs to
+ * map to that id; otherwise scrollToMessage can't find the row and shows "Original message not
+ * available". (onViewerDismiss handled this; onViewerGoto / the all-media jump did not.)
+ */
+test('Go to message on an album photo does not dead-end', async ({ browser }) => {
+  const a = await createAccount(await browser.newContext(), 'ALBUMA1');
+  const b = await createAccount(await browser.newContext(), 'ALBUMB1');
+  await pair(a, b);
+  const aChat = (await chatWith(a, b.id)) as string;
+
+  await a.page.evaluate((id) => (window as any).__ringTest.sendAlbum(id, 3), aChat);
+  await a.page.evaluate(async (id) => {
+    for (let i = 0; i < 100; i++) {
+      const ms = await (window as any).__ringTest.messages(id);
+      if (ms.filter((m: any) => m.kind === 'image').length >= 3) return;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }, aChat);
+
+  await a.page.goto(`/chat/${aChat}`);
+  const cells = a.page.locator('.album-cell');
+  await expect(cells).toHaveCount(3, { timeout: 30_000 }); // grouped album bubble (not 3 separate bubbles)
+
+  // Open the viewer on the SECOND album photo (a non-first member), then "Go to message".
+  await cells.nth(1).click();
+  await expect(a.page.locator('.viewer-track')).toBeVisible({ timeout: 10_000 });
+  await a.page.locator('.v-top button[aria-label="More"]').click();
+  await a.page.locator('.v-menu button', { hasText: 'Go to message' }).click();
+
+  // The dead-end toast must NOT appear (poll across its ~1.4s lifetime), and the viewer closes.
+  let sawToast = false;
+  const stop = Date.now() + 1800;
+  while (Date.now() < stop) {
+    if ((await a.page.getByText('Original message not available').count()) > 0) {
+      sawToast = true;
+      break;
+    }
+    await a.page.waitForTimeout(100);
+  }
+  expect(sawToast).toBe(false);
+  await expect(a.page.locator('.viewer-track')).toBeHidden({ timeout: 10_000 });
+
+  await a.page.context().close();
+  await b.page.context().close();
+});

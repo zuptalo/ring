@@ -1280,16 +1280,8 @@ function onViewerDismiss(id: string): void {
   // Unpin the chat's media so the bounded cache can reclaim what's off-screen.
   viewerPins.value = new Set();
   evictMedia();
-  // Album members render under one bubble keyed by the first message's id.
-  const m = allMedia.value.find((x) => x.id === id);
-  let target = id;
-  if (m?.albumId) {
-    const first = allMedia.value
-      .filter((x) => x.albumId === m.albumId)
-      .sort((a, b) => a.timestamp - b.timestamp)[0];
-    if (first) target = first.id;
-  }
-  void nextTick(() => scrollToMessage(target));
+  // scrollToMessage maps album members to the album's first id (centralized), so pass the raw id.
+  void nextTick(() => scrollToMessage(id));
 }
 
 const viewerMsg = (id: string) => allMedia.value.find((m) => m.id === id);
@@ -1782,6 +1774,17 @@ async function centerWhenRendered(id: string, tries: number, instant = false): P
 // otherwise race). Read in the rows-watch below.
 let seeking = false;
 async function scrollToMessage(id: string, opts: { instant?: boolean } = {}): Promise<void> {
+  // Album photos render under ONE bubble keyed by the album's first message id, so a non-first
+  // member has no row/DOM node of its own. Map any album member to that first id — otherwise
+  // "Go to message"/jump on photo 2+ dead-ends with "Original message not available". Centralized
+  // here so every caller (viewer goto, swipe-dismiss, ?jump from all-media, replies) is covered.
+  const am = allMedia.value.find((x) => x.id === id);
+  if (am?.albumId) {
+    const first = allMedia.value
+      .filter((x) => x.albumId === am.albumId)
+      .sort((a, b) => a.timestamp - b.timestamp)[0];
+    if (first) id = first.id;
+  }
   seeking = true;
   try {
     if (document.querySelector(`[data-mid="${id}"]`)) {
