@@ -384,6 +384,45 @@ export function installTestHook(): void {
       const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
       await dbSendMediaMessage(chatId, 'image', blob, name, undefined, { quality: 'original' });
     },
+    /** Seed a REAL, decodable image as a Media record with NO thumbnail tiers (mimicking media
+     *  that predates spec 1014) so the on-open backfill (T011) can be exercised. */
+    seedLegacyImage: async (chatId: string, w = 1024, h = 768): Promise<string> => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const cx = c.getContext('2d')!;
+      const g = cx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, '#0f766e');
+      g.addColorStop(1, '#f43f5e');
+      cx.fillStyle = g;
+      cx.fillRect(0, 0, w, h);
+      const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+      const id = uid();
+      await put<Media>('media', {
+        id,
+        kind: 'image',
+        mime: 'image/png',
+        name: 'legacy.png',
+        size: blob.size,
+        blob, // no posterBlob/posterGrid/posterStrip → the backfill must derive them
+        updatedAt: Date.now(),
+      });
+      const msgId = uid();
+      await put<Message>('messages', {
+        id: msgId,
+        chatId,
+        senderId: 'me',
+        senderName: 'You',
+        body: '',
+        kind: 'image',
+        mediaId: id,
+        timestamp: Date.now(),
+        outgoing: true,
+        status: 'sent',
+        updatedAt: Date.now(),
+      });
+      return msgId;
+    },
     /** Send `count` real images sharing one albumId → they render as a single grouped album
      *  bubble. Used to exercise "Go to message" on a non-first album photo (spec 1014 follow-up). */
     sendAlbum: async (chatId: string, count = 3): Promise<void> => {

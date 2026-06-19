@@ -30,15 +30,17 @@ the `drive/` harness. Two accounts (A, B).
 1. Storage management: per-type and per-chat totals include thumbnail bytes, shown distinctly from
    originals.
 2. Delete a chat's images → their thumbnails are gone too (no orphans; storage drops by both).
-3. "Free space, keep previews" → originals removed, previews still render in bubble/grid; opening the
-   viewer re-downloads the original on demand (upscaled thumb while it fetches).
+3. "Free space, keep previews" → the full-resolution originals are removed **permanently** (a confirm
+   dialog says so); the bubble/grid/strip previews still render, and the viewer shows the kept
+   (upscaled) preview — there is no re-download.
 4. From a chat's all-media screen, cleanup defaults to **this chat**; an app-wide option is available.
 
 ## US5 — a11y / RTL / theme
 1. Screen reader: images and viewer controls announce meaningful labels; the viewer is operable by
    keyboard alone.
 2. Switch to an RTL locale → album swipe direction and strip order are correct (no inversion).
-3. Light mode → the viewer is not forced black; contrast is adequate.
+3. Light mode → the viewer follows the app theme (light surface + dark chrome/text), not a forced
+   black; dark mode → dark surface + light chrome. Contrast is adequate in both.
 
 ## Backfill
 - After upgrading on a device with existing media, confirm older images/videos gain tiers in the

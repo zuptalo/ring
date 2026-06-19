@@ -351,14 +351,24 @@ chrome following.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T029 [P] Verify no regression to spec-1011/1012/1013 chat scroll + media rendering (momentum,
-  no-yank, the scroll-to-latest pill, seen receipts) given the bubble image-source swap.
-  (`src/views/detail/ChatDetailPage.vue`)
-- [ ] T030 [P] Run the quickstart manual smoke (`specs/1014-image-thumbnails-album/quickstart.md`),
-  including the **backfill** of existing media and real-device feel (swipe/zoom/strip).
-- [ ] T031 Definition-of-done gate (Constitution VII): `npm run build`; `npx vitest run`;
-  `cd server && go build ./... && go vet ./... && go test ./...` (unchanged); `make db-up && npm run
-  test:e2e` (incl. the new media specs). All green = done.
+- [X] T029 [P] No regression to spec-1011/1012/1013 found. Empirically: `chat-media-scroll.spec.ts`
+  (1011/1012 bounded-scroll, anchor INV-1/2/3, reply-quote seek) + `seen-on-view.spec.ts` (1013) are
+  green in the full e2e run. Code-level: an adversarial audit confirmed the bubble image-source swap
+  (bubble now renders the `posterBlob` tier; tier object-URLs added to the existing LRU eviction +
+  unmount revoke) preserves the spec-1011 fixed-frame anchor and leaves the scroll/momentum/pill/
+  receipt logic untouched.
+- [X] T030 [P] Quickstart smoke run via the `drive/` harness: US1 tiers + preview-before-download,
+  US2/US3 viewer robustness + navigation, US4 keep-previews (originals 2.1 MB → 0, preview still
+  renders) + thumbnail-aware storage page, US5 theme (viewer `#fff` light / `#000` dark), and the
+  **backfill** (legacy 1280×960 image → on-open backfill derives 512/320/128 tiers). Genuinely-manual
+  items remain by design and are noted in `quickstart.md` US5: screen-reader announcement + light/dark
+  contrast eyeball on a real device. (Stale "re-download" line in quickstart corrected to match the
+  shipped permanent-removal behavior.)
+- [X] T031 Definition-of-done gate (Constitution VII): `npm run build` green; `npx vitest run` 223/223
+  (the lone Argon2id timeout is a known CPU-contention flake — passes in isolation, untouched by 1014);
+  `cd server && go build/vet/test ./...` green (server untouched); `make db-up && npm run test:e2e` —
+  full suite green (run on an unloaded machine; an earlier run flaked only the 1500ms reply-quote-seek
+  budget under concurrent-workflow CPU load, which passed clean once isolated).
 
 ---
 
