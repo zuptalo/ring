@@ -65,8 +65,11 @@ import {
   deleteContact as dbDeleteContact,
   setSetting as dbSetSetting,
   storageByType as dbStorageByType,
+  storageByChat as dbStorageByChat,
   deleteMediaByKind as dbDeleteMediaByKind,
   deleteMediaLargerThan as dbDeleteMediaLargerThan,
+  freeKeepingPreviews as dbFreeKeepingPreviews,
+  clearChatMedia as dbClearChatMedia,
   listMessages,
   listChats,
   listArchivedChats,
@@ -108,7 +111,7 @@ import { peerPresence } from '@/composables/usePresence';
 import { activityFor } from '@/composables/useTyping';
 import type { ActivityKind, ActivityState } from '@/services/transport';
 import { setSecret } from '@/db/secrets';
-import { getAll, put, bulkPut } from '@/db/idb';
+import { get, getAll, put, bulkPut } from '@/db/idb';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
 import type { FriendRequest, Media, Message } from '@/db/types';
@@ -274,6 +277,7 @@ export function installTestHook(): void {
         body: m.body,
         kind: m.kind,
         status: m.status,
+        hasPoster: !!m.posterData, // spec 1014: the bubble-tier preview rode the sealed envelope
         seenReportedAt: m.seenReportedAt ?? null, // spec 1013: this device reported it Seen
         senderId: m.senderId,
         outgoing: m.outgoing,
@@ -364,6 +368,113 @@ export function installTestHook(): void {
         undefined,
         { quality },
       ),
+    /** Send a REAL, decodable image of the given pixel dimensions (a gradient, so JPEG
+     *  downscales produce genuinely different-sized tiers) at original quality — used to
+     *  exercise the spec-1014 bubble/grid/strip thumbnail tiers end-to-end. */
+    sendImage: async (chatId: string, w = 1024, h = 768, name = 'photo.png'): Promise<void> => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const cx = c.getContext('2d')!;
+      const g = cx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, '#1e3a8a');
+      g.addColorStop(1, '#f59e0b');
+      cx.fillStyle = g;
+      cx.fillRect(0, 0, w, h);
+      const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+      await dbSendMediaMessage(chatId, 'image', blob, name, undefined, { quality: 'original' });
+    },
+    /** Seed a REAL, decodable image as a Media record with NO thumbnail tiers (mimicking media
+     *  that predates spec 1014) so the on-open backfill (T011) can be exercised. */
+    seedLegacyImage: async (chatId: string, w = 1024, h = 768): Promise<string> => {
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const cx = c.getContext('2d')!;
+      const g = cx.createLinearGradient(0, 0, w, h);
+      g.addColorStop(0, '#0f766e');
+      g.addColorStop(1, '#f43f5e');
+      cx.fillStyle = g;
+      cx.fillRect(0, 0, w, h);
+      const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+      const id = uid();
+      await put<Media>('media', {
+        id,
+        kind: 'image',
+        mime: 'image/png',
+        name: 'legacy.png',
+        size: blob.size,
+        blob, // no posterBlob/posterGrid/posterStrip → the backfill must derive them
+        updatedAt: Date.now(),
+      });
+      const msgId = uid();
+      await put<Message>('messages', {
+        id: msgId,
+        chatId,
+        senderId: 'me',
+        senderName: 'You',
+        body: '',
+        kind: 'image',
+        mediaId: id,
+        timestamp: Date.now(),
+        outgoing: true,
+        status: 'sent',
+        updatedAt: Date.now(),
+      });
+      return msgId;
+    },
+    /** Send `count` real images sharing one albumId → they render as a single grouped album
+     *  bubble. Used to exercise "Go to message" on a non-first album photo (spec 1014 follow-up). */
+    sendAlbum: async (chatId: string, count = 3): Promise<void> => {
+      const albumId = uid();
+      for (let i = 0; i < count; i++) {
+        const c = document.createElement('canvas');
+        c.width = 800;
+        c.height = 600;
+        const cx = c.getContext('2d')!;
+        const g = cx.createLinearGradient(0, 0, 800, 600);
+        g.addColorStop(0, i % 2 ? '#0ea5e9' : '#7c3aed');
+        g.addColorStop(1, '#f59e0b');
+        cx.fillStyle = g;
+        cx.fillRect(0, 0, 800, 600);
+        const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+        await dbSendMediaMessage(chatId, 'image', blob, `album-${i}.png`, undefined, {
+          quality: 'original',
+          albumId,
+          albumName: 'Album',
+        });
+      }
+    },
+    /** Pixel dimensions of each persisted thumbnail tier for a message's media (null if the
+     *  tier or media is absent), so e2e can assert each tier is right-sized (spec 1014). */
+    mediaTierDims: async (
+      messageId: string,
+    ): Promise<{
+      full: { w: number; h: number } | null;
+      bubble: { w: number; h: number } | null;
+      grid: { w: number; h: number } | null;
+      strip: { w: number; h: number } | null;
+    }> => {
+      const m = await dbGetMessage(messageId);
+      const md = m?.mediaId ? await get<Media>('media', m.mediaId) : undefined;
+      const dims = async (b?: Blob): Promise<{ w: number; h: number } | null> => {
+        if (!b) return null;
+        try {
+          const bmp = await createImageBitmap(b);
+          const out = { w: bmp.width, h: bmp.height };
+          bmp.close?.();
+          return out;
+        } catch {
+          return null;
+        }
+      };
+      return {
+        full: await dims(md?.blob),
+        bubble: await dims(md?.posterBlob),
+        grid: await dims(md?.posterGrid),
+        strip: await dims(md?.posterStrip),
+      };
+    },
     /** A poll's per-option vote counts, for assertions. */
     pollCounts: async (messageId: string): Promise<number[]> => {
       const m = await dbGetMessage(messageId);
@@ -550,10 +661,16 @@ export function installTestHook(): void {
     /** Inject the curated showcase demo dataset (contacts, chats, messages, media,
      *  call log) for the screenshot harness. See services/showcase-seed.ts. */
     seedShowcase: (): Promise<void> => runSeedShowcase(),
-    /** Total on-device media bytes by kind. */
+    /** Total on-device media bytes by kind (originals + thumbnail tiers, distinct). Spec 1014. */
     storageByType: () => dbStorageByType(),
+    /** Per-chat media footprint incl. thumbnail-tier bytes (spec 1014 FR-016). */
+    storageByChat: () => dbStorageByChat(),
     deleteMediaByKind: (kinds: Media['kind'][], chatId?: string) => dbDeleteMediaByKind(kinds, chatId),
     deleteMediaLargerThan: (bytes: number, chatId?: string) => dbDeleteMediaLargerThan(bytes, chatId),
+    /** Spec 1014 FR-018: free originals but keep the bubble/grid/strip previews (optionally per chat). */
+    freeKeepingPreviews: (chatId?: string) => dbFreeKeepingPreviews(chatId ? { chatId } : {}),
+    /** Spec 1014 FR-019: delete all media in one chat (originals + tiers). */
+    clearChatMedia: (chatId: string) => dbClearChatMedia(chatId),
     /** Server-side directory search → [{id, username, displayName}]. */
     // Drive the real client store actions (import + mark-connected + reconcile),
     // not the raw API, so e2e exercises the actual friend-request behavior.

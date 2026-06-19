@@ -18,7 +18,7 @@
       </ion-toolbar>
     </ion-header>
 
-    <ion-content :fullscreen="true">
+    <ion-content ref="contentEl" :fullscreen="true">
       <!-- MEDIA: month-grouped grid of thumbnails -->
       <template v-if="tab === 'media'">
         <template v-for="grp in mediaGroups" :key="grp.label">
@@ -29,9 +29,20 @@
               :key="m.id"
               type="button"
               class="media-cell"
+              :data-media-id="m.mediaId"
+              :aria-label="m.mediaId && info[m.mediaId] ? (m.kind === 'video' ? 'Video' : 'Photo') : 'Media unavailable'"
               @click="openViewer(m.id)"
             >
-              <img v-if="m.mediaId && info[m.mediaId]" :src="info[m.mediaId].posterUrl || info[m.mediaId].url" alt="" />
+              <img
+                v-if="m.mediaId && info[m.mediaId]"
+                :src="info[m.mediaId].gridUrl || info[m.mediaId].posterUrl || info[m.mediaId].url"
+                :alt="m.kind === 'video' ? 'Video' : 'Photo'"
+                loading="lazy"
+                decoding="async"
+              />
+              <!-- Not-yet-resolved / cleared cell: a calm placeholder, not an empty tile or
+                   broken <img>. FR-008. -->
+              <div v-else class="cell-missing" data-state="missing"><ion-icon :icon="imageOutline" aria-hidden="true" /></div>
               <ion-icon v-if="m.kind === 'video'" class="cell-play" :icon="playCircle" />
             </button>
           </div>
@@ -39,29 +50,35 @@
         <div v-if="media.length === 0" class="empty"><ion-note>No media yet</ion-note></div>
       </template>
 
-      <!-- LINKS -->
+      <!-- LINKS: tap opens the URL; the chat-bubble button jumps to the message it was shared in. -->
       <template v-else-if="tab === 'links'">
         <ion-list>
-          <ion-item v-for="m in links" :key="m.id" button :detail="false" @click="openExternal(firstUrl(m.body))">
+          <ion-item v-for="m in links" :key="m.id" :detail="false">
             <ion-icon slot="start" :icon="linkOutline" color="primary" />
-            <ion-label class="ion-text-wrap">
+            <ion-label class="ion-text-wrap link-tap" @click="openExternal(firstUrl(m.body))">
               <h3>{{ firstUrl(m.body) }}</h3>
               <p>{{ m.body }}</p>
             </ion-label>
+            <ion-button slot="end" fill="clear" aria-label="Go to message" @click.stop="goToMessage(m.id)">
+              <ion-icon slot="icon-only" :icon="chatbubbleOutline" />
+            </ion-button>
           </ion-item>
         </ion-list>
         <div v-if="links.length === 0" class="empty"><ion-note>No links yet</ion-note></div>
       </template>
 
-      <!-- DOCS -->
+      <!-- DOCS: tap opens the document; the chat-bubble button jumps to its message. -->
       <template v-else>
         <ion-list>
-          <ion-item v-for="m in docs" :key="m.id" button :detail="false" @click="openDoc(m)">
+          <ion-item v-for="m in docs" :key="m.id" :detail="false">
             <ion-icon slot="start" :icon="documentOutline" color="primary" />
-            <ion-label class="ion-text-wrap">
+            <ion-label class="ion-text-wrap link-tap" @click="openDoc(m)">
               <h3>{{ m.mediaId && info[m.mediaId] ? info[m.mediaId].name : 'Document' }}</h3>
               <p>{{ docMeta(m) }}</p>
             </ion-label>
+            <ion-button slot="end" fill="clear" aria-label="Go to message" @click.stop="goToMessage(m.id)">
+              <ion-icon slot="icon-only" :icon="chatbubbleOutline" />
+            </ion-button>
           </ion-item>
         </ion-list>
         <div v-if="docs.length === 0" class="empty"><ion-note>No documents yet</ion-note></div>
@@ -72,15 +89,15 @@
       :open="viewer.open"
       :items="viewerItems"
       :start="viewer.start"
-      @close="viewer.open = false"
-      @dismiss="viewer.open = false"
+      @close="closeViewer"
+      @dismiss="closeViewer"
       @react="(id, e) => react(id, e)"
       @favorite="(id) => fav(id)"
       @del="(id) => del(id)"
       @share="(id) => share(id)"
       @caption="(id) => caption(id)"
-      @reply="goChat"
-      @goto="goChat"
+      @reply="goToMessage"
+      @goto="goToMessage"
       @allmedia="viewer.open = false"
     />
     <forward-picker :open="forwardOpen" @send="onForwardSend" @close="forwardOpen = false" />
@@ -88,23 +105,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonButton, IonButtons, IonBackButton, IonSegment, IonSegmentButton,
   IonLabel, IonContent, IonList, IonItem, IonIcon, IonNote, actionSheetController, alertController,
 } from '@ionic/vue';
-import { playCircle, linkOutline, documentOutline, trashOutline } from 'ionicons/icons';
+import { playCircle, linkOutline, documentOutline, trashOutline, imageOutline, chatbubbleOutline } from 'ionicons/icons';
 import { openExternal } from '@/utils/external';
 import {
   listChatMedia, listChatDocs, listChatLinks, getChat,
   reactToMessage, toggleFavorite, deleteMessage, setCaption, forwardMessage,
-  deleteMediaByKind, deleteMediaLargerThan, mediaCleanupPreview,
+  deleteMediaByKind, deleteMediaLargerThan, mediaCleanupPreview, freeKeepingPreviews, clearChatMedia,
   CAPTION_MAX,
 } from '@/db/queries';
 import { formatBytes } from '@/utils/bytes';
 import { get, put } from '@/db/idb';
-import { generateVideoPoster, generateImageThumb } from '@/utils/media-meta';
+import { generateVideoPoster, makeImageThumb } from '@/utils/media-meta';
+import { THUMB_TIERS } from '@/utils/thumbs';
 import type { Chat, Media, Message } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { formatStamp, formatFull } from '@/utils/time';
@@ -116,6 +134,20 @@ const router = useRouter();
 const chatId = route.params.id as string;
 
 // Clean up THIS chat's media: delete by type or by size (scoped to the chat).
+// Confirm the irreversible "keep previews" free for this chat (the originals can't be recovered).
+async function confirmKeepPreviews(): Promise<void> {
+  const a = await alertController.create({
+    header: 'Free space, keep previews',
+    message:
+      'Remove the full-resolution photos and videos in this chat but keep the small previews. Previews still show, but the originals are removed permanently and cannot be recovered.',
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      { text: 'Free space', role: 'destructive', handler: () => void freeKeepingPreviews({ chatId }) },
+    ],
+  });
+  await a.present();
+}
+
 async function cleanupChat(): Promise<void> {
   const MB = 1024 * 1024;
   const groups: { kinds: Media['kind'][]; label: string }[] = [
@@ -143,15 +175,33 @@ async function cleanupChat(): Promise<void> {
       handler: () => void deleteMediaLargerThan(10 * MB, chatId),
     });
   }
+  // Free originals but keep the small previews (spec 1014 FR-018), scoped to this chat.
+  const photos = await mediaCleanupPreview({ kinds: ['image', 'video'], chatId });
+  if (photos.bytes > 0) {
+    buttons.push({
+      text: `Free space, keep previews · ${formatBytes(photos.bytes)}`,
+      handler: () => void confirmKeepPreviews(),
+    });
+  }
   if (buttons.length === 0) {
     const a = await alertController.create({
       header: 'Nothing to clean',
       message: 'This chat has no downloaded media on this device.',
-      buttons: ['OK'],
+      buttons: [
+        { text: 'Manage storage (all chats)…', handler: () => void router.push('/settings/storage-manage') },
+        { text: 'OK', role: 'cancel' },
+      ],
     });
     await a.present();
     return;
   }
+  // Clear everything in THIS chat, and an explicit app-wide escape hatch (FR-019).
+  buttons.push({
+    text: 'Clear all media in this chat',
+    role: 'destructive',
+    handler: () => void clearChatMedia(chatId),
+  });
+  buttons.push({ text: 'Manage storage (all chats)…', handler: () => void router.push('/settings/storage-manage') });
   buttons.push({ text: 'Cancel', role: 'cancel' });
   const sheet = await actionSheetController.create({ header: "Clean up this chat's media", buttons });
   await sheet.present();
@@ -164,16 +214,28 @@ const docs = useLiveQuery(() => listChatDocs(chatId), ['messages'], [] as Messag
 const links = useLiveQuery(() => listChatLinks(chatId), ['messages'], [] as Message[]);
 
 // Resolve media blobs to object URLs (+ video posters).
-interface Info { url: string; posterUrl?: string; mime: string; name: string }
+interface Info { url?: string; posterUrl?: string; gridUrl?: string; stripUrl?: string; mime: string; name: string }
 const info = ref<Record<string, Info>>({});
+function revokeInfo(rec: Info): void {
+  for (const u of [rec.url, rec.posterUrl, rec.gridUrl, rec.stripUrl]) if (u) URL.revokeObjectURL(u);
+}
 watch(
   [media, docs],
   async () => {
+    // Release object URLs for media that has vanished (deleted / cleared while this page
+    // is open) so swiping/clearing a large album doesn't leak decoded blobs. FR-009.
+    const live = new Set([...media.value, ...docs.value].map((m) => m.mediaId).filter(Boolean));
+    for (const [id, rec] of Object.entries(info.value)) {
+      if (!live.has(id)) {
+        revokeInfo(rec);
+        delete info.value[id];
+      }
+    }
     for (const m of [...media.value, ...docs.value]) {
       if (m.mediaId && !info.value[m.mediaId]) {
         const md = await get<Media>('media', m.mediaId);
         if (md) {
-          const url = URL.createObjectURL(md.blob);
+          const url = md.blob ? URL.createObjectURL(md.blob) : undefined; // undefined once freed (FR-018)
           info.value[m.mediaId] = {
             url,
             // posterBlob, else the sender-embedded posterData (data URL) for videos,
@@ -183,17 +245,56 @@ watch(
               : m.kind === 'video'
                 ? m.posterData
                 : undefined,
+            // Grid cells render the grid tier (320); the viewer strip the strip tier (128).
+            // Fall back to the bubble tier (posterUrl) for media that predates the tiers (spec 1014).
+            gridUrl: md.posterGrid ? URL.createObjectURL(md.posterGrid) : undefined,
+            stripUrl: md.posterStrip ? URL.createObjectURL(md.posterStrip) : undefined,
             mime: md.mime,
             name: md.name,
           };
-          if (m.kind === 'video' && !info.value[m.mediaId].posterUrl) void poster(md.blob, m.mediaId);
-          if (m.kind === 'image' && !info.value[m.mediaId].posterUrl) void imageThumb(md.blob, m.mediaId);
+          // NB: thumbnail GENERATION for tier-less (legacy) media is NOT done here — it's gated on
+          // viewport visibility by the IntersectionObserver below, so opening a big library doesn't
+          // kick off N canvas decodes at once (FR-024).
         }
       }
     }
+    void nextTick(observeCells); // observe any newly-rendered cells
   },
   { immediate: true },
 );
+
+// Generate a missing thumbnail for ONE media item (called when its cell scrolls near the viewport).
+// Tiered media (gridUrl/posterUrl already set) needs nothing; only legacy items decode here.
+function ensureThumb(mediaId: string): void {
+  const rec = info.value[mediaId];
+  if (rec && (rec.gridUrl || rec.posterUrl)) return; // already has a small tier to show
+  void get<Media>('media', mediaId).then((md) => {
+    if (!md?.blob || (info.value[mediaId]?.gridUrl ?? info.value[mediaId]?.posterUrl)) return;
+    if (md.kind === 'video') void poster(md.blob, mediaId);
+    else if (md.kind === 'image') void imageThumb(md.blob, mediaId);
+  });
+}
+// Viewport-gated thumbnail decode (FR-024): generate a cell's thumbnail only as it nears the
+// viewport, capped by the image-thumb/video-poster limiters; once generated we stop observing it.
+let cellObserver: IntersectionObserver | undefined;
+function observeCells(): void {
+  if (!cellObserver) return;
+  document.querySelectorAll<HTMLElement>('.media-cell[data-media-id]').forEach((el) => cellObserver!.observe(el));
+}
+onMounted(() => {
+  cellObserver = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const id = (e.target as HTMLElement).dataset.mediaId;
+        if (id) ensureThumb(id);
+        cellObserver!.unobserve(e.target); // one-shot per cell
+      }
+    },
+    { rootMargin: '400px 0px' }, // prefetch a little below the fold for smooth scrolling
+  );
+  void nextTick(observeCells);
+});
 
 // Generate a video poster through the SHARED, concurrency-bounded helper (spec
 // 2002) instead of a bespoke per-cell <video> — so a media grid full of videos
@@ -218,7 +319,9 @@ async function poster(blob: Blob, mediaId: string): Promise<void> {
 // Small image thumbnail for the grid (the cells are tiny) so it doesn't decode the
 // full-resolution photo per cell. Persisted as posterBlob, shared with the chat view.
 async function imageThumb(blob: Blob, mediaId: string): Promise<void> {
-  const thumb = await generateImageThumb(blob);
+  // The image-thumb limiter (cap 3), separate from the video-poster queue, and the bubble tier (512)
+  // so it doubles as the persisted posterBlob shared with the chat view (spec 1014 / FR-024).
+  const thumb = await makeImageThumb(blob, THUMB_TIERS.bubble);
   if (!thumb) return;
   info.value[mediaId] = { ...info.value[mediaId], posterUrl: URL.createObjectURL(thumb) };
   try {
@@ -259,7 +362,7 @@ const docMeta = (m: Message) => {
 };
 function openDoc(m: Message): void {
   const i = m.mediaId ? info.value[m.mediaId] : undefined;
-  if (i) window.open(i.url, '_blank');
+  if (i?.url) window.open(i.url, '_blank');
 }
 
 /* ---- viewer (media tab) ---- */
@@ -272,8 +375,8 @@ const viewerItems = computed(() =>
       const mi = info.value[m.mediaId!];
       return {
         id: m.id,
-        url: mi.url,
-        thumb: mi.posterUrl || mi.url,
+        url: mi.url ?? '', // '' once the original is freed → the viewer falls back to the thumb
+        thumb: mi.stripUrl || mi.posterUrl || mi.url || '', // strip tier (spec 1014)
         kind: mi.mime.startsWith('video/') ? 'video' : 'image',
         caption: m.body,
         senderName: m.outgoing ? 'You' : chat.value?.isGroup ? m.senderName : chat.value?.name ?? m.senderName,
@@ -289,12 +392,39 @@ function reactionGroups(m: Message): Array<{ emoji: string; count: number }> {
   for (const r of m.reactions ?? []) map.set(r.emoji, (map.get(r.emoji) ?? 0) + 1);
   return [...map.entries()].map(([emoji, count]) => ({ emoji, count }));
 }
-function openViewer(id: string): void {
+// The full-screen viewer is a modal over the grid; capture the grid's scroll position on
+// open and restore it on close so the user lands exactly where they left (the modal
+// dismiss otherwise drifts the underlying content). FR-015.
+const contentEl = ref<{ $el?: HTMLElement } | null>(null);
+let savedScrollTop = 0;
+// ion-content's scroll element lives on the host ($el), reached via getScrollElement().
+async function gridScrollEl(): Promise<HTMLElement | undefined> {
+  const host = contentEl.value?.$el as unknown as { getScrollElement?: () => Promise<HTMLElement> } | undefined;
+  return host?.getScrollElement ? await host.getScrollElement() : undefined;
+}
+async function openViewer(id: string): Promise<void> {
+  savedScrollTop = (await gridScrollEl())?.scrollTop ?? 0;
   const start = media.value.findIndex((m) => m.id === id);
   viewer.value = { open: true, ids: media.value.map((m) => m.id), start: Math.max(0, start) };
 }
+async function closeViewer(): Promise<void> {
+  viewer.value.open = false;
+  await nextTick();
+  (await gridScrollEl())?.scrollTo({ top: savedScrollTop });
+}
 watch(viewerItems, (items) => {
-  if (viewer.value.open && items.length === 0) viewer.value.open = false;
+  if (!viewer.value.open) return;
+  // Reconcile the open viewer when media is deleted/cleared under it (spec 1014 FR-007):
+  // close on empty, else keep the opener index in range (MediaViewer clamps its own).
+  if (items.length === 0) viewer.value.open = false;
+  else if (viewer.value.start > items.length - 1) viewer.value.start = items.length - 1;
+});
+
+// Release all resolved object URLs when leaving the page so they don't leak across
+// visits (the info cache only lives for this view). FR-009.
+onBeforeUnmount(() => {
+  cellObserver?.disconnect();
+  for (const rec of Object.values(info.value)) revokeInfo(rec);
 });
 
 const react = (id: string, emoji: string) => void reactToMessage(id, emoji);
@@ -333,7 +463,9 @@ async function caption(id: string): Promise<void> {
   });
   await alert.present();
 }
-const goChat = () => router.push(`/chat/${chatId}`);
+// Go to a specific message in the chat (from the viewer's "Go to message"/reply, or a links/docs
+// row): navigate to the chat with ?jump so it scrolls to that message — not just the chat bottom.
+const goToMessage = (id: string) => router.push(`/chat/${chatId}?jump=${id}`);
 </script>
 
 <style scoped>
@@ -342,6 +474,11 @@ const goChat = () => router.push(`/chat/${chatId}`);
   font-size: 14px;
   font-weight: 600;
   color: var(--app-text-muted);
+}
+/* The link/doc label is the primary tap target (open URL / open doc); the trailing
+   chat-bubble button jumps to the message. */
+.link-tap {
+  cursor: pointer;
 }
 .media-grid {
   display: grid;
@@ -362,6 +499,19 @@ const goChat = () => router.push(`/chat/${chatId}`);
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* Placeholder cell for media that hasn't resolved / was cleared. FR-008. */
+.cell-missing {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--app-surface);
+  color: var(--ion-color-medium, #92949c);
+}
+.cell-missing ion-icon {
+  font-size: 28px;
 }
 .cell-play {
   position: absolute;

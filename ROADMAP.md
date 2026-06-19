@@ -33,6 +33,7 @@ Specs are grouped by category band; status moves
 | [1011](specs/1011-smooth-chat-history/spec.md) | Smooth Chat-History Scroll-Up (verified by a multi-user end-to-end exercise) | 🟢 shipped |
 | [1012](specs/1012-scroll-to-bottom-button/spec.md) | Hovering "Scroll to Latest" Button in Chat | ⚪ planned |
 | [1013](specs/1013-jump-pill-seen-receipts/spec.md) | Expanding "Jump to Latest" Pill + Visibility-Driven Seen Receipts | ⚪ planned |
+| [1014](specs/1014-image-thumbnails-album/spec.md) | Multi-Size Image Thumbnails + Album-View Overhaul | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

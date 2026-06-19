@@ -64,6 +64,8 @@ export default defineConfig({
         'src/utils/chat-grouping.ts',
         // Pure scroll-to-latest control logic (spec 1012).
         'src/utils/chat-unread.ts',
+        // Pure thumbnail tier-size math (spec 1014).
+        'src/utils/thumbs.ts',
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 80 },
     },

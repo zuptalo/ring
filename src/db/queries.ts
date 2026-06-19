@@ -19,7 +19,8 @@ import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive } from '@/services/notify';
 import { compressImage, compressVideo } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
-import { readVideoMeta, readImageMeta, generateVideoPoster } from '@/utils/media-meta';
+import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
+import { THUMB_TIERS } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview } from '@/services/link-preview';
 import type {
@@ -943,7 +944,7 @@ export async function forwardMessage(messageId: string, chatIds: string[]): Prom
     if (peer && ((await isContactGhosted(peer)) || (await isPeerBlocked(peer)))) continue;
     if (m.mediaId && (m.kind === 'image' || m.kind === 'video' || m.kind === 'file' || m.kind === 'voice')) {
       const media = await get<Media>('media', m.mediaId);
-      if (media) {
+      if (media?.blob) {
         await sendMediaMessage(cid, m.kind, media.blob, media.name, m.durationSec, {
           videoNote: m.videoNote,
           caption: m.body, // a forwarded photo keeps its caption, like WhatsApp
@@ -1513,7 +1514,7 @@ async function runMediaJob(messageId: string): Promise<void> {
     const message = await getMessage(messageId);
     if (!message || message.status !== 'compressing' || !message.mediaId) return;
     const media = await get<Media>('media', message.mediaId);
-    if (!media) return;
+    if (!media?.blob) return; // a freed-original record can't be (re)sent — nothing to upload
     try {
       resetJobProgress(messageId);
       let uploadBlob = media.blob;
@@ -1561,6 +1562,19 @@ async function runMediaJob(messageId: string): Promise<void> {
         message.mediaHeight = meta.height;
         message.mediaSize = uploadBlob.size;
         await put('messages', message);
+        // Spec 1014: generate the bubble tier — it rides MediaRef.poster (so the recipient previews
+        // before downloading the full image) and seeds the local tiers (posterBlob + derived
+        // grid/strip). An image already within the bubble size IS its own bubble (small upload).
+        if (!message.posterData && message.mediaId) {
+          const big = Math.max(meta.width ?? 0, meta.height ?? 0);
+          let bubble = await makeImageThumb(uploadBlob, THUMB_TIERS.bubble);
+          if (!bubble && big > 0 && big <= THUMB_TIERS.bubble) bubble = uploadBlob;
+          if (bubble) {
+            message.posterData = await blobToDataUrl(bubble);
+            await put('messages', message);
+            await applyThumbTiers(message.mediaId, bubble);
+          }
+        }
       }
       // --- upload phase --- (only the upload/seal can fail the job → retry/failed)
       // Pre-check against the server's cap so an oversize attachment (e.g. an
@@ -1704,6 +1718,62 @@ async function shouldAutoDownloadVideo(): Promise<boolean> {
   return type === 'wifi' || type === 'ethernet';
 }
 
+/** Spec 1014: persist the thumbnail tiers on a Media record from its bubble-tier blob — store it as
+ *  `posterBlob` (bubble) and derive `posterGrid` (320) + `posterStrip` (128) locally. Works for both
+ *  images (bubble from the sender's MediaRef.poster) and videos (bubble = the existing poster), so
+ *  the grid + strip render right-sized for both. No-op when there's no bubble or the tiers exist. */
+async function applyThumbTiers(mediaId: string, bubble: Blob | undefined): Promise<void> {
+  if (!bubble) return;
+  const media = await get<Media>('media', mediaId);
+  if (!media || (media.posterGrid && media.posterStrip)) return; // gone or already derived
+  try {
+    const { grid, strip } = await deriveTiers(bubble);
+    media.posterBlob = bubble;
+    media.posterGrid = grid ?? bubble; // tiny source: reuse the larger tier
+    media.posterStrip = strip ?? grid ?? bubble;
+    media.updatedAt = now();
+    await put<Media>('media', media);
+  } catch (e) {
+    console.warn('[media-thumbs] tier derive failed', e);
+  }
+}
+
+/** Decode a poster data URL (MediaRef.poster) back to a Blob to seed the tiers on the receive side. */
+async function bubbleFromDataUrl(dataUrl: string | undefined): Promise<Blob | undefined> {
+  if (!dataUrl) return undefined;
+  try {
+    return await (await fetch(dataUrl)).blob();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Spec 1014 backfill: ensure the grid (320) + strip (128) tiers exist for media already on the
+ *  device that predates them (images + videos). Bounded per call (`max`) so it never hogs the main
+ *  thread, and idempotent — records that already carry both tiers are skipped. The bubble source is
+ *  an existing poster (video poster / image bubble) or, for a tier-less image, one derived from the
+ *  full blob. Returns how many records it upgraded. Callers pass the on-screen chat's mediaIds and
+ *  schedule it at idle, so the media you're actually looking at upgrades first. */
+export async function backfillThumbTiers(mediaIds: string[], max = 16): Promise<number> {
+  let upgraded = 0;
+  for (const id of mediaIds) {
+    if (upgraded >= max) break;
+    const media = await get<Media>('media', id);
+    if (!media || (media.posterGrid && media.posterStrip)) continue; // gone or already tiered
+    if (media.kind !== 'image' && media.kind !== 'video') continue;
+    let bubble = media.posterBlob;
+    const full = media.blob;
+    if (!bubble && media.kind === 'image' && full) {
+      // No poster yet: the bubble is a 512 downscale, or the (small) original itself.
+      bubble = (await makeImageThumb(full, THUMB_TIERS.bubble)) ?? full;
+    }
+    if (!bubble) continue; // a video whose poster hasn't been generated yet — leave for that path
+    await applyThumbTiers(id, bubble);
+    upgraded++;
+  }
+  return upgraded;
+}
+
 /** Download a deferred video's full clip (auto-download off, or manual tap). */
 export async function downloadMessageMedia(messageId: string): Promise<void> {
   const m = await getMessage(messageId);
@@ -1722,6 +1792,7 @@ export async function downloadMessageMedia(messageId: string): Promise<void> {
     durationSec: m.durationSec ?? ref.durationSec,
     updatedAt: now(),
   });
+  await applyThumbTiers(mediaId, await bubbleFromDataUrl(ref.poster)); // spec 1014 tiers from the sent poster
   m.mediaId = mediaId;
   m.pendingMedia = undefined;
   m.updatedAt = now();
@@ -2559,7 +2630,7 @@ export async function listContacts(q = ''): Promise<Contact[]> {
 
 export async function getMediaUrl(id: string): Promise<string | null> {
   const media = await get<Media>('media', id);
-  return media ? URL.createObjectURL(media.blob) : null;
+  return media?.blob ? URL.createObjectURL(media.blob) : null;
 }
 
 /* ---- settings ---- */
@@ -2604,9 +2675,16 @@ export interface ChatStorage {
   chatId: string;
   name: string;
   avatar: string;
-  bytes: number;
+  bytes: number; // original (full-resolution) bytes
+  bytesThumbs: number; // thumbnail-tier bytes (spec 1014 FR-016), shown distinctly from originals
   count: number;
 }
+
+/** Spec 1014: total bytes of a Media record's thumbnail tiers (bubble + grid + strip). */
+const tierBytes = (m: Media): number =>
+  (m.posterBlob?.size ?? 0) + (m.posterGrid?.size ?? 0) + (m.posterStrip?.size ?? 0);
+/** Original (full-resolution) bytes still on device — 0 once freed via freeKeepingPreviews. */
+const originalBytes = (m: Media): number => (m.blob ? m.size : 0);
 
 /**
  * Real per-chat media footprint: join messages (have chatId + mediaId) to the
@@ -2619,14 +2697,16 @@ export async function storageByChat(): Promise<ChatStorage[]> {
     getAll<Media>('media'),
     getAll<Chat>('chats'),
   ]);
-  const sizeById = new Map(media.map((m) => [m.id, m.size]));
-  const byChat = new Map<string, { bytes: number; count: number }>();
+  // Originals AND thumbnail tiers accounted separately (spec 1014 FR-016).
+  const mediaById = new Map(media.map((m) => [m.id, m]));
+  const byChat = new Map<string, { bytes: number; bytesThumbs: number; count: number }>();
   for (const m of messages) {
     if (!m.mediaId) continue;
-    const size = sizeById.get(m.mediaId);
-    if (size === undefined) continue;
-    const row = byChat.get(m.chatId) ?? { bytes: 0, count: 0 };
-    row.bytes += size;
+    const md = mediaById.get(m.mediaId);
+    if (!md) continue;
+    const row = byChat.get(m.chatId) ?? { bytes: 0, bytesThumbs: 0, count: 0 };
+    row.bytes += originalBytes(md);
+    row.bytesThumbs += tierBytes(md);
     row.count += 1;
     byChat.set(m.chatId, row);
   }
@@ -2637,30 +2717,36 @@ export async function storageByChat(): Promise<ChatStorage[]> {
       name: chatById.get(chatId)?.name ?? 'Unknown chat',
       avatar: chatById.get(chatId)?.avatar ?? '',
       bytes: row.bytes,
+      bytesThumbs: row.bytesThumbs,
       count: row.count,
     }))
-    .sort((a, b) => b.bytes - a.bytes);
+    .sort((a, b) => b.bytes + b.bytesThumbs - (a.bytes + a.bytesThumbs));
 }
 
-/** Total on-device media bytes, broken down by media kind. */
+/** Total on-device media bytes by kind. Originals (`total`/`byKind`) and thumbnail tiers
+ *  (`thumbsTotal`/`thumbsByKind`) are accounted separately so the UI can show previews
+ *  distinctly from the full images they came from (spec 1014 FR-016). */
 export async function storageByType(): Promise<{
   total: number;
   byKind: Record<Media['kind'], number>;
+  thumbsTotal: number;
+  thumbsByKind: Record<Media['kind'], number>;
 }> {
   const media = await getAll<Media>('media');
-  const byKind: Record<Media['kind'], number> = {
-    image: 0,
-    video: 0,
-    file: 0,
-    voice: 0,
-    audio: 0,
-  };
+  const zero = (): Record<Media['kind'], number> => ({ image: 0, video: 0, file: 0, voice: 0, audio: 0 });
+  const byKind = zero();
+  const thumbsByKind = zero();
   let total = 0;
+  let thumbsTotal = 0;
   for (const m of media) {
-    byKind[m.kind] += m.size;
-    total += m.size;
+    const orig = originalBytes(m);
+    const thumbs = tierBytes(m);
+    byKind[m.kind] += orig;
+    total += orig;
+    thumbsByKind[m.kind] += thumbs;
+    thumbsTotal += thumbs;
   }
-  return { total, byKind };
+  return { total, byKind, thumbsTotal, thumbsByKind };
 }
 
 export interface NetworkStats {
@@ -3186,6 +3272,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
             durationSec,
             updatedAt: now(),
           });
+          await applyThumbTiers(mediaId, await bubbleFromDataUrl(payload.mediaRef.poster)); // spec 1014
         } else {
           pendingMedia = payload.mediaRef;
         }
@@ -3311,11 +3398,13 @@ async function selectMedia(opts: MediaSelector): Promise<Media[]> {
 }
 
 /** Remove the given media blobs and detach them from their messages (the message
- *  stays, showing "media unavailable"). Returns bytes freed. */
+ *  stays, showing "media unavailable"). Returns bytes freed (originals + thumbnail tiers).
+ *  The thumbnail tiers are FIELDS on the Media record, so remove() cascades them — no orphan
+ *  tiers are possible (spec 1014 FR-017). */
 async function deleteSelectedMedia(selected: Media[]): Promise<number> {
   if (!selected.length) return 0;
   const ids = new Set(selected.map((m) => m.id));
-  const freed = selected.reduce((n, m) => n + m.size, 0);
+  const freed = selected.reduce((n, m) => n + originalBytes(m) + tierBytes(m), 0);
   for (const id of ids) await remove('media', id);
   const messages = await getAll<Message>('messages');
   for (const msg of messages) {
@@ -3340,10 +3429,41 @@ export async function deleteMediaLargerThan(minBytes: number, chatId?: string): 
   return deleteSelectedMedia(await selectMedia({ minBytes, chatId }));
 }
 
-/** Preview a cleanup: bytes + count that WOULD be freed, without deleting. */
-export async function mediaCleanupPreview(opts: MediaSelector): Promise<{ bytes: number; count: number }> {
+/** Delete ALL media for one chat (originals + tiers), leaving "media unavailable" placeholders.
+ *  Per-chat cleanup entry point (spec 1014 FR-019); tiers cascade with the record (FR-017). */
+export async function clearChatMedia(chatId: string): Promise<number> {
+  return deleteSelectedMedia(await selectMedia({ chatId }));
+}
+
+/** "Free space but keep previews" (spec 1014 FR-018): drop the full-resolution original but KEEP the
+ *  record, its mediaId, and the bubble/grid/strip tiers — so every list surface still renders the
+ *  preview (it reads the tiers, not the original) while the large bytes are reclaimed. Only records
+ *  that actually have a tier to fall back on are freed; `size` is zeroed so storage accounting reflects
+ *  the reclaimed original. Optionally scoped to one chat. Returns bytes freed. */
+export async function freeKeepingPreviews(opts: MediaSelector = {}): Promise<number> {
+  const sel = (await selectMedia(opts)).filter((m) => m.blob && (m.posterBlob || m.posterGrid || m.posterStrip));
+  let freed = 0;
+  for (const m of sel) {
+    freed += originalBytes(m);
+    m.blob = undefined; // keep the record + mediaId + tiers; just release the original
+    m.size = 0;
+    m.updatedAt = now();
+    await put<Media>('media', m);
+  }
+  return freed;
+}
+
+/** Preview a cleanup: bytes + count that WOULD be freed, without deleting. `bytes` is originals;
+ *  `thumbBytes` is the tier bytes that the same delete would also reclaim (spec 1014 FR-016). */
+export async function mediaCleanupPreview(
+  opts: MediaSelector,
+): Promise<{ bytes: number; thumbBytes: number; count: number }> {
   const sel = await selectMedia(opts);
-  return { bytes: sel.reduce((n, m) => n + m.size, 0), count: sel.length };
+  return {
+    bytes: sel.reduce((n, m) => n + originalBytes(m), 0),
+    thumbBytes: sel.reduce((n, m) => n + tierBytes(m), 0),
+    count: sel.length,
+  };
 }
 
 /* ---- global search across everything ---- */

@@ -16,6 +16,9 @@
         <div class="v-title">
           <div class="v-sender">{{ cur?.senderName }}</div>
           <div class="v-when">{{ cur?.when }}</div>
+          <!-- Position indicator (current / total) as a third title line, so you always know
+               where you are in a multi-item album. Auto-hides with the chrome. FR-011. -->
+          <div v-if="items.length > 1" class="v-count" aria-live="polite">{{ index + 1 }} / {{ items.length }}</div>
         </div>
         <button v-if="cur?.outgoing" class="v-icon" aria-label="Caption" @click="$emit('caption', cur.id)">
           <ion-icon :icon="pencil" />
@@ -46,12 +49,24 @@
         @mouseup="onMouseUp"
         @mouseleave="onMouseUp"
       >
-        <div v-for="(it, i) in items" :key="it.id" class="viewer-slide">
+        <div v-for="(it, i) in items" :key="it.id" class="viewer-slide" :data-i="i">
           <div class="zoom-layer" :style="i === index ? zoomStyle : undefined">
             <!-- Only the current slide and its neighbours render real media, so a
                  media-heavy chat never decodes everything at once (OOM). -->
             <template v-if="it.kind === 'image'">
-              <img v-if="i === index || nearby(i)" :src="it.url || it.thumb" alt="" @click="onMediaClick" @dblclick="onMediaDblClick" />
+              <img
+                v-if="(i === index || nearby(i)) && (it.url || it.thumb)"
+                :src="it.url || it.thumb"
+                :alt="it.caption || 'Photo'"
+                @click="onMediaClick"
+                @dblclick="onMediaDblClick"
+              />
+              <!-- The full image / thumbnail is gone (cleared to free space, or not yet
+                   downloaded): a clear placeholder, never a broken <img>. FR-008. -->
+              <div v-else-if="i === index || nearby(i)" class="v-missing" data-state="missing">
+                <ion-icon :icon="imageOutline" aria-hidden="true" />
+                <span>Photo unavailable</span>
+              </div>
             </template>
             <video-player
               v-else-if="i === index || nearby(i)"
@@ -66,6 +81,12 @@
           </div>
         </div>
       </div>
+
+      <!-- Visible escape hatch while zoomed: pinch/double-tap also exit, but a tappable
+           affordance means a user can never get mode-locked (zoom blocks swiping). FR-014. -->
+      <button v-if="zoom.scale > 1" class="v-zoom-exit" aria-label="Exit zoom" @click="resetZoom">
+        <ion-icon :icon="contractOutline" />
+      </button>
 
       <!-- Bottom: video scrubber (if a video) · reactions · caption · quick-react ·
            actions · thumbnail strip. The video's scrubber/speed/PiP row is hosted HERE,
@@ -138,9 +159,14 @@
             class="v-thumb"
             :class="{ on: i === index }"
             :data-i="i"
+            :aria-label="`Photo ${i + 1} of ${items.length}`"
+            :aria-current="i === index ? 'true' : undefined"
             @click="jump(i)"
           >
-            <img :src="it.thumb" alt="" />
+            <!-- An unresolved/cleared item has no thumbnail — show a neutral tile, never a
+                 broken <img>. FR-008. Alt is on the button (aria-label); the img is decorative. -->
+            <img v-if="it.thumb" :src="it.thumb" :alt="`Thumbnail ${i + 1}`" />
+            <ion-icon v-else :icon="imageOutline" class="v-thumb-missing" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -149,12 +175,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue';
 import { IonModal, IonContent, IonIcon } from '@ionic/vue';
 import {
   chevronBack, pencil, ellipsisHorizontal, imagesOutline, chatbubbleOutline,
   happyOutline, arrowUndoOutline, shareOutline, downloadOutline, star, starOutline, trashOutline,
-  play, pause, browsersOutline,
+  play, pause, browsersOutline, imageOutline, contractOutline,
 } from 'ionicons/icons';
 import SpeedPill from './SpeedPill.vue';
 import VideoPlayer from './VideoPlayer.vue';
@@ -216,16 +242,48 @@ const cur = computed(() => props.items[index.value] ?? props.items[0]);
 // videos never load or autoplay.
 const nearby = (i: number) => Math.abs(i - index.value) <= 1;
 
+// onScroll derives the index from the scroll position for genuine user swipes (including
+// inertial/momentum scroll). But we also move the track PROGRAMMATICALLY (open, keyboard,
+// jump), and `scroll-snap: x mandatory` + the window-resolve re-layout then fire their own
+// scroll events that can round to the wrong slide and hijack the index. So we suppress
+// onScroll for a brief window after a programmatic move ONLY — swipes never call this, so
+// their (possibly long, momentum) scroll is always honored. FR-011/013.
+let positioning = false;
+let posTimer: ReturnType<typeof setTimeout> | undefined;
+function suppressScrollSync(): void {
+  positioning = true;
+  clearTimeout(posTimer);
+  posTimer = setTimeout(() => (positioning = false), 250);
+}
+// Position the track at slide i. Uses scrollIntoView on the slide element (direction-agnostic) so
+// it's correct in both LTR and RTL — physical scrollLeft math would be reversed under dir=rtl
+// (FR-022). The track may not be laid out yet on modal did-present (clientWidth 0) — retry on the
+// next frame so we never land on the wrong item.
+function scrollToIndex(i: number, tries = 8): void {
+  const el = track.value;
+  if (!el) return;
+  if (el.clientWidth) {
+    el.querySelector<HTMLElement>(`.viewer-slide[data-i="${i}"]`)?.scrollIntoView({
+      behavior: 'auto',
+      inline: 'center',
+      block: 'nearest',
+    });
+    return;
+  }
+  if (tries > 0) requestAnimationFrame(() => scrollToIndex(i, tries - 1));
+}
 function goToStart(): void {
-  index.value = props.start;
+  suppressScrollSync(); // protect the opening position from layout-induced scroll events
+  // Clamp like jump(): props.start can be stale if items shrank between the parent computing it
+  // and did-present firing, so never open on an out-of-range index. FR-007/011.
+  index.value = Math.max(0, Math.min(props.items.length - 1, props.start));
   menu.value = false;
   showEmojis.value = false;
   chromeHidden.value = false;
   resetZoom();
-  const el = track.value;
-  if (el) el.scrollLeft = props.start * el.clientWidth;
+  scrollToIndex(index.value);
   void scrollStrip();
-  emit('index', props.start); // resolve the opening item's window (index may not change)
+  emit('index', index.value); // resolve the opening item's window (index may not change)
   void playCurrentIfVideo();
 }
 // Autoplay the video we've landed on (the off-screen ones are paused by the index
@@ -238,24 +296,43 @@ async function playCurrentIfVideo(): Promise<void> {
   if (api && !api.playing) api.toggle();
 }
 function onScroll(): void {
+  // Ignore the snap/layout/window-resolve scrolls that a programmatic move (open/keyboard/jump)
+  // triggers — they can round to the wrong slide and revert the index. User swipes don't suppress,
+  // so their scroll (incl. momentum) is always honored. FR-011/013.
+  if (positioning) return;
   const el = track.value;
   if (!el?.clientWidth) return;
-  const i = Math.round(el.scrollLeft / el.clientWidth);
-  if (i !== index.value) {
-    index.value = i;
+  // The active slide is the one nearest the track's horizontal centre — measured from element rects,
+  // not scrollLeft/clientWidth, so it's correct under RTL (where scrollLeft is reversed). FR-022.
+  const mid = el.getBoundingClientRect().left + el.clientWidth / 2;
+  let best = index.value;
+  let bestDist = Infinity;
+  el.querySelectorAll<HTMLElement>('.viewer-slide').forEach((slide) => {
+    const r = slide.getBoundingClientRect();
+    const d = Math.abs(r.left + r.width / 2 - mid);
+    if (d < bestDist) {
+      bestDist = d;
+      best = Number(slide.dataset.i);
+    }
+  });
+  if (best !== index.value) {
+    index.value = best;
     resetZoom();
     void scrollStrip();
   }
 }
 function jump(i: number): void {
-  const el = track.value;
+  // Clamp so keyboard nav at the ends (and any caller) can never land out of range. FR-012.
+  i = Math.max(0, Math.min(props.items.length - 1, i));
   resetZoom();
-  if (el) el.scrollLeft = i * el.clientWidth;
   index.value = i;
+  suppressScrollSync(); // the snap re-scroll this triggers must not revert the index
+  scrollToIndex(i);
 }
 async function scrollStrip(): Promise<void> {
   await nextTick();
-  strip.value?.querySelector<HTMLElement>(`.v-thumb[data-i="${index.value}"]`)?.scrollIntoView({
+  if (!strip.value || index.value >= props.items.length) return; // guard the shrink race (FR-007)
+  strip.value.querySelector<HTMLElement>(`.v-thumb[data-i="${index.value}"]`)?.scrollIntoView({
     inline: 'center',
     block: 'nearest',
   });
@@ -361,6 +438,12 @@ function onTouchMove(e: TouchEvent): void {
   if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
   if (dir === null && (Math.abs(dy) > 8 || Math.abs(dx) > 8)) {
     dir = Math.abs(dy) > Math.abs(dx) * 1.3 ? 'v' : 'h';
+    // A horizontal swipe owns the index from here — lift any programmatic-move suppression so the
+    // swipe's scroll (incl. one that lands within ~250ms of opening) updates the index. FR-013.
+    if (dir === 'h') {
+      clearTimeout(posTimer);
+      positioning = false;
+    }
   }
   if (dir === 'v') {
     dragY.value = dy;
@@ -468,6 +551,8 @@ function pauseOffscreenVideos(): void {
 // Item ids → last playback position (seconds), so a remounted player resumes there.
 const positions = reactive<Record<string, number>>({});
 watch(index, () => {
+  resetZoom(); // FR-010: zoom never bleeds onto an adjacent item, whatever changed the index
+  void scrollStrip(); // FR-013: keep the active strip thumb centered on every nav path (swipe/keyboard/jump)
   pauseOffscreenVideos();
   emit('index', index.value); // let the parent resolve this window's media
   void playCurrentIfVideo();
@@ -492,11 +577,51 @@ watch(() => props.start, (s) => {
 watch(() => props.open, (o) => {
   if (!o) for (const api of videoApis.values()) api.pauseSilent();
 });
+// The item set can shrink while the viewer is open (a message deleted, or its media
+// cleared to free space). Clamp the index back into range — don't rely on the scroll
+// container's incidental re-clamp + onScroll, which is timing/engine-dependent — drop
+// stale per-slide video handles (videoApis is keyed by slide index, so a shrink would
+// leave dangling entries pauseOffscreenVideos still pokes), and stop anything now
+// off-screen. The empty case is handled by the host's close-watch. FR-007.
+watch(() => props.items.length, (len) => {
+  if (len === 0) return;
+  if (index.value > len - 1) {
+    index.value = len - 1;
+    suppressScrollSync();
+    scrollToIndex(index.value); // direction-agnostic (RTL-safe), replaces raw scrollLeft. FR-022.
+  }
+  for (const i of [...videoApis.keys()]) if (i > len - 1 || !nearby(i)) videoApis.delete(i);
+  pauseOffscreenVideos();
+});
+
+// Keyboard navigation: ←/→ move between items (jump() clamps at the ends). Escape, Tab
+// focus-trap, and focus-restore-to-opener are handled by ion-modal itself, so we only add
+// arrow keys. A document listener gated on props.open catches the keys wherever focus sits
+// inside the modal; it's removed on unmount (FR-012). (Pattern mirrors PinPad.vue.)
+function onKeydown(e: KeyboardEvent): void {
+  if (!props.open) return;
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  // Physical arrow keys: ← always moves to the visually-left item, → to the visually-right one. In
+  // RTL the items are laid out right-to-left, so the visually-left item is the NEXT one (index+1) —
+  // flip the mapping by direction so the keys match the layout (and the swipe). FR-022.
+  const rtl = !!track.value && getComputedStyle(track.value).direction === 'rtl';
+  const back = rtl ? e.key === 'ArrowRight' : e.key === 'ArrowLeft';
+  jump(index.value + (back ? -1 : 1));
+}
+onMounted(() => document.addEventListener('keydown', onKeydown));
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown);
+  // Clear pending timers (module-level, shared across instances) so a stale timer can't fire on a
+  // freshly-reopened viewer — e.g. a posTimer clearing `positioning` mid-suppression on the new one.
+  clearTimeout(posTimer);
+  clearTimeout(tapTimer);
+});
 </script>
 
 <style scoped>
 .viewer-content {
-  --background: #000;
+  --background: var(--viewer-surface);
 }
 .v-top {
   position: absolute;
@@ -507,8 +632,8 @@ watch(() => props.open, (o) => {
   display: flex;
   align-items: center;
   padding: max(env(safe-area-inset-top), 10px) 8px 10px;
-  background: linear-gradient(rgba(0, 0, 0, 0.55), transparent);
-  color: #fff;
+  background: linear-gradient(var(--viewer-overlay-top), transparent);
+  color: var(--viewer-text);
   transition: opacity 0.2s ease;
 }
 /* Distraction-free: fade the chrome out (kept in the layout so taps still land). */
@@ -538,10 +663,38 @@ watch(() => props.open, (o) => {
   font-size: 12px;
   opacity: 0.75;
 }
+/* Position indicator — a third line under the sender/date in the centered title. FR-011. */
+.v-count {
+  margin-top: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+/* Floating "exit zoom" affordance, just under the top bar. FR-014. */
+.v-zoom-exit {
+  position: absolute;
+  top: calc(max(env(safe-area-inset-top), 10px) + 56px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: var(--viewer-chrome-bg);
+  color: var(--viewer-text);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
 .v-icon {
   background: none;
   border: none;
-  color: #fff;
+  color: var(--viewer-text);
   font-size: 24px;
   width: 40px;
   height: 36px;
@@ -557,11 +710,12 @@ watch(() => props.open, (o) => {
   position: absolute;
   top: 52px;
   right: 10px;
-  background: #2a2a2a;
+  background: var(--viewer-menu-bg);
+  border: 1px solid var(--app-border);
   border-radius: 12px;
   overflow: hidden;
   min-width: 180px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--viewer-shadow);
 }
 .v-menu button {
   display: flex;
@@ -571,7 +725,7 @@ watch(() => props.open, (o) => {
   padding: 12px 16px;
   background: none;
   border: none;
-  color: #fff;
+  color: var(--viewer-text);
   font-size: 15px;
   cursor: pointer;
 }
@@ -614,6 +768,20 @@ watch(() => props.open, (o) => {
   max-height: 100%;
   object-fit: contain;
 }
+/* Placeholder for a cleared / not-downloaded item — a calm icon + label, never a
+   broken image. FR-008. */
+.v-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--viewer-text);
+  opacity: 0.7;
+  font-size: 14px;
+}
+.v-missing ion-icon {
+  font-size: 48px;
+}
 .v-bottom {
   position: absolute;
   left: 0;
@@ -621,8 +789,8 @@ watch(() => props.open, (o) => {
   bottom: 0;
   z-index: 3;
   padding: 10px 10px max(env(safe-area-inset-bottom), 10px);
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
-  color: #fff;
+  background: linear-gradient(transparent, var(--viewer-overlay-bottom));
+  color: var(--viewer-text);
   transition: opacity 0.2s ease;
 }
 /* Video scrubber row, hosted in the chrome above the action buttons. */
@@ -631,7 +799,7 @@ watch(() => props.open, (o) => {
   align-items: center;
   gap: 8px;
   padding: 4px 2px 8px;
-  color: #fff;
+  color: var(--viewer-text);
 }
 .v-vidbtn {
   flex: none;
@@ -639,8 +807,8 @@ watch(() => props.open, (o) => {
   height: 34px;
   border: none;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
+  background: var(--viewer-pill-bg);
+  color: var(--viewer-text);
   font-size: 18px;
   display: flex;
   align-items: center;
@@ -671,7 +839,7 @@ watch(() => props.open, (o) => {
   width: 100%;
   height: 4px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--viewer-pill-bg);
 }
 .v-vidprog {
   height: 100%;
@@ -684,7 +852,7 @@ watch(() => props.open, (o) => {
   margin-bottom: 8px;
 }
 .v-react-pill {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--viewer-pill-bg);
   border-radius: 12px;
   padding: 2px 8px;
   font-size: 14px;
@@ -710,7 +878,7 @@ watch(() => props.open, (o) => {
   flex: 1;
   height: 40px;
   border: none;
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--viewer-pill-bg);
   border-radius: 20px;
   font-size: 22px;
   cursor: pointer;
@@ -719,8 +887,8 @@ watch(() => props.open, (o) => {
   display: flex;
   justify-content: space-around;
   align-items: center;
-  /* Dark translucent pill so the buttons read over a bright/tall image behind. */
-  background: rgba(0, 0, 0, 0.42);
+  /* Theme-tinted translucent pill so the buttons read over a bright/tall image behind. */
+  background: var(--viewer-chrome-bg);
   border-radius: 18px;
   padding: 2px 4px;
   backdrop-filter: blur(8px);
@@ -729,7 +897,7 @@ watch(() => props.open, (o) => {
 .v-actions button {
   background: none;
   border: none;
-  color: #fff;
+  color: var(--viewer-text);
   font-size: 25px;
   width: 46px;
   height: 44px;
@@ -759,12 +927,12 @@ watch(() => props.open, (o) => {
   border-radius: 6px;
   padding: 0;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--viewer-pill-bg);
   cursor: pointer;
   opacity: 0.6;
 }
 .v-thumb.on {
-  border-color: #fff;
+  border-color: var(--viewer-text);
   opacity: 1;
 }
 .v-thumb img {
@@ -772,5 +940,14 @@ watch(() => props.open, (o) => {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* Neutral icon for a strip thumbnail whose image hasn't resolved (large/legacy
+   album) — never a broken <img>. FR-008. */
+.v-thumb-missing {
+  width: 100%;
+  height: 100%;
+  padding: 10px;
+  color: var(--viewer-text);
+  opacity: 0.75; /* keeps the "unavailable" icon ≥ AA contrast over the light pill */
 }
 </style>

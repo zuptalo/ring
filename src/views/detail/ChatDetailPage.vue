@@ -268,7 +268,7 @@
                 <video-note
                   v-if="m.kind === 'video' && m.videoNote"
                   :mid="m.id"
-                  :src="mediaInfo[m.mediaId].url"
+                  :src="mediaInfo[m.mediaId].url || ''"
                   :poster="mediaInfo[m.mediaId].posterUrl"
                   :duration-sec="m.durationSec"
                 />
@@ -276,7 +276,7 @@
                   v-else-if="m.kind === 'voice'"
                   :mid="m.id"
                   :sender="m.outgoing ? 'You' : chat?.isGroup ? m.senderName : chat?.name ?? m.senderName"
-                  :src="mediaInfo[m.mediaId].url"
+                  :src="mediaInfo[m.mediaId].url || ''"
                   :outgoing="m.outgoing"
                   :avatar="!m.outgoing && !chat?.isGroup ? chat?.avatar : undefined"
                   :duration-sec="m.durationSec"
@@ -547,7 +547,7 @@
                   @click.stop="openMediaViewer(am.id)"
                 >
                   <template v-if="am.mediaId && mediaInfo[am.mediaId]?.posterUrl">
-                    <img :src="mediaInfo[am.mediaId].posterUrl" alt="" loading="lazy" decoding="async" />
+                    <img :src="mediaInfo[am.mediaId].gridUrl || mediaInfo[am.mediaId].posterUrl" alt="" loading="lazy" decoding="async" />
                     <ion-icon v-if="am.kind === 'video'" class="play-overlay-sm" :icon="playCircle" />
                     <div v-if="idx === 3 && albumOverlay(item.messages)" class="album-more">
                       +{{ albumOverlay(item.messages) }}
@@ -925,6 +925,7 @@ import {
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
+  backfillThumbTiers,
 } from '@/db/queries';
 import { groupProgress } from '@/services/message-status';
 import { getSelfUserId } from '@/services/auth';
@@ -1243,7 +1244,7 @@ const viewerItems = computed(() => {
     return {
       id: m.id,
       url: mi?.url ?? '', // '' until this item's window is resolved
-      thumb: mi?.posterUrl || m.posterData || mi?.url || '',
+      thumb: mi?.stripUrl || mi?.posterUrl || m.posterData || mi?.url || '', // strip tier (spec 1014)
       kind: m.kind === 'video' ? 'video' : 'image',
       caption: m.body,
       senderName: m.outgoing ? 'You' : chat.value?.isGroup ? m.senderName : chat.value?.name ?? m.senderName,
@@ -1279,16 +1280,8 @@ function onViewerDismiss(id: string): void {
   // Unpin the chat's media so the bounded cache can reclaim what's off-screen.
   viewerPins.value = new Set();
   evictMedia();
-  // Album members render under one bubble keyed by the first message's id.
-  const m = allMedia.value.find((x) => x.id === id);
-  let target = id;
-  if (m?.albumId) {
-    const first = allMedia.value
-      .filter((x) => x.albumId === m.albumId)
-      .sort((a, b) => a.timestamp - b.timestamp)[0];
-    if (first) target = first.id;
-  }
-  void nextTick(() => scrollToMessage(target));
+  // scrollToMessage maps album members to the album's first id (centralized), so pass the raw id.
+  void nextTick(() => scrollToMessage(id));
 }
 
 const viewerMsg = (id: string) => allMedia.value.find((m) => m.id === id);
@@ -1563,7 +1556,10 @@ function clearedIcon(kind: string): string {
 const forwardable = (m: Message) =>
   !m.outgoing &&
   !m.deleted &&
-  (((m.kind === 'image' || m.kind === 'video' || m.kind === 'file') && !!m.mediaId) ||
+  // Forwarding re-sends the original, so require it to still be on device — an original freed to
+  // save space (spec 1014 FR-018) keeps its mediaId + preview but has no `url`, so it isn't
+  // forwardable (otherwise the forward would silently send nothing).
+  (((m.kind === 'image' || m.kind === 'video' || m.kind === 'file') && !!m.mediaId && !!mediaInfo.value[m.mediaId]?.url) ||
     (m.kind === 'text' && hasLink(m.body)));
 
 const forwardOpen = ref(false);
@@ -1778,6 +1774,17 @@ async function centerWhenRendered(id: string, tries: number, instant = false): P
 // otherwise race). Read in the rows-watch below.
 let seeking = false;
 async function scrollToMessage(id: string, opts: { instant?: boolean } = {}): Promise<void> {
+  // Album photos render under ONE bubble keyed by the album's first message id, so a non-first
+  // member has no row/DOM node of its own. Map any album member to that first id — otherwise
+  // "Go to message"/jump on photo 2+ dead-ends with "Original message not available". Centralized
+  // here so every caller (viewer goto, swipe-dismiss, ?jump from all-media, replies) is covered.
+  const am = allMedia.value.find((x) => x.id === id);
+  if (am?.albumId) {
+    const first = allMedia.value
+      .filter((x) => x.albumId === am.albumId)
+      .sort((a, b) => a.timestamp - b.timestamp)[0];
+    if (first) id = first.id;
+  }
   seeking = true;
   try {
     if (document.querySelector(`[data-mid="${id}"]`)) {
@@ -2307,6 +2314,10 @@ onIonViewDidEnter(() => {
   void markChatRead(chatId);
   markChatSeenIfVisible(); // the initial open-at-first-unseen is owned by the first-load watch
   scheduleShareHint();
+  // Spec 1014: at idle (after the chat has painted), upgrade this chat's existing media to the
+  // grid/strip thumbnail tiers in small bounded batches, so legacy photos shared before tiers
+  // existed render right-sized in the album grid + viewer strip without a re-download.
+  scheduleThumbBackfill();
   // Entered with ?search=1 (from the contact-info "Search" action) → open search.
   if (route.query.search) showSearch.value = true;
   // Entered with ?jump=<id> (e.g. from the Starred list) → seek to that message; for a
@@ -2557,8 +2568,10 @@ async function loadNewer(): Promise<void> {
 
 // Resolve on-device media (Blobs) to object URLs for rendering.
 interface MediaInfo {
-  url: string;
-  posterUrl?: string;
+  url?: string; // full-resolution original; undefined once freed to save space (spec 1014 FR-018)
+  posterUrl?: string; // bubble tier (≤512) — chat bubble + viewer main fallback
+  gridUrl?: string; // grid tier (≤320) — album grid cells (spec 1014)
+  stripUrl?: string; // strip tier (≤128) — viewer bottom thumbnail strip (spec 1014)
   mime: string;
   name: string;
 }
@@ -2601,7 +2614,9 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
     const media = await get<Media>('media', m.mediaId);
     if (!media) continue;
     const info: MediaInfo = {
-      url: URL.createObjectURL(media.blob),
+      // undefined when the original was freed to save space (spec 1014 FR-018) — the bubble/grid
+      // still render from the tiers below, and the viewer falls back to the thumb / placeholder.
+      url: media.blob ? URL.createObjectURL(media.blob) : undefined,
       // Poster precedence: a persisted posterBlob, else the sender-embedded
       // posterData (a stable data URL). Feeding posterData into posterUrl means the
       // viewer, bottom slider and Media grid (which read posterUrl, not the message)
@@ -2611,6 +2626,10 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
         : m.kind === 'video'
           ? m.posterData
           : undefined,
+      // Right-sized tiers for the grid (320) and strip (128); fall back to the bubble
+      // tier (then resolved below for legacy media that predates the tiers). Spec 1014.
+      gridUrl: media.posterGrid ? URL.createObjectURL(media.posterGrid) : undefined,
+      stripUrl: media.posterStrip ? URL.createObjectURL(media.posterStrip) : undefined,
       mime: media.mime,
       name: media.name,
     };
@@ -2619,7 +2638,7 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
     // Videos: prefer the sent thumbnail (m.posterData, a stable data URL).
     // Otherwise derive one from the first frame and PERSIST it (posterBlob) so it
     // isn't regenerated/lost on every remount.
-    if (m.kind === 'video' && !info.posterUrl && !m.posterData) {
+    if (m.kind === 'video' && !info.posterUrl && !m.posterData && media.blob) {
       const blob = media.blob;
       const mid = m.mediaId;
       void generateVideoPoster(blob).then(async (poster) => {
@@ -2640,7 +2659,7 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
     // Images: derive a small thumbnail (stored as posterBlob) the bubble/grid/strip
     // render instead of the full image, so scroll-back doesn't re-decode full-res
     // photos. The full image is still used in the viewer. Persist so it's one-time.
-    if (m.kind === 'image' && !info.posterUrl) {
+    if (m.kind === 'image' && !info.posterUrl && media.blob) {
       const blob = media.blob;
       const mid = m.mediaId;
       void generateImageThumb(blob).then(async (thumb) => {
@@ -2666,15 +2685,43 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
       });
     }
     // Audio (shared music): pull embedded cover art for the track card.
-    if (m.kind === 'audio' && !info.posterUrl) {
+    if (m.kind === 'audio' && !info.posterUrl && media.blob) {
+      const blob = media.blob;
       const mid = m.mediaId;
-      void readAudioTags(media.blob).then((tags) => {
+      void readAudioTags(blob).then((tags) => {
         if (tags.cover && mediaInfo.value[mid]) {
           mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: URL.createObjectURL(tags.cover) };
         }
       });
     }
   }
+}
+
+// Spec 1014: idle, bounded backfill of this chat's media to the grid/strip tiers. Each slice
+// upgrades a handful of records and reschedules until the chat's media is fully tiered or we leave
+// the view, so it never competes with scroll/decoding on the hot path. Idempotent (already-tiered
+// records are skipped), so re-entering the chat just resumes where it left off.
+let thumbBackfillRunning = false;
+function scheduleThumbBackfill(): void {
+  if (thumbBackfillRunning) return;
+  thumbBackfillRunning = true;
+  const idle = (cb: () => void): void => {
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+    if (ric) ric(cb);
+    else window.setTimeout(cb, 400);
+  };
+  const tick = (): void => {
+    if (!viewActive.value) {
+      thumbBackfillRunning = false;
+      return;
+    }
+    const ids = chatMediaMsgs.value.map((m) => m.mediaId).filter((id): id is string => !!id);
+    void backfillThumbTiers(ids, 8).then((n) => {
+      if (n > 0 && viewActive.value) idle(tick); // upgraded a batch — more may remain, keep nibbling
+      else thumbBackfillRunning = false;
+    });
+  };
+  idle(tick);
 }
 
 // Release least-recently-used media that's neither on screen nor pinned, revoking
@@ -2685,8 +2732,10 @@ function evictMedia(): void {
   for (const id of selectEvictions(mediaLru, keep, MAX_MEDIA)) {
     const mi = mediaInfo.value[id];
     if (mi) {
-      URL.revokeObjectURL(mi.url);
+      if (mi.url) URL.revokeObjectURL(mi.url);
       if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
+      if (mi.gridUrl) URL.revokeObjectURL(mi.gridUrl);
+      if (mi.stripUrl) URL.revokeObjectURL(mi.stripUrl);
       delete mediaInfo.value[id];
     }
     const i = mediaLru.indexOf(id);
@@ -2712,15 +2761,36 @@ watch(
 // chat opens (the cache only lives for this view).
 onUnmounted(() => {
   for (const mi of Object.values(mediaInfo.value)) {
-    URL.revokeObjectURL(mi.url);
+    if (mi.url) URL.revokeObjectURL(mi.url);
     if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
+    if (mi.gridUrl) URL.revokeObjectURL(mi.gridUrl);
+    if (mi.stripUrl) URL.revokeObjectURL(mi.stripUrl);
   }
 });
 
-// Close the viewer if its last item was deleted. (Defined here, after `messages`,
-// because watch() evaluates its source once at setup.)
-watch(viewerItems, (items) => {
-  if (viewer.value.open && items.length === 0) viewer.value.open = false;
+// Keep the open viewer consistent when its item set changes under it — a message
+// deleted or its media cleared while the viewer is open (spec 1014 FR-007). Empty →
+// close and release the media pins (so eviction can reclaim the just-freed window);
+// otherwise reconcile the opener index so it never points past the end. (Defined here,
+// after `messages`, because watch() evaluates its source once at setup.)
+watch(viewerItems, (items, prev) => {
+  if (!viewer.value.open) return;
+  if (items.length === 0) {
+    viewer.value.open = false;
+    viewerPins.value = new Set();
+    evictMedia();
+    return;
+  }
+  if (viewer.value.start > items.length - 1) viewer.value.start = items.length - 1;
+  // Item set shrank (a message deleted / its media cleared while the viewer is open): drop
+  // pins for the now-gone media and reclaim its blob URLs immediately, instead of waiting
+  // for the next swipe to rebuild the window. Gated on an actual shrink so this never runs
+  // on the resolve hot path (viewerItems also recomputes as thumbnails decode). FR-007/009.
+  if (prev && items.length < prev.length) {
+    const liveIds = new Set(chatMediaMsgs.value.map((m) => m.mediaId).filter((id): id is string => !!id));
+    viewerPins.value = new Set([...viewerPins.value].filter((id) => liveIds.has(id)));
+    evictMedia();
+  }
 });
 
 // Jump to the newest message (the bottom of the natural-order list), e.g. after
