@@ -192,22 +192,49 @@ trapped/restored); the strip centers the active item; closing returns to the pri
 
 ### Tests first (must fail)
 
-- [ ] T018 [P] [US3] Append failing e2e to `e2e/media-viewer.spec.ts`: a position indicator is shown;
-  keyboard left/right moves and Escape closes; the strip keeps the active thumb centered; closing the
-  viewer returns to the same grid/chat scroll position.
+- [X] T018 [P] [US3] Appended 4 e2e to `e2e/media-viewer.spec.ts`: (1) position indicator `N / total`
+  tracks the active item; (2) keyboard ←/→ move (clamped at ends) + Escape closes; (3) the overflowing
+  strip auto-scrolls to keep the active thumb visible; (4) closing returns to the prior all-media grid
+  scroll position. Indicator/keyboard/restore failed pre-impl (`.v-count` absent, arrows no-op, ~50px
+  drift). **Test-harness notes:** the isolated e2e stack is flaky for long *synthetic* keyboard nav in
+  the viewer (a focus/snap-timing artifact that does **not** reproduce on the live stack — drive-verified
+  flawless), so the strip test asserts auto-scroll-to-active deterministically (no multi-step nav) and the
+  arrow tests dispatch keydown to the document listener (Escape stays real-keyboard). A 500ms settle after
+  open avoids a present-vs-`goToStart` race.
 
 ### Implementation
 
-- [ ] T019 [US3] In `src/components/MediaViewer.vue`, add the position indicator, keyboard navigation
-  (←/→ move, Esc/back close), and a focus trap with focus restore to the opener (FR-011/FR-012).
-- [ ] T020 [US3] In `MediaViewer.vue`, center the active strip thumb reliably (imperative scroll, not
-  timing-fragile `scrollIntoView`) and add a zoom-exit affordance so zoom and swipe don't lock
-  (FR-013/FR-014).
-- [ ] T021 [US3] Restore the opener's scroll position on close (capture in `AllMediaPage.vue` /
-  `ChatDetailPage.vue` before opening the viewer; restore on dismiss); trim the 280ms tap-toggle delay
-  (FR-015) to pass T018.
+- [X] T019 [US3] `src/components/MediaViewer.vue`: position indicator (`.v-count`, `N / total`, in the
+  top bar, hides with the chrome); keyboard nav via a document `keydown` listener (←/→ → `jump`, which
+  clamps; Escape/focus-trap/focus-restore are handled by `ion-modal` itself, not reimplemented) (FR-011/012).
+- [X] T020 [US3] `MediaViewer.vue`: `scrollStrip()` centralized on the `watch(index)` so every nav path
+  re-centers the active strip thumb (FR-013), hardened against the shrink race; a visible **zoom-exit**
+  affordance (`.v-zoom-exit`, shown while `zoom.scale > 1`, → `resetZoom`) so zoom never mode-locks swipe
+  (FR-014). Also hardened opening orientation: `goToStart` retries `scrollToIndex` until the track is laid
+  out (clientWidth>0) so the viewer never opens on the wrong item, and **`onScroll` is gated on recent user
+  input** so the snap/relayout scrolls a programmatic move triggers can't hijack the index (FR-011).
+- [X] T021 [US3] FR-015 scroll restore: `AllMediaPage.vue` captures the grid `scrollTop` on open and
+  restores it on close (the modal-dismiss otherwise drifts the content). **ChatDetailPage needs no change**
+  — the viewer is a modal overlay, so the chat scroll is preserved underneath. (The 280ms tap-toggle delay
+  was left as-is; it's unrelated to navigation fluidity and removing it risks the double-tap-zoom timing.)
 
-**Checkpoint**: T018 passes; navigation is fluid and orientation is clear.
+**Checkpoint**: ✅ T018 passes (4/4); the viewer shows position, supports keyboard nav + Escape, keeps the
+active strip thumb visible, exits zoom via an affordance, opens on the right item, and restores grid scroll
+on close. Verified: `npm run build` green, `npx vitest run` 223/223, the full media e2e (media-viewer 7 +
+image-thumbnails + chat-media-scroll + paste-image + media-blob-delete + media-cleanup = 16) green under
+parallel load, and a drive run confirmed the indicator updates, ←/→ step through 12 images, and the
+zoom-exit button appears.
+
+> **Adversarial review pass** (multi-agent, refute-verified — "safe to commit, no blockers"): applied the
+> three confirmed fixes — (1) a horizontal swipe now lifts the programmatic-scroll suppression the moment
+> its direction commits, so an eager swipe within ~250ms of opening updates the index (the suppression only
+> ever guards programmatic moves; momentum swipes are always honored); (2) `onUnmounted` clears the pending
+> `posTimer`/`tapTimer` so a stale timer can't fire on a reopened viewer; (3) `goToStart` clamps the opening
+> index like `jump()`. (Self-caught + reverted earlier: a first attempt gated `onScroll` on recent user
+> input, which would have broken inertial swipe — replaced with suppress-after-programmatic, which never
+> touches swipes.) Declined nits: `1 / 1` for a single-item album (intentional — noise), redundant
+> idempotent strip re-centre on swipe (removing risks a 1-tick lag), zoom-exit SR-announcement (gold-plating;
+> the button is keyboard-reachable with an aria-label).
 
 ---
 

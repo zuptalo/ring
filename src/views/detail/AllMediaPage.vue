@@ -18,7 +18,7 @@
       </ion-toolbar>
     </ion-header>
 
-    <ion-content :fullscreen="true">
+    <ion-content ref="contentEl" :fullscreen="true">
       <!-- MEDIA: month-grouped grid of thumbnails -->
       <template v-if="tab === 'media'">
         <template v-for="grp in mediaGroups" :key="grp.label">
@@ -76,8 +76,8 @@
       :open="viewer.open"
       :items="viewerItems"
       :start="viewer.start"
-      @close="viewer.open = false"
-      @dismiss="viewer.open = false"
+      @close="closeViewer"
+      @dismiss="closeViewer"
       @react="(id, e) => react(id, e)"
       @favorite="(id) => fav(id)"
       @del="(id) => del(id)"
@@ -92,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonButton, IonButtons, IonBackButton, IonSegment, IonSegmentButton,
@@ -309,9 +309,25 @@ function reactionGroups(m: Message): Array<{ emoji: string; count: number }> {
   for (const r of m.reactions ?? []) map.set(r.emoji, (map.get(r.emoji) ?? 0) + 1);
   return [...map.entries()].map(([emoji, count]) => ({ emoji, count }));
 }
-function openViewer(id: string): void {
+// The full-screen viewer is a modal over the grid; capture the grid's scroll position on
+// open and restore it on close so the user lands exactly where they left (the modal
+// dismiss otherwise drifts the underlying content). FR-015.
+const contentEl = ref<{ $el?: HTMLElement } | null>(null);
+let savedScrollTop = 0;
+// ion-content's scroll element lives on the host ($el), reached via getScrollElement().
+async function gridScrollEl(): Promise<HTMLElement | undefined> {
+  const host = contentEl.value?.$el as unknown as { getScrollElement?: () => Promise<HTMLElement> } | undefined;
+  return host?.getScrollElement ? await host.getScrollElement() : undefined;
+}
+async function openViewer(id: string): Promise<void> {
+  savedScrollTop = (await gridScrollEl())?.scrollTop ?? 0;
   const start = media.value.findIndex((m) => m.id === id);
   viewer.value = { open: true, ids: media.value.map((m) => m.id), start: Math.max(0, start) };
+}
+async function closeViewer(): Promise<void> {
+  viewer.value.open = false;
+  await nextTick();
+  (await gridScrollEl())?.scrollTo({ top: savedScrollTop });
 }
 watch(viewerItems, (items) => {
   if (!viewer.value.open) return;

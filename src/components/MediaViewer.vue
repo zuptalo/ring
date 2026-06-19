@@ -16,6 +16,9 @@
         <div class="v-title">
           <div class="v-sender">{{ cur?.senderName }}</div>
           <div class="v-when">{{ cur?.when }}</div>
+          <!-- Position indicator (current / total) as a third title line, so you always know
+               where you are in a multi-item album. Auto-hides with the chrome. FR-011. -->
+          <div v-if="items.length > 1" class="v-count" aria-live="polite">{{ index + 1 }} / {{ items.length }}</div>
         </div>
         <button v-if="cur?.outgoing" class="v-icon" aria-label="Caption" @click="$emit('caption', cur.id)">
           <ion-icon :icon="pencil" />
@@ -78,6 +81,12 @@
           </div>
         </div>
       </div>
+
+      <!-- Visible escape hatch while zoomed: pinch/double-tap also exit, but a tappable
+           affordance means a user can never get mode-locked (zoom blocks swiping). FR-014. -->
+      <button v-if="zoom.scale > 1" class="v-zoom-exit" aria-label="Exit zoom" @click="resetZoom">
+        <ion-icon :icon="contractOutline" />
+      </button>
 
       <!-- Bottom: video scrubber (if a video) · reactions · caption · quick-react ·
            actions · thumbnail strip. The video's scrubber/speed/PiP row is hosted HERE,
@@ -164,12 +173,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue';
 import { IonModal, IonContent, IonIcon } from '@ionic/vue';
 import {
   chevronBack, pencil, ellipsisHorizontal, imagesOutline, chatbubbleOutline,
   happyOutline, arrowUndoOutline, shareOutline, downloadOutline, star, starOutline, trashOutline,
-  play, pause, browsersOutline, imageOutline,
+  play, pause, browsersOutline, imageOutline, contractOutline,
 } from 'ionicons/icons';
 import SpeedPill from './SpeedPill.vue';
 import VideoPlayer from './VideoPlayer.vue';
@@ -231,16 +240,42 @@ const cur = computed(() => props.items[index.value] ?? props.items[0]);
 // videos never load or autoplay.
 const nearby = (i: number) => Math.abs(i - index.value) <= 1;
 
+// onScroll derives the index from the scroll position for genuine user swipes (including
+// inertial/momentum scroll). But we also move the track PROGRAMMATICALLY (open, keyboard,
+// jump), and `scroll-snap: x mandatory` + the window-resolve re-layout then fire their own
+// scroll events that can round to the wrong slide and hijack the index. So we suppress
+// onScroll for a brief window after a programmatic move ONLY — swipes never call this, so
+// their (possibly long, momentum) scroll is always honored. FR-011/013.
+let positioning = false;
+let posTimer: ReturnType<typeof setTimeout> | undefined;
+function suppressScrollSync(): void {
+  positioning = true;
+  clearTimeout(posTimer);
+  posTimer = setTimeout(() => (positioning = false), 250);
+}
+// Position the track at slide i. The track may not be laid out yet on modal did-present
+// (clientWidth 0) — retry on the next frame so we never land on the wrong item.
+function scrollToIndex(i: number, tries = 8): void {
+  const el = track.value;
+  if (!el) return;
+  if (el.clientWidth) {
+    el.scrollLeft = i * el.clientWidth;
+    return;
+  }
+  if (tries > 0) requestAnimationFrame(() => scrollToIndex(i, tries - 1));
+}
 function goToStart(): void {
-  index.value = props.start;
+  suppressScrollSync(); // protect the opening position from layout-induced scroll events
+  // Clamp like jump(): props.start can be stale if items shrank between the parent computing it
+  // and did-present firing, so never open on an out-of-range index. FR-007/011.
+  index.value = Math.max(0, Math.min(props.items.length - 1, props.start));
   menu.value = false;
   showEmojis.value = false;
   chromeHidden.value = false;
   resetZoom();
-  const el = track.value;
-  if (el) el.scrollLeft = props.start * el.clientWidth;
+  scrollToIndex(index.value);
   void scrollStrip();
-  emit('index', props.start); // resolve the opening item's window (index may not change)
+  emit('index', index.value); // resolve the opening item's window (index may not change)
   void playCurrentIfVideo();
 }
 // Autoplay the video we've landed on (the off-screen ones are paused by the index
@@ -253,6 +288,10 @@ async function playCurrentIfVideo(): Promise<void> {
   if (api && !api.playing) api.toggle();
 }
 function onScroll(): void {
+  // Ignore the snap/layout/window-resolve scrolls that a programmatic move (open/keyboard/jump)
+  // triggers — they can round to the wrong slide and revert the index. User swipes don't suppress,
+  // so their scroll (incl. momentum) is always honored. FR-011/013.
+  if (positioning) return;
   const el = track.value;
   if (!el?.clientWidth) return;
   const i = Math.round(el.scrollLeft / el.clientWidth);
@@ -263,14 +302,17 @@ function onScroll(): void {
   }
 }
 function jump(i: number): void {
-  const el = track.value;
+  // Clamp so keyboard nav at the ends (and any caller) can never land out of range. FR-012.
+  i = Math.max(0, Math.min(props.items.length - 1, i));
   resetZoom();
-  if (el) el.scrollLeft = i * el.clientWidth;
   index.value = i;
+  suppressScrollSync(); // the snap re-scroll this triggers must not revert the index
+  scrollToIndex(i);
 }
 async function scrollStrip(): Promise<void> {
   await nextTick();
-  strip.value?.querySelector<HTMLElement>(`.v-thumb[data-i="${index.value}"]`)?.scrollIntoView({
+  if (!strip.value || index.value >= props.items.length) return; // guard the shrink race (FR-007)
+  strip.value.querySelector<HTMLElement>(`.v-thumb[data-i="${index.value}"]`)?.scrollIntoView({
     inline: 'center',
     block: 'nearest',
   });
@@ -376,6 +418,12 @@ function onTouchMove(e: TouchEvent): void {
   if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
   if (dir === null && (Math.abs(dy) > 8 || Math.abs(dx) > 8)) {
     dir = Math.abs(dy) > Math.abs(dx) * 1.3 ? 'v' : 'h';
+    // A horizontal swipe owns the index from here — lift any programmatic-move suppression so the
+    // swipe's scroll (incl. one that lands within ~250ms of opening) updates the index. FR-013.
+    if (dir === 'h') {
+      clearTimeout(posTimer);
+      positioning = false;
+    }
   }
   if (dir === 'v') {
     dragY.value = dy;
@@ -484,6 +532,7 @@ function pauseOffscreenVideos(): void {
 const positions = reactive<Record<string, number>>({});
 watch(index, () => {
   resetZoom(); // FR-010: zoom never bleeds onto an adjacent item, whatever changed the index
+  void scrollStrip(); // FR-013: keep the active strip thumb centered on every nav path (swipe/keyboard/jump)
   pauseOffscreenVideos();
   emit('index', index.value); // let the parent resolve this window's media
   void playCurrentIfVideo();
@@ -523,6 +572,29 @@ watch(() => props.items.length, (len) => {
   }
   for (const i of [...videoApis.keys()]) if (i > len - 1 || !nearby(i)) videoApis.delete(i);
   pauseOffscreenVideos();
+});
+
+// Keyboard navigation: ←/→ move between items (jump() clamps at the ends). Escape, Tab
+// focus-trap, and focus-restore-to-opener are handled by ion-modal itself, so we only add
+// arrow keys. A document listener gated on props.open catches the keys wherever focus sits
+// inside the modal; it's removed on unmount (FR-012). (Pattern mirrors PinPad.vue.)
+function onKeydown(e: KeyboardEvent): void {
+  if (!props.open) return;
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    jump(index.value - 1);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    jump(index.value + 1);
+  }
+}
+onMounted(() => document.addEventListener('keydown', onKeydown));
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown);
+  // Clear pending timers (module-level, shared across instances) so a stale timer can't fire on a
+  // freshly-reopened viewer — e.g. a posTimer clearing `positioning` mid-suppression on the new one.
+  clearTimeout(posTimer);
+  clearTimeout(tapTimer);
 });
 </script>
 
@@ -569,6 +641,34 @@ watch(() => props.items.length, (len) => {
 .v-when {
   font-size: 12px;
   opacity: 0.75;
+}
+/* Position indicator — a third line under the sender/date in the centered title. FR-011. */
+.v-count {
+  margin-top: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+/* Floating "exit zoom" affordance, just under the top bar. FR-014. */
+.v-zoom-exit {
+  position: absolute;
+  top: calc(max(env(safe-area-inset-top), 10px) + 56px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .v-icon {
   background: none;
