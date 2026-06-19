@@ -29,9 +29,13 @@
               :key="m.id"
               type="button"
               class="media-cell"
+              :aria-label="m.mediaId && info[m.mediaId] ? (m.kind === 'video' ? 'Video' : 'Photo') : 'Media unavailable'"
               @click="openViewer(m.id)"
             >
-              <img v-if="m.mediaId && info[m.mediaId]" :src="info[m.mediaId].gridUrl || info[m.mediaId].posterUrl || info[m.mediaId].url" alt="" />
+              <img v-if="m.mediaId && info[m.mediaId]" :src="info[m.mediaId].gridUrl || info[m.mediaId].posterUrl || info[m.mediaId].url" :alt="m.kind === 'video' ? 'Video' : 'Photo'" />
+              <!-- Not-yet-resolved / cleared cell: a calm placeholder, not an empty tile or
+                   broken <img>. FR-008. -->
+              <div v-else class="cell-missing" data-state="missing"><ion-icon :icon="imageOutline" aria-hidden="true" /></div>
               <ion-icon v-if="m.kind === 'video'" class="cell-play" :icon="playCircle" />
             </button>
           </div>
@@ -88,13 +92,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonButton, IonButtons, IonBackButton, IonSegment, IonSegmentButton,
   IonLabel, IonContent, IonList, IonItem, IonIcon, IonNote, actionSheetController, alertController,
 } from '@ionic/vue';
-import { playCircle, linkOutline, documentOutline, trashOutline } from 'ionicons/icons';
+import { playCircle, linkOutline, documentOutline, trashOutline, imageOutline } from 'ionicons/icons';
 import { openExternal } from '@/utils/external';
 import {
   listChatMedia, listChatDocs, listChatLinks, getChat,
@@ -166,9 +170,21 @@ const links = useLiveQuery(() => listChatLinks(chatId), ['messages'], [] as Mess
 // Resolve media blobs to object URLs (+ video posters).
 interface Info { url: string; posterUrl?: string; gridUrl?: string; stripUrl?: string; mime: string; name: string }
 const info = ref<Record<string, Info>>({});
+function revokeInfo(rec: Info): void {
+  for (const u of [rec.url, rec.posterUrl, rec.gridUrl, rec.stripUrl]) if (u) URL.revokeObjectURL(u);
+}
 watch(
   [media, docs],
   async () => {
+    // Release object URLs for media that has vanished (deleted / cleared while this page
+    // is open) so swiping/clearing a large album doesn't leak decoded blobs. FR-009.
+    const live = new Set([...media.value, ...docs.value].map((m) => m.mediaId).filter(Boolean));
+    for (const [id, rec] of Object.entries(info.value)) {
+      if (!live.has(id)) {
+        revokeInfo(rec);
+        delete info.value[id];
+      }
+    }
     for (const m of [...media.value, ...docs.value]) {
       if (m.mediaId && !info.value[m.mediaId]) {
         const md = await get<Media>('media', m.mediaId);
@@ -298,7 +314,17 @@ function openViewer(id: string): void {
   viewer.value = { open: true, ids: media.value.map((m) => m.id), start: Math.max(0, start) };
 }
 watch(viewerItems, (items) => {
-  if (viewer.value.open && items.length === 0) viewer.value.open = false;
+  if (!viewer.value.open) return;
+  // Reconcile the open viewer when media is deleted/cleared under it (spec 1014 FR-007):
+  // close on empty, else keep the opener index in range (MediaViewer clamps its own).
+  if (items.length === 0) viewer.value.open = false;
+  else if (viewer.value.start > items.length - 1) viewer.value.start = items.length - 1;
+});
+
+// Release all resolved object URLs when leaving the page so they don't leak across
+// visits (the info cache only lives for this view). FR-009.
+onBeforeUnmount(() => {
+  for (const rec of Object.values(info.value)) revokeInfo(rec);
 });
 
 const react = (id: string, emoji: string) => void reactToMessage(id, emoji);
@@ -366,6 +392,19 @@ const goChat = () => router.push(`/chat/${chatId}`);
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* Placeholder cell for media that hasn't resolved / was cleared. FR-008. */
+.cell-missing {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--app-surface);
+  color: var(--ion-color-medium, #92949c);
+}
+.cell-missing ion-icon {
+  font-size: 28px;
 }
 .cell-play {
   position: absolute;

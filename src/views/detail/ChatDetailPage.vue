@@ -2759,10 +2759,29 @@ onUnmounted(() => {
   }
 });
 
-// Close the viewer if its last item was deleted. (Defined here, after `messages`,
-// because watch() evaluates its source once at setup.)
-watch(viewerItems, (items) => {
-  if (viewer.value.open && items.length === 0) viewer.value.open = false;
+// Keep the open viewer consistent when its item set changes under it — a message
+// deleted or its media cleared while the viewer is open (spec 1014 FR-007). Empty →
+// close and release the media pins (so eviction can reclaim the just-freed window);
+// otherwise reconcile the opener index so it never points past the end. (Defined here,
+// after `messages`, because watch() evaluates its source once at setup.)
+watch(viewerItems, (items, prev) => {
+  if (!viewer.value.open) return;
+  if (items.length === 0) {
+    viewer.value.open = false;
+    viewerPins.value = new Set();
+    evictMedia();
+    return;
+  }
+  if (viewer.value.start > items.length - 1) viewer.value.start = items.length - 1;
+  // Item set shrank (a message deleted / its media cleared while the viewer is open): drop
+  // pins for the now-gone media and reclaim its blob URLs immediately, instead of waiting
+  // for the next swipe to rebuild the window. Gated on an actual shrink so this never runs
+  // on the resolve hot path (viewerItems also recomputes as thumbnails decode). FR-007/009.
+  if (prev && items.length < prev.length) {
+    const liveIds = new Set(chatMediaMsgs.value.map((m) => m.mediaId).filter((id): id is string => !!id));
+    viewerPins.value = new Set([...viewerPins.value].filter((id) => liveIds.has(id)));
+    evictMedia();
+  }
 });
 
 // Jump to the newest message (the bottom of the natural-order list), e.g. after

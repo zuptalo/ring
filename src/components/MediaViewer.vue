@@ -51,7 +51,19 @@
             <!-- Only the current slide and its neighbours render real media, so a
                  media-heavy chat never decodes everything at once (OOM). -->
             <template v-if="it.kind === 'image'">
-              <img v-if="i === index || nearby(i)" :src="it.url || it.thumb" alt="" @click="onMediaClick" @dblclick="onMediaDblClick" />
+              <img
+                v-if="(i === index || nearby(i)) && (it.url || it.thumb)"
+                :src="it.url || it.thumb"
+                :alt="it.caption || 'Photo'"
+                @click="onMediaClick"
+                @dblclick="onMediaDblClick"
+              />
+              <!-- The full image / thumbnail is gone (cleared to free space, or not yet
+                   downloaded): a clear placeholder, never a broken <img>. FR-008. -->
+              <div v-else-if="i === index || nearby(i)" class="v-missing" data-state="missing">
+                <ion-icon :icon="imageOutline" aria-hidden="true" />
+                <span>Photo unavailable</span>
+              </div>
             </template>
             <video-player
               v-else-if="i === index || nearby(i)"
@@ -140,7 +152,10 @@
             :data-i="i"
             @click="jump(i)"
           >
-            <img :src="it.thumb" alt="" />
+            <!-- An unresolved/cleared item has no thumbnail — show a neutral tile, never a
+                 broken <img>. FR-008. -->
+            <img v-if="it.thumb" :src="it.thumb" alt="" />
+            <ion-icon v-else :icon="imageOutline" class="v-thumb-missing" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -154,7 +169,7 @@ import { IonModal, IonContent, IonIcon } from '@ionic/vue';
 import {
   chevronBack, pencil, ellipsisHorizontal, imagesOutline, chatbubbleOutline,
   happyOutline, arrowUndoOutline, shareOutline, downloadOutline, star, starOutline, trashOutline,
-  play, pause, browsersOutline,
+  play, pause, browsersOutline, imageOutline,
 } from 'ionicons/icons';
 import SpeedPill from './SpeedPill.vue';
 import VideoPlayer from './VideoPlayer.vue';
@@ -468,6 +483,7 @@ function pauseOffscreenVideos(): void {
 // Item ids → last playback position (seconds), so a remounted player resumes there.
 const positions = reactive<Record<string, number>>({});
 watch(index, () => {
+  resetZoom(); // FR-010: zoom never bleeds onto an adjacent item, whatever changed the index
   pauseOffscreenVideos();
   emit('index', index.value); // let the parent resolve this window's media
   void playCurrentIfVideo();
@@ -491,6 +507,22 @@ watch(() => props.start, (s) => {
 // Closing the viewer stops any playing video (FR-006).
 watch(() => props.open, (o) => {
   if (!o) for (const api of videoApis.values()) api.pauseSilent();
+});
+// The item set can shrink while the viewer is open (a message deleted, or its media
+// cleared to free space). Clamp the index back into range — don't rely on the scroll
+// container's incidental re-clamp + onScroll, which is timing/engine-dependent — drop
+// stale per-slide video handles (videoApis is keyed by slide index, so a shrink would
+// leave dangling entries pauseOffscreenVideos still pokes), and stop anything now
+// off-screen. The empty case is handled by the host's close-watch. FR-007.
+watch(() => props.items.length, (len) => {
+  if (len === 0) return;
+  if (index.value > len - 1) {
+    index.value = len - 1;
+    const el = track.value;
+    if (el) el.scrollLeft = index.value * el.clientWidth;
+  }
+  for (const i of [...videoApis.keys()]) if (i > len - 1 || !nearby(i)) videoApis.delete(i);
+  pauseOffscreenVideos();
 });
 </script>
 
@@ -613,6 +645,20 @@ watch(() => props.open, (o) => {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+/* Placeholder for a cleared / not-downloaded item — a calm icon + label, never a
+   broken image. FR-008. */
+.v-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  opacity: 0.7;
+  font-size: 14px;
+}
+.v-missing ion-icon {
+  font-size: 48px;
 }
 .v-bottom {
   position: absolute;
@@ -772,5 +818,13 @@ watch(() => props.open, (o) => {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* Neutral icon for a strip thumbnail whose image hasn't resolved (large/legacy
+   album) — never a broken <img>. FR-008. */
+.v-thumb-missing {
+  width: 100%;
+  height: 100%;
+  padding: 10px;
+  color: rgba(255, 255, 255, 0.5);
 }
 </style>

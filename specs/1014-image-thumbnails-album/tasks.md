@@ -135,24 +135,50 @@ broken image/crash; a 200-image swipe keeps memory bounded.
 
 ### Tests first (must fail)
 
-- [ ] T014 [P] [US2] Write a failing e2e in `e2e/media-viewer.spec.ts`: deleting/clearing the viewed
-  item (or all chat media) while the viewer is open → placeholder or graceful close (no broken image /
-  out-of-range); an undownloaded/cleared item shows a placeholder; the active item stays correct after
-  the item set changes.
+- [X] T014 [P] [US2] e2e `e2e/media-viewer.spec.ts` (3 tests): (1) delete the **last** viewed item →
+  index clamps, exactly one strip thumb active, no broken `<img>`; delete the rest → viewer closes
+  gracefully. (2) clear chat media while viewing → graceful close, no broken image. (3) **TDD-failing**
+  FR-008: a 200-message album (100 images) opened on the newest leaves the oldest unresolved — the strip
+  rendered **75 broken `<img src="">`** pre-fix, **0** post-fix.
+
+> **Finding (recorded):** the viewer was already crash-robust against the headline "out-of-range" case —
+> the horizontal scroll-snap track auto-clamps `scrollLeft` on shrink and `onScroll` re-syncs `index`,
+> so deleting the viewed item never threw. T015's index clamp is therefore made an **explicit** guarantee
+> (not reliant on incidental browser scroll-clamp timing), and the genuine, demonstrable defect was the
+> FR-008 broken `<img>` for unresolved/cleared items (test 3). We do **not** retain cleared items in
+> `chatMediaMsgs` (no `isCleared` field): a cleared/deleted item leaves the set → the viewer clamps/closes
+> (FR-007) and the in-chat bubble keeps its existing `.media-cleared` placeholder.
 
 ### Implementation
 
-- [ ] T015 [US2] In `src/components/MediaViewer.vue`, clamp/guard the index on item-set changes (watch
-  items length; reset/close on empty), release stale per-item video-player references, and bounds-check
-  the `nearby()` render window (no `items[-1]`) (FR-007).
-- [ ] T016 [US2] In `MediaViewer.vue` (and the `viewerItems` source in `ChatDetailPage.vue`/
-  `AllMediaPage.vue`), render a clear placeholder for cleared/not-downloaded items instead of an empty
-  `<img>` (FR-008).
-- [ ] T017 [US2] In `MediaViewer.vue`, reset zoom per item (no fast-swipe bleed) and add full-resolution
-  LRU eviction of off-screen viewer images using the already-imported `selectEvictions` util (hold a
-  small fixed window; revoke evicted object URLs) to pass T014 (FR-009/FR-010).
+- [X] T015 [US2] `src/components/MediaViewer.vue`: `watch(() => props.items.length)` clamps `index` into
+  range and **releases stale per-slide video handles** (`videoApis` keys where `i > len-1 || !nearby(i)`)
+  + `pauseOffscreenVideos`; the empty case is handled by each host's close-watch. Host close-watches
+  (`ChatDetailPage.vue`, `AllMediaPage.vue`) reconcile `viewer.start` on shrink (and ChatDetailPage
+  clears `viewerPins` + `evictMedia()` on empty so the freed window is reclaimed) (FR-007).
+- [X] T016 [US2] Placeholders instead of empty `<img>`: `MediaViewer.vue` main slide (`.v-missing`
+  "Photo unavailable") and strip (`.v-thumb-missing` icon) when `!url && !thumb`; `AllMediaPage.vue`
+  grid cell (`.cell-missing`) when info is absent. The placeholders are `v-else` of the tier/url checks,
+  so a present `gridUrl`/`stripUrl`/`posterUrl` tier always wins (no US1 shadowing) (FR-008).
+- [X] T017 [US2] FR-010: `resetZoom()` centralized on the first line of `watch(index)` so zoom never
+  bleeds onto an adjacent item, whatever path changed the index. FR-009: **not** a viewer-side
+  `selectEvictions` rewrite (that task premise was wrong — `selectEvictions` was never imported in the
+  viewer, and the parent already bounds memory via `viewerPins` + `evictMedia` + the `nearby()` render
+  gate that caps decoded `<img>` to 3). The real leak was `AllMediaPage` never revoking its `info`
+  object URLs — now revoked on media-vanish (in the resolve watch) and on `onBeforeUnmount` (FR-009).
 
-**Checkpoint**: T014 passes; the viewer is crash-proof under item mutation and bounded in memory.
+**Checkpoint**: ✅ T014 passes (3/3); the viewer clamps + recovers under item mutation, never renders a
+broken image, resets zoom per item, and AllMediaPage no longer leaks object URLs. Verified: `npm run
+build` green, `npx vitest run` 223/223, e2e media-viewer (4) + image-thumbnails + the 4 existing media
+specs (chat-media-scroll, paste-image, media-blob-delete, media-cleanup) green.
+
+> **Adversarial review pass** (multi-agent, refute-verified): applied **H1** — on a shrink-while-open
+> the ChatDetailPage close-watch now prunes `viewerPins` of vanished media + `evictMedia()` (gated on an
+> actual shrink, off the resolve hot path) so a deleted item's blob URLs are reclaimed immediately, not
+> at the next swipe (FR-009); and **H2** — the AllMediaPage grid `<button>` gained an `aria-label`
+> (Photo/Video/"Media unavailable"). Declined M1 (non-occurring, guarded by `!info.posterUrl`; the
+> proposed `blob:` guard would mis-revoke the aliased `info.url`) and L1 (the explicit pre-assignment
+> `resetZoom()` calls prevent a 1-frame zoom flash before the index watch flushes).
 
 ---
 
