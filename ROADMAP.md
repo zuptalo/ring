@@ -32,6 +32,7 @@ Specs are grouped by category band; status moves
 | [1010](specs/1010-group-seen-receipts/spec.md) | Group "Seen" Receipts — Durable, Private, and Counted | 🟢 shipped |
 | [1011](specs/1011-smooth-chat-history/spec.md) | Smooth Chat-History Scroll-Up (verified by a multi-user end-to-end exercise) | 🟢 shipped |
 | [1012](specs/1012-scroll-to-bottom-button/spec.md) | Hovering "Scroll to Latest" Button in Chat | ⚪ planned |
+| [1013](specs/1013-jump-pill-seen-receipts/spec.md) | Expanding "Jump to Latest" Pill + Visibility-Driven Seen Receipts | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
