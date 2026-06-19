@@ -32,10 +32,10 @@ navigation (P2) · US4 cleanup (P2) · US5 a11y/RTL/theme + perf (P2).
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Capture the baseline green gates before any change: `npm run build`, `npx vitest run`,
+- [X] T001 Capture the baseline green gates before any change: `npm run build`, `npx vitest run`,
   `cd server && go build ./... && go vet ./... && go test ./...`, and `make db-up && npm run test:e2e`
   (media specs) — must stay green throughout (Constitution VII).
-- [ ] T002 [P] If the pure thumbnail-size/derive logic lands in a new `src/utils/*.ts` module, add it
+- [X] T002 [P] If the pure thumbnail-size/derive logic lands in a new `src/utils/*.ts` module, add it
   to `vitest.config.ts` `coverage.include` so it lands under the gated floor (mirror spec 1011/1012/1013).
 
 **Checkpoint**: baseline gates green; coverage gate ready for the new pure module.
@@ -49,22 +49,23 @@ navigation (P2) · US4 cleanup (P2) · US5 a11y/RTL/theme + perf (P2).
 
 ### Tests first (must fail)
 
-- [ ] T003 [P] Write a failing unit test for the v7→v8 migration in `src/db/idb.migration.test.ts`:
-  `migrateMessageToV8(row)` is additive/no-op (preserves all fields; existing `Media` rows keep
-  `blob`/`posterBlob`; never throws on malformed/`null`), mirroring the `migrateMessageToV6/V7` tests.
-- [ ] T004 [P] Write a failing vitest for the pure thumbnail-size/derive logic (e.g.
+- [X] T003 [P] **N/A — no row transform.** The 1014 change adds optional `posterGrid`/`posterStrip`
+  Blob fields to `Media` records, which IndexedDB stores without a per-row migration; the existing
+  migrations are *message*-store transforms, so there is no `migrateMessageToV8` to test. The
+  `DB_VERSION` 7→8 bump (T006) documents the schema add and preserves existing rows unchanged.
+- [X] T004 [P] Write a failing vitest for the pure thumbnail-size/derive logic (e.g.
   `src/utils/thumbs.ts` + `thumbs.test.ts`): target max-edge dimensions for the three tiers (strip
   128 / grid 320 / bubble 512) given a source W×H (aspect-preserving, no upscale past source), and the
   tier→tier derive ordering (bubble→grid→strip).
 
 ### Implementation
 
-- [ ] T005 Add `posterGrid?: Blob` and `posterStrip?: Blob` to the `Media` interface in
+- [X] T005 Add `posterGrid?: Blob` and `posterStrip?: Blob` to the `Media` interface in
   `src/db/types.ts`, documenting `posterBlob` as the bubble/large tier (video poster / image 512)
   (data-model.md).
-- [ ] T006 Bump `DB_VERSION` 7→8 in `src/db/idb.ts`; add the pure `migrateMessageToV8` (additive,
+- [X] T006 Bump `DB_VERSION` 7→8 in `src/db/idb.ts`; add the pure `migrateMessageToV8` (additive,
   never throws) + its `onupgradeneeded` wiring to pass T003 (Constitution V).
-- [ ] T007 Implement the pure thumbnail-size math in `src/utils/thumbs.ts` to pass T004, and add
+- [X] T007 Implement the pure thumbnail-size math in `src/utils/thumbs.ts` to pass T004, and add
   size-parameterized image thumbnail generation + `deriveTiers(posterBlob)` to `src/services/media-meta.ts`
   (with a separate image-thumb concurrency limiter, distinct from the video-poster limiter).
 

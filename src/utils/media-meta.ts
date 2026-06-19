@@ -5,6 +5,7 @@
  * hang the send pipeline, so each call resolves on a timeout with whatever it has.
  */
 import { createLimiter } from '@/utils/concurrency';
+import { THUMB_TIERS } from '@/utils/thumbs';
 export interface VideoMeta {
   width?: number;
   height?: number;
@@ -193,6 +194,30 @@ async function generateImageThumbUnlimited(blob: Blob, maxEdge: number, quality:
   } catch {
     return undefined;
   }
+}
+
+// Separate concurrency limiter for IMAGE thumbnails (spec 1014). Kept distinct from the video-poster
+// limiter so a media-heavy image grid filling in its thumbnails never queues behind (or starves)
+// the heavier video-poster decodes, and vice versa. Slightly higher cap — image downscales are far
+// cheaper than decoding a <video>.
+const imageThumbLimiter = createLimiter(3);
+
+/** Downscale an image Blob to `maxEdge` (image-thumb limiter), returning undefined when the source is
+ *  already within `maxEdge` (the caller falls back to the larger tier). Spec 1014. */
+export function makeImageThumb(blob: Blob, maxEdge: number, quality = 0.7): Promise<Blob | undefined> {
+  return imageThumbLimiter(() => generateImageThumbUnlimited(blob, maxEdge, quality));
+}
+
+/** Derive the GRID (320) and STRIP (128) thumbnail tiers from the already-generated/received bubble
+ *  tier (`posterBlob`). Both sides do this locally (send / receive / backfill) so only the bubble
+ *  tier crosses the wire (spec 1014, research D1). A tier comes back undefined when the bubble tier
+ *  is already within that tier's max edge — the caller then reuses the larger tier for that surface. */
+export async function deriveTiers(posterBlob: Blob): Promise<{ grid?: Blob; strip?: Blob }> {
+  const [grid, strip] = await Promise.all([
+    makeImageThumb(posterBlob, THUMB_TIERS.grid),
+    makeImageThumb(posterBlob, THUMB_TIERS.strip),
+  ]);
+  return { grid, strip };
 }
 
 /** A short resolution label from pixel dimensions, e.g. 1280×720 → "720p". */

@@ -26,7 +26,11 @@ export const STORES = [
 export type StoreName = (typeof STORES)[number];
 
 const DB_NAME = 'ring';
-const DB_VERSION = 7;
+// v8 (spec 1014): the Media record gains optional `posterGrid`/`posterStrip` thumbnail tiers. These
+// are additive optional Blob fields on existing records — IndexedDB needs no per-row transform for
+// that, so the version bump alone (which documents the schema evolution) is the whole migration;
+// existing rows are preserved unchanged and the tiers are filled in by the background backfill.
+const DB_VERSION = 8;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 

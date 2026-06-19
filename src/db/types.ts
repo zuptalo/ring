@@ -336,7 +336,14 @@ export interface Media {
   name: string;
   size: number;
   blob: Blob;
-  posterBlob?: Blob; // video thumbnail
+  // Spec 1014 thumbnail tiers. posterBlob is the LARGE/bubble tier (the existing video poster, and
+  // now the 512px image bubble thumbnail received via MediaRef.poster) — used by the chat bubble.
+  // posterGrid (320) and posterStrip (128) are derived locally from posterBlob and used by the
+  // all-media grid and the full-screen viewer's bottom strip respectively. Additive optional Blobs:
+  // legacy rows simply lack them until the background backfill fills them in.
+  posterBlob?: Blob;
+  posterGrid?: Blob;
+  posterStrip?: Blob;
   durationSec?: number; // audio/video length
   updatedAt: number;
 }
