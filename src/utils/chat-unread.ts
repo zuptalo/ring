@@ -14,6 +14,8 @@ export interface UnreadMsg {
   outgoing?: boolean;
   deleted?: boolean;
   senderId?: string;
+  /** Spec 1013: epoch ms when this device reported the message Seen; undefined = not yet. */
+  seenReportedAt?: number;
 }
 
 /**
@@ -66,4 +68,23 @@ export function unreadSince(
     )
     .sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { count: unread.length, firstId: unread.length ? unread[0].id : null };
+}
+
+/**
+ * The seen frontier (spec 1013): the `(timestamp, id)` of the **newest incoming, non-deleted
+ * message this device has reported Seen** (`seenReportedAt` set), or `null` if none have been
+ * reported. Because the uniform catch-up rule reports Seen for a viewed message and everything
+ * older, the not-yet-Seen set is exactly `unreadSince(messages, seenFrontier(...), selfId)` —
+ * the messages after this frontier. Pure; deterministic by `(timestamp, id)`; ignores input order.
+ */
+export function seenFrontier(messages: readonly UnreadMsg[], selfId: string): UnreadBoundary | null {
+  let best: UnreadBoundary | null = null;
+  for (const m of messages) {
+    if (m.seenReportedAt == null || m.deleted) continue;
+    if (m.outgoing === true || (m.senderId !== undefined && m.senderId === selfId)) continue;
+    if (best === null || m.timestamp > best.ts || (m.timestamp === best.ts && m.id > best.id)) {
+      best = { ts: m.timestamp, id: m.id };
+    }
+  }
+  return best;
 }

@@ -624,8 +624,10 @@
         <ion-note>{{ search ? 'No matching messages' : 'No messages yet' }}</ion-note>
       </div>
       </div>
-      <!-- Floating "scroll to latest" control (spec 1012): fades in when scrolled up, taps to
-           the first unread (or newest); the badge counts incoming unread. An ion-fab inside
+      <!-- Floating "scroll to latest" control (spec 1012 → expanding pill, spec 1013): fades in
+           when scrolled up, taps to the first unread (or newest). At rest it's a circle (chevron
+           only); when there are messages to catch up to it expands into a stadium/pill with the
+           count shown INLINE next to the chevron (not a corner badge). An ion-fab inside
            ion-content auto-sits above the composer and tracks the keyboard. -->
       <ion-fab
         slot="fixed"
@@ -637,17 +639,21 @@
       >
         <ion-fab-button
           size="small"
+          class="jump-btn"
+          :class="{ 'jump-btn-pill': unreadCount > 0 }"
+          :style="{ width: pillWidth + 'px' }"
           :aria-label="jumpLabel"
           :tabindex="jumpVisible ? 0 : -1"
           @click="onJumpToLatest"
         >
-          <ion-icon :icon="chevronDownOutline" />
+          <!-- Chevron + inline count. The count span is ALWAYS in the DOM (no v-if) so it can
+               animate both ways; the `.jump-btn-pill` class expands/collapses it via max-width +
+               opacity, and the auto-width button tracks it for a smooth grow/shrink. -->
+          <span class="jump-inner">
+            <ion-icon :icon="chevronDownOutline" class="jump-chevron" />
+            <span class="jump-count" aria-hidden="true">{{ unreadCount > 0 ? jumpBadge : '' }}</span>
+          </span>
         </ion-fab-button>
-        <!-- The badge is a SIBLING of the button, not a child: ion-fab-button clips its content
-             to the circle (overflow:hidden for the ripple), which cut the corner badge off
-             ("hidden inside the circle"). As a sibling it positions against .jump-fab and floats
-             free of that clip. Decorative for AT — the count is announced via the button label. -->
-        <ion-badge v-if="unreadCount > 0" class="jump-badge" aria-hidden="true">{{ jumpBadge }}</ion-badge>
       </ion-fab>
     </ion-content>
 
@@ -896,7 +902,7 @@ import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
   IonBackButton, IonIcon, IonSearchbar, IonContent, IonFooter, IonTextarea,
   IonAvatar, IonNote, IonModal, IonSpinner, IonDatetime, actionSheetController, alertController, popoverController, toastController,
-  IonInfiniteScroll, IonInfiniteScrollContent, IonFab, IonFabButton, IonBadge,
+  IonInfiniteScroll, IonInfiniteScrollContent, IonFab, IonFabButton,
   onIonViewWillEnter, onIonViewDidEnter, onIonViewWillLeave,
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
@@ -2673,6 +2679,10 @@ const unreadBoundary = ref<UnreadBoundary | null>(null);
 const unreadCount = ref(0);
 const firstUnreadId = ref<string | null>(null);
 const jumpBadge = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)));
+// Pill width (px): a plain 40px circle at rest, growing with the digit count when expanded
+// (ion-fab-button's native is absolutely positioned, so the host can't auto-size to content — we
+// set the width explicitly and animate it). The native's fixed 20px radius keeps stadium caps.
+const pillWidth = computed(() => (unreadCount.value > 0 ? 44 + jumpBadge.value.length * 11 : 40));
 const jumpLabel = computed(() =>
   unreadCount.value > 0
     ? `${unreadCount.value} new message${unreadCount.value === 1 ? '' : 's'}, scroll to latest`
@@ -4251,7 +4261,7 @@ function cancelRecording() {
    hidden so it's non-interactive. The disc is theme-inverted and translucent — a bright
    frosted disc with a solid dark arrow in light mode, a dark frosted disc with a solid bright
    arrow in dark mode — so the chat scrolls visibly behind it (backdrop blur) while the icon
-   stays crisp. The badge corner uses logical inset so it flips in RTL. */
+   stays crisp. When behind, it expands into a stadium/pill with the count inline (spec 1013). */
 .jump-fab {
   /* Pin explicitly to the bottom-trailing corner, just above the composer. Don't rely on
      ion-fab's vertical/horizontal attribute classes alone — on some builds they don't take
@@ -4291,19 +4301,36 @@ function cancelRecording() {
   --color: #ffffff;
   --box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
 }
-/* Count badge — positioned against .jump-fab (the ion-fab), NOT the button, so the button's
-   circular overflow clip can't cut it. Floats over the disc's top-trailing corner; logical inset
-   flips it in RTL. pointer-events:none so taps fall through to the button. */
-.jump-badge {
-  position: absolute;
-  top: -4px;
-  inset-inline-end: -4px;
-  z-index: 1;
-  pointer-events: none;
-  --background: var(--ion-color-primary);
-  --color: var(--ion-color-primary-contrast);
-  font-size: 11px;
+/* Expanding pill (spec 1013): chevron + inline count, centered. The host WIDTH is bound inline
+   (pillWidth: 40px circle → wider as the digit count grows) and animated here for a smooth
+   grow/shrink; the count just fades in. Logical margin so the count sits correctly in RTL. The
+   count inherits the button's solid theme-inverted color (bright on the dark disc, dark on the
+   bright disc). The native's fixed 20px radius keeps both caps fully rounded — a circle at 40px,
+   a stadium when wider. */
+.jump-fab ion-fab-button.jump-btn {
+  transition: width 0.24s ease, opacity 0.2s ease;
+}
+.jump-fab ion-fab-button.jump-btn::part(native) {
+  border-radius: 20px;
+}
+.jump-btn .jump-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.jump-btn .jump-count {
+  display: inline-block;
+  opacity: 0;
+  margin-inline-start: 0;
+  font-size: 13px;
   font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition: opacity 0.2s ease, margin-inline-start 0.2s ease;
+}
+.jump-btn.jump-btn-pill .jump-count {
+  opacity: 1;
+  margin-inline-start: 5px;
 }
 /* Centered day divider between message groups. */
 .day-sep {

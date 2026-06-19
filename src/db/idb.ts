@@ -26,7 +26,7 @@ export const STORES = [
 export type StoreName = (typeof STORES)[number];
 
 const DB_NAME = 'ring';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -76,6 +76,28 @@ export function migrateMessageToV6(
   return changed ? next : null;
 }
 
+/**
+ * Pure forward transform for the v6→v7 backfill (spec 1013). Visibility-driven "Seen" tracks,
+ * per INCOMING message, whether this device has reported it Seen (`seenReportedAt`). On upgrade we
+ * treat the pre-feature backlog as already reported — stamping each incoming message's
+ * `seenReportedAt` with its own `timestamp` — so the not-yet-Seen pill starts at 0 and the client
+ * doesn't re-emit Seen for history; new (post-upgrade) incoming messages arrive without the field
+ * and get the visibility-driven trigger. Returns a NEW row when it stamps one, or `null` when
+ * there's nothing to do (outgoing/own, already stamped, or no numeric timestamp) so the migration
+ * skips a needless write — never mutates the input. Exported for unit testing without IndexedDB
+ * (idb.migration.test.ts); the onupgradeneeded cursor applies it in the versionchange transaction.
+ */
+export function migrateMessageToV7(
+  row: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!row || typeof row !== 'object') return null;
+  if (row.outgoing === true || row.senderId === 'me') return null; // outgoing/own never carry it
+  if (Object.prototype.hasOwnProperty.call(row, 'seenReportedAt') && row.seenReportedAt !== undefined)
+    return null; // already reported → idempotent
+  if (typeof row.timestamp !== 'number') return null; // nothing sensible to stamp
+  return { ...row, seenReportedAt: row.timestamp };
+}
+
 export function openDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
@@ -107,23 +129,40 @@ export function openDB(): Promise<IDBDatabase> {
       // v5: user-defined chat filter lists.
       if (!db.objectStoreNames.contains('chatlists'))
         db.createObjectStore('chatlists', { keyPath: 'id' });
-      // v6 (spec 1010): rename "read" → "seen" on every stored message
-      // (status 'read'→'seen', readAt→seenAt, receipts[].readAt→seenAt). Runs inside
-      // THIS versionchange transaction over the existing rows: a cursor rewrites each
-      // row via the pure migrateMessageToV6 transform. It's a no-op on a fresh DB (the
-      // store was just created empty). Crucially, any cursor/update error bubbles to
-      // the transaction, which aborts the whole upgrade atomically — leaving existing
-      // message data intact at v5 and retried on the next open (Edge: upgrade failure),
-      // never partially migrated.
-      if (event.oldVersion > 0 && event.oldVersion < 6 && db.objectStoreNames.contains('messages')) {
+      // Forward message migrations (v6: spec 1010 "read"→"seen" rename; v7: spec 1013
+      // seen-reported backfill). They run in ONE cursor pass so a multi-version upgrade
+      // (e.g. v5→v7) does not open two racing cursors on the same store that could clobber
+      // each other's writes: each applicable transform is applied in order to a row (v6 then
+      // v7, so v7 sees the renamed row), then a single update. No-op on a fresh DB (the store
+      // was just created empty). Any cursor/update error bubbles to the versionchange
+      // transaction, which aborts the whole upgrade atomically — existing message data is left
+      // intact at the old version and retried on the next open, never partially migrated.
+      const needV6 = event.oldVersion > 0 && event.oldVersion < 6; // spec 1010 rename
+      const needV7 = event.oldVersion > 0 && event.oldVersion < 7; // spec 1013 backfill
+      if ((needV6 || needV7) && db.objectStoreNames.contains('messages')) {
         const tx = req.transaction; // the active versionchange transaction
         const cursorReq = tx?.objectStore('messages').openCursor();
         if (cursorReq) {
           cursorReq.onsuccess = () => {
             const cursor = cursorReq.result;
             if (!cursor) return;
-            const migrated = migrateMessageToV6(cursor.value as Record<string, unknown>);
-            if (migrated) cursor.update(migrated); // an update error aborts the upgrade txn
+            let row = cursor.value as Record<string, unknown>;
+            let changed = false;
+            if (needV6) {
+              const v6 = migrateMessageToV6(row);
+              if (v6) {
+                row = v6;
+                changed = true;
+              }
+            }
+            if (needV7) {
+              const v7 = migrateMessageToV7(row);
+              if (v7) {
+                row = v7;
+                changed = true;
+              }
+            }
+            if (changed) cursor.update(row); // an update error aborts the upgrade txn
             cursor.continue();
           };
         }

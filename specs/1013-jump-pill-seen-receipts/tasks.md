@@ -33,10 +33,10 @@ share `useSync.ts` + `ChatDetailPage.vue` and build on US1's count, so they are 
 
 **Purpose**: Capture a green baseline; confirm the unit-test gate already covers the pure module.
 
-- [ ] T001 Capture the baseline green gates before any change: `npm run build` (vue-tsc + vite),
+- [X] T001 Capture the baseline green gates before any change: `npm run build` (vue-tsc + vite),
   `npx vitest run`, and `cd server && go build ./... && go vet ./... && go test ./...`. These must
   stay green for the whole feature (Constitution VII).
-- [ ] T002 [P] Confirm `src/utils/chat-unread.ts` is already in `vitest.config.ts`
+- [X] T002 [P] Confirm `src/utils/chat-unread.ts` is already in `vitest.config.ts`
   `coverage.include` (added in spec 1012) so `seenFrontier` lands under the gated 80% floor — no
   config change expected; note it if missing.
 
@@ -51,24 +51,24 @@ and US2/US3's Seen logic all depend on. **Blocks all user stories.**
 
 ### Tests for Foundational (write first — must fail)
 
-- [ ] T003 [P] Write a failing vitest for `seenFrontier` in `src/utils/chat-unread.test.ts`:
+- [X] T003 [P] Write a failing vitest for `seenFrontier` in `src/utils/chat-unread.test.ts`:
   `seenFrontier(messages, selfId)` returns the `(timestamp, id)` of the newest **incoming,
   non-deleted** message with `seenReportedAt` set, else `null`; excludes outgoing/own and deleted;
   deterministic by `(timestamp, id)`; ignores input order.
-- [ ] T004 [P] Write a failing unit test for the migration in `src/db/idb.migration.test.ts`:
+- [X] T004 [P] Write a failing unit test for the migration in `src/db/idb.migration.test.ts`:
   `migrateMessageToV7(row)` preserves all existing fields, is a no-op for the new field (leaves
   `seenReportedAt` undefined), never throws on malformed/`null` rows (mirrors the
   `migrateMessageToV6` test pattern).
 
 ### Implementation for Foundational
 
-- [ ] T005 Add `seenReportedAt?: number` (epoch ms; incoming-only; client-local) to the `Message`
+- [X] T005 Add `seenReportedAt?: number` (epoch ms; incoming-only; client-local) to the `Message`
   interface in `src/db/types.ts`, documented as distinct from `seenAt` (sender-side) and never
   sent/synced (FR-018, data-model.md).
-- [ ] T006 Bump `DB_VERSION` 6→7 and add the pure `migrateMessageToV7` + its `onupgradeneeded`
+- [X] T006 Bump `DB_VERSION` 6→7 and add the pure `migrateMessageToV7` + its `onupgradeneeded`
   cursor wiring in `src/db/idb.ts` (forward, data-preserving; never throws) to pass T004
   (Constitution V).
-- [ ] T007 Implement `seenFrontier` in `src/utils/chat-unread.ts` (pure, no DOM/IDB) to pass T003;
+- [X] T007 Implement `seenFrontier` in `src/utils/chat-unread.ts` (pure, no DOM/IDB) to pass T003;
   reuse the existing `UnreadMsg`/`UnreadBoundary` types and `unreadSince` ordering.
 
 **Checkpoint**: T003/T004 pass; the field + migration ship; `seenFrontier` is green and gated.
@@ -87,20 +87,22 @@ back to a circle.
 
 ### Tests for User Story 1 (write first — must fail)
 
-- [ ] T008 [P] [US1] Write a failing e2e in `e2e/seen-on-view.spec.ts` (mobile emulation, seed +
+- [X] T008 [P] [US1] Write a failing e2e in `e2e/seen-on-view.spec.ts` (mobile emulation, seed +
   scroll via `__ringTest`): the control is a **circle** when the not-yet-Seen count is 0, becomes
   a **pill** with the inline count when peers send messages while scrolled up, grows with the
   count (capped `99+`), and shrinks back to a circle when caught up.
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1] In `src/views/detail/ChatDetailPage.vue`, add `unseenCount` + `firstUnseenId`
-  derived from `seenFrontier(...)` over a bounded not-yet-Seen read (mirror spec-1012
-  `recomputeUnread`: `unreadSince(newer, seenFrontier(...), selfId)`); drive the control from
-  `unseenCount` (FR-016).
-- [ ] T010 [US1] Replace the spec-1012 corner `ion-badge` with an **inline count** inside the
+- [ ] T009 [US1→US2] In `src/views/detail/ChatDetailPage.vue`, switch the pill's count SOURCE to
+  the not-yet-Seen set — `unseenCount`/`firstUnseenId` derived from `seenFrontier(...)` over a
+  bounded read (mirror spec-1012 `recomputeUnread`: `unreadSince(newer, seenFrontier(...), selfId)`)
+  (FR-016). **Deferred into the US2 phase**: US1 ships the pill on the existing spec-1012 boundary
+  count (so it grows/shrinks today); the seenFrontier source only shrinks once US2's visibility
+  marking sets `seenReportedAt`, so the switch lands with T013/T014.
+- [X] T010 [US1] Replace the spec-1012 corner `ion-badge` with an **inline count** inside the
   `ion-fab-button` (chevron + count) in `ChatDetailPage.vue` (Ionic-first, Principle XI).
-- [ ] T011 [US1] Add the circle↔stadium CSS transition in `ChatDetailPage.vue` (animate
+- [X] T011 [US1] Add the circle↔stadium CSS transition in `ChatDetailPage.vue` (animate
   width/border-radius; logical properties for RTL; keep the theme-inverted translucent frosted
   disc + solid icon; no composer overlap; accessible name conveys the count) to pass T008
   (FR-001/002/003/005, Principle X).
