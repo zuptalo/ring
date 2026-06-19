@@ -274,6 +274,7 @@ export function installTestHook(): void {
         body: m.body,
         kind: m.kind,
         status: m.status,
+        seenReportedAt: m.seenReportedAt ?? null, // spec 1013: this device reported it Seen
         senderId: m.senderId,
         outgoing: m.outgoing,
         reactions: m.reactions ?? [],
@@ -492,7 +493,7 @@ export function installTestHook(): void {
     seedMessages: async (
       chatId: string,
       n: number,
-      opts: { fromIds?: string[]; mediaEvery?: number } = {},
+      opts: { fromIds?: string[]; mediaEvery?: number; unseen?: boolean } = {},
     ): Promise<void> => {
       const self = getSelfUserId() ?? 'me';
       const senders = opts.fromIds && opts.fromIds.length ? opts.fromIds : [self, 'seed-peer-1'];
@@ -535,6 +536,10 @@ export function installTestHook(): void {
           timestamp: ts,
           outgoing,
           status: outgoing ? 'seen' : 'seen',
+          // Spec 1013: seeded incoming messages are historical → already seen-reported, so the
+          // not-yet-Seen pill starts at 0 (matches the upgrade backfill). `opts.unseen` seeds an
+          // unseen backlog for the visibility-driven Seen tests.
+          seenReportedAt: outgoing || opts.unseen ? undefined : ts,
           updatedAt: ts,
         });
       }

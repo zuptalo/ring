@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { jumpButtonVisible, unreadSince } from './chat-unread';
+import { jumpButtonVisible, unreadSince, seenFrontier } from './chat-unread';
 
 // Pure logic behind the "scroll to latest" control (spec 1012): the show/hide hysteresis
 // predicate and the unread-since-boundary count. Both are pure (no DOM) — the view feeds them
@@ -68,5 +68,46 @@ describe('unreadSince (incoming-only count + first unread)', () => {
 
   it('returns 0 / null when nothing is after the boundary', () => {
     expect(unreadSince([M('a', 10), M('b', 20)], { ts: 20, id: 'b' }, 'me')).toEqual({ count: 0, firstId: null });
+  });
+});
+
+describe('seenFrontier (high-water mark of what this device has reported Seen)', () => {
+  const F = (
+    id: string,
+    timestamp: number,
+    over: Partial<{ outgoing: boolean; deleted: boolean; senderId: string; seenReportedAt: number }> = {},
+  ) => ({ id, timestamp, outgoing: false, ...over });
+
+  it('returns null when no message has been reported Seen', () => {
+    expect(seenFrontier([F('a', 10), F('b', 20)], 'me')).toBeNull();
+  });
+
+  it('returns the (ts, id) of the newest incoming message with seenReportedAt set', () => {
+    const msgs = [F('a', 10, { seenReportedAt: 10 }), F('b', 20, { seenReportedAt: 20 }), F('c', 30)];
+    expect(seenFrontier(msgs, 'me')).toEqual({ ts: 20, id: 'b' }); // c is not reported
+  });
+
+  it('excludes outgoing / own-device messages even if they carry the flag', () => {
+    const msgs = [
+      F('in', 30, { seenReportedAt: 30 }),
+      F('out', 40, { outgoing: true, seenReportedAt: 40 }),
+      F('own', 50, { senderId: 'me', seenReportedAt: 50 }),
+    ];
+    expect(seenFrontier(msgs, 'me')).toEqual({ ts: 30, id: 'in' });
+  });
+
+  it('excludes deleted messages', () => {
+    const msgs = [F('x', 30, { seenReportedAt: 30, deleted: true }), F('y', 20, { seenReportedAt: 20 })];
+    expect(seenFrontier(msgs, 'me')).toEqual({ ts: 20, id: 'y' });
+  });
+
+  it('breaks timestamp ties by id (largest id wins at the same ts), independent of input order', () => {
+    const msgs = [
+      F('a', 30, { seenReportedAt: 30 }),
+      F('z', 30, { seenReportedAt: 30 }),
+      F('m', 30, { seenReportedAt: 30 }),
+    ];
+    expect(seenFrontier(msgs, 'me')).toEqual({ ts: 30, id: 'z' });
+    expect(seenFrontier([...msgs].reverse(), 'me')).toEqual({ ts: 30, id: 'z' });
   });
 });

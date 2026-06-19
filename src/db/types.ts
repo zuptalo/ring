@@ -228,6 +228,11 @@ export interface Message {
   failReason?: 'too-large'; // why a send failed permanently (drives a specific toast)
   deliveredAt?: number; // 1:1: when the peer's device confirmed delivery
   seenAt?: number; // 1:1: when the peer opened/saw it
+  // Spec 1013: when THIS device sent a 'seen' receipt for this INCOMING message (epoch ms).
+  // undefined = not yet reported. Distinct from seenAt (the SENDER-side receipt time). Client-
+  // local only — never sent on the wire, never own-data-synced; drives the visibility-driven
+  // "Seen" trigger's once-only dedup and the not-yet-Seen pill count.
+  seenReportedAt?: number;
   receipts?: Receipt[]; // group messages only
   reactions?: Reaction[]; // emoji reactions, by user
   replyTo?: ReplyRef; // the message this one is a reply to

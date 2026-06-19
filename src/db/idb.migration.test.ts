@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { migrateMessageToV6 } from './idb';
+import { migrateMessageToV6, migrateMessageToV7 } from './idb';
 
 // The DB_VERSION 5→6 forward transform (spec 1010): read → seen on every stored
 // message. Tested as a pure function (no IndexedDB needed); the onupgradeneeded
@@ -93,5 +93,48 @@ describe('migrateMessageToV6 (read → seen forward migration)', () => {
     expect(migrateMessageToV6(null)).toBeNull();
     expect(migrateMessageToV6(undefined)).toBeNull();
     expect(migrateMessageToV6({})).toBeNull();
+  });
+});
+
+// The DB_VERSION 6→7 forward transform (spec 1013): stamp the pre-feature backlog of INCOMING
+// messages as already seen-reported (seenReportedAt = the message's own timestamp), so after the
+// upgrade the not-yet-Seen pill starts at 0 and the client doesn't re-emit Seen for history.
+// New (post-upgrade) incoming messages arrive without the field → visibility-driven. Pure;
+// applied by the onupgradeneeded cursor inside the versionchange transaction.
+describe('migrateMessageToV7 (seen-reported backfill for the pre-feature backlog)', () => {
+  it('stamps an incoming message lacking seenReportedAt with its own timestamp, preserving all else', () => {
+    const row = { id: 'm1', chatId: 'c1', senderId: 'peer', body: 'hi', kind: 'text', status: 'seen', timestamp: 1000, outgoing: false, updatedAt: 2000 };
+    const out = migrateMessageToV7(row)!;
+    expect(out.seenReportedAt).toBe(1000);
+    expect(out.body).toBe('hi');
+    expect(out.timestamp).toBe(1000);
+    expect(out.outgoing).toBe(false);
+    expect(out.updatedAt).toBe(2000);
+  });
+
+  it('leaves outgoing/own messages untouched (null) — they never carry a seen-reported flag', () => {
+    expect(migrateMessageToV7({ id: 'o', outgoing: true, timestamp: 10 })).toBeNull();
+    expect(migrateMessageToV7({ id: 'o2', outgoing: false, senderId: 'me', timestamp: 10 })).toBeNull();
+  });
+
+  it('is idempotent: a row already carrying seenReportedAt needs no rewrite (null)', () => {
+    expect(migrateMessageToV7({ id: 'm', outgoing: false, timestamp: 10, seenReportedAt: 5 })).toBeNull();
+  });
+
+  it('skips an incoming row without a numeric timestamp (nothing sensible to stamp) (null)', () => {
+    expect(migrateMessageToV7({ id: 'm', outgoing: false })).toBeNull();
+  });
+
+  it('never mutates the input row (so an aborted upgrade leaves data intact)', () => {
+    const row = { id: 'm', outgoing: false, timestamp: 7 };
+    const snapshot = JSON.parse(JSON.stringify(row));
+    migrateMessageToV7(row);
+    expect(row).toEqual(snapshot);
+  });
+
+  it('handles malformed / empty input without throwing', () => {
+    expect(migrateMessageToV7(null)).toBeNull();
+    expect(migrateMessageToV7(undefined)).toBeNull();
+    expect(migrateMessageToV7({})).toBeNull();
   });
 });
