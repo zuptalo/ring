@@ -62,6 +62,8 @@ export default defineConfig({
         'src/utils/chat-window.ts',
         'src/utils/scroll-anchor.ts',
         'src/utils/chat-grouping.ts',
+        // Pure scroll-to-latest control logic (spec 1012).
+        'src/utils/chat-unread.ts',
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 80 },
     },

@@ -17,22 +17,23 @@ Derived from, and reset by, the existing scroll lifecycle (`stickBottom`, `onCon
 | Field | Type | Meaning |
 |---|---|---|
 | `jumpVisible` | boolean (reactive) | Whether the control is shown — true once scrolled up past the appear threshold, false within the hide threshold (hysteresis). Drives the CSS opacity fade. |
-| `unreadBoundaryTs` | epoch ms \| null | The newest message timestamp at the moment the user left the bottom. null while pinned to bottom. Messages newer than this (incoming) are "unread". |
-| `unreadCount` | number (reactive) | Count of **incoming** messages with `timestamp > unreadBoundaryTs` received while scrolled up. Shown as the badge (capped for display, e.g. `99+`). 0 ⇒ no badge. |
+| `unreadBoundary` | `{ ts, id }` \| null | The newest message the user had seen (a `(timestamp, id)` point in the chat's canonical order) at the moment they left the bottom. null while pinned to bottom. Messages that sort **after** this point (incoming) are "unread". A tuple, not a bare timestamp, so a same-millisecond incoming message isn't dropped (ids are random, several can share a ms). |
+| `unreadCount` | number (reactive) | Count of **incoming** messages sorting after `unreadBoundary` in `(timestamp, id)` order, received while scrolled up. Shown as the badge (capped for display, e.g. `99+`). 0 ⇒ no badge. |
 | `firstUnreadId` | message id \| null | The earliest incoming message after the boundary — the tap target when `unreadCount > 0`. |
 
 **State transitions**:
 
-- **Leave bottom** (`stickBottom` → false): set `unreadBoundaryTs = newestLoadedTs`; `unreadCount = 0`; `firstUnreadId = null`. Once past the appear threshold → `jumpVisible = true`.
-- **Incoming message while scrolled up** (`messages` change bus / `useChatHistory`): recompute `{count, firstId} = unreadSince(messages, unreadBoundaryTs, selfId)`.
+- **Leave bottom** (`stickBottom` → false): set `unreadBoundary = { ts, id }` of the newest loaded row; `unreadCount = 0`; `firstUnreadId = null`. Once past the appear threshold → `jumpVisible = true`.
+- **Incoming message while scrolled up** (`messages` change bus / `useChatHistory`): recompute `{count, firstId} = unreadSince(newer, unreadBoundary, selfId)` over a bounded read fetched inclusive of the boundary millisecond.
 - **Activate control**: jump (D4), then clear `unreadCount`/`firstUnreadId` (the badge resets); `jumpVisible` follows the scroll back toward the bottom.
-- **Reach bottom** (`stickBottom` → true): clear `unreadBoundaryTs`/`unreadCount`/`firstUnreadId`; once within the hide threshold → `jumpVisible = false`.
+- **Reach bottom** (`stickBottom` → true): clear `unreadBoundary`/`unreadCount`/`firstUnreadId`; once within the hide threshold → `jumpVisible = false`.
 
 ## New (pure): `src/utils/chat-unread.ts`
 
-- `unreadSince(messages: Message[], boundaryTs: number | null, selfId: string) → { count: number; firstId: string | null }`
-  Incoming, non-deleted messages with `timestamp > boundaryTs` (deterministic `(timestamp, id)`
-  order); `firstId` is the earliest. `boundaryTs == null` ⇒ `{ count: 0, firstId: null }`.
+- `unreadSince(messages: Message[], boundary: { ts: number; id: string } | null, selfId: string) → { count: number; firstId: string | null }`
+  Incoming, non-deleted messages sorting strictly after `boundary` in `(timestamp, id)` order
+  (so a same-millisecond newer message isn't dropped); `firstId` is the earliest. `boundary == null`
+  ⇒ `{ count: 0, firstId: null }`.
 - `jumpButtonVisible(distanceFromBottomPx: number, shown: boolean, showPx: number, hidePx: number) → boolean`
   Hysteresis: returns true past `showPx`, false within `hidePx`, otherwise keeps `shown`.
 

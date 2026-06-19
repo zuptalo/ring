@@ -624,6 +624,31 @@
         <ion-note>{{ search ? 'No matching messages' : 'No messages yet' }}</ion-note>
       </div>
       </div>
+      <!-- Floating "scroll to latest" control (spec 1012): fades in when scrolled up, taps to
+           the first unread (or newest); the badge counts incoming unread. An ion-fab inside
+           ion-content auto-sits above the composer and tracks the keyboard. -->
+      <ion-fab
+        slot="fixed"
+        vertical="bottom"
+        horizontal="end"
+        class="jump-fab"
+        :class="{ 'jump-hidden': !jumpVisible }"
+        :aria-hidden="!jumpVisible"
+      >
+        <ion-fab-button
+          size="small"
+          :aria-label="jumpLabel"
+          :tabindex="jumpVisible ? 0 : -1"
+          @click="onJumpToLatest"
+        >
+          <ion-icon :icon="chevronDownOutline" />
+        </ion-fab-button>
+        <!-- The badge is a SIBLING of the button, not a child: ion-fab-button clips its content
+             to the circle (overflow:hidden for the ripple), which cut the corner badge off
+             ("hidden inside the circle"). As a sibling it positions against .jump-fab and floats
+             free of that clip. Decorative for AT — the count is announced via the button label. -->
+        <ion-badge v-if="unreadCount > 0" class="jump-badge" aria-hidden="true">{{ jumpBadge }}</ion-badge>
+      </ion-fab>
     </ion-content>
 
     <ion-footer id="chat-footer">
@@ -871,7 +896,7 @@ import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
   IonBackButton, IonIcon, IonSearchbar, IonContent, IonFooter, IonTextarea,
   IonAvatar, IonNote, IonModal, IonSpinner, IonDatetime, actionSheetController, alertController, popoverController, toastController,
-  IonInfiniteScroll, IonInfiniteScrollContent,
+  IonInfiniteScroll, IonInfiniteScrollContent, IonFab, IonFabButton, IonBadge,
   onIonViewWillEnter, onIonViewDidEnter, onIonViewWillLeave,
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
@@ -881,6 +906,7 @@ import {
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
+  chevronDownOutline,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, markChatRead, sendMediaMessage, sendMessage,
@@ -891,7 +917,7 @@ import {
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
-  CAPTION_MAX, getSetting, listChatMediaAll, getMessage,
+  CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesNewer,
 } from '@/db/queries';
 import { groupProgress } from '@/services/message-status';
 import { getSelfUserId } from '@/services/auth';
@@ -933,6 +959,7 @@ import { useChatHistory } from '@/composables/useChatHistory';
 import { LOOK_AHEAD_PX } from '@/utils/chat-window';
 import { pickAnchor, resolveAnchorDelta, shouldDeferScrollWrite, isSelfEcho } from '@/utils/scroll-anchor';
 import { isRunStart as isRunStartEdge, showDay as showDayEdge } from '@/utils/chat-grouping';
+import { jumpButtonVisible, unreadSince, type UnreadBoundary } from '@/utils/chat-unread';
 import {
   audioCurId, audioPlaying, audioProgress, audioRate,
   playAudio, seekAudioFrac, cycleAudioRate, stopAudio, detachAudioEnded,
@@ -2632,6 +2659,59 @@ async function ensureScrollEl(): Promise<HTMLElement | null> {
   }
   return scrollEl;
 }
+// ---- "scroll to latest" floating control (spec 1012) ----
+// Fades in when scrolled up from the newest message; tapping jumps to the first unread
+// (earliest incoming since the user left the bottom) or, with none, the newest. The badge
+// counts incoming-only messages received while scrolled up. Pure logic in chat-unread.ts.
+const JUMP_SHOW_PX = 600; // ≈ one screen: appear once scrolled this far from the bottom
+const JUMP_HIDE_PX = 120; // hide within the same band the pin uses (nearBottom)
+const jumpVisible = ref(false);
+// The (timestamp, id) of the newest message the user had seen when they left the bottom — the
+// cut everything-below is "unread". A tuple, not a bare ts, so a same-millisecond incoming
+// message isn't dropped (ids are random, several can share a ms — see chat-unread.ts).
+const unreadBoundary = ref<UnreadBoundary | null>(null);
+const unreadCount = ref(0);
+const firstUnreadId = ref<string | null>(null);
+const jumpBadge = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)));
+const jumpLabel = computed(() =>
+  unreadCount.value > 0
+    ? `${unreadCount.value} new message${unreadCount.value === 1 ? '' : 's'}, scroll to latest`
+    : 'Scroll to latest',
+);
+function clearUnread(): void {
+  unreadBoundary.value = null;
+  unreadCount.value = 0;
+  firstUnreadId.value = null;
+}
+// Count incoming messages since the boundary via a bounded read (so a far-trimmed window still
+// counts accurately, spec 1011 evicts the tail); feeds the badge + first-unread target. The read
+// is inclusive of the boundary millisecond (the `ts - 1` idiom, as listMessagesNewer uses a
+// strict `>` slice and ms timestamps are integers) so a same-ms message isn't lost before the
+// precise (timestamp, id) cut in unreadSince.
+async function recomputeUnread(): Promise<void> {
+  const boundary = unreadBoundary.value;
+  if (boundary === null) return;
+  const newer = await listMessagesNewer(chatId, boundary.ts - 1, 100); // bounded by the display cap
+  if (unreadBoundary.value !== boundary) return; // boundary moved while reading — discard
+  const { count, firstId } = unreadSince(newer, boundary, selfId);
+  unreadCount.value = count;
+  firstUnreadId.value = firstId;
+}
+// New messages while scrolled up → recount (the change bus bumps history.total on add/remove).
+watch(
+  () => history.total.value,
+  () => {
+    if (unreadBoundary.value !== null) void recomputeUnread();
+  },
+);
+// Tap: jump to the first unread when there is one, else the newest; clear the badge either way.
+async function onJumpToLatest(): Promise<void> {
+  const target = unreadCount.value > 0 ? firstUnreadId.value : null;
+  clearUnread();
+  if (target) await scrollToMessage(target);
+  else await scrollToNewest();
+}
+
 async function scrollToNewest(): Promise<void> {
   // If we trimmed the newest rows while scrolling up (hasNewer), `rows` no longer holds the
   // bottom of the chat — reload the newest batch so the newest message is actually rendered
@@ -2644,6 +2724,10 @@ async function scrollToNewest(): Promise<void> {
   el.scrollTop = el.scrollHeight; // now lands on the newest row (botPad is 0 at the bottom)
   stickBottom = true;
   suppressStickUntil = Date.now() + 250;
+  // We're at the newest now → hide the scroll-to-latest control and clear its unread state
+  // (the pin scroll is suppressed in onContentScroll, so do it explicitly here).
+  jumpVisible.value = false;
+  clearUnread();
 }
 // Within ~120px of the bottom counts as "pinned to newest". Defaults to true before
 // the scroll element resolves (a fresh chat opens pinned to newest).
@@ -2661,6 +2745,19 @@ function onContentScroll(): void {
   if (lastScrollTop >= 0 && top !== lastScrollTop) scrollDir = top < lastScrollTop ? 'up' : 'down';
   lastScrollTop = top;
   stickBottom = nearBottom();
+  // Scroll-to-latest control (spec 1012): show/hide with hysteresis off the distance to the
+  // bottom; set the unread boundary on leaving the bottom, clear it on returning.
+  const dist = scrollEl ? scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight : 0;
+  jumpVisible.value = jumpButtonVisible(dist, jumpVisible.value, JUMP_SHOW_PX, JUMP_HIDE_PX);
+  if (stickBottom) {
+    clearUnread();
+  } else if (unreadBoundary.value === null) {
+    // Mark where the user left the bottom: the newest loaded row IS the chat's newest here (we
+    // can't have trimmed the tail within one scroll event of the bottom). Capture (ts, id) so a
+    // later same-millisecond message is still counted.
+    const last = rows.value[rows.value.length - 1];
+    if (last) unreadBoundary.value = { ts: last.timestamp, id: last.id };
+  }
 }
 
 async function send() {
@@ -4148,6 +4245,65 @@ function cancelRecording() {
   padding: 0;
   pointer-events: none;
   overflow-anchor: none;
+}
+/* Floating "scroll to latest" control (spec 1012). ion-fab is position:fixed within
+   ion-content, so toggling opacity fades it with no layout shift; pointer-events:none while
+   hidden so it's non-interactive. The disc is theme-inverted and translucent — a bright
+   frosted disc with a solid dark arrow in light mode, a dark frosted disc with a solid bright
+   arrow in dark mode — so the chat scrolls visibly behind it (backdrop blur) while the icon
+   stays crisp. The badge corner uses logical inset so it flips in RTL. */
+.jump-fab {
+  /* Pin explicitly to the bottom-trailing corner, just above the composer. Don't rely on
+     ion-fab's vertical/horizontal attribute classes alone — on some builds they don't take
+     effect and the fab falls back to ion-fab's default TOP-START position. These !important
+     rules guarantee the bottom-trailing placement everywhere (spec 1012). */
+  position: absolute !important;
+  top: auto !important;
+  bottom: 14px !important;
+  inset-inline-start: auto !important;
+  inset-inline-end: 14px !important;
+  margin: 0;
+  transition: opacity 0.2s ease;
+}
+.jump-fab.jump-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.jump-fab ion-fab-button {
+  /* Light theme: bright, translucent disc + solid dark arrow. */
+  --background: rgba(255, 255, 255, 0.6);
+  --background-hover: rgba(255, 255, 255, 0.72);
+  --background-activated: rgba(255, 255, 255, 0.82);
+  --color: #1c1c1e;
+  --box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+}
+/* Frost the disc so the chat is visible (softened) behind it as it scrolls. Applied to the
+   native button surface; the slotted arrow renders on top and stays fully opaque/solid. */
+.jump-fab ion-fab-button::part(native) {
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+}
+/* Dark theme: the inverse — dark translucent disc + solid bright arrow. */
+:root.ion-palette-dark .jump-fab ion-fab-button {
+  --background: rgba(28, 28, 30, 0.55);
+  --background-hover: rgba(40, 40, 44, 0.66);
+  --background-activated: rgba(48, 48, 52, 0.74);
+  --color: #ffffff;
+  --box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+/* Count badge — positioned against .jump-fab (the ion-fab), NOT the button, so the button's
+   circular overflow clip can't cut it. Floats over the disc's top-trailing corner; logical inset
+   flips it in RTL. pointer-events:none so taps fall through to the button. */
+.jump-badge {
+  position: absolute;
+  top: -4px;
+  inset-inline-end: -4px;
+  z-index: 1;
+  pointer-events: none;
+  --background: var(--ion-color-primary);
+  --color: var(--ion-color-primary-contrast);
+  font-size: 11px;
+  font-weight: 600;
 }
 /* Centered day divider between message groups. */
 .day-sep {

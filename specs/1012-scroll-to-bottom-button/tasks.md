@@ -32,8 +32,8 @@ depends on US1.
 **Purpose**: Confirm the unit-test runner and capture a green baseline (the server gates must
 stay green untouched — Constitution VII).
 
-- [ ] T001 Confirm `npx vitest run` is green and that the new pure helper runs under the existing `node` env (no DOM needed). As `src/utils/chat-unread.ts` lands, append it to `vitest.config.ts` `coverage.include` so the 80% gated floor ratchets onto it (Constitution VII). No new runner/config.
-- [ ] T002 [P] Capture the baseline green gates before any change: `npm run build` (vue-tsc + vite) and `cd server && go build ./... && go vet ./... && go test ./...`. These must stay green for the whole feature.
+- [X] T001 Confirm `npx vitest run` is green and that the new pure helper runs under the existing `node` env (no DOM needed). As `src/utils/chat-unread.ts` lands, append it to `vitest.config.ts` `coverage.include` so the 80% gated floor ratchets onto it (Constitution VII). No new runner/config.
+- [X] T002 [P] Capture the baseline green gates before any change: `npm run build` (vue-tsc + vite) and `cd server && go build ./... && go vet ./... && go test ./...`. These must stay green for the whole feature.
 
 **Checkpoint**: `vitest` runs; baseline build/server gates green.
 
@@ -61,15 +61,15 @@ fades out. Resting at the bottom shows no control.
 
 ### Tests for User Story 1 (write first — must fail)
 
-- [ ] T003 [P] [US1] Write failing vitest for the show/hide hysteresis predicate in `src/utils/chat-unread.test.ts`: `jumpButtonVisible(distancePx, shown, showPx, hidePx)` returns true past `showPx`, false within `hidePx`, keeps the current `shown` in the gap, and never oscillates given `showPx > hidePx`.
-- [ ] T004 [P] [US1] Write a failing e2e in `e2e/scroll-to-latest.spec.ts` (seed/scroll via `__ringTest`, mobile emulation): **B-1** the control is absent while resting at the bottom; **B-2** it fades in after scrolling up past the threshold (bottom-trailing, above the composer); **B-3/B-5** tapping it returns to the newest message and it fades out (no-unread case).
+- [X] T003 [P] [US1] Write failing vitest for the show/hide hysteresis predicate in `src/utils/chat-unread.test.ts`: `jumpButtonVisible(distancePx, shown, showPx, hidePx)` returns true past `showPx`, false within `hidePx`, keeps the current `shown` in the gap, and never oscillates given `showPx > hidePx`.
+- [X] T004 [P] [US1] Write a failing e2e in `e2e/scroll-to-latest.spec.ts` (seed/scroll via `__ringTest`, mobile emulation): **B-1** the control is absent while resting at the bottom; **B-2** it fades in after scrolling up past the threshold (bottom-trailing, above the composer); **B-3/B-5** tapping it returns to the newest message and it fades out (no-unread case).
 
 ### Implementation for User Story 1
 
-- [ ] T005 [US1] Implement `jumpButtonVisible` (pure, hysteresis) in `src/utils/chat-unread.ts` to pass T003 (no DOM).
-- [ ] T006 [US1] Add the control to `src/views/detail/ChatDetailPage.vue`: an `ion-fab` (vertical=bottom, horizontal=end) inside `ion-content` with a small `ion-fab-button` + chevron-down `ion-icon`, bound to a `jumpVisible` ref and faded via a CSS opacity transition (~200ms). Style with theme tokens; trailing-side via logical properties (RTL); light/dark (FR-001/005/007, D1/D5).
-- [ ] T007 [US1] Wire `jumpVisible` from the existing scroll state in `ChatDetailPage.vue`: in `onContentScroll`, compute distance-from-bottom (`scrollHeight - scrollTop - clientHeight`) and update `jumpVisible` via `jumpButtonVisible` (hysteresis); force-hide on reaching the bottom (`stickBottom`/`scrollToNewest`). Reuse the existing scroll metrics — no new listener (FR-002/003, D2).
-- [ ] T008 [US1] Add the tap handler in `ChatDetailPage.vue` → `scrollToNewest()` (no-unread path); confirm auto-follow re-engages and the control fades out as the bottom is reached. Set an accessible name (e.g. "Scroll to latest") and an adequate touch target (FR-004/006/007, B-5/B-8).
+- [X] T005 [US1] Implement `jumpButtonVisible` (pure, hysteresis) in `src/utils/chat-unread.ts` to pass T003 (no DOM).
+- [X] T006 [US1] Add the control to `src/views/detail/ChatDetailPage.vue`: an `ion-fab` (vertical=bottom, horizontal=end) inside `ion-content` with a small `ion-fab-button` + chevron-down `ion-icon`, bound to a `jumpVisible` ref and faded via a CSS opacity transition (~200ms). Style with theme tokens; trailing-side via logical properties (RTL); light/dark (FR-001/005/007, D1/D5).
+- [X] T007 [US1] Wire `jumpVisible` from the existing scroll state in `ChatDetailPage.vue`: in `onContentScroll`, compute distance-from-bottom (`scrollHeight - scrollTop - clientHeight`) and update `jumpVisible` via `jumpButtonVisible` (hysteresis); force-hide on reaching the bottom (`stickBottom`/`scrollToNewest`). Reuse the existing scroll metrics — no new listener (FR-002/003, D2).
+- [X] T008 [US1] Add the tap handler in `ChatDetailPage.vue` → `scrollToNewest()` (no-unread path); confirm auto-follow re-engages and the control fades out as the bottom is reached. Set an accessible name (e.g. "Scroll to latest") and an adequate touch target (FR-004/006/007, B-5/B-8).
 
 **Checkpoint**: T003/T004 pass; US1 is independently demoable (MVP) — the button appears/hides,
 fades, and returns to newest, clear of the composer.
@@ -90,15 +90,15 @@ badge.
 
 ### Tests for User Story 2 (write first — must fail)
 
-- [ ] T009 [P] [US2] Write failing vitest for `unreadSince` in `src/utils/chat-unread.test.ts`: `unreadSince(messages, boundaryTs, selfId)` → `{count, firstId}` over **incoming**, non-deleted messages with `timestamp > boundaryTs`, deterministic `(timestamp, id)` order, earliest as `firstId`; `boundaryTs === null` → `{0, null}`; outgoing/own excluded.
-- [ ] T010 [US2] Add failing e2e to `e2e/scroll-to-latest.spec.ts` (append after the US1 cases — same file, sequential): **B-6** scrolled up + N incoming → badge shows N; an own/at-bottom message does NOT badge; large counts cap (`99+`); **B-4** tapping jumps to the first unread `[data-mid]` and clears the badge.
+- [X] T009 [P] [US2] Write failing vitest for `unreadSince` in `src/utils/chat-unread.test.ts`: `unreadSince(messages, boundaryTs, selfId)` → `{count, firstId}` over **incoming**, non-deleted messages with `timestamp > boundaryTs`, deterministic `(timestamp, id)` order, earliest as `firstId`; `boundaryTs === null` → `{0, null}`; outgoing/own excluded.
+- [X] T010 [US2] Add failing e2e to `e2e/scroll-to-latest.spec.ts` (append after the US1 cases — same file, sequential): **B-6** scrolled up + N incoming → badge shows N; an own/at-bottom message does NOT badge; large counts cap (`99+`); **B-4** tapping jumps to the first unread `[data-mid]` and clears the badge.
 
 ### Implementation for User Story 2
 
-- [ ] T011 [US2] Implement `unreadSince` in `src/utils/chat-unread.ts` to pass T009.
-- [ ] T012 [US2] Track the unread boundary in `ChatDetailPage.vue`: on leaving the bottom capture `unreadBoundaryTs = newestLoadedTs`; recompute `{unreadCount, firstUnreadId} = unreadSince(messages, unreadBoundaryTs, selfId)` off the existing `messages` change bus / `useChatHistory`; reset all three on reaching the bottom or on activation (D3, data-model.md).
-- [ ] T013 [US2] Add the count `ion-badge` to the control in `ChatDetailPage.vue` (shown when `unreadCount > 0`, capped e.g. `99+`), and fold the count into the control's accessible name (FR-008, B-6/B-8).
-- [ ] T014 [US2] Extend the tap handler in `ChatDetailPage.vue`: if `unreadCount > 0` and `firstUnreadId` → `scrollToMessage(firstUnreadId)` (spec 1011 seek; loads the target if it was trimmed) and clear the badge; else `scrollToNewest()` (FR-004, B-4, D4).
+- [X] T011 [US2] Implement `unreadSince` in `src/utils/chat-unread.ts` to pass T009.
+- [X] T012 [US2] Track the unread boundary in `ChatDetailPage.vue`: on leaving the bottom capture `unreadBoundaryTs = newestLoadedTs`; recompute `{unreadCount, firstUnreadId} = unreadSince(messages, unreadBoundaryTs, selfId)` off the existing `messages` change bus / `useChatHistory`; reset all three on reaching the bottom or on activation (D3, data-model.md).
+- [X] T013 [US2] Add the count `ion-badge` to the control in `ChatDetailPage.vue` (shown when `unreadCount > 0`, capped e.g. `99+`), and fold the count into the control's accessible name (FR-008, B-6/B-8).
+- [X] T014 [US2] Extend the tap handler in `ChatDetailPage.vue`: if `unreadCount > 0` and `firstUnreadId` → `scrollToMessage(firstUnreadId)` (spec 1011 seek; loads the target if it was trimmed) and clear the badge; else `scrollToNewest()` (FR-004, B-4, D4).
 
 **Checkpoint**: T009/T010 pass; US2 layers the badge + first-unread jump on the working button.
 
@@ -106,11 +106,11 @@ badge.
 
 ## Phase 5: Polish & Cross-Cutting Concerns
 
-- [ ] T015 [P] Verify composer clearance: the control stays above the composer and never overlaps the input or the newest bubble's tap targets across keyboard open/close and reply/edit-bar states (B-7 / SC-004). (`src/views/detail/ChatDetailPage.vue`)
-- [ ] T016 [P] Verify accessibility + i18n: the control is labeled and reachable by assistive tech, has an adequate touch target, renders on the trailing side in LTR **and** RTL, and is correct in light/dark (B-8 / SC-006-007).
-- [ ] T017 [P] Verify no regression to spec 1011 scroll behavior (momentum, no-yank on incoming while scrolled up) and that the control adds no scroll-hot-path cost beyond the existing `onContentScroll`. (`src/views/detail/ChatDetailPage.vue`)
-- [ ] T018 Run the quickstart manual smoke (specs/1012-scroll-to-bottom-button/quickstart.md), including **real-device** fade feel and tuning the appear-threshold / hysteresis magnitudes (emulation can't fully prove the feel — research D2 open risk).
-- [ ] T019 Definition-of-done gate (Constitution VII): `npm run build`; `cd server && go build ./... && go vet ./... && go test ./...` (unchanged, must stay green); `npx vitest run`; `make db-up && npm run test:e2e` (incl. `e2e/scroll-to-latest.spec.ts`). All green = done.
+- [X] T015 [P] Verify composer clearance: the control stays above the composer and never overlaps the input or the newest bubble's tap targets across keyboard open/close and reply/edit-bar states (B-7 / SC-004). (`src/views/detail/ChatDetailPage.vue`)
+- [X] T016 [P] Verify accessibility + i18n: the control is labeled and reachable by assistive tech, has an adequate touch target, renders on the trailing side in LTR **and** RTL, and is correct in light/dark (B-8 / SC-006-007).
+- [X] T017 [P] Verify no regression to spec 1011 scroll behavior (momentum, no-yank on incoming while scrolled up) and that the control adds no scroll-hot-path cost beyond the existing `onContentScroll`. (`src/views/detail/ChatDetailPage.vue`)
+- [X] T018 Run the quickstart manual smoke (specs/1012-scroll-to-bottom-button/quickstart.md), including **real-device** fade feel and tuning the appear-threshold / hysteresis magnitudes (emulation can't fully prove the feel — research D2 open risk).
+- [X] T019 Definition-of-done gate (Constitution VII): `npm run build`; `cd server && go build ./... && go vet ./... && go test ./...` (unchanged, must stay green); `npx vitest run`; `make db-up && npm run test:e2e` (incl. `e2e/scroll-to-latest.spec.ts`). All green = done.
 
 ---
 
