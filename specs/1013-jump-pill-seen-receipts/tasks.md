@@ -94,7 +94,7 @@ back to a circle.
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1→US2] In `src/views/detail/ChatDetailPage.vue`, switch the pill's count SOURCE to
+- [X] T009 [US1→US2] In `src/views/detail/ChatDetailPage.vue`, switch the pill's count SOURCE to
   the not-yet-Seen set — `unseenCount`/`firstUnseenId` derived from `seenFrontier(...)` over a
   bounded read (mirror spec-1012 `recomputeUnread`: `unreadSince(newer, seenFrontier(...), selfId)`)
   (FR-016). **Deferred into the US2 phase**: US1 ships the pill on the existing spec-1012 boundary
@@ -125,7 +125,7 @@ scroll the older ones into view → sender shows only on-screen ones as Seen; sc
 
 ### Tests for User Story 2 (write first — must fail)
 
-- [ ] T012 [P] [US2] Append failing e2e to `e2e/seen-on-view.spec.ts` (two accounts): an off-screen
+- [X] T012 [P] [US2] Append failing e2e to `e2e/seen-on-view.spec.ts` (two accounts): an off-screen
   incoming message is **not** Seen on the sender; scrolling it ≥50% into view flips it to **Seen**
   within the timeout; with the "Seen receipts" privacy toggle **off**, viewing sends **nothing**;
   and an **own (outgoing)** message and a **deleted** message never emit a Seen receipt even when
@@ -133,16 +133,16 @@ scroll the older ones into view → sender shows only on-screen ones as Seen; sc
 
 ### Implementation for User Story 2
 
-- [ ] T013 [US2] Add a second `IntersectionObserver` (`bubbleVisObs`, root = the ion-content scroll
+- [X] T013 [US2] Add a second `IntersectionObserver` (`bubbleVisObs`, root = the ion-content scroll
   element, `threshold: 0.5`) in `ChatDetailPage.vue` observing `.bubble[data-mid]`; manage its
   lifecycle alongside the existing window sentinels ((un)observe as the render window slides;
   clean up on unmount); gate its callback on foreground (route active + `document.visibilityState
   === 'visible'`) (FR-007/012, D2).
-- [ ] T014 [US2] In `src/composables/useSync.ts`, add a per-message Seen send that stamps
+- [X] T014 [US2] In `src/composables/useSync.ts`, add a per-message Seen send that stamps
   `Message.seenReportedAt = now()` (DB) and emits the unchanged `receipt` envelope via the existing
   path; keep the `seenReceiptsEnabled` privacy gate and 1:1/group addressing; rebuild the
   in-session dedup from `seenReportedAt` (FR-009/010/013, D1).
-- [ ] T015 [US2] Wire the observer callback in `ChatDetailPage.vue` to the new send for the visible
+- [X] T015 [US2] Wire the observer callback in `ChatDetailPage.vue` to the new send for the visible
   message, and **remove** the on-open/on-foreground bulk `sendSeenReceipts(chatId)` call sites
   (the `onMounted`/`onVisibilityChange` triggers) to pass T012 (FR-007/008).
 
@@ -164,7 +164,7 @@ duplicate receipts.
 
 ### Tests for User Story 3 (write first — must fail)
 
-- [ ] T016 [P] [US3] Append failing e2e to `e2e/seen-on-view.spec.ts`: bringing a mid-backlog
+- [X] T016 [P] [US3] Append failing e2e to `e2e/seen-on-view.spec.ts`: bringing a mid-backlog
   message ≥50% into view reports Seen for it **and all older** not-yet-Seen (newer off-screen stay
   unreported); after a full app reload the pill count reflects only still-unseen messages and the
   sender receives **no duplicate** Seen receipts; opening a chat with unseen messages lands at the
@@ -172,11 +172,11 @@ duplicate receipts.
 
 ### Implementation for User Story 3
 
-- [ ] T017 [US3] Extend the send into `reportSeenAndOlder(message)` (in `useSync.ts` /
+- [X] T017 [US3] Extend the send into `reportSeenAndOlder(message)` (in `useSync.ts` /
   `ChatDetailPage.vue`): stamp `seenReportedAt` + emit a receipt for the message **and every older
   not-yet-Seen incoming, non-deleted** message, once each (dedup via `seenReportedAt`) (FR-014/015,
   D3). Consider batching the sends (see T020).
-- [ ] T018 [US3] Implement **open-at-first-unseen** in `ChatDetailPage.vue`: on chat open, if
+- [X] T018 [US3] Implement **open-at-first-unseen** in `ChatDetailPage.vue`: on chat open, if
   `firstUnseenId` exists, `seekTo`/`scrollToMessage` it (momentum-safe via `suppressStickUntil`,
   spec 1011), else open at the newest; align the control's tap target to the first not-yet-Seen
   (FR-006/017, D5) to pass T016.
@@ -187,18 +187,18 @@ duplicate receipts.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T019 [P] Verify **no regression to spec 1011** scroll behavior (momentum, no-yank when a
+- [X] T019 [P] Verify **no regression to spec 1011** scroll behavior (momentum, no-yank when a
   message arrives while scrolled up); confirm `bubbleVisObs` is read-only w.r.t. scroll position
   (only the open-at-first-unseen seek moves it, momentum-safe). (`src/views/detail/ChatDetailPage.vue`)
-- [ ] T020 [P] Fling safety/perf: defer/batch Seen sends while a fling is active (reuse
+- [X] T020 [P] Fling safety/perf: defer/batch Seen sends while a fling is active (reuse
   `lastScrollAt`) so a fast scroll doesn't burst receipts; `log`/cap if a very large backlog is
   collapsed in one catch-up. (`src/views/detail/ChatDetailPage.vue`, `src/composables/useSync.ts`)
-- [ ] T021 [P] Accessibility + i18n: the pill is labeled with the count, reaches an adequate touch
+- [X] T021 [P] Accessibility + i18n: the pill is labeled with the count, reaches an adequate touch
   target, renders trailing-side in LTR **and** RTL (logical properties), and is correct in
   light/dark. (`src/views/detail/ChatDetailPage.vue`) (Principles X/XI)
-- [ ] T022 Run the quickstart manual smoke (`specs/1013-jump-pill-seen-receipts/quickstart.md`),
+- [X] T022 Run the quickstart manual smoke (`specs/1013-jump-pill-seen-receipts/quickstart.md`),
   including real-device fade/feel, the foreground gate, and persistence across a reload.
-- [ ] T023 Definition-of-done gate (Constitution VII): `npm run build`; `npx vitest run`;
+- [X] T023 Definition-of-done gate (Constitution VII): `npm run build`; `npx vitest run`;
   `cd server && go build ./... && go vet ./... && go test ./...` (unchanged, must stay green);
   `make db-up && npm run test:e2e` (incl. `e2e/seen-on-view.spec.ts`). All green = done.
 

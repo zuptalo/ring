@@ -22,7 +22,7 @@ import {
   type TransportState,
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, listChats, listMessages, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing } from '@/db/queries';
+import { getChat, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -513,6 +513,66 @@ export async function sendSeenReceipts(chatId: string): Promise<void> {
       seenReceiptsSent.delete(m.id); // retry next time if the send failed
     }
   }
+}
+
+/**
+ * Visibility-driven "Seen" (spec 1013). Report Seen for a just-viewed message AND every OLDER
+ * not-yet-Seen incoming message (uniform catch-up, FR-014) — reading down naturally clears the
+ * backlog. Two concerns are kept separate:
+ *   - LOCAL "seen" (`seenReportedAt`) drives the not-yet-Seen pill and dedups sends. It is set
+ *     once a message has been accounted for, regardless of the wire result, so the pill reflects
+ *     what the user has read.
+ *   - The wire RECEIPT is gated by the "Seen receipts" privacy toggle (FR-010) and the transport.
+ * Privacy OFF ⇒ we stamp locally (the pill still catches up) but send nothing. Privacy ON ⇒ we
+ * stamp only the messages whose receipt we actually sent; an offline/failed send leaves the
+ * message not-yet-Seen so it's retried on the next view / foreground / reconnect (FR-009). The
+ * wire envelope, addressing (1:1 → peer, group → the message's author) and server are unchanged.
+ */
+export async function reportSeenUpTo(chatId: string, viewedMessageId: string): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  const peerUserId = chat.isGroup ? null : chat.participantIds[0];
+  if (!chat.isGroup && !peerUserId) return;
+
+  // Bounded read of the newest rows: the viewed message (always on screen, in the not-yet-Seen
+  // block) and the older not-yet-Seen messages all live near the bottom, so a full read of a huge
+  // chat is unnecessary. Viewing deep, already-Seen history simply finds nothing to do.
+  const msgs = await listMessagesOlder(chatId, null, 500);
+  const viewed = msgs.find((m) => m.id === viewedMessageId);
+  if (!viewed) return;
+  // Incoming, non-deleted, not-yet-reported messages at or before the viewed one in (ts, id) order.
+  const targets = msgs.filter(
+    (m) =>
+      !m.outgoing &&
+      m.senderId !== 'me' &&
+      !m.deleted &&
+      m.seenReportedAt == null &&
+      (m.timestamp < viewed.timestamp || (m.timestamp === viewed.timestamp && m.id <= viewed.id)),
+  );
+  if (!targets.length) return;
+  const at = Date.now();
+
+  // Privacy off: locally account them as seen (the pill catches up) but tell no one.
+  if (!seenReceiptsEnabled) {
+    await markMessagesSeenReported(targets.map((m) => m.id), at);
+    return;
+  }
+  // Offline: leave them not-yet-Seen so the next view/foreground/reconnect retries (FR-009).
+  if (!transport || transport.state !== 'online') return;
+
+  const reported: string[] = [];
+  for (const m of targets) {
+    const to = chat.isGroup ? m.senderId : peerUserId;
+    if (!to || to === 'me') continue;
+    try {
+      await transport.send({ t: 'receipt', messageId: m.id, status: 'seen', at, to });
+      seenReceiptsSent.add(m.id);
+      reported.push(m.id);
+    } catch {
+      // leave unstamped → retried on the next markVisibleSeen (scroll / foreground / reconnect)
+    }
+  }
+  if (reported.length) await markMessagesSeenReported(reported, at);
 }
 
 // Message ids we've sent a 'downloaded' receipt for (so we don't resend each scan).

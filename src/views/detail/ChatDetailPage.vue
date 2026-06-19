@@ -186,7 +186,7 @@
               </span>
             <div
               class="bubble"
-              :class="{ out: m.outgoing, 'bubble-plain': m.videoNote && !m.deleted, 'bubble-media': mediaBubble(m) }"
+              :class="{ out: m.outgoing, 'bubble-plain': m.videoNote && !m.deleted, 'bubble-media': mediaBubble(m), 'bubble-unseen': !m.outgoing && !m.deleted && m.seenReportedAt == null }"
               :data-mid="m.id"
               :style="swipeStyle(m.id)"
               @touchstart.passive="onSwipeStart($event, m)"
@@ -771,7 +771,7 @@
         <!-- Normal mode -->
         <template v-else>
           <ion-buttons slot="start">
-            <ion-button @click="openAttach">
+            <ion-button color="primary" @click="openAttach">
               <ion-icon slot="icon-only" :icon="addOutline" />
             </ion-button>
           </ion-buttons>
@@ -809,6 +809,7 @@
             <template v-else>
               <!-- Tap = camera; hold ~0.6s = round video note. -->
               <ion-button
+                color="primary"
                 aria-label="Camera"
                 @pointerdown="camDown"
                 @pointerup="camUp"
@@ -923,7 +924,7 @@ import {
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
-  CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesNewer,
+  CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
 } from '@/db/queries';
 import { groupProgress } from '@/services/message-status';
 import { getSelfUserId } from '@/services/auth';
@@ -965,14 +966,14 @@ import { useChatHistory } from '@/composables/useChatHistory';
 import { LOOK_AHEAD_PX } from '@/utils/chat-window';
 import { pickAnchor, resolveAnchorDelta, shouldDeferScrollWrite, isSelfEcho } from '@/utils/scroll-anchor';
 import { isRunStart as isRunStartEdge, showDay as showDayEdge } from '@/utils/chat-grouping';
-import { jumpButtonVisible, unreadSince, type UnreadBoundary } from '@/utils/chat-unread';
+import { jumpButtonVisible, unreadSince, seenFrontier } from '@/utils/chat-unread';
 import {
   audioCurId, audioPlaying, audioProgress, audioRate,
   playAudio, seekAudioFrac, cycleAudioRate, stopAudio, detachAudioEnded,
   type AudioTrackMeta,
 } from '@/composables/useAudioPlayer';
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
-import { sendSeenReceipts, sendDownloadedReceipts, sendActivity, sendGroupActivity } from '@/composables/useSync';
+import { reportSeenUpTo, sendDownloadedReceipts, sendActivity, sendGroupActivity, useSync } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
 import { activityFor, activityKindLabel, coalescedActivityLabel } from '@/composables/useTyping';
 import { ACTIVITY, type ActivityKind, type ActivityState } from '@/services/transport';
@@ -1756,11 +1757,11 @@ function notAvailableToast(): void {
 }
 // Poll briefly for the target row to mount, then center it (it may need a tick after a
 // window change). Returns true once it scrolled to it.
-async function centerWhenRendered(id: string, tries: number): Promise<boolean> {
+async function centerWhenRendered(id: string, tries: number, instant = false): Promise<boolean> {
   for (let i = 0; i < tries; i++) {
     const el = document.querySelector(`[data-mid="${id}"]`);
     if (el) {
-      el.scrollIntoView({ behavior: i === 0 ? 'smooth' : 'auto', block: 'center' });
+      el.scrollIntoView({ behavior: instant || i > 0 ? 'auto' : 'smooth', block: 'center' });
       return true;
     }
     await new Promise((r) => setTimeout(r, 80));
@@ -1772,29 +1773,46 @@ async function centerWhenRendered(id: string, tries: number): Promise<boolean> {
 // just center it. Otherwise, for an on-device message older/newer than the loaded window,
 // load batches toward it (bounded loop) until it falls within the run, move the render
 // window to include it, and center it — instead of the old "not available" dead end.
-async function scrollToMessage(id: string): Promise<void> {
-  if (document.querySelector(`[data-mid="${id}"]`)) {
-    await centerWhenRendered(id, 1);
-    return;
+// True while a seek is loading/centering its target, so the rows-watch's auto-follow doesn't yank
+// back to the newest when seekTo swaps the window (the seek and a stickBottom scrollToNewest would
+// otherwise race). Read in the rows-watch below.
+let seeking = false;
+async function scrollToMessage(id: string, opts: { instant?: boolean } = {}): Promise<void> {
+  seeking = true;
+  try {
+    if (document.querySelector(`[data-mid="${id}"]`)) {
+      await centerWhenRendered(id, 1, opts.instant);
+      return;
+    }
+    const target = await getMessage(id);
+    if (!target || target.chatId !== chatId) {
+      notAvailableToast();
+      return;
+    }
+    // Load a window centered on the target in one read-pair (fast even for a target 5,000
+    // messages back — vs paging batch-by-batch, which is O(n²) reads and janky). D7. A concurrent
+    // `messages` change (e.g. the just-sent reply's sent→delivered status, or a receipt) makes
+    // useChatHistory.reconcile bump the shared token and supersede the in-flight seek (it returns
+    // false, window unchanged). Retry a few times so a transient supersede doesn't dead-end it.
+    for (let attempt = 0; attempt < 5 && rows.value.findIndex((r) => r.id === id) < 0; attempt++) {
+      await history.seekTo(target.timestamp);
+      if (rows.value.findIndex((r) => r.id === id) >= 0) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    if (rows.value.findIndex((r) => r.id === id) < 0) {
+      notAvailableToast();
+      return;
+    }
+    // The whole loaded run is rendered, so the target now mounts; re-seed the spacers for the
+    // new window and center it on screen (a tap-driven scroll, not a fling, so scrollIntoView
+    // is fine here). `instant` (open-at-first-unseen) jumps straight there so the visibility scan
+    // doesn't mark every message it would smooth-scroll past (spec 1013).
+    await nextTick();
+    reseedTopPad();
+    if (!(await centerWhenRendered(id, 20, opts.instant))) notAvailableToast();
+  } finally {
+    seeking = false;
   }
-  const target = await getMessage(id);
-  if (!target || target.chatId !== chatId) {
-    notAvailableToast();
-    return;
-  }
-  // Load a window centered on the target in one read-pair (fast even for a target 5,000
-  // messages back — vs paging batch-by-batch, which is O(n²) reads and janky). D7.
-  if (rows.value.findIndex((r) => r.id === id) < 0) await history.seekTo(target.timestamp);
-  if (rows.value.findIndex((r) => r.id === id) < 0) {
-    notAvailableToast();
-    return;
-  }
-  // The whole loaded run is rendered, so the target now mounts; re-seed the spacers for the
-  // new window and center it on screen (a tap-driven scroll, not a fling, so scrollIntoView
-  // is fine here).
-  await nextTick();
-  reseedTopPad();
-  if (!(await centerWhenRendered(id, 20))) notAvailableToast();
 }
 
 // Drag-to-swipe a bubble (touch only): drag right past the threshold to reply,
@@ -2147,6 +2165,7 @@ function observeScroll(): void {
   void ensureScrollEl().then((el) => {
     if (el && resizeObs) resizeObs.observe(el); // viewport height (keyboard)
     setupWindowSentinels(el);
+    setupBubbleObserver(el); // spec 1013: per-bubble ≥50% visibility → Seen
   });
 }
 
@@ -2176,6 +2195,75 @@ function setupWindowSentinels(root: HTMLElement | null): void {
   if (bottomSentinel.value) windowObs.observe(bottomSentinel.value);
 }
 
+// ---- visibility-driven "Seen" (spec 1013) ----
+// A second IntersectionObserver over the message bubbles: a bubble crossing ≥50% visible is
+// "seen". The NEWEST visible incoming message advances the Seen frontier (reportSeenUpTo marks it
+// AND all older not-yet-Seen — uniform catch-up). Acts only while the chat is genuinely
+// foregrounded (route active + document visible); off-screen messages are never reported. The
+// observer is bounded by the rendered window (spec 1011 MAX_ROWS).
+let bubbleVisObs: IntersectionObserver | null = null;
+let markSeenTimer: ReturnType<typeof setTimeout> | undefined;
+// Don't auto-report Seen until the initial open position is decided (the first-load watch seeks to
+// the first unseen message, or pins to the bottom, then flips this on). Otherwise the observer
+// would mark the bottom screenful — and, via catch-up, the whole backlog — Seen on open.
+let seenSettled = false;
+function setupBubbleObserver(root: HTMLElement | null): void {
+  if (!root || !('IntersectionObserver' in window)) return;
+  bubbleVisObs?.disconnect();
+  // The observer is just a cheap TRIGGER: any bubble crossing in/out re-runs the authoritative
+  // geometry scan in markVisibleSeen. (We don't trust the observer's own ratio bookkeeping, which
+  // can lag a programmatic jump.)
+  bubbleVisObs = new IntersectionObserver(() => markVisibleSeen(), { root, threshold: [0, 0.5, 1] });
+  observeBubbles();
+}
+function observeBubbles(): void {
+  if (!bubbleVisObs) return;
+  // observe() is idempotent; bubbles removed by the window slide simply stop reporting.
+  listEl.value?.querySelectorAll<HTMLElement>('.bubble[data-mid]').forEach((n) => bubbleVisObs!.observe(n));
+}
+// Report Seen up to the newest incoming message that is currently ≥50% within the scroll viewport
+// (catch-up handles everything older). Measures live geometry rather than cached observer state, so
+// it's correct right after a programmatic jump. DEBOUNCED to the scroll settling (~220ms quiet):
+// during a fling/seek the observer fires constantly, but we only read the store + send once the
+// view comes to rest — so it adds no per-frame cost to scrolling (spec 1013 perf, T020) and won't
+// mark messages merely flung past.
+function markVisibleSeen(): void {
+  clearTimeout(markSeenTimer);
+  markSeenTimer = setTimeout(() => void runMarkVisibleSeen(), 220);
+}
+async function runMarkVisibleSeen(): Promise<void> {
+  if (!seenSettled) return; // wait until the initial open position (first-unseen vs bottom) settles
+  if (seeking) return; // don't let a Seen write supersede an in-flight seek (token race)
+  if (!viewActive.value || document.visibilityState !== 'visible') return;
+  const el = scrollEl;
+  if (!el) return;
+  const vTop = el.getBoundingClientRect().top;
+  const vBot = vTop + el.clientHeight;
+  let newestTs = -Infinity;
+  let newestId: string | null = null;
+  for (const n of Array.from(listEl.value?.querySelectorAll<HTMLElement>('.bubble[data-mid]') ?? [])) {
+    const r = n.getBoundingClientRect();
+    if (r.height <= 0) continue;
+    const visible = Math.min(r.bottom, vBot) - Math.max(r.top, vTop);
+    if (visible / r.height < 0.5) continue; // <50% on screen → not "seen"
+    const mid = n.dataset.mid;
+    const m = mid ? rows.value.find((x) => x.id === mid) : undefined;
+    if (!m || m.outgoing || m.deleted) continue; // incoming, non-deleted only
+    if (m.timestamp > newestTs || (m.timestamp === newestTs && newestId !== null && m.id > newestId)) {
+      newestTs = m.timestamp;
+      newestId = m.id;
+    }
+  }
+  if (!newestId) return;
+  await reportSeenUpTo(chatId, newestId);
+  await recomputeUnread(); // the marks dropped the not-yet-Seen count → shrink the pill
+}
+// Re-attempt Seen for what's on screen when the transport reconnects (offline sends are retried).
+const { syncState } = useSync();
+watch(syncState, (s) => {
+  if (s === 'online') markVisibleSeen();
+});
+
 onMounted(() => {
   void markChatRead(chatId);
   void resumePendingMediaJobs(); // restart any compressions interrupted by a reload
@@ -2195,17 +2283,18 @@ onUnmounted(() => {
   clearTimeout(listReadyFallback);
   resizeObs?.disconnect();
   windowObs?.disconnect();
+  bubbleVisObs?.disconnect();
+  clearTimeout(markSeenTimer);
 });
-// Send 'seen' receipts ONLY when the user is genuinely looking at this chat: its
-// view is the active one AND the app is foregrounded (document visible). A message
-// that arrives via push while the app is backgrounded (screen off / another app)
-// must NOT be marked seen just because the chat view is still mounted, or the
-// sender would see a false "seen". The receipt is sent instead when the user
-// returns to the foregrounded chat (onVisibilityChange) or opens it. (sendSeenReceipts
-// is itself a no-op when the "Seen receipts" privacy toggle is off.)
+// Report Seen ONLY when the user is genuinely looking at this chat: its view is the active one AND
+// the app is foregrounded (document visible). Spec 1013: this no longer bulk-marks the whole chat —
+// it asks the visibility observer to report Seen for the messages actually on screen (and older,
+// via catch-up). A message that arrived via push while backgrounded is NOT marked until the chat
+// is foregrounded and the message is on screen. markVisibleSeen is itself foreground-gated and the
+// send is a no-op when the "Seen receipts" privacy toggle is off.
 function markChatSeenIfVisible(): void {
   if (viewActive.value && document.visibilityState === 'visible') {
-    void sendSeenReceipts(chatId);
+    markVisibleSeen();
     void sendDownloadedReceipts(chatId); // free server blobs once we hold the media
   }
 }
@@ -2216,7 +2305,7 @@ onIonViewDidEnter(() => {
   observeScroll(); // resolve + observe the scroll element (re-pin on keyboard/resize)
   setActiveChat(chatId); // suppress in-app banners for the chat we're viewing
   void markChatRead(chatId);
-  markChatSeenIfVisible();
+  markChatSeenIfVisible(); // the initial open-at-first-unseen is owned by the first-load watch
   scheduleShareHint();
   // Entered with ?search=1 (from the contact-info "Search" action) → open search.
   if (route.query.search) showSearch.value = true;
@@ -2342,14 +2431,25 @@ watch(
     if (!didInitialLoad) {
       didInitialLoad = true;
       if (!search.value && rows.value.length) {
-        stickBottom = true;
-        await scrollToNewest();
+        // Spec 1013: open at the first not-yet-Seen message (unread-divider style) so reading down
+        // advances Seen; only fall back to the newest when caught up. This is the authoritative
+        // initial-position decision, so it must own the pin (onIonViewDidEnter would race it).
+        await recomputeUnread();
+        if (unreadCount.value > 0 && firstUnreadId.value) {
+          await scrollToMessage(firstUnreadId.value, { instant: true }); // jump, don't scroll past
+        } else {
+          stickBottom = true;
+          await scrollToNewest();
+        }
         reseedTopPad();
       }
+      seenSettled = true; // initial position decided → the observer may now report Seen
       listReady.value = true;
+      markChatSeenIfVisible(); // mark what's actually on screen (landed first-unseen, or bottom)
       return;
     }
     if (search.value || !newestId || newestId === prevId) return; // not a new bottom message
+    if (seeking) return; // a seek is swapping the window — don't yank back to the newest
     const newest = rows.value[rows.value.length - 1];
     if (newest?.outgoing || stickBottom) await scrollToNewest();
   },
@@ -2672,10 +2772,10 @@ async function ensureScrollEl(): Promise<HTMLElement | null> {
 const JUMP_SHOW_PX = 600; // ≈ one screen: appear once scrolled this far from the bottom
 const JUMP_HIDE_PX = 120; // hide within the same band the pin uses (nearBottom)
 const jumpVisible = ref(false);
-// The (timestamp, id) of the newest message the user had seen when they left the bottom — the
-// cut everything-below is "unread". A tuple, not a bare ts, so a same-millisecond incoming
-// message isn't dropped (ids are random, several can share a ms — see chat-unread.ts).
-const unreadBoundary = ref<UnreadBoundary | null>(null);
+// Not-yet-Seen pill state (spec 1013): how many incoming messages this device hasn't reported
+// Seen yet, and the first such message (the open-at / tap target). Derived from the persisted
+// per-message `seenReportedAt` via recomputeUnread() — this replaces spec 1012's scroll-boundary
+// count, so the pill reflects what's actually unseen (and the sender hasn't been told you've seen).
 const unreadCount = ref(0);
 const firstUnreadId = ref<string | null>(null);
 const jumpBadge = computed(() => (unreadCount.value > 99 ? '99+' : String(unreadCount.value)));
@@ -2688,36 +2788,39 @@ const jumpLabel = computed(() =>
     ? `${unreadCount.value} new message${unreadCount.value === 1 ? '' : 's'}, scroll to latest`
     : 'Scroll to latest',
 );
-function clearUnread(): void {
-  unreadBoundary.value = null;
-  unreadCount.value = 0;
-  firstUnreadId.value = null;
-}
-// Count incoming messages since the boundary via a bounded read (so a far-trimmed window still
-// counts accurately, spec 1011 evicts the tail); feeds the badge + first-unread target. The read
-// is inclusive of the boundary millisecond (the `ts - 1` idiom, as listMessagesNewer uses a
-// strict `>` slice and ms timestamps are integers) so a same-ms message isn't lost before the
-// precise (timestamp, id) cut in unreadSince.
+// Count the not-yet-Seen incoming messages (those without `seenReportedAt`) and the first such
+// message — everything after the seen frontier. Reads the chat's messages so the count is correct
+// even for a backlog larger than the loaded window; recomputed on message change and right after
+// marking Seen (the persisted flag is the source of truth, so this stays accurate across restarts).
 async function recomputeUnread(): Promise<void> {
-  const boundary = unreadBoundary.value;
-  if (boundary === null) return;
-  const newer = await listMessagesNewer(chatId, boundary.ts - 1, 100); // bounded by the display cap
-  if (unreadBoundary.value !== boundary) return; // boundary moved while reading — discard
-  const { count, firstId } = unreadSince(newer, boundary, selfId);
+  // The not-yet-Seen messages are the newest block (everything after the seen frontier), so a
+  // BOUNDED read of the newest rows is enough — and essential: a full read of a 5k-message chat on
+  // every change would starve scrolling/seeks (the count is display-capped at 99+ anyway).
+  const recent = await listMessagesOlder(chatId, null, 200);
+  // When NOTHING has been reported yet the frontier is null — which for unreadSince means "pinned
+  // to bottom → 0" (the spec-1012 sense), the OPPOSITE of what we want (all incoming are unseen).
+  // Coalesce to a before-everything boundary so a fresh/unseen backlog counts in full.
+  const frontier = seenFrontier(recent, selfId) ?? { ts: -Infinity, id: '' };
+  const { count, firstId } = unreadSince(recent, frontier, selfId);
   unreadCount.value = count;
   firstUnreadId.value = firstId;
 }
-// New messages while scrolled up → recount (the change bus bumps history.total on add/remove).
+// New / removed messages → recount (the change bus bumps history.total). Marking Seen recomputes
+// explicitly in markVisibleSeen, since a field update doesn't change the total.
 watch(
   () => history.total.value,
-  () => {
-    if (unreadBoundary.value !== null) void recomputeUnread();
-  },
+  () => void recomputeUnread(),
 );
-// Tap: jump to the first unread when there is one, else the newest; clear the badge either way.
+// Re-observe bubbles whenever the rendered window changes (slide / new message) so the freshly
+// rendered bubbles get visibility callbacks (observe() is idempotent for ones already tracked).
+watch(
+  () => [rows.value.length, rows.value[0]?.id, rows.value[rows.value.length - 1]?.id].join('|'),
+  () => void nextTick(observeBubbles),
+);
+// Tap: jump to the first not-yet-Seen message when there is one, else the newest. The count
+// clears itself as those messages scroll into view and get reported Seen (no manual reset).
 async function onJumpToLatest(): Promise<void> {
   const target = unreadCount.value > 0 ? firstUnreadId.value : null;
-  clearUnread();
   if (target) await scrollToMessage(target);
   else await scrollToNewest();
 }
@@ -2734,10 +2837,9 @@ async function scrollToNewest(): Promise<void> {
   el.scrollTop = el.scrollHeight; // now lands on the newest row (botPad is 0 at the bottom)
   stickBottom = true;
   suppressStickUntil = Date.now() + 250;
-  // We're at the newest now → hide the scroll-to-latest control and clear its unread state
-  // (the pin scroll is suppressed in onContentScroll, so do it explicitly here).
+  // We're at the newest now → hide the control (the count clears itself as the now-visible bottom
+  // messages get reported Seen by the visibility observer).
   jumpVisible.value = false;
-  clearUnread();
 }
 // Within ~120px of the bottom counts as "pinned to newest". Defaults to true before
 // the scroll element resolves (a fresh chat opens pinned to newest).
@@ -2755,19 +2857,11 @@ function onContentScroll(): void {
   if (lastScrollTop >= 0 && top !== lastScrollTop) scrollDir = top < lastScrollTop ? 'up' : 'down';
   lastScrollTop = top;
   stickBottom = nearBottom();
-  // Scroll-to-latest control (spec 1012): show/hide with hysteresis off the distance to the
-  // bottom; set the unread boundary on leaving the bottom, clear it on returning.
+  // Scroll-to-latest control: show/hide with hysteresis off the distance to the bottom. The
+  // not-yet-Seen count is driven by the visibility observer + recomputeUnread, not by the scroll
+  // boundary (spec 1013), so there's nothing to set here.
   const dist = scrollEl ? scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight : 0;
   jumpVisible.value = jumpButtonVisible(dist, jumpVisible.value, JUMP_SHOW_PX, JUMP_HIDE_PX);
-  if (stickBottom) {
-    clearUnread();
-  } else if (unreadBoundary.value === null) {
-    // Mark where the user left the bottom: the newest loaded row IS the chat's newest here (we
-    // can't have trimmed the tail within one scroll event of the bottom). Capture (ts, id) so a
-    // later same-millisecond message is still counted.
-    const last = rows.value[rows.value.length - 1];
-    if (last) unreadBoundary.value = { ts: last.timestamp, id: last.id };
-  }
 }
 
 async function send() {
@@ -4322,6 +4416,8 @@ function cancelRecording() {
   display: inline-block;
   opacity: 0;
   margin-inline-start: 0;
+  /* Green count — the theme green, same as the composer mic/camera buttons (spec 1013). */
+  color: var(--ion-color-primary);
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
@@ -4331,6 +4427,12 @@ function cancelRecording() {
 .jump-btn.jump-btn-pill .jump-count {
   opacity: 1;
   margin-inline-start: 5px;
+}
+/* A new (not-yet-Seen) incoming message wears a green ring in the theme green — same as the pill
+   count and the composer buttons — until it's reported Seen (spec 1013). box-shadow (not border)
+   so it follows the rounded corners and adds/removes with no layout shift. */
+.bubble.bubble-unseen {
+  box-shadow: 0 0 0 1.5px var(--ion-color-primary);
 }
 /* Centered day divider between message groups. */
 .day-sep {

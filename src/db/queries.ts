@@ -897,6 +897,25 @@ export async function toggleFavorite(messageId: string): Promise<boolean> {
   return !!m.favorite;
 }
 
+/**
+ * Spec 1013: stamp `seenReportedAt` on the given INCOMING messages — this device has accounted
+ * them Seen. Drives the not-yet-Seen pill (a write notifies the change bus, so the count
+ * recomputes) and dedups receipt sends. Skips outgoing/own and any already stamped, so it's a
+ * cheap idempotent no-op when nothing is new. Returns the ids it actually stamped.
+ */
+export async function markMessagesSeenReported(ids: readonly string[], at: number): Promise<string[]> {
+  const stamped: string[] = [];
+  for (const id of ids) {
+    const m = await getMessage(id);
+    if (!m || m.outgoing || m.senderId === 'me' || m.seenReportedAt != null) continue;
+    m.seenReportedAt = at;
+    m.updatedAt = now();
+    await put('messages', m);
+    stamped.push(id);
+  }
+  return stamped;
+}
+
 /** The starred (favorited) messages in a chat, newest first. */
 export async function listStarred(chatId: string): Promise<Message[]> {
   const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
