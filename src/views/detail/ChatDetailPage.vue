@@ -268,7 +268,7 @@
                 <video-note
                   v-if="m.kind === 'video' && m.videoNote"
                   :mid="m.id"
-                  :src="mediaInfo[m.mediaId].url"
+                  :src="mediaInfo[m.mediaId].url || ''"
                   :poster="mediaInfo[m.mediaId].posterUrl"
                   :duration-sec="m.durationSec"
                 />
@@ -276,7 +276,7 @@
                   v-else-if="m.kind === 'voice'"
                   :mid="m.id"
                   :sender="m.outgoing ? 'You' : chat?.isGroup ? m.senderName : chat?.name ?? m.senderName"
-                  :src="mediaInfo[m.mediaId].url"
+                  :src="mediaInfo[m.mediaId].url || ''"
                   :outgoing="m.outgoing"
                   :avatar="!m.outgoing && !chat?.isGroup ? chat?.avatar : undefined"
                   :duration-sec="m.durationSec"
@@ -1564,7 +1564,10 @@ function clearedIcon(kind: string): string {
 const forwardable = (m: Message) =>
   !m.outgoing &&
   !m.deleted &&
-  (((m.kind === 'image' || m.kind === 'video' || m.kind === 'file') && !!m.mediaId) ||
+  // Forwarding re-sends the original, so require it to still be on device — an original freed to
+  // save space (spec 1014 FR-018) keeps its mediaId + preview but has no `url`, so it isn't
+  // forwardable (otherwise the forward would silently send nothing).
+  (((m.kind === 'image' || m.kind === 'video' || m.kind === 'file') && !!m.mediaId && !!mediaInfo.value[m.mediaId]?.url) ||
     (m.kind === 'text' && hasLink(m.body)));
 
 const forwardOpen = ref(false);
@@ -2562,7 +2565,7 @@ async function loadNewer(): Promise<void> {
 
 // Resolve on-device media (Blobs) to object URLs for rendering.
 interface MediaInfo {
-  url: string;
+  url?: string; // full-resolution original; undefined once freed to save space (spec 1014 FR-018)
   posterUrl?: string; // bubble tier (≤512) — chat bubble + viewer main fallback
   gridUrl?: string; // grid tier (≤320) — album grid cells (spec 1014)
   stripUrl?: string; // strip tier (≤128) — viewer bottom thumbnail strip (spec 1014)
@@ -2608,7 +2611,9 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
     const media = await get<Media>('media', m.mediaId);
     if (!media) continue;
     const info: MediaInfo = {
-      url: URL.createObjectURL(media.blob),
+      // undefined when the original was freed to save space (spec 1014 FR-018) — the bubble/grid
+      // still render from the tiers below, and the viewer falls back to the thumb / placeholder.
+      url: media.blob ? URL.createObjectURL(media.blob) : undefined,
       // Poster precedence: a persisted posterBlob, else the sender-embedded
       // posterData (a stable data URL). Feeding posterData into posterUrl means the
       // viewer, bottom slider and Media grid (which read posterUrl, not the message)
@@ -2630,7 +2635,7 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
     // Videos: prefer the sent thumbnail (m.posterData, a stable data URL).
     // Otherwise derive one from the first frame and PERSIST it (posterBlob) so it
     // isn't regenerated/lost on every remount.
-    if (m.kind === 'video' && !info.posterUrl && !m.posterData) {
+    if (m.kind === 'video' && !info.posterUrl && !m.posterData && media.blob) {
       const blob = media.blob;
       const mid = m.mediaId;
       void generateVideoPoster(blob).then(async (poster) => {
@@ -2651,7 +2656,7 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
     // Images: derive a small thumbnail (stored as posterBlob) the bubble/grid/strip
     // render instead of the full image, so scroll-back doesn't re-decode full-res
     // photos. The full image is still used in the viewer. Persist so it's one-time.
-    if (m.kind === 'image' && !info.posterUrl) {
+    if (m.kind === 'image' && !info.posterUrl && media.blob) {
       const blob = media.blob;
       const mid = m.mediaId;
       void generateImageThumb(blob).then(async (thumb) => {
@@ -2677,9 +2682,10 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
       });
     }
     // Audio (shared music): pull embedded cover art for the track card.
-    if (m.kind === 'audio' && !info.posterUrl) {
+    if (m.kind === 'audio' && !info.posterUrl && media.blob) {
+      const blob = media.blob;
       const mid = m.mediaId;
-      void readAudioTags(media.blob).then((tags) => {
+      void readAudioTags(blob).then((tags) => {
         if (tags.cover && mediaInfo.value[mid]) {
           mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: URL.createObjectURL(tags.cover) };
         }
@@ -2723,7 +2729,7 @@ function evictMedia(): void {
   for (const id of selectEvictions(mediaLru, keep, MAX_MEDIA)) {
     const mi = mediaInfo.value[id];
     if (mi) {
-      URL.revokeObjectURL(mi.url);
+      if (mi.url) URL.revokeObjectURL(mi.url);
       if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
       if (mi.gridUrl) URL.revokeObjectURL(mi.gridUrl);
       if (mi.stripUrl) URL.revokeObjectURL(mi.stripUrl);
@@ -2752,7 +2758,7 @@ watch(
 // chat opens (the cache only lives for this view).
 onUnmounted(() => {
   for (const mi of Object.values(mediaInfo.value)) {
-    URL.revokeObjectURL(mi.url);
+    if (mi.url) URL.revokeObjectURL(mi.url);
     if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
     if (mi.gridUrl) URL.revokeObjectURL(mi.gridUrl);
     if (mi.stripUrl) URL.revokeObjectURL(mi.stripUrl);

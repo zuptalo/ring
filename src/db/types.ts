@@ -335,7 +335,10 @@ export interface Media {
   mime: string;
   name: string;
   size: number;
-  blob: Blob;
+  // The full-resolution original. Optional because "free space, keep previews" (spec 1014 FR-018)
+  // drops the original while retaining the thumbnail tiers below — the record (and its mediaId) stays
+  // so the bubble/grid/strip previews keep rendering. `size` is zeroed when the blob is freed.
+  blob?: Blob;
   // Spec 1014 thumbnail tiers. posterBlob is the LARGE/bubble tier (the existing video poster, and
   // now the 512px image bubble thumbnail received via MediaRef.poster) — used by the chat bubble.
   // posterGrid (320) and posterStrip (128) are derived locally from posterBlob and used by the

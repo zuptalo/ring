@@ -24,6 +24,7 @@
           <ion-label class="ion-text-wrap">
             <h2>{{ formatBytes(used) }}</h2>
             <p>{{ quota ? formatBytes(quota) + ' available' : 'Used by Ring on this device' }}</p>
+            <p v-if="thumbsUsed > 0">includes {{ formatBytes(thumbsUsed) }} in previews</p>
           </ion-label>
         </ion-item>
         <ion-item lines="none">
@@ -41,7 +42,10 @@
           :lines="i === typeRows.length - 1 ? 'none' : undefined"
           @click="byType[t.kind] > 0 && cleanKind([t.kind], t.label)"
         >
-          <ion-label>{{ t.label }}</ion-label>
+          <ion-label class="ion-text-wrap">
+            {{ t.label }}
+            <p v-if="thumbsByType[t.kind] > 0">+ {{ formatBytes(thumbsByType[t.kind]) }} previews</p>
+          </ion-label>
           <ion-note slot="end">{{ formatBytes(byType[t.kind]) }}</ion-note>
           <ion-icon
             v-if="byType[t.kind] > 0"
@@ -58,6 +62,10 @@
           <ion-icon slot="start" :icon="fileTrayFullOutline" color="primary" />
           <ion-label color="primary">Free up large files…</ion-label>
         </ion-item>
+        <ion-item button :detail="false" lines="none" @click="confirmKeepPreviews">
+          <ion-icon slot="start" :icon="imagesOutline" color="primary" />
+          <ion-label color="primary">Free space, keep previews</ion-label>
+        </ion-item>
       </ion-list>
 
       <ion-list :inset="true" v-if="perChat.length">
@@ -68,7 +76,10 @@
           </ion-avatar>
           <ion-label class="ion-text-wrap">
             <h2>{{ row.name }}</h2>
-            <p>{{ row.count }} item{{ row.count === 1 ? '' : 's' }}</p>
+            <p>
+              {{ row.count }} item{{ row.count === 1 ? '' : 's' }}
+              <template v-if="row.bytesThumbs > 0"> · {{ formatBytes(row.bytesThumbs) }} previews</template>
+            </p>
           </ion-label>
           <ion-note slot="end">{{ formatBytes(row.bytes) }}</ion-note>
         </ion-item>
@@ -91,10 +102,10 @@ import {
   IonContent, IonList, IonListHeader, IonItem, IonLabel, IonNote, IonIcon,
   IonAvatar, IonProgressBar, alertController, actionSheetController,
 } from '@ionic/vue';
-import { trashOutline, fileTrayFullOutline } from 'ionicons/icons';
+import { trashOutline, fileTrayFullOutline, imagesOutline } from 'ionicons/icons';
 import {
   storageByChat, storageByType, clearAllMedia,
-  deleteMediaByKind, deleteMediaLargerThan, mediaCleanupPreview,
+  deleteMediaByKind, deleteMediaLargerThan, mediaCleanupPreview, freeKeepingPreviews,
 } from '@/db/queries';
 import type { Media } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
@@ -109,13 +120,16 @@ const typeRows: { kind: Media['kind']; label: string }[] = [
 ];
 
 const perChat = useLiveQuery(() => storageByChat(), ['messages', 'media', 'chats'], []);
+const zeroByKind = { image: 0, video: 0, file: 0, voice: 0, audio: 0 };
 const typeStats = useLiveQuery(
   () => storageByType(),
   ['media'],
-  { total: 0, byKind: { image: 0, video: 0, file: 0, voice: 0, audio: 0 } },
+  { total: 0, byKind: { ...zeroByKind }, thumbsTotal: 0, thumbsByKind: { ...zeroByKind } },
 );
 const byType = computed(() => typeStats.value.byKind);
+const thumbsByType = computed(() => typeStats.value.thumbsByKind);
 const used = computed(() => typeStats.value.total);
+const thumbsUsed = computed(() => typeStats.value.thumbsTotal);
 
 // Origin storage allowance (real where the API exists; 0 hides the ratio).
 const quota = ref(0);
@@ -172,6 +186,20 @@ async function confirmLarge(minBytes: number, mb: number): Promise<void> {
     buttons: [
       { text: 'Cancel', role: 'cancel' },
       { text: 'Delete', role: 'destructive', handler: () => void deleteMediaLargerThan(minBytes) },
+    ],
+  });
+  await a.present();
+}
+
+// Free the full-resolution originals app-wide but keep the small previews (spec 1014 FR-018).
+async function confirmKeepPreviews(): Promise<void> {
+  const a = await alertController.create({
+    header: 'Free space, keep previews',
+    message:
+      'Remove the full-resolution photos and videos from this device but keep the small previews. Previews still show in chats, but the full-resolution originals are removed permanently and cannot be recovered.',
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      { text: 'Free space', role: 'destructive', handler: () => void freeKeepingPreviews() },
     ],
   });
   await a.present();

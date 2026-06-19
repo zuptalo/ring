@@ -249,23 +249,58 @@ per-chat all-media screen defaults to this chat.
 
 ### Tests first (must fail)
 
-- [ ] T022 [P] [US4] Write a failing e2e in `e2e/media-cleanup.spec.ts`: storage usage includes
-  thumbnail bytes; deleting a chat's images removes their thumbnails (no orphans); "free space, keep
-  previews" removes originals while bubble/grid previews still render; per-chat cleanup is scoped to
-  the current chat.
+- [X] T022 [P] [US4] e2e in `e2e/media-cleanup.spec.ts`: storage by-type + by-chat include thumbnail
+  bytes distinct from (and smaller than) originals; `freeKeepingPreviews` frees originals while all three
+  tiers + the rendered bubble survive; deleting a chat's images removes their tiers (no orphan) and is
+  scoped to that chat. New testhooks: `storageByChat`, `freeKeepingPreviews`, `clearChatMedia`.
 
 ### Implementation
 
-- [ ] T023 [US4] In `src/db/queries.ts`, extend `storageByType`/`storageByChat` to sum
-  `blob + posterBlob + posterGrid + posterStrip` (originals vs thumbnails distinct); make deletion
-  remove all tiers (no orphans); add `freeKeepingPreviews` (delete `blob`, set `mediaCleared`, keep
-  tiers) and a `clearChatMedia(chatId, …)` per-chat path (FR-016/FR-017/FR-018).
-- [ ] T024 [US4] Wire the UI: `src/views/detail/StorageManagePage.vue` shows thumbnail totals and
-  per-chat row actions incl. "free space, keep previews"; `src/views/detail/AllMediaPage.vue` cleanup
-  defaults to THIS chat with an app-wide toggle; add any `src/settings/schema.ts` entries (FR-019) to
-  pass T022.
+> **Data design (resolved):** "free space, keep previews" drops `Media.blob` only and KEEPS the record,
+> `mediaId`, and the tiers — it does **NOT** set `mediaCleared` (the tasks.md hint was wrong: `mediaCleared`
+> + cleared `mediaId` triggers the "removed to free space" placeholder, the opposite of FR-018). The bubble/
+> grid/strip read the tiers (`posterUrl`/`gridUrl`/`stripUrl`), never `blob`, so the preview renders pixel-
+> identical after freeing; the viewer main falls back to the thumb via the US2 placeholder path. `Media.blob`
+> became optional (`blob?: Blob`) — a type-only change, additive, **no `DB_VERSION` bump** (FR-020).
 
-**Checkpoint**: T022 passes; storage is thumbnail-aware, global + per-chat, with keep-previews.
+- [X] T023 [US4] `src/db/queries.ts`: `storageByType`/`storageByChat` now account originals
+  (`originalBytes` = blob ? size : 0) and thumbnail tiers (`tierBytes` = posterBlob+grid+strip) separately
+  (FR-016); `freeKeepingPreviews(opts)` drops `blob` + zeroes `size`, keeps tiers (FR-018); `clearChatMedia`
+  per-chat wrapper (FR-019); deletion already removes the whole record so tiers cascade — **FR-017 is
+  inherent** (documented). Guarded the ~25 `media.blob` readers (send pipeline bails on a freed record;
+  `resolveMediaFor`/AllMediaPage builders fall back when `blob` is absent).
+- [X] T024 [US4] UI: `StorageManagePage.vue` shows previews distinctly (summary "includes X in previews",
+  per-type "+ X previews", per-chat "· X previews") and a global "Free space, keep previews" action;
+  `AllMediaPage.vue` cleanup already defaults to THIS chat — added "Free space, keep previews", "Clear all
+  media in this chat", and an explicit "Manage storage (all chats)…" link (FR-019). No `schema.ts` change
+  needed (the storage route already exists; cleanup is action-only, no new toggles).
+
+**Checkpoint**: ✅ T022 passes; storage is thumbnail-aware (global + per-chat), deletion leaves no orphan
+tiers, and keep-previews frees originals while previews render. Verified: `npm run build` green, `npx vitest
+run` 223/223, `media-cleanup` (2 incl. the new US4 test) green, full media e2e green (the 2 US2 viewer tests
+flake only under 6-file parallel load — pass in isolation), and a drive run showed originals 2.1 MB → 0 with
+the bubble preview still rendering + the Manage-storage page showing previews distinctly.
+
+> **Adversarial review pass** (multi-agent, refute-verified): applied the two real findings — **(B)** the
+> keep-previews confirmation no longer promises an impossible "re-download" (a freed original is removed
+> permanently — `downloadMessageMedia` can't recover it and the server blob is already gone), stated honestly
+> in both StorageManagePage and a new AllMediaPage confirm; **(E)** `forwardable()` now also requires the
+> original to be on device, so a freed image isn't offered for forward (forwarding re-sends the original,
+> which would otherwise silently send nothing). Declined the over-stated findings: A (freed items have
+> `size=0` → correctly excluded from "large files"; kept previews are intentional and removable by-kind/
+> clear-chat — not a leak), C (Vue omits an `undefined` `:href`; files are never freed), D (the media-job
+> closure keeps its own blob ref; `freeKeepingPreviews` writes a different fetched object).
+
+### Follow-up (user request): "Go to message" from the all-media page
+
+- **Fix**: AllMediaPage's media-viewer `@goto`/`@reply` used `goChat` which ignored the message id (it just
+  opened the chat at the bottom). Now `goToMessage(id)` navigates to `/chat/:id?jump=:id`, so the chat
+  **scrolls to that message** (the same `?jump` path the Starred list uses; verified it works even though
+  AllMediaPage is a child route of the chat).
+- **New**: the Links and Docs tabs each gained a "Go to message" button (the row tap still opens the
+  link/document), so a shared link or document can jump to where it was sent.
+- Verified by `e2e/all-media-goto.spec.ts` (viewer + links + docs all navigate with `?jump`) and a drive run
+  (media-viewer go-to-message scrolled a far-off-screen target image into view).
 
 ---
 

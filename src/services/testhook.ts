@@ -65,8 +65,11 @@ import {
   deleteContact as dbDeleteContact,
   setSetting as dbSetSetting,
   storageByType as dbStorageByType,
+  storageByChat as dbStorageByChat,
   deleteMediaByKind as dbDeleteMediaByKind,
   deleteMediaLargerThan as dbDeleteMediaLargerThan,
+  freeKeepingPreviews as dbFreeKeepingPreviews,
+  clearChatMedia as dbClearChatMedia,
   listMessages,
   listChats,
   listArchivedChats,
@@ -597,10 +600,16 @@ export function installTestHook(): void {
     /** Inject the curated showcase demo dataset (contacts, chats, messages, media,
      *  call log) for the screenshot harness. See services/showcase-seed.ts. */
     seedShowcase: (): Promise<void> => runSeedShowcase(),
-    /** Total on-device media bytes by kind. */
+    /** Total on-device media bytes by kind (originals + thumbnail tiers, distinct). Spec 1014. */
     storageByType: () => dbStorageByType(),
+    /** Per-chat media footprint incl. thumbnail-tier bytes (spec 1014 FR-016). */
+    storageByChat: () => dbStorageByChat(),
     deleteMediaByKind: (kinds: Media['kind'][], chatId?: string) => dbDeleteMediaByKind(kinds, chatId),
     deleteMediaLargerThan: (bytes: number, chatId?: string) => dbDeleteMediaLargerThan(bytes, chatId),
+    /** Spec 1014 FR-018: free originals but keep the bubble/grid/strip previews (optionally per chat). */
+    freeKeepingPreviews: (chatId?: string) => dbFreeKeepingPreviews(chatId ? { chatId } : {}),
+    /** Spec 1014 FR-019: delete all media in one chat (originals + tiers). */
+    clearChatMedia: (chatId: string) => dbClearChatMedia(chatId),
     /** Server-side directory search → [{id, username, displayName}]. */
     // Drive the real client store actions (import + mark-connected + reconcile),
     // not the raw API, so e2e exercises the actual friend-request behavior.
