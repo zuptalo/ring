@@ -23,6 +23,7 @@ import router from '@/router';
 import { getSetting, isChatMuted, getChat } from '@/db/queries';
 import { subscribe } from '@/db/idb';
 import { notifyLocal } from '@/services/push';
+import { inAppGloballyEnabled, getChatNotifyPrefs, type ChatNotifyContent } from '@/services/notify-prefs';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { playTone } from '@/services/sound';
 
@@ -220,23 +221,35 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
   // Per-chat mute suppresses all alerting for this chat (the message still arrives
   // and grows the unread badge). Requests have no chat to mute.
   if (n.chatId && (await isChatMuted(n.chatId))) return;
+  // Per-chat notification controls (spec 1015): content visibility + in-app toggle.
+  // A friend request / system notice has no chat, so it uses the defaults (web push
+  // on, in-app on, content full).
+  const chatPrefs = n.chatId ? await getChatNotifyPrefs(n.chatId) : null;
+  const content: ChatNotifyContent = chatPrefs?.content ?? 'full';
+  // content = 'none' → badge-only: reveal nothing, anywhere (no banner, no system
+  // notification, no lock-screen text). The badge still updates elsewhere (FR-024).
+  if (content === 'none') return;
+  // content = 'generic' → fire a placeholder with no message text (sender name is
+  // not message content, so it may still head the notice, matching showPreview=off).
+  const showFull = content === 'full';
   const p = await ensurePrefs();
   // Backgrounded: hand off to an OS notification (covers the connected-but-hidden
   // gap; truly-offline is covered by the server push). Requests always notify;
   // message notifications respect "Show notifications".
   if (!appVisible()) {
     if (n.kind === 'message' && !p.showMessages) return;
+    const full = showFull && p.showPreview;
     let title: string;
     let body: string;
     if (n.kind === 'request') {
       title = 'Friend request';
-      body = p.showPreview ? `${n.name} ${n.body}` : 'New request';
+      body = full ? `${n.name} ${n.body}` : 'New request';
     } else if (n.kind === 'system') {
       title = 'Ring';
       body = `${n.name} ${n.body}`; // e.g. "Ada joined Ring"
     } else {
       title = n.name;
-      body = p.showPreview ? n.body : 'New message';
+      body = full ? n.body : 'New message';
     }
     // Pass chatId so the page- and SW-shown notifications for one conversation
     // share a tag and collapse instead of duplicating.
@@ -250,17 +263,25 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
     return;
   }
 
+  // In-app banner path. Gated by the GLOBAL in-app master switch (FR-018; this also
+  // suppresses friend-request banners while leaving their web push intact) and by
+  // the PER-CHAT in-app toggle (FR-019). Both leave the badge + system push alone.
+  if (!(await inAppGloballyEnabled())) return;
+  if (chatPrefs && !chatPrefs.inApp) return;
+
   const style = p.inappStyle;
   await inAppSoundAndHaptics();
   if (style === 'none') return;
 
   const headline = n.kind === 'request' ? `${n.name} wants to connect` : n.name;
   const url = targetUrl(n);
+  // For a 'generic' chat, mask the message text in the banner/alert too (no preview).
+  const bodyText = showFull ? n.body : n.kind === 'message' ? 'New message' : '';
 
   if (style === 'alerts') {
     const a = await alertController.create({
       header: headline,
-      message: n.kind === 'request' ? undefined : n.body,
+      message: n.kind === 'request' ? undefined : bodyText,
       buttons: [
         { text: 'Dismiss', role: 'cancel' },
         { text: 'View', handler: () => void router.push(url) },
@@ -270,8 +291,8 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
     return;
   }
 
-  // Default: a banner at the top showing the chat avatar (or an icon for requests /
-  // system notices) + name + preview, auto-dismissing, tap to open (see
+  // Default: a banner showing the chat avatar (or an icon for requests / system
+  // notices) + name + preview, auto-dismissing, tap to open (see
   // NotificationBanners.vue). Resolve the chat's avatar for a message; a request /
   // system notice has no chat, so it falls back to an icon.
   let avatar = n.avatar ?? '';
@@ -279,5 +300,5 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
     avatar = (await getChat(n.chatId))?.avatar ?? '';
   }
   const icon = n.icon ?? (n.kind === 'system' ? DEFAULT_SYSTEM_ICON : undefined);
-  showBanner({ kind: n.kind, name: n.name, body: n.body, avatar, icon, url, chatId: n.chatId });
+  showBanner({ kind: n.kind, name: n.name, body: bodyText, avatar, icon, url, chatId: n.chatId });
 }

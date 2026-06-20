@@ -129,3 +129,35 @@ export const accept = (c: RingClient) => c.page.evaluate(() => (window as any)._
 export const hangup = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.hangup());
 export const remoteTracks = (c: RingClient): Promise<number> =>
   c.page.evaluate(() => (window as any).__ringTest.remoteTracks());
+
+/* ---- notification helpers (spec 1015) ---- */
+
+/** Drop / restore a client's WebSocket to simulate a closed (offline) app, so the
+ *  relay queues messages and the service-worker preview path is exercised. */
+export const goOffline = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.disconnect());
+export const goOnline = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.reconnect());
+
+/** Current in-app notification banners (kind/name/body) for asserting alerting. */
+export const notices = (c: RingClient): Promise<{ kind: string; name: string; body: string }[]> =>
+  c.page.evaluate(() => (window as any).__ringTest.notices());
+
+/** The body texts of the banners currently shown (convenience for `toContain`). */
+export const noticeBodies = async (c: RingClient): Promise<string[]> =>
+  (await notices(c)).map((n) => n.body);
+
+/** Full closed-app background-preview result (notes + pending + suppressed + silenced),
+ *  for asserting the service-worker decision (badge-only / web-push-off, FR-022/024). */
+export const previewFull = (c: RingClient): Promise<{ notes: any[]; pending: number; suppressed: boolean; silenced: boolean }> =>
+  c.page.evaluate(() => (window as any).__ringTest.previewPendingFull());
+
+/** Top edge of the in-app banner and bottom edge of the header, so a test can assert
+ *  the banner sits BELOW the header (FR-014 / SC-005). Null when either is absent. */
+export const bannerVsHeader = (c: RingClient): Promise<{ bannerTop: number; headerBottom: number } | null> =>
+  c.page.evaluate(() => {
+    const nb = document.querySelector('.nb');
+    const header = document.querySelector('ion-header') || document.querySelector('ion-toolbar');
+    const rect = (el: Element | null) => (el ? el.getBoundingClientRect() : null);
+    const b = rect(nb);
+    const h = rect(header);
+    return b && h ? { bannerTop: b.top, headerBottom: h.bottom } : null;
+  });

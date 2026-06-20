@@ -597,6 +597,10 @@ export const SETTINGS: Record<string, SettingNode> = {
     title: 'In-app notifications',
     groups: [
       {
+        items: [{ type: 'toggle', title: 'In-app notifications', key: 'notifications.inapp.enabled', default: true }],
+        footer: 'Master switch for banners that appear while Ring is open. When off, no in-app banner is shown for any chat — system (lock-screen) notifications and the app badge are unaffected.',
+      },
+      {
         header: 'Alert style',
         items: [
           {
@@ -610,7 +614,7 @@ export const SETTINGS: Record<string, SettingNode> = {
             ],
           },
         ],
-        footer: 'Alerts require an action before proceeding. Banners appear at the top of the screen and go away automatically.',
+        footer: 'Alerts require an action before proceeding. Banners appear below the header and go away automatically.',
       },
       {
         items: [

@@ -78,6 +78,29 @@
           </ion-item>
         </ion-list>
 
+        <!-- Per-chat notification controls (spec 1015 US4/US5): web push, in-app
+             banner, and how much a notification reveals. Device-local; enforced
+             client-side. "Badge only" reveals nothing, just bumps the unread count. -->
+        <ion-list v-if="!contact.ghosted && chat" :inset="true">
+          <ion-item>
+            <ion-icon slot="start" :icon="notificationsOutline" />
+            <ion-toggle :checked="notifyWebPush" @ion-change="setWebPush($event.detail.checked)">
+              Web push
+            </ion-toggle>
+          </ion-item>
+          <ion-item>
+            <ion-icon slot="start" :icon="chatbubbleOutline" />
+            <ion-toggle :checked="notifyInApp" @ion-change="setInApp($event.detail.checked)">
+              In-app banners
+            </ion-toggle>
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="chooseContent">
+            <ion-icon slot="start" :icon="documentTextOutline" />
+            <ion-label>Show content</ion-label>
+            <ion-note slot="end">{{ contentLabel }}</ion-note>
+          </ion-item>
+        </ion-list>
+
         <ion-list v-if="!contact.ghosted" :inset="true">
           <ion-item v-if="contact.blocked" button :detail="false" @click="unblock">
             <ion-icon slot="start" :icon="banOutline" />
@@ -97,17 +120,17 @@
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
-  IonContent, IonAvatar, IonButton, IonIcon, IonList, IonItem, IonLabel, IonNote,
+  IonContent, IonAvatar, IonButton, IonIcon, IonList, IonItem, IonLabel, IonNote, IonToggle,
   toastController, alertController, actionSheetController,
 } from '@ionic/vue';
 import {
   chatbubbleOutline, searchOutline, banOutline, imagesOutline,
-  notificationsOutline, notificationsOffOutline, starOutline, timerOutline, eyeOutline,
+  notificationsOutline, notificationsOffOutline, starOutline, timerOutline, eyeOutline, documentTextOutline,
 } from 'ionicons/icons';
 import { computed } from 'vue';
 import {
   getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl,
-  getPresenceOverrides, setPresenceOverride,
+  getPresenceOverrides, setPresenceOverride, setChatNotifyPrefs, type ChatNotifyContent,
 } from '@/db/queries';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { forceReconnect } from '@/composables/useSync';
@@ -143,6 +166,40 @@ const muteLabel = computed(() => {
   if (until - Date.now() > 360 * 24 * 60 * 60 * 1000) return 'Muted';
   return `Muted until ${new Date(until).toLocaleDateString()}`;
 });
+
+// Per-chat notification controls (spec 1015). Derived from the (live-queried) chat
+// record with the pre-1015 defaults applied, so toggling writes through
+// setChatNotifyPrefs and the liveQuery re-renders.
+const notifyWebPush = computed(() => chat.value?.notifyWebPush ?? true);
+const notifyInApp = computed(() => chat.value?.notifyInApp ?? true);
+const notifyContent = computed<ChatNotifyContent>(() => chat.value?.notifyContent ?? 'full');
+const CONTENT_LABELS: Record<ChatNotifyContent, string> = {
+  full: 'Message content',
+  generic: 'No preview',
+  none: 'Badge only',
+};
+const contentLabel = computed(() => CONTENT_LABELS[notifyContent.value]);
+
+async function setWebPush(on: boolean): Promise<void> {
+  if (chat.value) await setChatNotifyPrefs(chat.value.id, { webPush: on });
+}
+async function setInApp(on: boolean): Promise<void> {
+  if (chat.value) await setChatNotifyPrefs(chat.value.id, { inApp: on });
+}
+async function chooseContent(): Promise<void> {
+  if (!chat.value) return;
+  const set = (content: ChatNotifyContent) => () => void setChatNotifyPrefs(chat.value!.id, { content });
+  const sheet = await actionSheetController.create({
+    header: 'Show in notifications',
+    buttons: [
+      { text: 'Message content', handler: set('full') },
+      { text: 'No preview', handler: set('generic') },
+      { text: 'Badge only (no banner)', handler: set('none') },
+      { text: 'Cancel', role: 'cancel' },
+    ],
+  });
+  await sheet.present();
+}
 
 // Online / last-seen line under the name ('' when unknown / hidden).
 const statusLine = computed(() => presenceLabel(peerPresence(contactId)));

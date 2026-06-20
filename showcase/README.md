@@ -15,6 +15,12 @@ npx playwright install webkit chromium     # iPhone/iPad use WebKit; Pixel/Deskt
 npm run showcase
 ```
 
+> Spec 1015: the redesigned in-app notification banner (translucent green, anchored
+> below the header, dismissible) should be reviewed here across devices + light/dark.
+> A capture state that stages the banner is a TODO for `capture.spec.ts`; until then
+> review it via `make start` + the `drive/` harness or the `notifications-inapp.spec.ts`
+> e2e (which asserts its geometry).
+
 Output lands in `showcase/output/<device>/<theme>/NN-screen.png` (gitignored):
 
 - **devices**: `iphone`, `ipad` (WebKit → iOS-mode styling), `android`, `desktop` (Chromium)

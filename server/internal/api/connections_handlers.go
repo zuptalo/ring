@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -34,6 +35,18 @@ func (h *Handlers) notifyConn(userID string, frame map[string]any) {
 	}
 }
 
+// wakeConn sends a content-free push tickle so an OFFLINE peer learns of a
+// friend-request lifecycle event (the live notifyConn frame above only reaches a
+// connected client). Fire-and-forget; nil Notifier (tests / push disabled) is a
+// no-op. The tickle carries no identity — the SW reconciles state via
+// GET /v1/connections — so the zero-knowledge boundary is preserved.
+func (h *Handlers) wakeConn(ctx context.Context, userID string) {
+	if h.Notifier == nil {
+		return
+	}
+	h.Notifier.NotifyConn(ctx, userID)
+}
+
 // requestConnection (POST /v1/connections/request) records a pending request from
 // the caller to {target} and notifies the target.
 func (h *Handlers) requestConnection(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +74,7 @@ func (h *Handlers) requestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	if state == "pending" {
 		h.notifyConn(req.Target, map[string]any{"t": "connect-req", "from": uid})
+		h.wakeConn(r.Context(), req.Target) // wake an offline target (FR-008)
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"state": state})
 }
@@ -84,6 +98,7 @@ func (h *Handlers) acceptConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.notifyConn(req.Requester, map[string]any{"t": "connect-update", "from": uid, "state": "accepted"})
+	h.wakeConn(r.Context(), req.Requester) // wake an offline requester (FR-009)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -133,6 +148,7 @@ func (h *Handlers) rejectConnection(w http.ResponseWriter, r *http.Request) {
 	// Tell the requester it was rejected (a blocked requester can no longer see the
 	// caller in the directory either).
 	h.notifyConn(req.Requester, map[string]any{"t": "connect-update", "from": uid, "state": "rejected"})
+	h.wakeConn(r.Context(), req.Requester) // wake an offline requester (FR-010)
 	w.WriteHeader(http.StatusNoContent)
 }
 

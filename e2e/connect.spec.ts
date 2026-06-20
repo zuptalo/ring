@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createAccount } from './helpers';
+import { createAccount, noticeBodies } from './helpers';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const ev = (p: any, fn: (a: any) => any, arg: any) => p.page.evaluate(fn, arg);
@@ -55,4 +55,31 @@ test('connect requests: request -> accept, and reject+block hides from directory
     .poll(async () => (await conns(c)).outgoing.find((r: any) => r.target === b.id)?.state, { timeout: 20_000 })
     .toBe('rejected');
   await expect.poll(() => search(c, bUsername), { timeout: 20_000 }).not.toContain(bUsername); // hidden after
+});
+
+/**
+ * Spec 1015 (US2 / FR-009, FR-020): the original requester is notified of the
+ * outcome of their friend request. Verifies the live in-app path — B accepts A's
+ * request and A (app open) gets an "accepted your friend request" in-app banner.
+ */
+test('friend-request outcome notifies the requester (accepted)', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'CONNNOT1');
+  const b = await createAccount(ctxB, 'CONNNOT2');
+  await ev(b, ([n]) => (window as any).__ringTest.setProfile(n, ''), ['Bob']);
+
+  // A requests B → pending.
+  expect(await ev(a, (id) => (window as any).__ringTest.connectRequest(id), b.id)).toBe('pending');
+
+  // B accepts → A receives a live connect-update(accepted) and surfaces an in-app
+  // banner naming the (now-known) peer with the outcome.
+  await ev(b, (id) => (window as any).__ringTest.connectAccept(id), a.id);
+
+  await expect
+    .poll(() => noticeBodies(a), { timeout: 20_000 })
+    .toContain('accepted your friend request');
+
+  await ctxA.close();
+  await ctxB.close();
 });

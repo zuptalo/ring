@@ -1098,6 +1098,17 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
   if (!contact) return;
   const chatId = await startDirectChat(contact);
 
+  // Per-chat call mute (spec 1015 FR-022a): a muted or web-push-off chat silences
+  // its incoming calls too. The caller/chat is resolvable here (the app is live), so
+  // this is the HARD guarantee — don't ring on this device (no overlay, no tone);
+  // the caller's own no-answer timeout ends it as a normal missed call. (A fully
+  // closed app's SW path can't resolve the caller from the content-free tickle, so
+  // it fail-opens and rings — see sw.ts.)
+  const offerChat = await getChat(chatId);
+  if ((offerChat?.mutedUntil && offerChat.mutedUntil > Date.now()) || offerChat?.notifyWebPush === false) {
+    return;
+  }
+
   const signal = await openSealedSignal(chatId, frame.ciphertext);
   if (!signal || signal.type !== 'offer' || !signal.sdp) {
     console.warn('[call] incoming offer could not be opened', { hasSignal: !!signal });
