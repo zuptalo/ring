@@ -11,6 +11,11 @@
       :class="{ replying: replyUrl === b.url, dragging: dragUrl === b.url }"
       :style="cardStyle(b)"
     >
+      <!-- Explicit dismiss affordance (FR-015), in addition to swipe-up / auto-dismiss.
+           Stop propagation so closing never opens the chat. -->
+      <button class="nb-close" aria-label="Dismiss notification" @click.stop="dismissBanner(b.id)" @pointerdown.stop>
+        <ion-icon :icon="closeOutline" />
+      </button>
       <!-- Header: tap anywhere here to open the full chat. -->
       <div class="nb-main" role="button" tabindex="0" @click="open(b)" @keydown.enter="open(b)">
         <div class="nb-avatar" :class="{ 'nb-system': b.kind === 'system' && !b.avatar }">
@@ -76,7 +81,7 @@
 import { ref, watch } from 'vue';
 import { IonIcon, IonTextarea, toastController } from '@ionic/vue';
 import {
-  personAddOutline, chatbubbleEllipsesOutline, sendOutline, checkmarkCircle,
+  personAddOutline, chatbubbleEllipsesOutline, sendOutline, checkmarkCircle, closeOutline,
 } from 'ionicons/icons';
 import router from '@/router';
 import {
@@ -249,7 +254,10 @@ watch(
 <style scoped>
 .nb-stack {
   position: fixed;
-  top: max(8px, env(safe-area-inset-top));
+  /* Anchored BELOW the header (spec 1015 FR-014): offset by the toolbar height +
+     the safe-area inset so the banner never covers the header title / back control.
+     ~56px covers the Ionic toolbar (MD 56 / iOS 44 + chrome); a little breathing gap. */
+  top: calc(env(safe-area-inset-top, 0px) + 56px);
   left: 0;
   right: 0;
   /* Below the incoming-call overlay (20000), above ordinary content + tabs. */
@@ -262,6 +270,7 @@ watch(
 }
 .nb {
   pointer-events: auto;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -271,12 +280,13 @@ watch(
   padding: 10px 14px 6px;
   border-radius: 18px;
   color: #fff;
-  /* Neutral translucent slate (light theme); a darker charcoal in dark theme below.
-     Self-contained + white text so it stays legible over any background. */
-  background: rgba(58, 60, 66, 0.92);
-  backdrop-filter: blur(18px) saturate(180%);
-  -webkit-backdrop-filter: blur(18px) saturate(180%);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.32);
+  /* Translucent banner in the app's greenish theme colour (spec 1015 FR-013),
+     built from the existing primary token (no new colours). White text stays
+     legible on the saturated green in both light and dark. */
+  background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.9);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
   animation: nb-in 0.22s ease;
   transition: transform 0.22s ease;
 }
@@ -286,8 +296,30 @@ watch(
 }
 @media (prefers-color-scheme: dark) {
   .nb {
-    background: rgba(44, 44, 48, 0.82);
+    /* Slightly more opaque in dark mode so the green reads as a solid surface. */
+    background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.95);
   }
+}
+/* Explicit dismiss button (FR-015), top-trailing so it clears the avatar + text. */
+.nb-close {
+  position: absolute;
+  top: 6px;
+  inset-inline-end: 8px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1;
+}
+.nb-close ion-icon {
+  font-size: 15px;
 }
 @keyframes nb-in {
   from {

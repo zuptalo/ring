@@ -129,6 +129,59 @@ func TestNotifyHeaders(t *testing.T) {
 	}
 }
 
+// TestNotifyConnHeaders verifies the CONNECTION (friend-request) path is
+// long-ish-lived, high-urgency, and collapsible under its own topic (so a burst
+// of connection events folds to one wake and never collapses a message/call).
+func TestNotifyConnHeaders(t *testing.T) {
+	cap := &capturedReq{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.record(r)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p256dh, auth := newSubKeys(t)
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}},
+	}}
+	n := newNotifier(t, st)
+
+	n.NotifyConn(context.Background(), "u1")
+	if cap.ttl != "604800" {
+		t.Errorf("conn TTL = %q, want 604800 (7d)", cap.ttl)
+	}
+	if cap.urgency != "high" {
+		t.Errorf("conn Urgency = %q, want high", cap.urgency)
+	}
+	if cap.topic != "ring-conn" {
+		t.Errorf("conn Topic = %q, want ring-conn", cap.topic)
+	}
+}
+
+// TestNotifyConnFansOutToAllSubs verifies the connection tickle reaches every one
+// of a user's devices (parity with Notify/NotifyCall).
+func TestNotifyConnFansOutToAllSubs(t *testing.T) {
+	cap := &capturedReq{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.record(r)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p1, a1 := newSubKeys(t)
+	p2, a2 := newSubKeys(t)
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {
+			{Endpoint: srv.URL, P256dh: p1, Auth: a1},
+			{Endpoint: srv.URL, P256dh: p2, Auth: a2},
+		},
+	}}
+	newNotifier(t, st).NotifyConn(context.Background(), "u1")
+	if got := atomic.LoadInt32(&cap.hits); got != 2 {
+		t.Errorf("conn fan-out hits = %d, want 2 (one per device)", got)
+	}
+}
+
 // TestPrunesGoneSubscription verifies a 410 endpoint is removed.
 func TestPrunesGoneSubscription(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

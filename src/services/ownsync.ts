@@ -42,7 +42,7 @@ const SYNCED_PREF_KEYS: string[] = [
   'notifications.group.show', 'notifications.group.reactions', 'notifications.group.sound',
   'notifications.status.show', 'notifications.status.reactions', 'notifications.status.sound',
   'notifications.reminders', 'notifications.showPreview', 'notifications.badge',
-  'notifications.inapp.style', 'notifications.inapp.sounds', 'notifications.inapp.vibrate',
+  'notifications.inapp.enabled', 'notifications.inapp.style', 'notifications.inapp.sounds', 'notifications.inapp.vibrate',
   'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters',
 ];
 

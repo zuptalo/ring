@@ -11,8 +11,11 @@
 import type { MessagePayload } from '@/services/crypto/message';
 
 export function notifyPreview(p: MessagePayload): string {
-  if (p.albumName) return p.albumName; // an album wins over any per-item caption
-  if (p.body) return p.body; // a caption (or the text message itself)
+  // Defensive (spec 1015 FR-004a): only ever surface a clean string. A decrypted
+  // but malformed payload (e.g. a non-string body) must fall through to a safe
+  // label, never render a partial/garbled preview.
+  if (typeof p.albumName === 'string' && p.albumName.trim()) return p.albumName; // an album wins over any per-item caption
+  if (typeof p.body === 'string' && p.body.trim()) return p.body; // a caption (or the text message itself)
   switch (p.kind) {
     case 'image':
       return 'Photo';

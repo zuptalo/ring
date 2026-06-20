@@ -56,7 +56,17 @@ export interface SwNote {
 export interface PreviewResult {
   notes: SwNote[];
   pending: number;
+  // suppressed: there was something to alert on but the user's global "Show
+  // notifications" toggle withheld it → caller skips the generic placeholder AND
+  // doesn't badge (nothing to count for the user).
   suppressed: boolean;
+  // silenced: every notifiable message was INTENTIONALLY silenced by per-chat prefs
+  // (mute / web-push-off / content=none) and nothing else needs surfacing → caller
+  // shows NO notification (not even the generic placeholder), but STILL badges the
+  // pending count (spec 1015 FR-022/FR-024: "badge only"). Distinct from `suppressed`
+  // so the badge keeps updating, and from a cold-start undecryptable frame (which
+  // still gets a generic placeholder to honor the Web Push userVisibleOnly contract).
+  silenced: boolean;
 }
 
 async function setting<T>(key: string, fallback: T): Promise<T> {
@@ -116,7 +126,7 @@ function noteForPayload(
   contacts: Contact[],
   showMessages: boolean,
   showPreview: boolean,
-): { note: SwNote | null; wasMessage: boolean } {
+): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
 
@@ -162,21 +172,34 @@ function noteForPayload(
   const isGroup = !!payload.groupId;
   const groupChat = isGroup ? chats.find((c) => c.id === payload.groupId) : undefined;
   const senderName = known || 'Someone';
-  const preview = showPreview ? notifyPreview(payload) : 'New message';
   const chat = isGroup
     ? groupChat
     : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
   // Per-chat mute: don't show an OS notification for a muted chat (the frame was
-  // still fetched above, so the sender's delivery receipt is unaffected).
-  if (chat?.mutedUntil && chat.mutedUntil > Date.now()) return { note: null, wasMessage: true };
+  // still fetched above, so the sender's delivery receipt is unaffected). `silenced`
+  // marks this as an INTENTIONAL per-chat silence, so the caller shows no generic
+  // placeholder (vs. a cold-start undecryptable frame, which still needs one) — the
+  // badge still counts it.
+  if (chat?.mutedUntil && chat.mutedUntil > Date.now()) return { note: null, wasMessage: true, silenced: true };
+  // Per-chat web push off (spec 1015 FR-022): suppress the system notification for
+  // the closed app — the server still sent the content-free tickle (it can't know
+  // per-chat prefs), so the SW enforces it here; the badge still counts the frame.
+  if (chat?.notifyWebPush === false) return { note: null, wasMessage: true, silenced: true };
+  // Content visibility (FR-022/FR-024). 'none' = badge-only → no notification at all.
+  const content = chat?.notifyContent ?? 'full';
+  if (content === 'none') return { note: null, wasMessage: true, silenced: true };
+  // Show the decrypted text only when the chat allows full content AND the global
+  // "Show preview" is on (most-private-wins); otherwise a content-free placeholder.
+  const showText = content === 'full' && showPreview;
+  const preview = showText ? notifyPreview(payload) : 'New message';
   const chatId = chat?.id;
   return {
     note: {
       ids: [f.id as string],
       title: isGroup ? groupChat?.name || 'Group' : senderName,
       // Group previews prefix the sender (WhatsApp-style), but only when we know who
-      // they are, never the bare "Someone:" garble.
-      body: isGroup && showPreview && known ? `${known}: ${preview}` : preview,
+      // they are and full content is allowed, never the bare "Someone:" garble.
+      body: isGroup && showText && known ? `${known}: ${preview}` : preview,
       url: chatId ? `/chat/${chatId}` : '/tabs/chats',
       tag: chatId ? `ring:${chatId}` : `ring:from:${from}`,
     },
@@ -231,7 +254,7 @@ export async function previewPending(): Promise<PreviewResult> {
   const token = await readSessionToken();
   if (!token) {
     console.warn('[sw-inbox] no session token → generic');
-    return { notes: [], pending: 0, suppressed: false };
+    return { notes: [], pending: 0, suppressed: false, silenced: false };
   }
 
   // Fetch the queue FIRST, before any decryption or settings gate. Fetching is
@@ -253,14 +276,14 @@ export async function previewPending(): Promise<PreviewResult> {
     }
     if (!res.ok) {
       console.warn('[sw-inbox] /relay/pending not ok', res.status);
-      return { notes: [], pending: 0, suppressed: false };
+      return { notes: [], pending: 0, suppressed: false, silenced: false };
     }
     frames = ((await res.json()) as { frames?: MsgFrame[] }).frames ?? [];
   } catch (e) {
     console.warn('[sw-inbox] /relay/pending fetch failed', e);
-    return { notes: [], pending: 0, suppressed: false };
+    return { notes: [], pending: 0, suppressed: false, silenced: false };
   }
-  if (!frames.length) return { notes: [], pending: 0, suppressed: false };
+  if (!frames.length) return { notes: [], pending: 0, suppressed: false, silenced: false };
 
   // Queued message frames = the undelivered backlog → the app-icon badge. Known
   // from the fetch alone, so the badge is right even if we can't decrypt.
@@ -276,7 +299,7 @@ export async function previewPending(): Promise<PreviewResult> {
     console.warn('[sw-inbox] device unlock failed (PIN-locked?) → generic');
     // Can't tell a message from a request → let the caller show a generic, UNLESS
     // the user disabled message notifications (then stay silent rather than buzz).
-    return { notes: [], pending, suppressed: !showMessages };
+    return { notes: [], pending, suppressed: !showMessages, silenced: false };
   }
 
   const showPreview = await setting<boolean>('notifications.showPreview', true);
@@ -289,6 +312,8 @@ export async function previewPending(): Promise<PreviewResult> {
 
   const raw: SwNote[] = [];
   let withheldMessage = false;
+  let silencedMessage = false; // a message intentionally silenced by per-chat prefs
+  let decryptFailed = 0; // frames we couldn't decrypt (cold start / session not reachable)
   for (const f of frames) {
     if (f.t !== 'msg' || !f.from || !f.id || seen.has(f.id)) continue;
     let payload: MessagePayload;
@@ -296,11 +321,13 @@ export async function previewPending(): Promise<PreviewResult> {
       payload = await previewPacket(sessionKeyForPeer(chats, f.from), f.ciphertext);
     } catch (e) {
       console.warn('[sw-inbox] decrypt failed for a frame → skipped', e);
+      decryptFailed += 1;
       continue; // can't decrypt this one (session not reachable yet) → leave it for the page
     }
     seen.add(f.id);
-    const { note, wasMessage } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview);
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview);
     if (note) raw.push(note);
+    else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;
   }
 
@@ -312,7 +339,15 @@ export async function previewPending(): Promise<PreviewResult> {
   //
   // suppressed = we'd have alerted but "Show notifications" is off and nothing else
   // (a request/invite) needs surfacing → caller skips the generic placeholder.
-  return { notes, pending, suppressed: notes.length === 0 && (withheldMessage || !showMessages) };
+  const suppressed = notes.length === 0 && (withheldMessage || !showMessages);
+  // silenced = nothing to show AND everything we could decrypt was intentionally
+  // per-chat silenced (mute / web-push-off / badge-only), with no undecryptable
+  // frames left that might warrant a placeholder. Caller shows NO notification but
+  // STILL badges the pending count (spec 1015 FR-022/FR-024). If a frame couldn't be
+  // decrypted (decryptFailed > 0) we can't know its chat, so we fall back to the
+  // generic placeholder (userVisibleOnly) rather than silently dropping it.
+  const silenced = notes.length === 0 && !suppressed && silencedMessage && decryptFailed === 0;
+  return { notes, pending, suppressed, silenced };
 }
 
 /** Persist the frame ids we actually displayed, so they aren't re-shown on the next
@@ -333,4 +368,94 @@ export async function markShown(ids: string[]): Promise<void> {
 export async function unreadCount(): Promise<number> {
   const chats = await getAll<Chat>('chats');
   return chats.reduce((n, c) => n + (c.unread || 0), 0);
+}
+
+/* ---- friend-request (connection) lifecycle notifications (spec 1015 US2) ---- */
+
+// The conn tickle is content-free, so on wake the SW reconciles the authoritative
+// state from GET /v1/connections (just user ids + state — no decryption needed, so
+// this works even while PIN-locked) and shows a GENERIC, identity-safe notice
+// (FR-012a: never a name/raw id for a not-yet-a-contact requester). A ledger keyed
+// by (kind,peer) makes repeated/duplicate conn tickles idempotent (no re-notify for
+// an unchanged event), and expires by age so an old entry can't suppress forever.
+const CONN_SHOWN_KEY = 'swConnShownKeys';
+const CONN_SHOWN_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const CONN_SHOWN_MAX = 500;
+
+/** A ready-to-show friend-request notification. `keys` are the dedup-ledger keys it
+ *  covers; the caller marks them shown after displaying so they don't re-notify. */
+export interface ConnNote {
+  keys: string[];
+  title: string;
+  body: string;
+  url: string;
+  tag: string;
+}
+
+async function loadConnShownEntries(): Promise<ShownEntry[]> {
+  const raw = await setting<ShownEntry[]>(CONN_SHOWN_KEY, []);
+  const cutoff = Date.now() - CONN_SHOWN_TTL_MS;
+  return raw.filter((e) => e && typeof e.ts === 'number' && e.ts >= cutoff);
+}
+
+interface ConnReq {
+  requester?: string;
+  target?: string;
+  state?: string;
+}
+
+/**
+ * Build generic friend-request notifications for the conn tickle. Reconciles the
+ * server's connection state against a dedup ledger so only NEW events surface:
+ *   - an incoming pending request  → "New friend request"
+ *   - our outgoing request accepted → "Your friend request was accepted"
+ *   - our outgoing request rejected → "Your friend request was declined"
+ * All bodies are identity-safe (no names / ids), so nothing about who is exposed,
+ * and no decryption is needed. Returns [] on any auth/network failure.
+ */
+export async function previewConnections(): Promise<ConnNote[]> {
+  const token = await readSessionToken();
+  if (!token) return [];
+  let data: { incoming?: ConnReq[]; outgoing?: ConnReq[] };
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/connections`, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return [];
+    data = (await res.json()) as { incoming?: ConnReq[]; outgoing?: ConnReq[] };
+  } catch {
+    return [];
+  }
+  const seen = new Set((await loadConnShownEntries()).map((e) => e.id));
+  const notes: ConnNote[] = [];
+  const add = (key: string, body: string, tag: string): void => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    notes.push({ keys: [key], title: 'Ring', body, url: '/tabs/contacts', tag });
+  };
+  for (const r of data.incoming ?? []) {
+    if (r.state === 'pending' && r.requester) add(`req:${r.requester}`, 'New friend request', 'ring:conn:req');
+  }
+  for (const r of data.outgoing ?? []) {
+    if (!r.target) continue;
+    if (r.state === 'accepted') add(`acc:${r.target}`, 'Your friend request was accepted', `ring:conn:acc:${r.target}`);
+    else if (r.state === 'rejected') add(`rej:${r.target}`, 'Your friend request was declined', `ring:conn:rej:${r.target}`);
+  }
+  return notes;
+}
+
+/** Persist the conn-ledger keys we displayed, so the same event doesn't re-notify
+ *  on the next conn tickle (idempotency / no duplicate outcome notifications). */
+export async function markConnShown(keys: string[]): Promise<void> {
+  if (!keys.length) return;
+  const now = Date.now();
+  const entries = await loadConnShownEntries();
+  const known = new Set(entries.map((e) => e.id));
+  for (const k of keys) if (!known.has(k)) entries.push({ id: k, ts: now });
+  await put<Setting<ShownEntry[]>>('settings', { key: CONN_SHOWN_KEY, value: entries.slice(-CONN_SHOWN_MAX) });
 }

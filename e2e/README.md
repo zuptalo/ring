@@ -40,3 +40,13 @@ ports + database).
   media (validated, passing).
 - A skipped group-call (SFU) test is scaffolded; it's enabled once the SFU +
   insertable-streams E2EE worker land.
+- `sw-decrypt.spec.ts` - service-worker background decryption: rich queued-message
+  previews, and (spec 1015) that the read-only preview is complete + repeatable
+  (no ratchet advance) and the page still drains on reconnect; and that a closed-app
+  "badge only" chat is fully silenced (no generic placeholder) yet still badges.
+- `connect.spec.ts` - connect-request lifecycle, and (spec 1015) that the requester
+  is notified of an accept outcome via an in-app banner.
+- `notifications-inapp.spec.ts` (spec 1015) - the global in-app master switch, the
+  per-chat in-app toggle, and per-chat content visibility (full / generic /
+  badge-only) all gate the in-app banner; and the banner renders below the header
+  (geometric no-overlap check, FR-014 / SC-005).

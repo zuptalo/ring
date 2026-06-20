@@ -92,11 +92,13 @@ type AuthFunc func(ctx context.Context, token string) (userID string, ok bool, e
 // Notifier sends an out-of-band push when something can't be delivered to a live
 // foreground connection (recipient offline/backgrounded). Notify is for queued
 // messages (long-lived, collapsible tickle); NotifyCall is for a ringing call
-// (short-lived, never-collapsed tickle). Implemented by the push package; nil
-// disables push.
+// (short-lived, never-collapsed tickle); NotifyConn is for a friend-request
+// lifecycle event (received/accepted/rejected, collapsible tickle). Implemented
+// by the push package; nil disables push.
 type Notifier interface {
 	Notify(ctx context.Context, userID string)
 	NotifyCall(ctx context.Context, userID string)
+	NotifyConn(ctx context.Context, userID string)
 }
 
 // frame is the wire shape. The relay only reads t/id/to/from/refId/messageId;

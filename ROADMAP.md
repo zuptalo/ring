@@ -34,6 +34,7 @@ Specs are grouped by category band; status moves
 | [1012](specs/1012-scroll-to-bottom-button/spec.md) | Hovering "Scroll to Latest" Button in Chat | ⚪ planned |
 | [1013](specs/1013-jump-pill-seen-receipts/spec.md) | Expanding "Jump to Latest" Pill + Visibility-Driven Seen Receipts | ⚪ planned |
 | [1014](specs/1014-image-thumbnails-album/spec.md) | Multi-Size Image Thumbnails + Album-View Overhaul | 🔵 in-review |
+| [1015](specs/1015-reliable-push-notifications/spec.md) | Reliable Push & Redesigned In-App Notifications | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

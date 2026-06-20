@@ -57,6 +57,28 @@
           </ion-item>
         </ion-list>
 
+        <!-- Per-chat notification controls (spec 1015 US4/US5), same as 1:1 chats:
+             web push, in-app banner, and how much a notification reveals. -->
+        <ion-list v-if="chat" :inset="true">
+          <ion-item>
+            <ion-icon slot="start" :icon="notificationsOutline" />
+            <ion-toggle :checked="notifyWebPush" @ion-change="setWebPush($event.detail.checked)">
+              Web push
+            </ion-toggle>
+          </ion-item>
+          <ion-item>
+            <ion-icon slot="start" :icon="chatbubbleOutline" />
+            <ion-toggle :checked="notifyInApp" @ion-change="setInApp($event.detail.checked)">
+              In-app banners
+            </ion-toggle>
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="chooseContent">
+            <ion-icon slot="start" :icon="documentTextOutline" />
+            <ion-label>Show content</ion-label>
+            <ion-note slot="end">{{ contentLabel }}</ion-note>
+          </ion-item>
+        </ion-list>
+
         <ion-list v-if="invited.length" :inset="true">
           <ion-list-header><ion-label>Invited</ion-label></ion-list-header>
           <ion-item
@@ -119,16 +141,18 @@ import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
-  IonContent, IonAvatar, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote,
+  IonContent, IonAvatar, IonList, IonListHeader, IonItem, IonLabel, IonIcon, IonNote, IonToggle,
   actionSheetController, alertController,
 } from '@ionic/vue';
 import {
   personAddOutline, exitOutline, createOutline, cameraOutline, ellipsisHorizontal,
   imagesOutline, searchOutline, notificationsOutline, notificationsOffOutline, starOutline, timerOutline,
+  chatbubbleOutline, documentTextOutline,
 } from 'ionicons/icons';
 import {
   getChat, listContacts, addMemberToGroup, removeMember, leaveGroup,
   renameGroup, setGroupAvatar, clearGroupAvatar, setChatMute, setChatTtl,
+  setChatNotifyPrefs, type ChatNotifyContent,
 } from '@/db/queries';
 import type { Chat, Contact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
@@ -149,6 +173,37 @@ const muteLabel = computed(() => {
   if (until - Date.now() > 360 * 24 * 60 * 60 * 1000) return 'Muted';
   return `Muted until ${new Date(until).toLocaleDateString()}`;
 });
+
+// Per-chat notification controls (spec 1015), identical to 1:1 chats.
+const notifyWebPush = computed(() => chat.value?.notifyWebPush ?? true);
+const notifyInApp = computed(() => chat.value?.notifyInApp ?? true);
+const notifyContent = computed<ChatNotifyContent>(() => chat.value?.notifyContent ?? 'full');
+const CONTENT_LABELS: Record<ChatNotifyContent, string> = {
+  full: 'Message content',
+  generic: 'No preview',
+  none: 'Badge only',
+};
+const contentLabel = computed(() => CONTENT_LABELS[notifyContent.value]);
+
+async function setWebPush(on: boolean): Promise<void> {
+  await setChatNotifyPrefs(chatId, { webPush: on });
+}
+async function setInApp(on: boolean): Promise<void> {
+  await setChatNotifyPrefs(chatId, { inApp: on });
+}
+async function chooseContent(): Promise<void> {
+  const set = (content: ChatNotifyContent) => () => void setChatNotifyPrefs(chatId, { content });
+  const sheet = await actionSheetController.create({
+    header: 'Show in notifications',
+    buttons: [
+      { text: 'Message content', handler: set('full') },
+      { text: 'No preview', handler: set('generic') },
+      { text: 'Badge only (no banner)', handler: set('none') },
+      { text: 'Cancel', role: 'cancel' },
+    ],
+  });
+  await sheet.present();
+}
 
 function openMedia(): void {
   router.push(`/chat/${chatId}/media`);

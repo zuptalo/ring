@@ -52,6 +52,8 @@ import {
   votePoll as dbVotePoll,
   sendMediaMessage as dbSendMediaMessage,
   setChatTtl as dbSetChatTtl,
+  setChatNotifyPrefs as dbSetChatNotifyPrefs,
+  type ChatNotifyPrefs,
   sweepExpiredMessages as dbSweepExpired,
   getChat as dbGetChat,
   deleteChat as dbDeleteChat,
@@ -169,6 +171,9 @@ export function installTestHook(): void {
     /** Service-worker background decrypt: read-only previews of queued messages
      *  (returns [{title,body,url}]). Does not persist or ack. */
     previewPending: () => previewPending().then((r) => r.notes),
+    /** Full background-preview result (notes + pending + suppressed + silenced), so a
+     *  test can assert the closed-app SW decision (spec 1015 badge-only / web-push-off). */
+    previewPendingFull: () => previewPending(),
     /** Drop the WebSocket so the server queues messages (simulate app closed). */
     disconnect: () => disconnectTransport(),
     /** Reconnect the WebSocket (drains the queue for real). */
@@ -233,6 +238,10 @@ export function installTestHook(): void {
     editChatMessage: (messageId: string, body: string) => dbEditMessage(messageId, body),
     deleteForEveryone: (messageId: string, trace: boolean) => dbDeleteMessageForEveryone(messageId, trace),
     setChatTtl: (chatId: string, ms: number | null) => dbSetChatTtl(chatId, ms),
+    /** Set per-chat notification controls (spec 1015): { webPush?, inApp?, content? }. */
+    setChatNotify: (chatId: string, patch: Partial<ChatNotifyPrefs>) => dbSetChatNotifyPrefs(chatId, patch),
+    /** Write a global setting (e.g. notifications.inapp.enabled) for assertions. */
+    setGlobalSetting: (key: string, value: unknown) => dbSetSetting(key, value),
     sweepExpired: () => dbSweepExpired(),
     chatTtl: async (chatId: string) => (await dbGetChat(chatId))?.defaultTtlMs ?? null,
     /** Delete a chat (removes messages + the ratchet session). */

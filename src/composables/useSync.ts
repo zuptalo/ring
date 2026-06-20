@@ -22,7 +22,7 @@ import {
   type TransportState,
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported } from '@/db/queries';
+import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -298,15 +298,33 @@ function start(): void {
     // new incoming request (so it surfaces like a friend request).
     if (f.t === 'connect-req') {
       void refreshConnections();
-      void notifyIncoming({ kind: 'request', name: 'Someone', body: 'wants to be friends' });
+      // FR-012a: a brand-new requester isn't a contact yet → a generic, identity-safe
+      // label ('Someone'), never a raw id. Use their name only if already a local contact.
+      void (async () => {
+        const name = (await getContact(f.from ?? ''))?.name || 'Someone';
+        void notifyIncoming({ kind: 'request', name, body: 'wants to be friends' });
+      })();
       return;
     }
     if (f.t === 'connect-update') {
-      // Our outgoing request was accepted → they're a friend now: import + mark
-      // connected (we no longer auto-import the directory). Rejected/withdrawn just
-      // reconcile the lists.
-      if (f.state === 'accepted') void onConnectionAccepted(f.from);
-      else void refreshConnections();
+      // Our outgoing request's outcome (spec 1015 US2 / FR-009, FR-010): notify the
+      // requester. The peer is locally known (we sent the request), so name them when
+      // a contact exists, else stay generic (FR-012a). 'withdrawn' is a silent removal.
+      if (f.state === 'accepted') {
+        void (async () => {
+          await onConnectionAccepted(f.from); // imports them as a contact + marks connected
+          const name = (await getContact(f.from ?? ''))?.name || 'Someone';
+          void notifyIncoming({ kind: 'system', name, body: 'accepted your friend request', url: '/tabs/contacts' });
+        })();
+      } else {
+        void refreshConnections();
+        if (f.state === 'rejected') {
+          void (async () => {
+            const name = (await getContact(f.from ?? ''))?.name || 'Someone';
+            void notifyIncoming({ kind: 'system', name, body: 'declined your friend request', url: '/tabs/contacts' });
+          })();
+        }
+      }
       return;
     }
     if (f.t === 'activity') {

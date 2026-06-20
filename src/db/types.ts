@@ -78,6 +78,21 @@ export interface Chat {
   // chat until this epoch-ms time. A far-future value means "muted always". Local
   // only (the message still arrives + counts toward the badge); never synced.
   mutedUntil?: number;
+  // ---- Per-chat notification controls (spec 1015). Device-local like mutedUntil:
+  // they ride in the encrypted own-data sync blob (sealed under the master key) but
+  // NEVER reach the server in plaintext, and enforcement is entirely client-side.
+  // Absent = default (the pre-1015 behaviour), so existing chats are unchanged. ----
+  // Web push for this chat: when false, suppress the system/web-push notification
+  // (and, per FR-022a, the chat's call rings) while the app is closed. The badge
+  // still updates. Default: true.
+  notifyWebPush?: boolean;
+  // In-app banner for this chat: when false, suppress the in-app banner while the
+  // app is open (independent of the global in-app master switch). Default: true.
+  notifyInApp?: boolean;
+  // How much a notification for this chat reveals: 'full' = decrypted sender+text,
+  // 'generic' = a content-free placeholder ("New message"), 'none' = badge-only
+  // (no banner / system text anywhere). Default: 'full'.
+  notifyContent?: 'full' | 'generic' | 'none';
   // Disappearing messages: when set, messages SENT in this chat are stamped to
   // self-destruct after this many ms (carried inside the sealed payload, so they
   // disappear for everyone). Kept in sync with the peer via a `ttl` control signal.

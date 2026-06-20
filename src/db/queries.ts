@@ -2354,6 +2354,55 @@ export async function isChatMuted(chatId: string): Promise<boolean> {
   return !!chat?.mutedUntil && chat.mutedUntil > now();
 }
 
+/* ---- per-chat notification controls (spec 1015) ---- */
+
+export type ChatNotifyContent = 'full' | 'generic' | 'none';
+
+/** The effective per-chat notification preferences, with the pre-1015 defaults
+ *  applied when a field is absent (so existing chats read as web-push on, in-app
+ *  on, content full). Device-local; enforcement is entirely client-side. */
+export interface ChatNotifyPrefs {
+  webPush: boolean;
+  inApp: boolean;
+  content: ChatNotifyContent;
+}
+
+const CHAT_NOTIFY_DEFAULTS: ChatNotifyPrefs = { webPush: true, inApp: true, content: 'full' };
+
+/** Read a chat's notification controls with defaults applied. A missing chat (or
+ *  any absent field) yields the defaults, so callers never special-case undefined. */
+export async function getChatNotifyPrefs(chatId: string): Promise<ChatNotifyPrefs> {
+  const chat = await getChat(chatId);
+  return {
+    webPush: chat?.notifyWebPush ?? CHAT_NOTIFY_DEFAULTS.webPush,
+    inApp: chat?.notifyInApp ?? CHAT_NOTIFY_DEFAULTS.inApp,
+    content: chat?.notifyContent ?? CHAT_NOTIFY_DEFAULTS.content,
+  };
+}
+
+/** Patch one or more per-chat notification controls. Writing a value equal to the
+ *  default deletes the stored field (keeps records minimal + "unchanged" chats
+ *  field-free). Bumps updatedAt like setChatMute, so the change rides the encrypted
+ *  own-data sync; the server only ever sees ciphertext (FR-026). */
+export async function setChatNotifyPrefs(chatId: string, patch: Partial<ChatNotifyPrefs>): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  if (patch.webPush !== undefined) {
+    if (patch.webPush === CHAT_NOTIFY_DEFAULTS.webPush) delete chat.notifyWebPush;
+    else chat.notifyWebPush = patch.webPush;
+  }
+  if (patch.inApp !== undefined) {
+    if (patch.inApp === CHAT_NOTIFY_DEFAULTS.inApp) delete chat.notifyInApp;
+    else chat.notifyInApp = patch.inApp;
+  }
+  if (patch.content !== undefined) {
+    if (patch.content === CHAT_NOTIFY_DEFAULTS.content) delete chat.notifyContent;
+    else chat.notifyContent = patch.content;
+  }
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
 /** Per-contact presence overrides (userId -> 'allow'|'deny'), layered on top of the
  *  global online/last-seen tier. Sent to the server with presence-prefs. */
 export async function getPresenceOverrides(): Promise<Record<string, 'allow' | 'deny'>> {
@@ -3345,14 +3394,20 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   // Surface the message: in-app banner/sound if focused on another tab, or an
   // OS notification if backgrounded, all gated by the user's notification
   // settings (see services/notify). Skipped for the chat being viewed.
-  void notifyIncoming({
+  //
+  // AWAITED (spec 1015 FR-005): the relay ack is sent by useSync only after
+  // receiveIncoming resolves, so awaiting the notification dispatch here means an
+  // incoming item is never acked/drained before it has been surfaced to the user
+  // (the message is also already persisted above, so it is never lost either way).
+  // A notify error must never block the ack/dedup that follow, so it's swallowed.
+  await notifyIncoming({
     kind: 'message',
     chatId: targetChatId,
     name: chat?.isGroup ? chat.name : contact.name,
     // The notification spells out shared location / contact / poll (no icon to lean
     // on), unlike the terser `preview` used for the chats list above.
     body: isGroupMsg ? `${contact.name}: ${notifyPreview(payload)}` : notifyPreview(payload) || 'New message',
-  });
+  }).catch(() => {});
 
   // Durably stored now → record so a duplicate re-send/redelivery is skipped. Marked
   // here (after the row is persisted) so a crash mid-processing leaves it UNmarked,

@@ -26,6 +26,12 @@ import (
 var (
 	tickleMsg  = []byte(`{"t":"msg"}`)
 	tickleCall = []byte(`{"t":"call"}`)
+	// tickleConn wakes a device for a connection (friend-request) lifecycle event
+	// — request received / accepted / rejected. It carries NO identity or state;
+	// the SW resolves specifics from GET /v1/connections (zero-knowledge: the push
+	// service only learns "a connection event occurred for this endpoint", the same
+	// privacy class as msg/call).
+	tickleConn = []byte(`{"t":"conn"}`)
 )
 
 const (
@@ -49,6 +55,17 @@ const (
 	// an incoming-call ring away. Must be <=32 url-safe-base64 chars.
 	msgTopic = "ring-msg"
 
+	// connTTL: a friend-request lifecycle wake is worth holding until the device
+	// next comes online (like a message), but a weeks-stale connection wake is
+	// noise — the SW reconciles current state from GET /v1/connections on wake, so
+	// a moderate hold is plenty. 7 days covers a phone offline over a long weekend.
+	connTTL = 7 * 24 * 60 * 60 // 604800s
+	// connTopic collapses a burst of connection tickles to one subscription into a
+	// single wake-up (the SW re-reads the full connection state on any wake, so
+	// collapsing loses nothing). Distinct from msgTopic so a connection wake is
+	// never collapsed away by a message burst (and vice versa).
+	connTopic = "ring-conn"
+
 	// sendBudget bounds one subscription's whole delivery attempt (incl. retries),
 	// so one slow/hung endpoint can't starve a user's other devices.
 	sendBudget = 10 * time.Second
@@ -70,6 +87,9 @@ var (
 	}
 	callParams = func() pushParams {
 		return pushParams{payload: tickleCall, ttl: callTTL, urgency: webpush.UrgencyHigh, topic: ""}
+	}
+	connParams = func() pushParams {
+		return pushParams{payload: tickleConn, ttl: connTTL, urgency: webpush.UrgencyHigh, topic: connTopic}
 	}
 )
 
@@ -139,6 +159,14 @@ func (n *Notifier) Notify(ctx context.Context, userID string) { n.notify(ctx, us
 // promptly for the live ring that follows over the WebSocket.
 func (n *Notifier) NotifyCall(ctx context.Context, userID string) {
 	n.notify(ctx, userID, callParams())
+}
+
+// NotifyConn pushes a content-free CONNECTION tickle for a friend-request
+// lifecycle event (received / accepted / rejected). Long-ish lived + collapsible
+// like a message, so an offline device still learns of it on wake; the SW then
+// reconciles the actual state from GET /v1/connections. Carries no identity.
+func (n *Notifier) NotifyConn(ctx context.Context, userID string) {
+	n.notify(ctx, userID, connParams())
 }
 
 func (n *Notifier) notify(ctx context.Context, userID string, p pushParams) {

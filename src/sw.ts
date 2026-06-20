@@ -17,7 +17,10 @@
  * per-chat tags collapse the page- and SW-shown notes so there's never a duplicate.
  */
 import { precacheAndRoute } from 'workbox-precaching';
-import { previewPending, markShown, unreadCount, ackCall, type SwNote } from '@/services/sw-inbox';
+import {
+  previewPending, markShown, unreadCount, ackCall, previewConnections, markConnShown,
+  type SwNote, type ConnNote,
+} from '@/services/sw-inbox';
 import { resubscribePush } from '@/services/sw-push';
 
 declare const self: ServiceWorkerGlobalScope & {
@@ -138,16 +141,66 @@ async function updateAppBadge(newCount: number): Promise<void> {
   }
 }
 
-/** Decode the content-free tickle's frame type ('call' shows a ring; anything
- *  else, including an unreadable/absent payload, is treated as a message). */
-function pushKind(event: PushEvent): 'call' | 'msg' {
+/** Decode the content-free tickle's frame type ('call' shows a ring, 'conn' is a
+ *  friend-request lifecycle event; anything else, including an unreadable/absent
+ *  payload, is treated as a message). */
+function pushKind(event: PushEvent): 'call' | 'msg' | 'conn' {
   try {
     const data = event.data?.json() as { t?: string } | undefined;
     if (data?.t === 'call') return 'call';
+    if (data?.t === 'conn') return 'conn';
   } catch {
     /* not JSON → treat as a message */
   }
   return 'msg';
+}
+
+/** Show the generic friend-request notifications (identity-safe; no decryption). */
+async function showConnNotes(notes: ConnNote[]): Promise<void> {
+  for (const n of notes) {
+    try {
+      await self.registration.showNotification(n.title, {
+        body: n.body,
+        icon: ICON,
+        badge: ICON,
+        tag: n.tag,
+        renotify: true,
+        data: { url: n.url },
+      });
+    } catch (e) {
+      console.warn('[sw] conn showNotification failed', e);
+    }
+  }
+}
+
+/**
+ * Handle a friend-request (conn) push: reconcile connection state and show a
+ * generic, identity-safe notification for any NEW request/accept/reject. The conn
+ * tickle carries no identity and needs no decryption, so this works even while the
+ * device is PIN-locked. Always shows at least a generic placeholder to honor the
+ * userVisibleOnly contract when something is pending but can't be reconciled.
+ */
+async function showConnNotification(): Promise<void> {
+  let notes: ConnNote[] = [];
+  try {
+    notes = await previewConnections();
+  } catch {
+    /* fall through to the placeholder below */
+  }
+  if (notes.length) {
+    await showConnNotes(notes);
+    await markConnShown(notes.flatMap((n) => n.keys));
+    return;
+  }
+  // Couldn't reconcile (offline / already-seen) but a tickle implies activity →
+  // a single generic placeholder keeps the userVisibleOnly contract.
+  await self.registration.showNotification('Ring', {
+    body: 'New friend request',
+    icon: ICON,
+    badge: ICON,
+    tag: 'ring:conn:req',
+    data: { url: '/tabs/contacts' },
+  });
 }
 
 /**
@@ -158,7 +211,7 @@ function pushKind(event: PushEvent): 'call' | 'msg' {
  */
 async function showMessageNotification(): Promise<void> {
   const preview = previewPending(); // started once; awaited twice (race, then settle)
-  let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, suppressed: false };
+  let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, suppressed: false, silenced: false };
   try {
     result = await Promise.race([
       preview,
@@ -173,9 +226,12 @@ async function showMessageNotification(): Promise<void> {
     await closeByTag(GENERIC_TAG); // clear any earlier generic before the rich note
     await showNotes(result.notes);
     await markShown(allIds(result.notes)); // only mark what we displayed
-  } else if (!result.suppressed) {
+  } else if (!result.suppressed && !result.silenced) {
     // Nothing decryptable yet (cold start / PIN-locked) and the user didn't disable
     // message notifications → keep the userVisibleOnly contract with a placeholder.
+    // `silenced` (every pending message intentionally per-chat silenced: mute /
+    // web-push-off / badge-only) shows NO placeholder — spec 1015 FR-022/FR-024 —
+    // while the badge below still counts them.
     await showGeneric();
     shownGeneric = true;
   }
@@ -194,6 +250,12 @@ async function showMessageNotification(): Promise<void> {
       await closeByTag(GENERIC_TAG); // upgrade: drop the placeholder…
       await showNotes(full.notes); // …show the real sender + text…
       await markShown(allIds(full.notes)); // …and don't re-preview them next push
+    } else if (shownGeneric && full.silenced) {
+      // A SLOW cold start showed the generic before the decrypt settled; the settled
+      // result says every pending message was per-chat silenced → drop the placeholder
+      // so badge-only / web-push-off / mute is honored even on a slow wake. The badge
+      // below still counts them (pending), since `silenced` never sets `suppressed`.
+      await closeByTag(GENERIC_TAG);
     }
   } catch {
     /* ignore */
@@ -282,7 +344,8 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      if (pushKind(event) === 'call') {
+      const kind = pushKind(event);
+      if (kind === 'call') {
         // A call is never queued on the relay; the tickle itself is the signal.
         // Show the ring immediately, ack reachability (so the caller's UI flips to
         // "Ringing"), and nudge any device to reconnect so the live call-offer
@@ -290,6 +353,15 @@ self.addEventListener('push', (event) => {
         await showCall();
         void ackCall();
         for (const client of clients) client.postMessage({ type: 'ring:drain' });
+        return;
+      }
+      if (kind === 'conn') {
+        // Friend-request lifecycle. A live page owns the alert (it gets the
+        // connect-req / connect-update WS frame and notifies via useSync), so the
+        // SW only notifies when the app is fully CLOSED (no client to claim it),
+        // avoiding a duplicate. Still nudge any live client to reconcile its lists.
+        for (const client of clients) client.postMessage({ type: 'ring:conn' });
+        if (!clients.length) await showConnNotification();
         return;
       }
       // Let a live, unlocked page own the notification (avoids a duplicate); the SW
