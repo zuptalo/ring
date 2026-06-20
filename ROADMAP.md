@@ -31,10 +31,10 @@ Specs are grouped by category band; status moves
 | [1009](specs/1009-activity-indicators/spec.md) | Ephemeral Activity Indicators (Typing & Recording) | 🟢 shipped |
 | [1010](specs/1010-group-seen-receipts/spec.md) | Group "Seen" Receipts — Durable, Private, and Counted | 🟢 shipped |
 | [1011](specs/1011-smooth-chat-history/spec.md) | Smooth Chat-History Scroll-Up (verified by a multi-user end-to-end exercise) | 🟢 shipped |
-| [1012](specs/1012-scroll-to-bottom-button/spec.md) | Hovering "Scroll to Latest" Button in Chat | ⚪ planned |
-| [1013](specs/1013-jump-pill-seen-receipts/spec.md) | Expanding "Jump to Latest" Pill + Visibility-Driven Seen Receipts | ⚪ planned |
-| [1014](specs/1014-image-thumbnails-album/spec.md) | Multi-Size Image Thumbnails + Album-View Overhaul | 🔵 in-review |
-| [1015](specs/1015-reliable-push-notifications/spec.md) | Reliable Push & Redesigned In-App Notifications | 🟡 in-progress |
+| [1012](specs/1012-scroll-to-bottom-button/spec.md) | Hovering "Scroll to Latest" Button in Chat | 🟢 shipped |
+| [1013](specs/1013-jump-pill-seen-receipts/spec.md) | Expanding "Jump to Latest" Pill + Visibility-Driven Seen Receipts | 🟢 shipped |
+| [1014](specs/1014-image-thumbnails-album/spec.md) | Multi-Size Image Thumbnails + Album-View Overhaul | 🟢 shipped |
+| [1015](specs/1015-reliable-push-notifications/spec.md) | Reliable Push & Redesigned In-App Notifications | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
