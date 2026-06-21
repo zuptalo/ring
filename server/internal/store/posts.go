@@ -108,6 +108,57 @@ func (s *Store) DeletePost(ctx context.Context, author, id string) error {
 	return err
 }
 
+// RemovePostRecipient drops `recipient` from a post's audience (author-only): it
+// deletes their wrapped-key envelope (so they can't re-fetch the key) and records a
+// revocation so their device removes the local copy on next sync. Returns true if the
+// caller authored the post (the operation applied).
+func (s *Store) RemovePostRecipient(ctx context.Context, postID, author, recipient string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var owns bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM posts WHERE id = $1 AND author::text = $2)`, postID, author).Scan(&owns); err != nil {
+		return false, err
+	}
+	if !owns {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM post_envelopes WHERE post_id = $1 AND recipient::text = $2`, postID, recipient); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO post_revocations (post_id, recipient) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		postID, recipient); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// ListRevocations returns post ids recently revoked for `recipient` (bounded window),
+// so their client can delete those local copies. Idempotent for the client.
+func (s *Store) ListRevocations(ctx context.Context, recipient string) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT post_id FROM post_revocations
+		  WHERE recipient::text = $1 AND created_at > now() - interval '30 days'`, recipient)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 /* ---- engagement (reactions/comments) — US4 ---- */
 
 // CanSeePost reports whether `user` is in a post's audience (has an envelope) or is its

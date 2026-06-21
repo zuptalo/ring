@@ -40,16 +40,18 @@ func (c *fakePostConn) OutgoingRequests(context.Context, string) ([]store.Connec
 
 // fakePostStore is an in-memory PostStore for handler tests.
 type fakePostStore struct {
-	posts map[string]store.NewPost
-	eng   map[string][]store.PostEngagementRow
-	views map[string][]string
+	posts   map[string]store.NewPost
+	eng     map[string][]store.PostEngagementRow
+	views   map[string][]string
+	revoked map[string][]string
 }
 
 func newFakePostStore() *fakePostStore {
 	return &fakePostStore{
-		posts: map[string]store.NewPost{},
-		eng:   map[string][]store.PostEngagementRow{},
-		views: map[string][]string{},
+		posts:   map[string]store.NewPost{},
+		eng:     map[string][]store.PostEngagementRow{},
+		views:   map[string][]string{},
+		revoked: map[string][]string{},
 	}
 }
 func (f *fakePostStore) PostAuthor(_ context.Context, postID string) (string, error) {
@@ -136,6 +138,25 @@ func (f *fakePostStore) DeletePost(_ context.Context, author, id string) error {
 		delete(f.posts, id)
 	}
 	return nil
+}
+func (f *fakePostStore) RemovePostRecipient(_ context.Context, postID, author, recipient string) (bool, error) {
+	p, ok := f.posts[postID]
+	if !ok || p.Author != author {
+		return false, nil
+	}
+	envs := p.Envelopes[:0:0]
+	for _, e := range p.Envelopes {
+		if e.Recipient != recipient {
+			envs = append(envs, e)
+		}
+	}
+	p.Envelopes = envs
+	f.posts[postID] = p
+	f.revoked[recipient] = append(f.revoked[recipient], postID)
+	return true, nil
+}
+func (f *fakePostStore) ListRevocations(_ context.Context, recipient string) ([]string, error) {
+	return f.revoked[recipient], nil
 }
 
 func newPostTestServer(conn ConnectionStore, posts PostStore) http.Handler {
@@ -362,5 +383,46 @@ func TestDeletePostAuthorOnly(t *testing.T) {
 	}
 	if ids := listPostIDs(t, srv, tokB); len(ids) != 0 {
 		t.Errorf("after author delete, bob sees %v, want []", ids)
+	}
+}
+
+// TestRemovePostRecipientAuthorOnly: dropping a recipient is author-only, removes the
+// post from that recipient's feed, and surfaces in their `revoked` list so an offline
+// device can prune it (the un-close-friend revocation path).
+func TestRemovePostRecipientAuthorOnly(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Bob (not the author) cannot revoke his own membership for someone else's post.
+	if rr := do(t, srv, http.MethodDelete, "/v1/posts/"+postID+"/recipient/"+aliceID, tokB, ""); rr.Code != http.StatusForbidden {
+		t.Fatalf("non-author revoke status = %d, want 403", rr.Code)
+	}
+
+	// Alice (the author) removes Bob from the audience → 204, and Bob no longer sees it.
+	if rr := do(t, srv, http.MethodDelete, "/v1/posts/"+postID+"/recipient/"+bobID, tokA, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("author revoke status = %d, want 204", rr.Code)
+	}
+	if ids := listPostIDs(t, srv, tokB); len(ids) != 0 {
+		t.Errorf("after revoke, bob sees %v, want []", ids)
+	}
+
+	// The revocation surfaces in Bob's list response so an offline device prunes it.
+	rr := do(t, srv, http.MethodGet, "/v1/posts", tokB, "")
+	var resp struct {
+		Revoked []string `json:"revoked"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(resp.Revoked) != 1 || resp.Revoked[0] != postID {
+		t.Errorf("revoked = %v, want [%s]", resp.Revoked, postID)
 	}
 }

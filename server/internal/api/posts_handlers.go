@@ -152,7 +152,47 @@ func (h *Handlers) listPosts(w http.ResponseWriter, r *http.Request) {
 			cursor = p.CreatedMs
 		}
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"posts": posts, "cursor": cursor})
+	// Revocations: posts the caller was removed from (e.g. dropped from close friends)
+	// so the client deletes its local copies. Idempotent.
+	revoked, _ := h.Posts.ListRevocations(r.Context(), uid)
+	httpx.JSON(w, http.StatusOK, map[string]any{"posts": posts, "cursor": cursor, "revoked": revoked})
+}
+
+// removePostRecipient (DELETE /v1/posts/{id}/recipient/{userId}) drops a recipient from
+// one of the caller's own posts (author-only) and signals them to remove their copy —
+// used when un-close-friending someone to revoke close-only posts.
+func (h *Handlers) removePostRecipient(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	postID := r.PathValue("id")
+	recipient := r.PathValue("userId")
+	if !uuidRE.MatchString(postID) || !uuidRE.MatchString(recipient) {
+		httpx.Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	owns, err := h.Posts.RemovePostRecipient(r.Context(), postID, uid, recipient)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not revoke")
+		return
+	}
+	if !owns {
+		httpx.Error(w, http.StatusForbidden, "not your post")
+		return
+	}
+	// Signal the removed recipient: a live frame to delete it now, and a push so an
+	// offline device picks up the revocation on its next sync.
+	if h.Hub != nil {
+		if b, e := json.Marshal(map[string]any{"t": "post-revoke", "post": postID}); e == nil {
+			h.Hub.Send(recipient, b)
+		}
+	}
+	if h.Notifier != nil {
+		h.Notifier.NotifyPost(r.Context(), recipient)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type engagementReq struct {

@@ -108,11 +108,15 @@ export interface ServerPost {
 }
 
 /** Pull posts addressed to the caller (and their own) newer than `since`, newest
- *  first, with a cursor to pass next time. */
-export async function listPosts(since = 0): Promise<{ posts: ServerPost[]; cursor: number }> {
+ *  first, with a cursor to pass next time. `revoked` lists post ids the caller was
+ *  removed from (e.g. dropped from close friends) so the client prunes local copies. */
+export async function listPosts(
+  since = 0,
+): Promise<{ posts: ServerPost[]; cursor: number; revoked: string[] }> {
   const res = await fetch(`${apiBaseUrl()}/v1/posts?since=${since}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`list posts failed: ${res.status}`);
-  return (await res.json()) as { posts: ServerPost[]; cursor: number };
+  const body = (await res.json()) as { posts: ServerPost[]; cursor: number; revoked?: string[] };
+  return { ...body, revoked: body.revoked ?? [] };
 }
 
 /** Delete one of the caller's own posts (author-only server-side). Idempotent. */
@@ -122,6 +126,17 @@ export async function deletePost(id: string): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok && res.status !== 404) throw new Error(`delete post failed: ${res.status}`);
+}
+
+/** Remove one recipient from one of the caller's own posts (author-only). Used when
+ *  un-close-friending someone to revoke close-only posts: their key envelope is deleted
+ *  and a revocation is recorded so their device prunes the local copy. Idempotent. */
+export async function removePostRecipient(postId: string, userId: string): Promise<void> {
+  const res = await fetch(
+    `${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/recipient/${encodeURIComponent(userId)}`,
+    { method: 'DELETE', headers: authHeaders() },
+  );
+  if (!res.ok && res.status !== 404) throw new Error(`remove post recipient failed: ${res.status}`);
 }
 
 /** Submit one opaque engagement item (reaction/comment) on a post; the server fans it

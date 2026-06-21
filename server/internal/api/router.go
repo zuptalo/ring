@@ -117,6 +117,8 @@ type PostStore interface {
 	CreatePost(ctx context.Context, p store.NewPost) error
 	ListPosts(ctx context.Context, recipient string, sinceMs int64) ([]store.PostForRecipient, error)
 	DeletePost(ctx context.Context, author, id string) error
+	RemovePostRecipient(ctx context.Context, postID, author, recipient string) (bool, error)
+	ListRevocations(ctx context.Context, recipient string) ([]string, error)
 	CanSeePost(ctx context.Context, postID, user string) (bool, error)
 	PostAudience(ctx context.Context, postID string) ([]string, error)
 	PostAuthor(ctx context.Context, postID string) (string, error)
@@ -236,6 +238,7 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	mux.Handle("POST /v1/posts", authMW(http.HandlerFunc(h.createPost)))
 	mux.Handle("GET /v1/posts", authMW(http.HandlerFunc(h.listPosts)))
 	mux.Handle("DELETE /v1/posts/{id}", authMW(http.HandlerFunc(h.deletePost)))
+	mux.Handle("DELETE /v1/posts/{id}/recipient/{userId}", authMW(http.HandlerFunc(h.removePostRecipient)))
 	mux.Handle("POST /v1/posts/{id}/engagement", authMW(http.HandlerFunc(h.submitEngagement)))
 	mux.Handle("GET /v1/posts/{id}/engagement", authMW(http.HandlerFunc(h.listEngagement)))
 	mux.Handle("POST /v1/posts/{id}/view", authMW(http.HandlerFunc(h.recordView)))

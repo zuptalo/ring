@@ -285,6 +285,13 @@ export interface PostEngagementFrame {
   post: string;
 }
 
+/** Content-free nudge that the author revoked a post from us (e.g. they dropped us from
+ *  close friends); the client deletes its local copy of that post. */
+export interface PostRevokeFrame {
+  t: 'post-revoke';
+  post: string;
+}
+
 /* ---- ephemeral activity indicators (spec 1009): typing / recording ---- */
 
 /** What a peer is doing in a conversation right now (sealed on the wire). */
@@ -333,6 +340,7 @@ export type Frame =
   | ConnectUpdateFrame
   | PostNewFrame
   | PostEngagementFrame
+  | PostRevokeFrame
   | CallFrame;
 
 export interface Transport {

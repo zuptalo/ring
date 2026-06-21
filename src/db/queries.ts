@@ -10,7 +10,7 @@ import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
 import { buildPost, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
@@ -1969,11 +1969,30 @@ export async function listCloseFriends(): Promise<Contact[]> {
   return (await listFriends()).filter((c) => c.closeFriend);
 }
 
-/** Set/clear the author-private close-friend flag on a contact (spec 0003, US5). */
+/** Set/clear the author-private close-friend flag on a contact (spec 0003, US5).
+ *  Demoting someone (close → not) revokes your close-only posts from them: their key
+ *  envelopes are dropped server-side and their device prunes the local copies, so a
+ *  removed close friend can no longer see posts that were meant only for close friends. */
 export async function setCloseFriend(id: string, value: boolean): Promise<void> {
   const c = await getContact(id);
   if (!c || !!c.closeFriend === value) return;
   await put<Contact>('contacts', { ...c, closeFriend: value, updatedAt: Date.now() });
+  if (!value) await revokeCloseFriendPosts(id);
+}
+
+/** Revoke every still-live close-only post we authored from `userId` (called when they
+ *  are removed from close friends). Best-effort + idempotent: the server drops their
+ *  envelope and records a revocation; a post they never received is a harmless no-op. */
+export async function revokeCloseFriendPosts(userId: string): Promise<void> {
+  const self = getSelfUserId();
+  if (!self) return;
+  const nowMs = now();
+  const closePosts = (await getAll<Post>('posts')).filter(
+    (p) => p.outgoing && p.audience === 'close' && (!p.expiresAt || p.expiresAt > nowMs),
+  );
+  for (const p of closePosts) {
+    await apiRemovePostRecipient(p.id, userId).catch(() => {});
+  }
 }
 
 /* ---- spec 0003: Wall posts ---- */
@@ -2158,11 +2177,24 @@ export async function syncPosts(): Promise<void> {
   if (!isUnlockedNow()) return;
   const cursor = (await getSetting<number>('postsCursor', 0)) ?? 0;
   try {
-    const { posts, cursor: next } = await apiListPosts(cursor);
+    const { posts, cursor: next, revoked } = await apiListPosts(cursor);
     for (const sp of posts) await receivePost(sp);
+    // Posts the author revoked from us (e.g. they dropped us from close friends) —
+    // prune any local copy. Idempotent: an id we never had is a harmless no-op.
+    for (const id of revoked) await pruneLocalPost(id);
     if (next > cursor) await setSetting('postsCursor', next);
   } catch {
     /* offline / transient — retried on the next nudge */
+  }
+}
+
+/** Remove a post and its engagement from this device only (no server call). Used by
+ *  the sweep, by revocation pulls, and by the live `post-revoke` nudge. Idempotent. */
+export async function pruneLocalPost(id: string): Promise<void> {
+  if (!(await get<Post>('posts', id))) return;
+  await remove('posts', id);
+  for (const e of await getByIndex<PostEngagement>('postEngagement', 'postId', id)) {
+    await remove('postEngagement', e.id);
   }
 }
 
