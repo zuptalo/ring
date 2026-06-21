@@ -9,6 +9,26 @@ export function timeLeft(expiresAt: number | undefined, nowMs: number): string {
   return `${Math.floor(s / 86400)}d left`;
 }
 
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/** Day-of-month with an English ordinal suffix (1st, 2nd, 3rd, 13th, 21st). */
+function ordinal(n: number): string {
+  const v = n % 100;
+  const suffix = v >= 11 && v <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th');
+  return `${n}${suffix}`;
+}
+
+/** A post's full date + time, e.g. "2026, January 13th - 20:59" (24-hour, local). */
+export function formatPostDateTime(ts: number): string {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${d.getFullYear()}, ${MONTHS[d.getMonth()]} ${ordinal(d.getDate())} - ${hh}:${mm}`;
+}
+
 /** Compact relative time for a post/comment timestamp ("now", "5m", "3h", "2d"). */
 export function ago(ts: number, nowMs: number = Date.now()): string {
   const s = Math.max(0, Math.floor((nowMs - ts) / 1000));

@@ -39,83 +39,102 @@
         <p>No posts match “{{ search }}”.</p>
       </div>
 
-      <ion-card v-for="p in filteredWall" :key="p.id" class="post">
-        <!-- Header: avatar + name + a subtle "disappears in …" countdown. -->
-        <div class="phead">
-          <ion-avatar class="avatar" @click="open(p.id)">
-            <img v-if="p.authorAvatar" :src="p.authorAvatar" :alt="p.authorName" />
-            <div v-else class="ph">{{ initial(p.authorName) }}</div>
-          </ion-avatar>
-          <div class="who" @click="open(p.id)">
-            <div class="name">
-              {{ p.authorName }}<span v-if="p.authorUsername" class="user"> @{{ p.authorUsername }}</span>
+      <!-- Each post is a sliding item: swipe LEFT to delete your own post (or hide
+           someone else's), swipe RIGHT to mute/unmute their Wall notifications. -->
+      <ion-item-sliding v-for="p in filteredWall" :key="p.id">
+        <ion-item lines="none" class="postitem">
+          <div class="post">
+            <!-- Header: avatar + name + a subtle "disappears in …" countdown. -->
+            <div class="phead">
+              <ion-avatar class="avatar" @click="open(p.id)">
+                <img v-if="p.authorAvatar" :src="p.authorAvatar" :alt="p.authorName" />
+                <div v-else class="ph">{{ initial(p.authorName) }}</div>
+              </ion-avatar>
+              <div class="who" @click="open(p.id)">
+                <div class="name">
+                  {{ p.authorName }}<span v-if="p.authorUsername" class="user"> @{{ p.authorUsername }}</span>
+                </div>
+                <div class="sub">
+                  {{ ago(p.createdAt, now) }}<span v-if="p.audience === 'close'"> · Close friends</span><span v-if="p.muted"> · Muted</span>
+                </div>
+              </div>
+              <span v-if="left(p)" class="countdown" :title="'This post auto-deletes'">
+                <ion-icon :icon="timeOutline" />{{ left(p) }}
+              </span>
             </div>
-            <div class="sub">
-              {{ ago(p.createdAt, now) }}<span v-if="p.audience === 'close'"> · Close friends</span>
+
+            <!-- Media + body (tap → full post). -->
+            <div v-if="p.mediaUrl" class="thumb" @click="open(p.id)">
+              <img v-if="p.kind === 'image'" :src="p.mediaUrl" :alt="p.body || 'Photo'" />
+              <video v-else-if="p.kind === 'video'" :src="p.mediaUrl" muted playsinline preload="metadata" />
+              <div v-else class="voice"><ion-icon :icon="micOutline" /> Voice message</div>
+              <ion-icon v-if="p.kind === 'video'" class="play" :icon="playCircleOutline" />
+            </div>
+            <p v-if="p.body" class="body" @click="open(p.id)"><EmojiText :text="p.body" /></p>
+
+            <!-- Reactions: pills + a quick-react button opening the shared picker. -->
+            <div class="rrow">
+              <button
+                v-for="r in p.reactions"
+                :key="r.emoji"
+                class="rpill"
+                :class="{ mine: r.mine }"
+                @click="onReact(p, r.emoji)"
+              >
+                <Emoji :emoji="r.emoji" /><span class="rc">{{ r.count }}</span>
+              </button>
+              <button class="raddbtn" aria-label="React" @click="openPicker(p, $event)">
+                <ion-icon :icon="happyOutline" />
+              </button>
+            </div>
+
+            <!-- Comment preview: first comment → "view all" → last comment (with avatars). -->
+            <div v-if="p.commentCount" class="cpreview">
+              <div class="crow">
+                <ion-avatar class="cmini">
+                  <img v-if="p.comments[0].authorAvatar" :src="p.comments[0].authorAvatar" :alt="p.comments[0].authorName" />
+                  <div v-else class="ph">{{ initial(p.comments[0].authorName) }}</div>
+                </ion-avatar>
+                <span class="cname">{{ p.comments[0].authorName }}</span>
+                <EmojiText :text="p.comments[0].text" />
+              </div>
+              <a v-if="p.commentCount > 2" class="more" @click="open(p.id)">
+                View all {{ p.commentCount }} comments
+              </a>
+              <div v-if="p.commentCount > 1" class="crow">
+                <ion-avatar class="cmini">
+                  <img v-if="p.comments[p.commentCount - 1].authorAvatar" :src="p.comments[p.commentCount - 1].authorAvatar" :alt="p.comments[p.commentCount - 1].authorName" />
+                  <div v-else class="ph">{{ initial(p.comments[p.commentCount - 1].authorName) }}</div>
+                </ion-avatar>
+                <span class="cname">{{ p.comments[p.commentCount - 1].authorName }}</span>
+                <EmojiText :text="p.comments[p.commentCount - 1].text" />
+              </div>
+            </div>
+
+            <!-- Quick comment from the feed. -->
+            <div class="cinput">
+              <ion-input
+                class="cfield"
+                :value="draft[p.id] || ''"
+                placeholder="Add a comment…"
+                @ion-input="onDraft(p.id, $event)"
+                @keyup.enter="sendComment(p)"
+              />
+              <ion-button size="small" fill="clear" :disabled="!(draft[p.id] || '').trim()" @click="sendComment(p)">
+                Post
+              </ion-button>
             </div>
           </div>
-          <span v-if="left(p)" class="countdown" :title="'This post auto-deletes'">
-            <ion-icon :icon="timeOutline" />{{ left(p) }}
-          </span>
-          <button v-if="!p.isOwn" class="cardmenu" aria-label="Post options" @click.stop="openPostMenu(p)">
-            <ion-icon :icon="ellipsisVertical" />
-          </button>
-        </div>
+        </ion-item>
 
-        <!-- Media + body (tap → full post). -->
-        <div v-if="p.mediaUrl" class="thumb" @click="open(p.id)">
-          <img v-if="p.kind === 'image'" :src="p.mediaUrl" :alt="p.body || 'Photo'" />
-          <video v-else-if="p.kind === 'video'" :src="p.mediaUrl" muted playsinline preload="metadata" />
-          <div v-else class="voice"><ion-icon :icon="micOutline" /> Voice message</div>
-          <ion-icon v-if="p.kind === 'video'" class="play" :icon="playCircleOutline" />
-        </div>
-        <p v-if="p.body" class="body" @click="open(p.id)"><EmojiText :text="p.body" /></p>
-
-        <!-- Reactions: pills + a quick-react button opening the shared picker. -->
-        <div class="rrow">
-          <button
-            v-for="r in p.reactions"
-            :key="r.emoji"
-            class="rpill"
-            :class="{ mine: r.mine }"
-            @click="onReact(p, r.emoji)"
-          >
-            <Emoji :emoji="r.emoji" /><span class="rc">{{ r.count }}</span>
-          </button>
-          <button class="raddbtn" aria-label="React" @click="openPicker(p, $event)">
-            <ion-icon :icon="happyOutline" />
-          </button>
-        </div>
-
-        <!-- Comment preview: first comment → "view all" → last comment. -->
-        <div v-if="p.commentCount" class="cpreview">
-          <div class="crow">
-            <span class="cname">{{ p.comments[0].authorName }}</span>
-            <EmojiText :text="p.comments[0].text" />
-          </div>
-          <a v-if="p.commentCount > 2" class="more" @click="open(p.id)">
-            View all {{ p.commentCount }} comments
-          </a>
-          <div v-if="p.commentCount > 1" class="crow">
-            <span class="cname">{{ p.comments[p.commentCount - 1].authorName }}</span>
-            <EmojiText :text="p.comments[p.commentCount - 1].text" />
-          </div>
-        </div>
-
-        <!-- Quick comment from the feed. -->
-        <div class="cinput">
-          <ion-input
-            class="cfield"
-            :value="draft[p.id] || ''"
-            placeholder="Add a comment…"
-            @ion-input="onDraft(p.id, $event)"
-            @keyup.enter="sendComment(p)"
-          />
-          <ion-button size="small" fill="clear" :disabled="!(draft[p.id] || '').trim()" @click="sendComment(p)">
-            Post
-          </ion-button>
-        </div>
-      </ion-card>
+        <ion-item-options v-if="!p.isOwn" side="start">
+          <ion-item-option color="medium" @click="toggleMute(p)">{{ p.muted ? 'Unmute' : 'Mute' }}</ion-item-option>
+        </ion-item-options>
+        <ion-item-options side="end">
+          <ion-item-option v-if="p.isOwn" color="danger" @click="confirmDeletePost(p)">Delete</ion-item-option>
+          <ion-item-option v-else color="dark" @click="hideUser(p)">Hide</ion-item-option>
+        </ion-item-options>
+      </ion-item-sliding>
     </ion-content>
   </ion-page>
 </template>
@@ -124,22 +143,22 @@
 import { computed, reactive, ref, watch } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
-  IonCard, IonAvatar, IonIcon, IonInput, IonSearchbar, toastController, actionSheetController,
+  IonItem, IonItemSliding, IonItemOption, IonItemOptions, IonAvatar, IonIcon, IonInput, IonSearchbar,
+  toastController, actionSheetController, alertController,
   onIonViewWillEnter, onIonViewWillLeave,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
 import {
   createOutline, sparklesOutline, micOutline, playCircleOutline, happyOutline, timeOutline,
-  ellipsisVertical, notificationsOutline, notificationsOffOutline,
+  notificationsOutline, notificationsOffOutline,
 } from 'ionicons/icons';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
 import { useWall, type WallPost } from '@/composables/useWall';
 import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
-  reactToPost, commentOnPost, MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
-  markWallSeen, setWallMuteUntil, isWallTempMuted,
-  setWallUserMuted, setWallUserHidden, isWallUserMuted, isWallUserHidden,
+  reactToPost, commentOnPost, deletePost, MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
+  markWallSeen, setWallMuteUntil, isWallTempMuted, setWallUserMuted, setWallUserHidden,
 } from '@/db/queries';
 import { timeLeft, ago } from '@/utils/post-time';
 
@@ -262,26 +281,39 @@ async function mute(until: number): Promise<void> {
   muted.value = await isWallTempMuted();
 }
 
-// --- per-user mute / hide ---
-async function openPostMenu(post: WallPost): Promise<void> {
-  const [isMuted, isHidden] = [await isWallUserMuted(post.author), await isWallUserHidden(post.author)];
-  const name = post.authorName;
-  const sheet = await actionSheetController.create({
-    header: name,
+// --- per-user mute / hide (swipe-right = mute, swipe-left = hide) ---
+async function toggleMute(post: WallPost): Promise<void> {
+  await setWallUserMuted(post.author, !post.muted);
+  const t = await toastController.create({
+    message: post.muted ? `Unmuted ${post.authorName}` : `Muted ${post.authorName}'s Wall notifications`,
+    duration: 1400,
+    position: 'top',
+  });
+  await t.present();
+}
+async function hideUser(post: WallPost): Promise<void> {
+  await setWallUserHidden(post.author, true);
+  const t = await toastController.create({
+    message: `Hid ${post.authorName}'s posts. Undo from the bell menu.`,
+    duration: 1800,
+    position: 'top',
+  });
+  await t.present();
+}
+
+// --- delete your own post (swipe-left, with confirmation) ---
+async function confirmDeletePost(post: WallPost): Promise<void> {
+  const a = await alertController.create({
+    header: 'Delete post',
+    message:
+      'This removes the post for you and signals your audience to remove their copies. ' +
+      'Copies already downloaded can’t be guaranteed to disappear.',
     buttons: [
-      {
-        text: isMuted ? `Unmute ${name}'s posts` : `Mute ${name}'s posts`,
-        handler: () => void setWallUserMuted(post.author, !isMuted),
-      },
-      {
-        text: isHidden ? `Unhide ${name}'s posts` : `Hide ${name}'s posts`,
-        role: isHidden ? undefined : 'destructive',
-        handler: () => void setWallUserHidden(post.author, !isHidden),
-      },
       { text: 'Cancel', role: 'cancel' },
+      { text: 'Delete', role: 'destructive', handler: () => void deletePost(post.id) },
     ],
   });
-  await sheet.present();
+  await a.present();
 }
 </script>
 
@@ -299,9 +331,21 @@ async function openPostMenu(post: WallPost): Promise<void> {
   font-size: 44px;
   color: var(--ion-color-primary);
 }
+/* The sliding wrapper hosts a card-styled div in a transparent, padding-free item. */
+.postitem {
+  --background: transparent;
+  --padding-start: 12px;
+  --inner-padding-end: 12px;
+  --border-width: 0;
+  --min-height: 0;
+}
 .post {
-  margin: 12px;
+  width: 100%;
+  margin: 8px 0;
   border-radius: 16px;
+  overflow: hidden;
+  background: var(--ion-card-background, var(--ion-item-background, #fff));
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
 }
 .phead {
   display: flex;
@@ -351,15 +395,6 @@ async function openPostMenu(post: WallPost): Promise<void> {
   background: var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
   padding: 3px 8px;
   border-radius: 999px;
-}
-.cardmenu {
-  flex: none;
-  border: none;
-  background: none;
-  color: var(--ion-color-medium);
-  font-size: 20px;
-  padding: 2px 4px;
-  cursor: pointer;
 }
 .thumb {
   position: relative;
@@ -434,12 +469,30 @@ async function openPostMenu(post: WallPost): Promise<void> {
   padding: 2px 14px 4px;
 }
 .cpreview .crow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 14px;
-  padding: 1px 0;
+  padding: 2px 0;
+}
+.cpreview .cmini {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.cpreview .cmini .ph {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--ion-color-step-150, rgba(120, 120, 128, 0.2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 10px;
 }
 .cpreview .cname {
   font-weight: 600;
-  margin-right: 6px;
 }
 .cpreview .more {
   display: block;

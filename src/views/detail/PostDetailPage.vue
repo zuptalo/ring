@@ -62,21 +62,30 @@
           </ul>
         </div>
 
-        <!-- Comments (audience-visible thread). -->
+        <!-- Comments (audience-visible thread). Swipe a comment you can remove to the
+             left to delete it (with confirmation). -->
         <div class="comments">
           <h3>Comments</h3>
-          <ul v-if="comments.length" class="clist">
-            <li v-for="c in comments" :key="c.id">
-              <div class="cmeta">
-                <span class="cname">{{ nameOf(c.actor) }}</span>
-                <span class="ctime">{{ ago(c.at) }}</span>
-                <button v-if="canModerate(c)" class="cdel" aria-label="Delete comment" @click="removeComment(c)">
-                  <ion-icon :icon="trashOutline" />
-                </button>
-              </div>
-              <p class="ctext"><EmojiText :text="c.text || ''" /></p>
-            </li>
-          </ul>
+          <ion-list v-if="comments.length" class="clist">
+            <ion-item-sliding v-for="c in comments" :key="c.id">
+              <ion-item lines="none" class="citem">
+                <ion-avatar slot="start" class="cavatar">
+                  <img v-if="avatarOf(c.actor)" :src="avatarOf(c.actor)" :alt="nameOf(c.actor)" />
+                  <div v-else class="ph">{{ initial(nameOf(c.actor)) }}</div>
+                </ion-avatar>
+                <ion-label class="cwrap">
+                  <div class="cmeta">
+                    <span class="cname">{{ nameOf(c.actor) }}</span>
+                    <span class="ctime">{{ ago(c.at) }}</span>
+                  </div>
+                  <p class="ctext"><EmojiText :text="c.text || ''" /></p>
+                </ion-label>
+              </ion-item>
+              <ion-item-options v-if="canModerate(c)" side="end">
+                <ion-item-option color="danger" @click="confirmDeleteComment(c)">Delete</ion-item-option>
+              </ion-item-options>
+            </ion-item-sliding>
+          </ion-list>
           <p v-else class="empty">No comments yet.</p>
           <div class="cinput">
             <ion-textarea
@@ -106,11 +115,13 @@
 import { computed, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
-  IonContent, IonAvatar, IonIcon, IonTextarea, onIonViewWillEnter, onIonViewWillLeave, alertController,
+  IonContent, IonAvatar, IonIcon, IonTextarea, IonList, IonItem, IonLabel,
+  IonItemSliding, IonItemOptions, IonItemOption,
+  onIonViewWillEnter, onIonViewWillLeave, alertController,
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { trashOutline, happyOutline, timeOutline } from 'ionicons/icons';
-import { timeLeft } from '@/utils/post-time';
+import { timeLeft, formatPostDateTime } from '@/utils/post-time';
 import { toastController } from '@ionic/vue';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
@@ -186,6 +197,10 @@ const nameOf = (actorId: string): string => {
   if (actorId === selfId) return 'You';
   return contacts.value.find((c) => c.id === actorId)?.name ?? 'Someone';
 };
+const avatarOf = (actorId: string): string => {
+  if (actorId === selfId) return self.avatar.value;
+  return contacts.value.find((c) => c.id === actorId)?.avatar ?? '';
+};
 
 // Comments thread.
 const comments = useLiveQuery(() => listPostComments(postId), ['postEngagement'], [] as PostEngagement[]);
@@ -202,8 +217,16 @@ async function sendComment(): Promise<void> {
 function canModerate(c: PostEngagement): boolean {
   return c.actor === selfId || !!post.value?.outgoing;
 }
-function removeComment(c: PostEngagement): void {
-  void deleteComment(postId, c.id);
+async function confirmDeleteComment(c: PostEngagement): Promise<void> {
+  const a = await alertController.create({
+    header: 'Delete comment',
+    message: 'This removes your comment for everyone in the audience.',
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      { text: 'Delete', role: 'destructive', handler: () => void deleteComment(postId, c.id) },
+    ],
+  });
+  await a.present();
 }
 
 // Author-only view list.
@@ -246,7 +269,7 @@ function initial(name: string): string {
   return (name.trim()[0] ?? '?').toUpperCase();
 }
 function when(ts: number): string {
-  return new Date(ts).toLocaleString();
+  return formatPostDateTime(ts);
 }
 function ago(ts: number): string {
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
@@ -401,17 +424,39 @@ async function confirmDelete(): Promise<void> {
   margin: 0 0 8px;
 }
 .comments .clist {
-  list-style: none;
   margin: 0 0 12px;
   padding: 0;
+  background: transparent;
 }
-.comments .clist li {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
+.comments .citem {
+  --background: transparent;
+  --padding-start: 0;
+  --inner-padding-end: 0;
+  --min-height: 0;
+  align-items: flex-start;
+}
+.comments .cavatar {
+  width: 32px;
+  height: 32px;
+  margin: 6px 10px 6px 0;
+}
+.comments .cavatar .ph {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--ion-color-step-150, rgba(120, 120, 128, 0.2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 13px;
+}
+.comments .cwrap {
+  margin: 6px 0;
 }
 .comments .cmeta {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
 }
 .comments .cname {
@@ -421,14 +466,6 @@ async function confirmDelete(): Promise<void> {
 .comments .ctime {
   color: var(--ion-color-medium);
   font-size: 12px;
-}
-.comments .cdel {
-  margin-left: auto;
-  border: none;
-  background: none;
-  color: var(--ion-color-medium);
-  cursor: pointer;
-  font-size: 16px;
 }
 .comments .ctext {
   margin: 2px 0 0;

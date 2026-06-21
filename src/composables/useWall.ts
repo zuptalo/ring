@@ -9,7 +9,7 @@
 import { computed, ref, watch, onUnmounted } from 'vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useSelfProfile } from '@/composables/useSelfProfile';
-import { listWallPosts, listContacts, listAllPostEngagement, getMedia } from '@/db/queries';
+import { listWallPosts, listContacts, listAllPostEngagement, getMedia, getWallMutedUsers } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import type { Post, Contact, PostEngagement } from '@/db/types';
 
@@ -22,6 +22,7 @@ export interface CommentView {
   id: string;
   actor: string;
   authorName: string;
+  authorAvatar: string;
   text: string;
   at: number;
 }
@@ -30,6 +31,7 @@ export interface WallPost extends Post {
   authorName: string;
   authorAvatar: string;
   authorUsername?: string;
+  muted: boolean; // author's Wall notifications are muted
   mediaUrl?: string;
   reactions: ReactionGroup[];
   myEmojis: string[];
@@ -42,6 +44,7 @@ export function useWall() {
   const posts = useLiveQuery(() => listWallPosts(), ['posts', 'settings'], [] as Post[]);
   const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
   const engagement = useLiveQuery(() => listAllPostEngagement(), ['postEngagement'], [] as PostEngagement[]);
+  const mutedUsers = useLiveQuery(() => getWallMutedUsers(), ['settings'], {} as Record<string, boolean>);
   const self = useSelfProfile();
   const selfId = getSelfUserId();
 
@@ -104,10 +107,18 @@ export function useWall() {
       const reactions = [...rmap.entries()].map(([emoji, g]) => ({ emoji, ...g }));
       const myEmojis = reactionRows.filter((r) => r.actor === selfId).map((r) => r.emoji!);
 
+      const avatarOf = (id: string) => (id === selfId ? self.avatar.value : byId.get(id)?.avatar ?? '');
       const comments = es
         .filter((e) => e.type === 'comment' && !e.deleted)
         .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id))
-        .map((cm) => ({ id: cm.id, actor: cm.actor, authorName: nameOf(cm.actor), text: cm.text ?? '', at: cm.at }));
+        .map((cm) => ({
+          id: cm.id,
+          actor: cm.actor,
+          authorName: nameOf(cm.actor),
+          authorAvatar: avatarOf(cm.actor),
+          text: cm.text ?? '',
+          at: cm.at,
+        }));
 
       return {
         ...p,
@@ -115,6 +126,7 @@ export function useWall() {
         authorName: isOwn ? 'You' : c?.name ?? 'Unknown',
         authorAvatar: isOwn ? self.avatar.value : c?.avatar ?? '',
         authorUsername: isOwn ? undefined : c?.username,
+        muted: !!mutedUsers.value[p.author],
         mediaUrl: mediaUrls.value[p.id],
         reactions,
         myEmojis,
