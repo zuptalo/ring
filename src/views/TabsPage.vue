@@ -21,6 +21,10 @@
           <ion-label>Chats</ion-label>
           <ion-badge v-if="chats" color="primary">{{ chats }}</ion-badge>
         </ion-tab-button>
+        <ion-tab-button tab="wall" :selected="activeTab === 'wall'" @click="switchTab('/tabs/wall')">
+          <ion-icon :icon="activeTab === 'wall' ? sparkles : sparklesOutline" />
+          <ion-label>Wall</ion-label>
+        </ion-tab-button>
         <ion-tab-button tab="contacts" :selected="activeTab === 'contacts'" @click="switchTab('/tabs/contacts')">
           <ion-icon :icon="activeTab === 'contacts' ? people : peopleOutline" />
           <ion-label>Contacts</ion-label>
@@ -52,6 +56,7 @@ import {
 import {
   call, callOutline,
   chatbubbles, chatbubblesOutline,
+  sparkles, sparklesOutline,
   people, peopleOutline,
   settings, settingsOutline,
 } from 'ionicons/icons';

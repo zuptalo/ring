@@ -38,6 +38,7 @@ const routes: RouteRecordRaw[] = [
       { path: '', redirect: '/tabs/chats' },
       { path: 'calls', component: CallsPage },
       { path: 'chats', component: ChatsPage },
+      { path: 'wall', component: () => import('@/views/tabs/WallPage.vue') },
       { path: 'contacts', component: ContactsPage },
       { path: 'settings', component: SettingsPage },
       // Backward-compat for old links/bookmarks to the former "You" tab.
@@ -136,10 +137,11 @@ const routes: RouteRecordRaw[] = [
     path: '/settings/calls-declines',
     component: () => import('@/views/detail/CallsDeclinesPage.vue'),
   },
-  // Social Wall (spec 0003).
+  // Social Wall (spec 0003). The feed lives in the bottom tab bar (/tabs/wall);
+  // compose + post detail push full-screen over it. Old /wall links redirect in.
   {
     path: '/wall',
-    component: () => import('@/views/detail/WallPage.vue'),
+    redirect: '/tabs/wall',
   },
   {
     path: '/wall/compose',

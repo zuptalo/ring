@@ -2,9 +2,6 @@
   <ion-page>
     <ion-header :translucent="true">
       <ion-toolbar>
-        <ion-buttons slot="start">
-          <ion-back-button default-href="/tabs/chats" />
-        </ion-buttons>
         <ion-title>Wall</ion-title>
         <ion-buttons slot="end">
           <ion-button aria-label="New post" @click="compose">
@@ -66,7 +63,7 @@
 
 <script setup lang="ts">
 import {
-  IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
+  IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
   IonContent, IonList, IonItem, IonAvatar, IonLabel, IonIcon,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';

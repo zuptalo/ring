@@ -3,7 +3,7 @@
     <ion-header :translucent="true">
       <ion-toolbar>
         <ion-buttons slot="start">
-          <ion-back-button default-href="/wall" />
+          <ion-back-button default-href="/tabs/wall" />
         </ion-buttons>
         <ion-title>New post</ion-title>
         <ion-buttons slot="end">
