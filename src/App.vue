@@ -273,14 +273,25 @@ body.keyboard-open ion-footer {
   overflow: hidden;
 }
 
-/* The "update available" toast surfaces at the top with the rest of the app's
-   notifications (Ionic's top toasts already clear the safe-area inset). Styled
-   like the in-app notification banners: neutral dark, white text reads in both
-   themes. */
+/* The "update available" toast is styled to MATCH the in-app notification banners
+   (NotificationBanners.vue), so every in-app notification + toast shares one look:
+   the brand-green translucent card with blur, white text, 18px corners, sitting just
+   below the app header (same safe-area + 56px offset as the banner stack) rather than
+   pinned to the very top. */
 ion-toast.app-update-toast {
-  --background: #2c2c30;
+  --background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.9);
   --color: #fff;
-  --border-radius: 14px;
+  --border-radius: 18px;
+  --max-width: 560px;
+  --box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+  --button-color: #fff;
+}
+/* Push the box below the header and give it the banner's frosted blur. (The visible
+   box is the `container` part; offsetting it lines the toast up with the banners.) */
+ion-toast.app-update-toast::part(container) {
+  margin-top: calc(env(safe-area-inset-top, 0px) + 56px);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
 }
 /* Defensive: never let a long unbreakable token (e.g. a version with a git sha)
    wrap one character per line and blow up the toast. */
@@ -289,5 +300,14 @@ ion-toast.app-update-toast::part(message) {
 }
 ion-toast.app-update-toast::part(button) {
   color: #fff;
+}
+ion-toast.app-update-toast::part(icon) {
+  color: #fff;
+}
+/* Match the banners' slightly stronger fill in dark mode. */
+@media (prefers-color-scheme: dark) {
+  ion-toast.app-update-toast {
+    --background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.95);
+  }
 }
 </style>

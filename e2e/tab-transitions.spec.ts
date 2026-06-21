@@ -81,6 +81,15 @@ test.describe('tab transitions', () => {
     const a = await createAccount(ctx, 'TABTRAN4');
     await a.page.evaluate((av) => (window as any).__ringTest.setProfile('Speedy', av), AVATAR);
 
+    // Warm the account first: prove the identity renders on Settings from LOCAL data,
+    // so the rapid-switch assertion below isolates "does fast switching leave the tab
+    // fully rendered" rather than racing a cold first-paint against the account's
+    // initial sync. The profile is local, but on a loaded CI runner a thrashing event
+    // loop (parallel contexts retrying failed network calls) could otherwise delay that
+    // very first Settings paint past the assertion timeout — the source of the flake.
+    await a.page.goto('/tabs/settings');
+    await expect(a.page.getByText('Speedy')).toBeVisible({ timeout: 30_000 });
+
     await a.page.goto('/tabs/chats');
     await tabBtn(a.page, 'Calls').waitFor({ state: 'visible', timeout: 30_000 });
 
@@ -89,7 +98,8 @@ test.describe('tab transitions', () => {
       await tabBtn(a.page, t).click();
     }
     // After the burst, the last tab (Settings) must be fully rendered, not stuck
-    // in a placeholder/partial state.
+    // in a placeholder/partial state (the identity is already warm from above, so this
+    // is purely a rendering-under-fast-switching check).
     await a.page.waitForURL('**/tabs/settings');
     await expect(a.page.getByText('Speedy')).toBeVisible();
 
