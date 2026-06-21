@@ -778,9 +778,12 @@
           <!-- Auto-growing multi-line textarea so long messages wrap and the box
                grows (capped in CSS, then scrolls). autocapitalize/autocorrect/
                spellcheck on → the OS keyboard offers predictive text & suggestions.
-               The Return key inserts a line break; send with the send button. -->
+               On a physical keyboard (desktop) Enter sends and Shift+Enter inserts a
+               line break (v-enter-send); on touch the Return key inserts a line break
+               and you send with the button. -->
           <ion-textarea
             ref="composerEl"
+            v-enter-send="send"
             class="composer"
             :value="draft"
             :placeholder="pendingImages.length ? 'Add a caption' : 'Message'"
@@ -959,6 +962,7 @@ import { resolutionLabel, fileSizeLabel, generateVideoPoster, generateImageThumb
 import { openExternal } from '@/utils/external';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing, capitalizeFirst } from '@/utils/text';
+import { vEnterSend } from '@/directives/enter-send';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
 import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact } from '@/db/types';
