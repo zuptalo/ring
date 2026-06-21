@@ -38,7 +38,8 @@ export interface WallPost extends Post {
 }
 
 export function useWall() {
-  const posts = useLiveQuery(() => listWallPosts(), ['posts'], [] as Post[]);
+  // Depends on settings too: listWallPosts excludes hidden users (a settings ledger).
+  const posts = useLiveQuery(() => listWallPosts(), ['posts', 'settings'], [] as Post[]);
   const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
   const engagement = useLiveQuery(() => listAllPostEngagement(), ['postEngagement'], [] as PostEngagement[]);
   const self = useSelfProfile();
@@ -123,5 +124,7 @@ export function useWall() {
     });
   });
 
-  return { wall, now };
+  // `loaded` flips true after the first query resolves, so the UI can avoid flashing
+  // the empty state / "New post" button before posts have loaded.
+  return { wall, now, loaded: posts.loaded };
 }

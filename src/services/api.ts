@@ -83,6 +83,7 @@ export async function createPost(req: {
   blobId: string;
   size: number;
   expiresAt?: number;
+  ttlMs?: number;
   envelopes: PostEnvelopeWire[];
 }): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/v1/posts`, {
@@ -102,6 +103,7 @@ export interface ServerPost {
   size: number;
   createdAt: number;
   expiresAt?: number;
+  ttlMs?: number;
   wrappedKey?: string;
 }
 

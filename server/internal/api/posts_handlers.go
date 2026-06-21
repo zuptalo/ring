@@ -27,6 +27,7 @@ type createPostReq struct {
 	BlobID    string            `json:"blobId"`
 	Size      int               `json:"size"`
 	ExpiresAt int64             `json:"expiresAt"` // epoch ms; 0/absent = keep
+	TtlMs     int64             `json:"ttlMs"`     // per-post lifetime window
 	Envelopes []postEnvelopeReq `json:"envelopes"`
 }
 
@@ -95,8 +96,13 @@ func (h *Handlers) createPost(w http.ResponseWriter, r *http.Request) {
 			expires = t
 		}
 	}
+	// Clamp the per-post window to (0, 72h]; default 72h.
+	ttl := req.TtlMs
+	if ttl <= 0 || ttl > maxPostLifetime.Milliseconds() {
+		ttl = maxPostLifetime.Milliseconds()
+	}
 	if err := h.Posts.CreatePost(r.Context(), store.NewPost{
-		ID: req.ID, Author: uid, BlobID: req.BlobID, Size: req.Size, ExpiresAt: &expires, Envelopes: envs,
+		ID: req.ID, Author: uid, BlobID: req.BlobID, Size: req.Size, ExpiresAt: &expires, TtlMs: ttl, Envelopes: envs,
 	}); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not create post")
 		return
@@ -114,6 +120,7 @@ type postOut struct {
 	Size       int    `json:"size"`
 	CreatedAt  int64  `json:"createdAt"`
 	ExpiresAt  int64  `json:"expiresAt,omitempty"`
+	TtlMs      int64  `json:"ttlMs,omitempty"`
 	WrappedKey string `json:"wrappedKey,omitempty"`
 }
 
@@ -139,7 +146,7 @@ func (h *Handlers) listPosts(w http.ResponseWriter, r *http.Request) {
 	for _, p := range rows {
 		posts = append(posts, postOut{
 			ID: p.ID, Author: p.Author, BlobID: p.BlobID, Size: p.Size,
-			CreatedAt: p.CreatedMs, ExpiresAt: p.ExpiresMs, WrappedKey: p.WrappedKey,
+			CreatedAt: p.CreatedMs, ExpiresAt: p.ExpiresMs, TtlMs: p.TtlMs, WrappedKey: p.WrappedKey,
 		})
 		if p.CreatedMs > cursor {
 			cursor = p.CreatedMs

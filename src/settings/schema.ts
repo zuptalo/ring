@@ -247,6 +247,7 @@ export const SETTINGS: Record<string, SettingNode> = {
           { type: 'link', id: 'privacy-profile-photo', title: 'Profile picture', icon: 'person' },
           { type: 'link', id: 'privacy-about', title: 'About', icon: 'info' },
           { type: 'link', id: 'privacy-groups', title: 'Groups', icon: 'people' },
+          { type: 'route', title: 'Close friends', path: '/settings/close-friends', icon: 'people' },
           { type: 'link', id: 'privacy-status', title: 'Status', icon: 'time' },
         ],
       },
@@ -541,6 +542,13 @@ export const SETTINGS: Record<string, SettingNode> = {
           { type: 'link', id: 'notifications-status-sound', title: 'Sound', icon: 'music' },
           { type: 'toggle', title: 'Reaction notifications', key: 'notifications.status.reactions', default: true },
         ],
+      },
+      {
+        header: 'Wall notifications',
+        items: [
+          { type: 'toggle', title: 'Show notifications', key: 'notifications.wall.show', default: true },
+        ],
+        footer: 'Get notified when a friend shares a new post on their Wall.',
       },
       {
         items: [{ type: 'toggle', title: 'Reminders', key: 'notifications.reminders', default: true }],

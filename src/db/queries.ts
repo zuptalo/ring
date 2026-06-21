@@ -2012,9 +2012,10 @@ export async function createPost(opts: {
   body?: string;
   audience: 'friends' | 'close';
   lifetime: PostLifetime;
-  // Optional attachment (image/video/voice). When present, it is encrypted + uploaded
-  // and the media-ref rides sealed inside the post payload.
-  media?: { blob: Blob; kind: 'image' | 'video' | 'voice'; name: string; durationSec?: number };
+  // Optional attachment (image/video/voice). When present, it is compressed to the
+  // chosen quality (SD or HD — never original), encrypted + uploaded, and the media-ref
+  // rides sealed inside the post payload.
+  media?: { blob: Blob; kind: 'image' | 'video' | 'voice'; name: string; durationSec?: number; quality?: 'sd' | 'hd' };
 }): Promise<Post> {
   const self = getSelfUserId();
   if (!self) throw new Error('not signed in');
@@ -2035,7 +2036,16 @@ export async function createPost(opts: {
   let mediaId: string | undefined;
   const payload: PostPayload = { kind, body };
   if (opts.media) {
-    const ref = await prepareOutgoingMedia(opts.media.blob, opts.media.name, opts.media.durationSec);
+    // Posts only ship SD or HD (never the original): compress images/videos to the
+    // chosen quality before upload; voice is left as-is.
+    const q = opts.media.quality ?? 'hd';
+    const toUpload =
+      opts.media.kind === 'image'
+        ? await compressImage(opts.media.blob, q)
+        : opts.media.kind === 'video'
+          ? await compressVideo(opts.media.blob, q)
+          : opts.media.blob;
+    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { quality: q });
     payload.media = ref;
     mediaId = uid();
     await put<Media>('media', {
@@ -2044,7 +2054,7 @@ export async function createPost(opts: {
       mime: ref.mime,
       name: ref.name,
       size: ref.size,
-      blob: opts.media.blob,
+      blob: toUpload,
       durationSec: ref.durationSec,
       updatedAt: now(),
     });
@@ -2054,10 +2064,11 @@ export async function createPost(opts: {
   const blobId = await uploadBlob(new Blob([built.blob as BlobPart]));
   const id = uid();
   const createdAt = now();
-  // Always ephemeral, hard-capped at 72h (the server clamps too).
-  const ttl = Math.min(POST_TTL_MS[opts.lifetime] ?? MAX_POST_TTL_MS, MAX_POST_TTL_MS);
-  const expiresAt = createdAt + ttl;
-  await apiCreatePost({ id, blobId, size: built.blob.length, expiresAt, envelopes: built.envelopes });
+  // The chosen window (1h/24h/72h), capped at 72h. Keep-alive later resets the expiry
+  // to now + this same window on each interaction.
+  const ttlMs = Math.min(POST_TTL_MS[opts.lifetime] ?? MAX_POST_TTL_MS, MAX_POST_TTL_MS);
+  const expiresAt = createdAt + ttlMs;
+  await apiCreatePost({ id, blobId, size: built.blob.length, expiresAt, ttlMs, envelopes: built.envelopes });
   const post: Post = {
     id,
     author: self,
@@ -2068,6 +2079,7 @@ export async function createPost(opts: {
     createdAt,
     lastActivityAt: createdAt,
     expiresAt,
+    ttlMs,
     outgoing: true,
     postKey: built.postKey,
     updatedAt: createdAt,
@@ -2121,6 +2133,7 @@ async function receivePost(sp: ServerPost): Promise<void> {
     createdAt: sp.createdAt,
     lastActivityAt: Math.max(prev?.lastActivityAt ?? 0, sp.createdAt),
     expiresAt: sp.expiresAt,
+    ttlMs: sp.ttlMs,
     outgoing: false,
     postKey,
     updatedAt: now(),
@@ -2163,6 +2176,12 @@ const notifiedPostIds = new Set<string>();
  *  `authorId` ("X shared a photo"). Called from the live `post-new` nudge, so it only
  *  fires for genuinely new posts (a recency guard backs that up). */
 export async function notifyNewPost(authorId: string): Promise<void> {
+  // Respect notification controls: master toggle, a temporary global mute, and a
+  // per-user mute/hide.
+  if (!(await getSetting<boolean>('notifications.wall.show', true))) return;
+  if (await isWallTempMuted()) return;
+  if (await isWallUserMuted(authorId)) return;
+  if (await isWallUserHidden(authorId)) return;
   const recent = (await getAll<Post>('posts'))
     .filter((p) => p.author === authorId && !p.outgoing && !notifiedPostIds.has(p.id))
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -2179,13 +2198,75 @@ export async function notifyNewPost(authorId: string): Promise<void> {
   });
 }
 
+/* ---- Wall mute / hide controls (client-only ledgers) ---- */
+
+async function getWallLedger(key: string): Promise<Record<string, boolean>> {
+  return (await getSetting<Record<string, boolean>>(key, {})) ?? {};
+}
+async function setWallLedgerEntry(key: string, id: string, on: boolean): Promise<void> {
+  const map = await getWallLedger(key);
+  if (!!map[id] === on) return;
+  if (on) map[id] = true;
+  else delete map[id];
+  await setSetting(key, map);
+}
+
+/** Users whose posts are hidden from your Wall entirely. */
+export async function getWallHiddenUsers(): Promise<Record<string, boolean>> {
+  return getWallLedger('wall.hiddenUsers');
+}
+/** Users whose Wall notifications you've muted (their posts still show). */
+export async function getWallMutedUsers(): Promise<Record<string, boolean>> {
+  return getWallLedger('wall.mutedUsers');
+}
+export async function setWallUserHidden(id: string, hidden: boolean): Promise<void> {
+  await setWallLedgerEntry('wall.hiddenUsers', id, hidden);
+}
+export async function setWallUserMuted(id: string, muted: boolean): Promise<void> {
+  await setWallLedgerEntry('wall.mutedUsers', id, muted);
+}
+export async function isWallUserHidden(id: string): Promise<boolean> {
+  return !!(await getWallHiddenUsers())[id];
+}
+export async function isWallUserMuted(id: string): Promise<boolean> {
+  return !!(await getWallMutedUsers())[id];
+}
+
+/** Temporary global mute of Wall notifications until this epoch ms (0 = not muted). */
+export async function getWallMuteUntil(): Promise<number> {
+  return (await getSetting<number>('wall.muteUntil', 0)) ?? 0;
+}
+export async function setWallMuteUntil(ts: number): Promise<void> {
+  await setSetting('wall.muteUntil', ts);
+}
+export async function isWallTempMuted(): Promise<boolean> {
+  return (await getWallMuteUntil()) > now();
+}
+
+/** Mark the Wall as seen (clears the unread-post badge). Called when the Wall is open. */
+export async function markWallSeen(): Promise<void> {
+  await setSetting('wall.lastSeenAt', now());
+}
+
+/** Count of received (non-own), non-expired posts newer than the last time the Wall was
+ *  seen — drives the Wall tab + app icon badge. Hidden users are excluded. */
+export async function wallUnreadCount(): Promise<number> {
+  const since = (await getSetting<number>('wall.lastSeenAt', 0)) ?? 0;
+  const nowMs = now();
+  const hidden = await getWallHiddenUsers();
+  return (await getAll<Post>('posts')).filter(
+    (p) => !p.outgoing && p.createdAt > since && !hidden[p.author] && (!p.expiresAt || p.expiresAt > nowMs),
+  ).length;
+}
+
 /** All non-expired Wall posts on this device, ordered by last activity — so a brand-
  *  new post AND a post that just got a reaction/comment both rise to the top. */
 export async function listWallPosts(): Promise<Post[]> {
   const nowMs = now();
+  const hidden = await getWallHiddenUsers();
   const activity = (p: Post) => p.lastActivityAt ?? p.createdAt;
   return (await getAll<Post>('posts'))
-    .filter((p) => !p.expiresAt || p.expiresAt > nowMs)
+    .filter((p) => (!p.expiresAt || p.expiresAt > nowMs) && !hidden[p.author])
     .sort((a, b) => activity(b) - activity(a));
 }
 
@@ -2230,12 +2311,12 @@ interface ReactionData {
 // Keep-alive (rolling 72h of inactivity): any interaction extends the post's life to
 // (interaction time + 72h) and bumps its last-activity, so an actively-engaged post
 // stays alive and jumps to the top of the feed. Local mirror of the server bump.
-const POST_KEEPALIVE_MS = MAX_POST_TTL_MS;
 async function bumpPostActivity(postId: string, atMs: number): Promise<void> {
   const post = await get<Post>('posts', postId);
   if (!post) return;
+  const window = Math.min(post.ttlMs ?? MAX_POST_TTL_MS, MAX_POST_TTL_MS);
   const lastActivityAt = Math.max(post.lastActivityAt ?? post.createdAt, atMs);
-  const expiresAt = Math.max(post.expiresAt ?? 0, atMs + POST_KEEPALIVE_MS);
+  const expiresAt = Math.max(post.expiresAt ?? 0, atMs + window);
   if (lastActivityAt === (post.lastActivityAt ?? post.createdAt) && expiresAt === (post.expiresAt ?? 0)) return;
   await put<Post>('posts', { ...post, lastActivityAt, expiresAt, updatedAt: now() });
 }

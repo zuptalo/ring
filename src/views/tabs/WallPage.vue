@@ -4,10 +4,21 @@
       <ion-toolbar>
         <ion-title>Wall</ion-title>
         <ion-buttons slot="end">
+          <ion-button :aria-label="muted ? 'Wall notifications muted' : 'Mute Wall notifications'" @click="openMuteMenu">
+            <ion-icon slot="icon-only" :icon="muted ? notificationsOffOutline : notificationsOutline" />
+          </ion-button>
           <ion-button aria-label="New post" @click="compose">
             <ion-icon slot="icon-only" :icon="createOutline" />
           </ion-button>
         </ion-buttons>
+      </ion-toolbar>
+      <ion-toolbar>
+        <ion-searchbar
+          :value="search"
+          placeholder="Search posts, comments, people"
+          :debounce="150"
+          @ion-input="onSearch"
+        />
       </ion-toolbar>
     </ion-header>
 
@@ -18,13 +29,17 @@
         </ion-toolbar>
       </ion-header>
 
-      <div v-if="!wall.length" class="empty">
+      <div v-if="loaded && !wall.length" class="empty">
         <ion-icon :icon="sparklesOutline" />
         <p>No posts yet. Share a moment with your friends.</p>
         <ion-button fill="solid" @click="compose">New post</ion-button>
       </div>
 
-      <ion-card v-for="p in wall" :key="p.id" class="post">
+      <div v-if="loaded && wall.length && !filteredWall.length" class="empty">
+        <p>No posts match “{{ search }}”.</p>
+      </div>
+
+      <ion-card v-for="p in filteredWall" :key="p.id" class="post">
         <!-- Header: avatar + name + a subtle "disappears in …" countdown. -->
         <div class="phead">
           <ion-avatar class="avatar" @click="open(p.id)">
@@ -42,6 +57,9 @@
           <span v-if="left(p)" class="countdown" :title="'This post auto-deletes'">
             <ion-icon :icon="timeOutline" />{{ left(p) }}
           </span>
+          <button v-if="!p.isOwn" class="cardmenu" aria-label="Post options" @click.stop="openPostMenu(p)">
+            <ion-icon :icon="ellipsisVertical" />
+          </button>
         </div>
 
         <!-- Media + body (tap → full post). -->
@@ -103,24 +121,53 @@
 </template>
 
 <script setup lang="ts">
-import { reactive } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
-  IonCard, IonAvatar, IonIcon, IonInput, toastController,
+  IonCard, IonAvatar, IonIcon, IonInput, IonSearchbar, toastController, actionSheetController,
+  onIonViewWillEnter, onIonViewWillLeave,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
-import { createOutline, sparklesOutline, micOutline, playCircleOutline, happyOutline, timeOutline } from 'ionicons/icons';
+import {
+  createOutline, sparklesOutline, micOutline, playCircleOutline, happyOutline, timeOutline,
+  ellipsisVertical, notificationsOutline, notificationsOffOutline,
+} from 'ionicons/icons';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
 import { useWall, type WallPost } from '@/composables/useWall';
 import { useReactionPicker } from '@/composables/useReactionPicker';
-import { reactToPost, commentOnPost, MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS } from '@/db/queries';
+import {
+  reactToPost, commentOnPost, MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
+  markWallSeen, setWallMuteUntil, isWallTempMuted,
+  setWallUserMuted, setWallUserHidden, isWallUserMuted, isWallUserHidden,
+} from '@/db/queries';
 import { timeLeft, ago } from '@/utils/post-time';
 
 const router = useRouter();
-const { wall, now } = useWall();
+const { wall, now, loaded } = useWall();
 const { openQuick } = useReactionPicker();
 const draft = reactive<Record<string, string>>({});
+
+// Search across a post's body, its comments, and the author's name/username.
+const search = ref('');
+function onSearch(e: CustomEvent): void {
+  search.value = (e.detail as { value?: string | null }).value ?? '';
+}
+const filteredWall = computed(() => {
+  const q = search.value.trim().toLowerCase();
+  if (!q) return wall.value;
+  return wall.value.filter((p) => {
+    const hay = [
+      p.body ?? '',
+      p.authorName,
+      p.authorUsername ?? '',
+      ...p.comments.map((c) => `${c.text} ${c.authorName}`),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(q);
+  });
+});
 
 function compose(): void {
   void router.push('/wall/compose');
@@ -165,6 +212,72 @@ async function sendComment(post: WallPost): Promise<void> {
   if (!t) return;
   draft[post.id] = '';
   await commentOnPost(post.id, t);
+}
+
+// --- seen-tracking: clear the badge while the Wall is open (and as posts arrive) ---
+let active = false;
+const muted = ref(false);
+onIonViewWillEnter(async () => {
+  active = true;
+  await markWallSeen();
+  muted.value = await isWallTempMuted();
+});
+onIonViewWillLeave(() => {
+  active = false;
+});
+watch(
+  () => wall.value.length,
+  () => {
+    if (active) void markWallSeen();
+  },
+);
+
+// --- temporary mute of all Wall notifications ---
+function tomorrow9am(): number {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(9, 0, 0, 0);
+  return d.getTime();
+}
+async function openMuteMenu(): Promise<void> {
+  const buttons = [
+    { text: 'Mute for 1 hour', handler: () => void mute(Date.now() + 60 * 60_000) },
+    { text: 'Mute for 8 hours', handler: () => void mute(Date.now() + 8 * 60 * 60_000) },
+    { text: 'Mute until 9 AM tomorrow', handler: () => void mute(tomorrow9am()) },
+    { text: 'Mute until I turn it back on', handler: () => void mute(Number.MAX_SAFE_INTEGER) },
+  ];
+  if (muted.value) buttons.unshift({ text: 'Turn notifications back on', handler: () => void mute(0) });
+  const sheet = await actionSheetController.create({
+    header: 'Wall notifications',
+    buttons: [...buttons, { text: 'Cancel', role: 'cancel' }],
+  });
+  await sheet.present();
+}
+async function mute(until: number): Promise<void> {
+  await setWallMuteUntil(until);
+  muted.value = await isWallTempMuted();
+}
+
+// --- per-user mute / hide ---
+async function openPostMenu(post: WallPost): Promise<void> {
+  const [isMuted, isHidden] = [await isWallUserMuted(post.author), await isWallUserHidden(post.author)];
+  const name = post.authorName;
+  const sheet = await actionSheetController.create({
+    header: name,
+    buttons: [
+      {
+        text: isMuted ? `Unmute ${name}'s posts` : `Mute ${name}'s posts`,
+        handler: () => void setWallUserMuted(post.author, !isMuted),
+      },
+      {
+        text: isHidden ? `Unhide ${name}'s posts` : `Hide ${name}'s posts`,
+        role: isHidden ? undefined : 'destructive',
+        handler: () => void setWallUserHidden(post.author, !isHidden),
+      },
+      { text: 'Cancel', role: 'cancel' },
+    ],
+  });
+  await sheet.present();
 }
 </script>
 
@@ -234,6 +347,15 @@ async function sendComment(post: WallPost): Promise<void> {
   background: var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
   padding: 3px 8px;
   border-radius: 999px;
+}
+.cardmenu {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--ion-color-medium);
+  font-size: 20px;
+  padding: 2px 4px;
+  cursor: pointer;
 }
 .thumb {
   position: relative;

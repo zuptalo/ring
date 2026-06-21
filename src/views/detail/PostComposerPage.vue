@@ -48,6 +48,16 @@
         @change="onFile"
       />
 
+      <ion-list v-if="media" :inset="true">
+        <ion-list-header>Quality</ion-list-header>
+        <ion-item lines="none">
+          <ion-segment :value="quality" @ion-change="onQuality">
+            <ion-segment-button value="sd"><ion-label>SD</ion-label></ion-segment-button>
+            <ion-segment-button value="hd"><ion-label>HD</ion-label></ion-segment-button>
+          </ion-segment>
+        </ion-item>
+      </ion-list>
+
       <ion-list :inset="true">
         <ion-list-header>Who can see this</ion-list-header>
         <ion-item lines="none">
@@ -70,8 +80,9 @@
       </ion-list>
 
       <p class="hint">
-        Posts are end-to-end encrypted and visible only to the audience you choose — never the
-        server or the wider network. Every post disappears within 72 hours.
+        Your post is end to end encrypted and only the audience you pick can see it, never the
+        server or the wider network. It disappears after the time you choose once there is no new
+        activity, and a fresh reaction or comment keeps it around a little longer.
       </p>
     </ion-content>
   </ion-page>
@@ -97,6 +108,7 @@ const sharing = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 const media = ref<File | null>(null);
 const mediaUrl = ref<string | undefined>(undefined);
+const quality = ref<'sd' | 'hd'>('hd');
 const mediaKind = computed<'image' | 'video'>(() =>
   media.value?.type.startsWith('video/') ? 'video' : 'image',
 );
@@ -111,6 +123,9 @@ function onAudience(e: CustomEvent): void {
 }
 function onLifetime(e: CustomEvent): void {
   lifetime.value = ((e.detail as { value?: string }).value as PostLifetime) ?? '72h';
+}
+function onQuality(e: CustomEvent): void {
+  quality.value = ((e.detail as { value?: string }).value as 'sd' | 'hd') ?? 'hd';
 }
 
 function pickMedia(): void {
@@ -142,7 +157,7 @@ async function share(): Promise<void> {
       audience: audience.value,
       lifetime: lifetime.value,
       media: media.value
-        ? { blob: media.value, kind: mediaKind.value, name: media.value.name || 'attachment' }
+        ? { blob: media.value, kind: mediaKind.value, name: media.value.name || 'attachment', quality: quality.value }
         : undefined,
     });
     router.back();

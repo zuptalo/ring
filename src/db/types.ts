@@ -358,7 +358,8 @@ export interface Post {
   // post with fresh interaction jumps to the top) and, with keep-alive, tracks the
   // rolling 72h-of-inactivity window. Absent on legacy rows → treated as createdAt.
   lastActivityAt?: number;
-  expiresAt?: number; // epoch ms; with keep-alive = last activity + 72h
+  expiresAt?: number; // epoch ms; with keep-alive = last activity + ttlMs
+  ttlMs?: number; // the author's chosen lifetime window (keep-alive resets to now + this)
   outgoing: boolean; // true for self-authored
   // The post's content key K_post (b64url). Every audience member holds it (the author
   // generated it; recipients unwrap it from their envelope) and uses it to seal/open

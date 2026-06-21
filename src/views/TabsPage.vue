@@ -24,6 +24,7 @@
         <ion-tab-button tab="wall" :selected="activeTab === 'wall'" @click="switchTab('/tabs/wall')">
           <ion-icon :icon="activeTab === 'wall' ? sparkles : sparklesOutline" />
           <ion-label>Wall</ion-label>
+          <ion-badge v-if="wall" color="primary">{{ wall }}</ion-badge>
         </ion-tab-button>
         <ion-tab-button tab="contacts" :selected="activeTab === 'contacts'" @click="switchTab('/tabs/contacts')">
           <ion-icon :icon="activeTab === 'contacts' ? people : peopleOutline" />
@@ -65,7 +66,7 @@ import { useRoute } from 'vue-router';
 import { useBadges } from '@/composables/useBadges';
 import { isAuthenticated } from '@/services/auth';
 
-const { chats, calls, contacts, you } = useBadges();
+const { chats, calls, contacts, you, wall } = useBadges();
 
 // Active tab derived from the URL; drives the filled-vs-outline icon swap.
 const route = useRoute();

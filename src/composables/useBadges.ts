@@ -15,6 +15,7 @@ import {
   countPendingRequests,
   countUnread,
   countUnresolvedAlerts,
+  wallUnreadCount,
 } from '@/db/queries';
 import { incomingRequests } from '@/services/connections';
 
@@ -41,12 +42,15 @@ export function useBadges() {
   const pendingDb = useLiveQuery(() => countPendingRequests(), ['requests'], 0);
   const contacts = computed(() => pendingDb.value + incomingRequests.value.length);
   const you = useLiveQuery(() => countUnresolvedAlerts(), ['alerts'], 0);
+  // Wall = unseen received posts (cleared when the Wall tab is open). Depends on both
+  // the posts store and settings (the last-seen marker + hidden-user ledger).
+  const wall = useLiveQuery(() => wallUnreadCount(), ['posts', 'settings'], 0);
 
   const total = computed(
-    () => chats.value + calls.value + contacts.value + you.value,
+    () => chats.value + calls.value + contacts.value + you.value + wall.value,
   );
 
   watch(total, (n) => setAppBadge(n), { immediate: true });
 
-  return { chats, calls, contacts, you, total };
+  return { chats, calls, contacts, you, wall, total };
 }

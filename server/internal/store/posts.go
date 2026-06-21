@@ -25,6 +25,7 @@ type NewPost struct {
 	BlobID    string // opaque capability of the K_post-sealed payload
 	Size      int
 	ExpiresAt *time.Time // nil = keep
+	TtlMs     int64      // per-post lifetime window (keep-alive resets to now+ttl)
 	Envelopes []NewPostEnvelope
 }
 
@@ -37,6 +38,7 @@ type PostForRecipient struct {
 	Size       int
 	CreatedMs  int64
 	ExpiresMs  int64  // 0 = no expiry
+	TtlMs      int64  // per-post lifetime window
 	WrappedKey string // "" for own posts
 }
 
@@ -47,9 +49,13 @@ func (s *Store) CreatePost(ctx context.Context, p NewPost) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	ttl := p.TtlMs
+	if ttl <= 0 {
+		ttl = 72 * 60 * 60 * 1000
+	}
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO posts (id, author, blob_id, size, expires_at) VALUES ($1, $2, $3, $4, $5)`,
-		p.ID, p.Author, p.BlobID, p.Size, p.ExpiresAt); err != nil {
+		`INSERT INTO posts (id, author, blob_id, size, expires_at, ttl_ms) VALUES ($1, $2, $3, $4, $5, $6)`,
+		p.ID, p.Author, p.BlobID, p.Size, p.ExpiresAt, ttl); err != nil {
 		return err
 	}
 	for _, e := range p.Envelopes {
@@ -71,6 +77,7 @@ func (s *Store) ListPosts(ctx context.Context, recipient string, sinceMs int64) 
 		`SELECT p.id, p.author::text, p.blob_id, p.size,
 		        (extract(epoch from p.created_at)*1000)::bigint,
 		        COALESCE((extract(epoch from p.expires_at)*1000)::bigint, 0),
+		        p.ttl_ms,
 		        COALESCE(e.wrapped_key, '')
 		   FROM posts p
 		   LEFT JOIN post_envelopes e ON e.post_id = p.id AND e.recipient::text = $1
@@ -86,7 +93,7 @@ func (s *Store) ListPosts(ctx context.Context, recipient string, sinceMs int64) 
 	var out []PostForRecipient
 	for rows.Next() {
 		var p PostForRecipient
-		if err := rows.Scan(&p.ID, &p.Author, &p.BlobID, &p.Size, &p.CreatedMs, &p.ExpiresMs, &p.WrappedKey); err != nil {
+		if err := rows.Scan(&p.ID, &p.Author, &p.BlobID, &p.Size, &p.CreatedMs, &p.ExpiresMs, &p.TtlMs, &p.WrappedKey); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -151,9 +158,10 @@ func (s *Store) SubmitEngagement(ctx context.Context, postID, id, actor, kind, p
 		id, postID, actor, kind, payload); err != nil {
 		return err
 	}
+	// Keep-alive: extend to now + the post's OWN window (never shorten).
 	if _, err := tx.Exec(ctx,
-		`UPDATE posts SET expires_at = now() + interval '72 hours'
-		  WHERE id = $1 AND (expires_at IS NULL OR expires_at < now() + interval '72 hours')`,
+		`UPDATE posts SET expires_at = GREATEST(expires_at, now() + (ttl_ms * interval '1 millisecond'))
+		  WHERE id = $1`,
 		postID); err != nil {
 		return err
 	}
