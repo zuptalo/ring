@@ -36,6 +36,7 @@ Specs are grouped by category band; status moves
 | [1013](specs/1013-jump-pill-seen-receipts/spec.md) | Expanding "Jump to Latest" Pill + Visibility-Driven Seen Receipts | 🟢 shipped |
 | [1014](specs/1014-image-thumbnails-album/spec.md) | Multi-Size Image Thumbnails + Album-View Overhaul | 🟢 shipped |
 | [1015](specs/1015-reliable-push-notifications/spec.md) | Reliable Push & Redesigned In-App Notifications | 🟢 shipped |
+| [1016](specs/1016-9-am-local/spec.md) | 9-AM-Local Version-Announcement Push (Per-Device, Behind-Only) | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
