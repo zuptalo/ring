@@ -34,7 +34,7 @@
           <audio v-else-if="post.kind === 'voice'" :src="mediaUrl" controls />
         </div>
 
-        <p v-if="post.body" class="body">{{ post.body }}</p>
+        <p v-if="post.body" class="body"><EmojiText :text="post.body" big /></p>
 
         <p v-if="post.expiresAt" class="expiry">
           Disappears {{ when(post.expiresAt) }}
@@ -72,7 +72,7 @@
                   <ion-icon :icon="trashOutline" />
                 </button>
               </div>
-              <p class="ctext">{{ c.text }}</p>
+              <p class="ctext"><EmojiText :text="c.text || ''" /></p>
             </li>
           </ul>
           <p v-else class="empty">No comments yet.</p>
@@ -109,6 +109,7 @@ import {
 import { useRoute, useRouter } from 'vue-router';
 import { trashOutline } from 'ionicons/icons';
 import Emoji from '@/components/Emoji.vue';
+import EmojiText from '@/components/EmojiText.vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import {
   getPost, getContact, getMedia, deletePost,

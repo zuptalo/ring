@@ -51,7 +51,8 @@
             </div>
             <p v-if="p.body || p.kind === 'text'" class="body">
               <ion-icon v-if="p.kind !== 'text' && !p.mediaUrl" :icon="kindIcon(p.kind)" class="kind" />
-              {{ p.body || (p.mediaUrl ? '' : kindLabel(p.kind)) }}
+              <EmojiText v-if="p.body" :text="p.body" />
+              <template v-else>{{ p.mediaUrl ? '' : kindLabel(p.kind) }}</template>
             </p>
             <span v-if="p.audience === 'close'" class="badge">Close friends</span>
           </ion-label>
@@ -68,6 +69,7 @@ import {
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
 import { createOutline, sparklesOutline, imageOutline, videocamOutline, micOutline, playCircleOutline } from 'ionicons/icons';
+import EmojiText from '@/components/EmojiText.vue';
 import { useWall } from '@/composables/useWall';
 import type { Post } from '@/db/types';
 
