@@ -20,6 +20,7 @@
 import { watch } from 'vue';
 import { useRegisterSW } from 'virtual:pwa-register/vue';
 import { toastController, modalController } from '@ionic/vue';
+import { sparklesOutline } from 'ionicons/icons';
 import { fetchServerConfig } from '@/services/api';
 import { computeDelta, userFacing, displayVersion, type ReleaseNote } from '@/services/release-notes';
 import WhatsNewSheet from '@/components/WhatsNewSheet.vue';
@@ -131,6 +132,8 @@ export function useAppUpdate(): void {
     const toast = await toastController.create({
       header: 'Update available',
       message: label,
+      icon: sparklesOutline, // leading glyph, matching the in-app banners' icon/avatar
+
       // Top of the screen, where every other notification (banners, error
       // toasts) surfaces; see the .app-update-toast rules in App.vue.
       position: 'top',
