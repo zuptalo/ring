@@ -46,9 +46,15 @@
               <span v-if="p.authorUsername" class="user">@{{ p.authorUsername }}</span>
               <span class="time">{{ ago(p.createdAt) }}</span>
             </div>
-            <p class="body">
-              <ion-icon v-if="p.kind !== 'text'" :icon="kindIcon(p.kind)" class="kind" />
-              {{ p.body || kindLabel(p.kind) }}
+            <div v-if="p.mediaUrl" class="thumb">
+              <img v-if="p.kind === 'image'" :src="p.mediaUrl" :alt="p.body || 'Photo'" />
+              <video v-else-if="p.kind === 'video'" :src="p.mediaUrl" muted playsinline preload="metadata" />
+              <div v-else class="voice"><ion-icon :icon="micOutline" /> Voice message</div>
+              <ion-icon v-if="p.kind === 'video'" class="play" :icon="playCircleOutline" />
+            </div>
+            <p v-if="p.body || p.kind === 'text'" class="body">
+              <ion-icon v-if="p.kind !== 'text' && !p.mediaUrl" :icon="kindIcon(p.kind)" class="kind" />
+              {{ p.body || (p.mediaUrl ? '' : kindLabel(p.kind)) }}
             </p>
             <span v-if="p.audience === 'close'" class="badge">Close friends</span>
           </ion-label>
@@ -64,7 +70,7 @@ import {
   IonContent, IonList, IonItem, IonAvatar, IonLabel, IonIcon,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
-import { createOutline, sparklesOutline, imageOutline, videocamOutline, micOutline } from 'ionicons/icons';
+import { createOutline, sparklesOutline, imageOutline, videocamOutline, micOutline, playCircleOutline } from 'ionicons/icons';
 import { useWall } from '@/composables/useWall';
 import type { Post } from '@/db/types';
 
@@ -140,6 +146,33 @@ function ago(ts: number): string {
 }
 .post .time {
   margin-left: auto;
+}
+.post .thumb {
+  position: relative;
+  margin: 6px 0 2px;
+  max-width: 220px;
+}
+.post .thumb img,
+.post .thumb video {
+  width: 100%;
+  max-height: 220px;
+  border-radius: 12px;
+  object-fit: cover;
+  display: block;
+}
+.post .thumb .voice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ion-color-medium);
+}
+.post .thumb .play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  font-size: 44px;
+  color: rgba(255, 255, 255, 0.92);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
 }
 .post .body {
   margin: 2px 0 0;

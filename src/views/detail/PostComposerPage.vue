@@ -16,13 +16,36 @@
       <ion-textarea
         class="composer"
         :auto-grow="true"
-        :rows="4"
-        placeholder="Share something with your friends…"
+        :rows="3"
+        :placeholder="media ? 'Add a caption…' : 'Share something with your friends…'"
         autocapitalize="sentences"
         :spellcheck="true"
         dir="auto"
         :value="body"
         @ion-input="onInput"
+      />
+
+      <!-- Attachment preview -->
+      <div v-if="mediaUrl" class="preview">
+        <img v-if="mediaKind === 'image'" :src="mediaUrl" alt="Selected photo" />
+        <video v-else :src="mediaUrl" controls playsinline />
+        <ion-button class="remove" fill="solid" color="dark" size="small" @click="clearMedia">
+          <ion-icon slot="icon-only" :icon="closeOutline" />
+        </ion-button>
+      </div>
+
+      <ion-list v-else :inset="true">
+        <ion-item button :detail="false" @click="pickMedia">
+          <ion-icon slot="start" :icon="imageOutline" color="primary" />
+          <ion-label color="primary">Add photo or video</ion-label>
+        </ion-item>
+      </ion-list>
+      <input
+        ref="fileInput"
+        type="file"
+        accept="image/*,video/*"
+        style="display: none"
+        @change="onFile"
       />
 
       <ion-list :inset="true">
@@ -39,38 +62,46 @@
         <ion-list-header>Disappears after</ion-list-header>
         <ion-item lines="none">
           <ion-segment :value="lifetime" @ion-change="onLifetime">
+            <ion-segment-button value="1h"><ion-label>1 hour</ion-label></ion-segment-button>
             <ion-segment-button value="24h"><ion-label>24 hours</ion-label></ion-segment-button>
-            <ion-segment-button value="7d"><ion-label>7 days</ion-label></ion-segment-button>
-            <ion-segment-button value="keep"><ion-label>Keep</ion-label></ion-segment-button>
+            <ion-segment-button value="72h"><ion-label>72 hours</ion-label></ion-segment-button>
           </ion-segment>
         </ion-item>
       </ion-list>
 
       <p class="hint">
-        Your post is end-to-end encrypted and visible only to the audience you choose.
-        Only friends can see it — never the server or the wider network.
+        Posts are end-to-end encrypted and visible only to the audience you choose — never the
+        server or the wider network. Every post disappears within 72 hours.
       </p>
     </ion-content>
   </ion-page>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, onUnmounted } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
   IonContent, IonTextarea, IonList, IonListHeader, IonItem, IonSegment, IonSegmentButton,
-  IonLabel, alertController,
+  IonLabel, IonIcon, alertController,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
+import { imageOutline, closeOutline } from 'ionicons/icons';
 import { createPost, type PostLifetime } from '@/db/queries';
 
 const router = useRouter();
 const body = ref('');
 const audience = ref<'friends' | 'close'>('friends');
-const lifetime = ref<PostLifetime>('24h');
+const lifetime = ref<PostLifetime>('72h');
 const sharing = ref(false);
 
-const canShare = computed(() => body.value.trim().length > 0);
+const fileInput = ref<HTMLInputElement | null>(null);
+const media = ref<File | null>(null);
+const mediaUrl = ref<string | undefined>(undefined);
+const mediaKind = computed<'image' | 'video'>(() =>
+  media.value?.type.startsWith('video/') ? 'video' : 'image',
+);
+
+const canShare = computed(() => body.value.trim().length > 0 || !!media.value);
 
 function onInput(e: CustomEvent): void {
   body.value = (e.detail as { value?: string | null }).value ?? '';
@@ -79,14 +110,41 @@ function onAudience(e: CustomEvent): void {
   audience.value = ((e.detail as { value?: string }).value as 'friends' | 'close') ?? 'friends';
 }
 function onLifetime(e: CustomEvent): void {
-  lifetime.value = ((e.detail as { value?: string }).value as PostLifetime) ?? '24h';
+  lifetime.value = ((e.detail as { value?: string }).value as PostLifetime) ?? '72h';
 }
+
+function pickMedia(): void {
+  fileInput.value?.click();
+}
+function onFile(e: Event): void {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  clearMedia();
+  media.value = f;
+  mediaUrl.value = URL.createObjectURL(f);
+}
+function clearMedia(): void {
+  if (mediaUrl.value) URL.revokeObjectURL(mediaUrl.value);
+  mediaUrl.value = undefined;
+  media.value = null;
+  if (fileInput.value) fileInput.value.value = '';
+}
+onUnmounted(() => {
+  if (mediaUrl.value) URL.revokeObjectURL(mediaUrl.value);
+});
 
 async function share(): Promise<void> {
   if (!canShare.value || sharing.value) return;
   sharing.value = true;
   try {
-    await createPost({ payload: { kind: 'text', body: body.value.trim() }, audience: audience.value, lifetime: lifetime.value });
+    await createPost({
+      body: body.value,
+      audience: audience.value,
+      lifetime: lifetime.value,
+      media: media.value
+        ? { blob: media.value, kind: mediaKind.value, name: media.value.name || 'attachment' }
+        : undefined,
+    });
     router.back();
   } catch (err) {
     const a = await alertController.create({
@@ -107,6 +165,24 @@ async function share(): Promise<void> {
   --padding-end: 20px;
   font-size: 17px;
   margin-top: 8px;
+}
+.preview {
+  position: relative;
+  margin: 8px 16px;
+}
+.preview img,
+.preview video {
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+  border-radius: 14px;
+  background: #000;
+}
+.preview .remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  --border-radius: 50%;
 }
 .hint {
   margin: 8px 20px;

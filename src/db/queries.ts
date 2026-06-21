@@ -31,7 +31,7 @@ import type {
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement,
 } from './types';
 
 // WhatsApp-style cap on pinned chats.
@@ -1978,13 +1978,16 @@ export async function setCloseFriend(id: string, value: boolean): Promise<void> 
 
 /* ---- spec 0003: Wall posts ---- */
 
-// Author-chosen post lifetime → ttl (ms); 'keep' = no expiry.
-const POST_TTL_MS: Record<string, number | undefined> = {
+// Author-chosen post lifetime → ttl (ms). Wall posts are ALWAYS ephemeral: nothing
+// lives longer than 72 hours, whatever its type (text/photo/video/voice). There is no
+// "keep" option, and the server independently clamps to MAX_POST_TTL_MS as a backstop.
+export const MAX_POST_TTL_MS = 72 * 60 * 60 * 1000;
+const POST_TTL_MS: Record<string, number> = {
+  '1h': 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000,
-  keep: undefined,
+  '72h': MAX_POST_TTL_MS,
 };
-export type PostLifetime = 'keep' | '24h' | '7d';
+export type PostLifetime = '1h' | '24h' | '72h';
 
 // Cache each friend's X25519 identity public key (stable per account) so building a
 // post doesn't re-fetch (and re-consume a one-time prekey) for every post. Lazily
@@ -2006,12 +2009,17 @@ async function peerPostKey(userId: string): Promise<Uint8Array | null> {
  * ciphertext + the per-recipient envelope set.
  */
 export async function createPost(opts: {
-  payload: PostPayload;
+  body?: string;
   audience: 'friends' | 'close';
   lifetime: PostLifetime;
+  // Optional attachment (image/video/voice). When present, it is encrypted + uploaded
+  // and the media-ref rides sealed inside the post payload.
+  media?: { blob: Blob; kind: 'image' | 'video' | 'voice'; name: string; durationSec?: number };
 }): Promise<Post> {
   const self = getSelfUserId();
   if (!self) throw new Error('not signed in');
+  const body = opts.body?.trim() || undefined;
+  if (!body && !opts.media) throw new Error('Nothing to post.');
   const friends = opts.audience === 'close' ? await listCloseFriends() : await listFriends();
   if (!friends.length) throw new Error('No audience — add friends first.');
   const audience: AudienceMember[] = [];
@@ -2020,18 +2028,42 @@ export async function createPost(opts: {
     if (pub) audience.push({ userId: f.id, pubKey: pub });
   }
   if (!audience.length) throw new Error('No reachable audience for this post.');
-  const built = buildPost(opts.payload, audience);
+
+  // Encrypt + upload the attachment first (its key rides sealed in the payload), and
+  // keep a local Media copy so the author renders it immediately.
+  const kind: Post['kind'] = opts.media ? opts.media.kind : 'text';
+  let mediaId: string | undefined;
+  const payload: PostPayload = { kind, body };
+  if (opts.media) {
+    const ref = await prepareOutgoingMedia(opts.media.blob, opts.media.name, opts.media.durationSec);
+    payload.media = ref;
+    mediaId = uid();
+    await put<Media>('media', {
+      id: mediaId,
+      kind: opts.media.kind,
+      mime: ref.mime,
+      name: ref.name,
+      size: ref.size,
+      blob: opts.media.blob,
+      durationSec: ref.durationSec,
+      updatedAt: now(),
+    });
+  }
+
+  const built = buildPost(payload, audience);
   const blobId = await uploadBlob(new Blob([built.blob as BlobPart]));
   const id = uid();
   const createdAt = now();
-  const ttl = POST_TTL_MS[opts.lifetime];
-  const expiresAt = ttl ? createdAt + ttl : undefined;
+  // Always ephemeral, hard-capped at 72h (the server clamps too).
+  const ttl = Math.min(POST_TTL_MS[opts.lifetime] ?? MAX_POST_TTL_MS, MAX_POST_TTL_MS);
+  const expiresAt = createdAt + ttl;
   await apiCreatePost({ id, blobId, size: built.blob.length, expiresAt, envelopes: built.envelopes });
   const post: Post = {
     id,
     author: self,
-    kind: opts.payload.kind,
-    body: opts.payload.body,
+    kind,
+    body,
+    mediaId,
     audience: opts.audience,
     createdAt,
     expiresAt,
@@ -2057,11 +2089,31 @@ async function receivePost(sp: ServerPost): Promise<void> {
   } catch {
     return;
   }
+  // Pull + decrypt the attachment (if any) and store it as a local Media record so the
+  // Wall renders it like any other media.
+  let mediaId: string | undefined;
+  if (payload.media && payload.kind !== 'text') {
+    const mblob = await receiveIncomingMedia(payload.media).catch(() => null);
+    if (mblob) {
+      mediaId = uid();
+      await put<Media>('media', {
+        id: mediaId,
+        kind: payload.kind,
+        mime: payload.media.mime,
+        name: payload.media.name,
+        size: payload.media.size,
+        blob: mblob,
+        durationSec: payload.media.durationSec,
+        updatedAt: now(),
+      });
+    }
+  }
   await put<Post>('posts', {
     id: sp.id,
     author: sp.author,
     kind: payload.kind,
     body: payload.body,
+    mediaId,
     createdAt: sp.createdAt,
     expiresAt: sp.expiresAt,
     outgoing: false,
@@ -2094,6 +2146,11 @@ export async function listWallPosts(): Promise<Post[]> {
 /** A single Wall post by id (or null). */
 export async function getPost(id: string): Promise<Post | null> {
   return (await get<Post>('posts', id)) ?? null;
+}
+
+/** A media record by id (for rendering a post's photo/video/voice). */
+export async function getMedia(id: string): Promise<Media | null> {
+  return (await get<Media>('media', id)) ?? null;
 }
 
 /** Delete one of our own posts: best-effort server delete + remove the local copy. */

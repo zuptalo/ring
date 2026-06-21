@@ -27,12 +27,13 @@ import {
   type Envelope,
 } from './envelope';
 
-/** Decrypted content carried inside a post, sealed under K_post. */
+/** Decrypted content carried inside a post, sealed under K_post. For non-text posts
+ *  the full media-ref (blob id + per-file key + mime/dimensions) rides sealed inside
+ *  the payload, so the server never sees it. */
 export interface PostPayload {
   kind: 'text' | 'voice' | 'video' | 'image';
   body?: string;
-  /** Media-ref for non-text posts: blob capability id + its per-file key (b64url). */
-  media?: { blobId: string; fileKey: string };
+  media?: import('./message').MediaRef;
 }
 
 /** Generate a fresh per-post content key. */

@@ -11,7 +11,11 @@ beforeAll(async () => {
   await ready();
 });
 
-const payload: PostPayload = { kind: 'image', body: 'sunset', media: { blobId: 'cap9', fileKey: 'ZmtleQ' } };
+const payload: PostPayload = {
+  kind: 'image',
+  body: 'sunset',
+  media: { blobId: 'cap9', fileKey: 'ZmtleQ', mime: 'image/png', size: 99, name: 's.png' },
+};
 
 describe('buildPost / openReceivedPost', () => {
   it('an audience member recovers the exact payload', () => {

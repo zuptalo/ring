@@ -16,7 +16,11 @@ beforeAll(async () => {
 });
 
 const textPost: PostPayload = { kind: 'text', body: 'hello wall' };
-const mediaPost: PostPayload = { kind: 'image', body: 'caption', media: { blobId: 'cap123', fileKey: 'AAAA' } };
+const mediaPost: PostPayload = {
+  kind: 'image',
+  body: 'caption',
+  media: { blobId: 'cap123', fileKey: 'AAAA', mime: 'image/jpeg', size: 1024, name: 'p.jpg' },
+};
 
 describe('post payload seal/open', () => {
   it('round-trips a text payload', () => {

@@ -33,6 +33,10 @@ type createPostReq struct {
 // maxPostEnvelopes bounds a single post's fan-out (a sanity cap, not a privacy gate).
 const maxPostEnvelopes = 1024
 
+// maxPostLifetime is the hard ceiling on how long any post lives, enforced
+// server-side regardless of the client (spec 0003, FR-012).
+const maxPostLifetime = 72 * time.Hour
+
 // notifyPost sends a content-free "a post is waiting" nudge to a recipient: a live WS
 // frame if connected, and an offline push tickle otherwise. Carries no content — the
 // client reconciles via GET /v1/posts — preserving the zero-knowledge boundary.
@@ -81,13 +85,18 @@ func (h *Handlers) createPost(w http.ResponseWriter, r *http.Request) {
 		}
 		envs = append(envs, store.NewPostEnvelope{Recipient: e.Recipient, WrappedKey: e.WrappedKey})
 	}
-	var expires *time.Time
+	// Wall posts are ALWAYS ephemeral: clamp the expiry to at most 72h from now,
+	// whatever the client sent (including "no expiry"). This guarantees the
+	// 72-hour ceiling server-side, independent of the client (FR-012).
+	maxExpiry := time.Now().Add(maxPostLifetime)
+	expires := maxExpiry
 	if req.ExpiresAt > 0 {
-		t := time.UnixMilli(req.ExpiresAt)
-		expires = &t
+		if t := time.UnixMilli(req.ExpiresAt); t.Before(maxExpiry) {
+			expires = t
+		}
 	}
 	if err := h.Posts.CreatePost(r.Context(), store.NewPost{
-		ID: req.ID, Author: uid, BlobID: req.BlobID, Size: req.Size, ExpiresAt: expires, Envelopes: envs,
+		ID: req.ID, Author: uid, BlobID: req.BlobID, Size: req.Size, ExpiresAt: &expires, Envelopes: envs,
 	}); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not create post")
 		return

@@ -277,8 +277,11 @@ list. A viewer with seen receipts off opens the post; the author does not see th
   image.
 - **FR-011**: For each post, the author MUST choose an audience of either **all friends** or **close
   friends**.
-- **FR-012**: For each post, the author MUST choose a lifetime (at minimum: 24 hours, 7 days, and
-  "keep"); the chosen lifetime governs automatic disappearance.
+- **FR-012**: Every post is ephemeral with a **hard maximum lifetime of 72 hours**, regardless of
+  type (text/photo/video/voice). The author chooses a lifetime up to that ceiling (e.g. 1 hour, 24
+  hours, 72 hours); there is no "keep"/permanent option. The 72-hour ceiling MUST be enforced
+  server-side (the server clamps any longer or absent expiry), not just in the UI, so no post can
+  outlive it.
 - **FR-013**: A post MUST be delivered only to its chosen audience as of post time; non-audience users
   MUST receive nothing and MUST NOT be able to infer the post exists.
 - **FR-014**: Post content and media MUST be end-to-end encrypted such that only audience members can

@@ -28,7 +28,13 @@
           </div>
         </div>
 
-        <p class="body">{{ post.body }}</p>
+        <div v-if="mediaUrl" class="media">
+          <img v-if="post.kind === 'image'" :src="mediaUrl" :alt="post.body || 'Photo'" />
+          <video v-else-if="post.kind === 'video'" :src="mediaUrl" controls playsinline />
+          <audio v-else-if="post.kind === 'voice'" :src="mediaUrl" controls />
+        </div>
+
+        <p v-if="post.body" class="body">{{ post.body }}</p>
 
         <p v-if="post.expiresAt" class="expiry">
           Disappears {{ when(post.expiresAt) }}
@@ -49,7 +55,8 @@ import {
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { trashOutline } from 'ionicons/icons';
-import { getPost, getContact, deletePost } from '@/db/queries';
+import { onIonViewWillLeave } from '@ionic/vue';
+import { getPost, getContact, getMedia, deletePost } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { useSelfProfile } from '@/composables/useSelfProfile';
 import type { Post } from '@/db/types';
@@ -61,11 +68,16 @@ const post = ref<Post | null>(null);
 const authorName = ref('Unknown');
 const authorAvatar = ref('');
 const authorUsername = ref<string | undefined>(undefined);
+const mediaUrl = ref<string | undefined>(undefined);
 
 onIonViewWillEnter(async () => {
   const id = String(route.params.id);
   post.value = await getPost(id);
   if (!post.value) return;
+  if (post.value.mediaId) {
+    const md = await getMedia(post.value.mediaId);
+    if (md?.blob) mediaUrl.value = URL.createObjectURL(md.blob);
+  }
   if (post.value.author === getSelfUserId()) {
     authorName.value = 'You';
     authorAvatar.value = self.avatar.value;
@@ -75,6 +87,13 @@ onIonViewWillEnter(async () => {
     authorName.value = c?.name ?? 'Unknown';
     authorAvatar.value = c?.avatar ?? '';
     authorUsername.value = c?.username;
+  }
+});
+
+onIonViewWillLeave(() => {
+  if (mediaUrl.value) {
+    URL.revokeObjectURL(mediaUrl.value);
+    mediaUrl.value = undefined;
   }
 });
 
@@ -137,6 +156,20 @@ async function confirmDelete(): Promise<void> {
 .who .time {
   color: var(--ion-color-medium);
   font-size: 13px;
+}
+.media {
+  margin: 16px 0 0;
+}
+.media img,
+.media video {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: 14px;
+  object-fit: contain;
+  background: #000;
+}
+.media audio {
+  width: 100%;
 }
 .body {
   margin: 16px 0 0;
