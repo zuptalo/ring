@@ -88,6 +88,21 @@ import {
   listLockedChats,
   getSetting,
   downloadMessageMedia as dbDownloadMessageMedia,
+  createPost as dbCreatePost,
+  syncPosts as dbSyncPosts,
+  getPost as dbGetPost,
+  listWallPosts as dbListWallPosts,
+  reactToPost as dbReactToPost,
+  syncEngagement as dbSyncEngagement,
+  listPostReactions as dbListPostReactions,
+  listPostComments as dbListPostComments,
+  commentOnPost as dbCommentOnPost,
+  deleteComment as dbDeleteComment,
+  recordPostView as dbRecordPostView,
+  listPostViews as dbListPostViews,
+  setCloseFriend as dbSetCloseFriend,
+  listCloseFriends as dbListCloseFriends,
+  listFriends as dbListFriends,
 } from '@/db/queries';
 import { downloadBlob } from '@/services/media-transfer';
 import {
@@ -699,6 +714,48 @@ export function installTestHook(): void {
     incomingRequestIds: (): string[] => storeIncomingRequests.value.map((r) => r.userId),
     searchDirectory: async (q: string) =>
       (await searchDirectory(q)).map((u) => ({ id: u.id, username: u.username, displayName: u.displayName })),
+
+    /* ---- Wall (spec 0003): drive the real queries.ts orchestration so e2e exercises
+       the actual encrypt → upload → fan-out → receive/open path, not a shortcut. ---- */
+    /** Compose + share a post. Returns the new post id. */
+    post: async (opts: { body?: string; audience?: 'friends' | 'close'; lifetime?: '1h' | '24h' | '72h' }): Promise<string> => {
+      const p = await dbCreatePost({ body: opts.body, audience: opts.audience ?? 'friends', lifetime: opts.lifetime ?? '24h' });
+      return p.id;
+    },
+    /** Pull posts addressed to us (and apply revocations). */
+    syncPosts: () => dbSyncPosts(),
+    /** Ids of the non-expired, non-hidden posts on this device (feed order). */
+    wallPostIds: async (): Promise<string[]> => (await dbListWallPosts()).map((p) => p.id),
+    /** A single post as a lean view, or null if we don't have it. */
+    getPost: async (id: string) => {
+      const p = await dbGetPost(id);
+      return p ? { id: p.id, kind: p.kind, body: p.body, author: p.author, audience: p.audience, outgoing: p.outgoing } : null;
+    },
+    /** React to a post; returns the action ('added' | 'removed' | 'limit' | ...). */
+    reactToPost: (postId: string, emoji: string) => dbReactToPost(postId, emoji),
+    /** Pull a post's engagement (reactions/comments/views) from the server. */
+    syncEngagement: (postId: string) => dbSyncEngagement(postId),
+    /** A post's reactions as { actor, emoji } pairs. */
+    postReactions: async (postId: string): Promise<{ actor: string; emoji: string }[]> =>
+      (await dbListPostReactions(postId)).map((r) => ({ actor: r.actor, emoji: r.emoji ?? '' })),
+    /** Add a comment to a post. */
+    commentOnPost: (postId: string, text: string) => dbCommentOnPost(postId, text),
+    /** A post's comments as { id, actor, text, deleted } (excludes nothing, so a
+     *  tombstoned comment shows deleted=true). */
+    postComments: async (postId: string): Promise<{ id: string; actor: string; text: string; deleted: boolean }[]> =>
+      (await dbListPostComments(postId)).map((c) => ({ id: c.id, actor: c.actor, text: c.text ?? '', deleted: !!c.deleted })),
+    /** Delete one of our own comments (or any comment if we authored the post). */
+    deletePostComment: (postId: string, commentId: string) => dbDeleteComment(postId, commentId),
+    /** Record that we viewed a post (gated by the seen-receipts setting). */
+    recordPostView: (postId: string) => dbRecordPostView(postId),
+    /** A post's viewer ids (author-only server-side). */
+    postViews: (postId: string): Promise<string[]> => dbListPostViews(postId),
+    /** Toggle a contact's close-friend flag (demoting revokes close-only posts). */
+    setCloseFriend: (id: string, value: boolean) => dbSetCloseFriend(id, value),
+    /** Ids of the current close friends. */
+    closeFriendIds: async (): Promise<string[]> => (await dbListCloseFriends()).map((c) => c.id),
+    /** Ids of all accepted friends (the "all friends" audience source). */
+    friendIds: async (): Promise<string[]> => (await dbListFriends()).map((c) => c.id),
 
     /** Place a 1:1 call. */
     startCall: (peerId: string, kind: 'audio' | 'video') => startDirectCall(peerId, kind),
