@@ -135,12 +135,17 @@
 
             <!-- Quick comment from the feed. -->
             <div class="cinput">
-              <ion-input
+              <ion-textarea
+                v-enter-send="() => sendComment(p)"
                 class="cfield"
-                :value="draft[p.id] || ''"
+                :auto-grow="true"
+                :rows="1"
                 placeholder="Add a comment…"
+                autocapitalize="sentences"
+                :spellcheck="true"
+                dir="auto"
+                :value="draft[p.id] || ''"
                 @ion-input="onDraft(p.id, $event)"
-                @keyup.enter="sendComment(p)"
               />
               <ion-button size="small" fill="clear" :disabled="!(draft[p.id] || '').trim()" @click="sendComment(p)">
                 Post
@@ -165,7 +170,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
-  IonItem, IonItemSliding, IonItemOption, IonItemOptions, IonAvatar, IonIcon, IonInput, IonSearchbar,
+  IonItem, IonItemSliding, IonItemOption, IonItemOptions, IonAvatar, IonIcon, IonTextarea, IonSearchbar,
   toastController, actionSheetController, alertController,
   onIonViewWillEnter, onIonViewWillLeave,
 } from '@ionic/vue';
@@ -176,6 +181,7 @@ import {
 } from 'ionicons/icons';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
+import { vEnterSend } from '@/directives/enter-send';
 import { useWall, type WallPost } from '@/composables/useWall';
 import { useReactionPicker } from '@/composables/useReactionPicker';
 import {

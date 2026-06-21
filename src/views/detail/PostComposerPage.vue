@@ -14,6 +14,7 @@
 
     <ion-content :fullscreen="true">
       <ion-textarea
+        v-enter-send="share"
         class="composer"
         :auto-grow="true"
         :rows="3"
@@ -97,6 +98,7 @@ import {
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
 import { imageOutline, closeOutline } from 'ionicons/icons';
+import { vEnterSend } from '@/directives/enter-send';
 import { createPost, type PostLifetime } from '@/db/queries';
 
 const router = useRouter();

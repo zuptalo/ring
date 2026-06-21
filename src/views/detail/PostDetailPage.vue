@@ -89,9 +89,12 @@
           <p v-else class="empty">No comments yet.</p>
           <div class="cinput">
             <ion-textarea
+              v-enter-send="sendComment"
               :auto-grow="true"
               :rows="1"
               placeholder="Add a comment…"
+              autocapitalize="sentences"
+              :spellcheck="true"
               dir="auto"
               :value="commentText"
               @ion-input="onComment"
@@ -125,6 +128,7 @@ import { timeLeft, formatPostDateTime } from '@/utils/post-time';
 import { toastController } from '@ionic/vue';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
+import { vEnterSend } from '@/directives/enter-send';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
