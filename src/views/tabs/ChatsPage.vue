@@ -4,6 +4,9 @@
       <ion-toolbar>
         <ion-title>Chats</ion-title>
         <ion-buttons slot="end">
+          <ion-button aria-label="Wall" @click="router.push('/wall')">
+            <ion-icon slot="icon-only" :icon="sparklesOutline" />
+          </ion-button>
           <ion-button aria-label="New chat" @click="newOpen = true">
             <ion-icon slot="icon-only" :icon="createOutline" />
           </ion-button>
@@ -155,7 +158,7 @@ import {
   IonLabel, IonNote, IonModal,
 } from '@ionic/vue';
 import {
-  createOutline, personAddOutline, peopleOutline, archiveOutline, lockClosedOutline,
+  createOutline, personAddOutline, peopleOutline, archiveOutline, lockClosedOutline, sparklesOutline,
 } from 'ionicons/icons';
 import ChatListItem from '@/components/ChatListItem.vue';
 import ChatActionsHost from '@/components/ChatActionsHost.vue';

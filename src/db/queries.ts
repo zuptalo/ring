@@ -10,11 +10,13 @@ import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
-import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob } from '@/services/media-transfer';
+import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
+import { buildPost, openReceivedPost, type AudienceMember, type PostPayload } from '@/services/posts';
+import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
-import { isUnlockedNow } from '@/services/crypto/identity';
+import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive } from '@/services/notify';
 import { compressImage, compressVideo } from '@/services/media-encode';
@@ -29,7 +31,7 @@ import type {
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post,
 } from './types';
 
 // WhatsApp-style cap on pinned chats.
@@ -1972,6 +1974,141 @@ export async function setCloseFriend(id: string, value: boolean): Promise<void> 
   const c = await getContact(id);
   if (!c || !!c.closeFriend === value) return;
   await put<Contact>('contacts', { ...c, closeFriend: value, updatedAt: Date.now() });
+}
+
+/* ---- spec 0003: Wall posts ---- */
+
+// Author-chosen post lifetime → ttl (ms); 'keep' = no expiry.
+const POST_TTL_MS: Record<string, number | undefined> = {
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  keep: undefined,
+};
+export type PostLifetime = 'keep' | '24h' | '7d';
+
+// Cache each friend's X25519 identity public key (stable per account) so building a
+// post doesn't re-fetch (and re-consume a one-time prekey) for every post. Lazily
+// filled from the peer bundle; this key is the wrap target for K_post.
+async function peerPostKey(userId: string): Promise<Uint8Array | null> {
+  const cache = (await getSetting<Record<string, string>>('postPeerKeys', {})) ?? {};
+  if (cache[userId]) return b64urlToBytes(cache[userId]);
+  const bundle = await fetchPeerBundle(userId).catch(() => null);
+  if (!bundle) return null;
+  cache[userId] = bundle.xPub;
+  await setSetting('postPeerKeys', cache);
+  return b64urlToBytes(bundle.xPub);
+}
+
+/**
+ * Create a Wall post: seal the payload under a fresh per-post key, wrap that key to
+ * each audience member, upload the opaque blob, register the post server-side, then
+ * persist it locally so the author sees it immediately. The server only ever holds
+ * ciphertext + the per-recipient envelope set.
+ */
+export async function createPost(opts: {
+  payload: PostPayload;
+  audience: 'friends' | 'close';
+  lifetime: PostLifetime;
+}): Promise<Post> {
+  const self = getSelfUserId();
+  if (!self) throw new Error('not signed in');
+  const friends = opts.audience === 'close' ? await listCloseFriends() : await listFriends();
+  if (!friends.length) throw new Error('No audience — add friends first.');
+  const audience: AudienceMember[] = [];
+  for (const f of friends) {
+    const pub = await peerPostKey(f.id);
+    if (pub) audience.push({ userId: f.id, pubKey: pub });
+  }
+  if (!audience.length) throw new Error('No reachable audience for this post.');
+  const built = buildPost(opts.payload, audience);
+  const blobId = await uploadBlob(new Blob([built.blob as BlobPart]));
+  const id = uid();
+  const createdAt = now();
+  const ttl = POST_TTL_MS[opts.lifetime];
+  const expiresAt = ttl ? createdAt + ttl : undefined;
+  await apiCreatePost({ id, blobId, size: built.blob.length, expiresAt, envelopes: built.envelopes });
+  const post: Post = {
+    id,
+    author: self,
+    kind: opts.payload.kind,
+    body: opts.payload.body,
+    audience: opts.audience,
+    createdAt,
+    expiresAt,
+    outgoing: true,
+    updatedAt: createdAt,
+  };
+  await put<Post>('posts', post);
+  return post;
+}
+
+// Persist a single received post: unwrap K_post with our identity key, open the
+// payload, store it. Own posts come back without an envelope (already local) and are
+// skipped; anything we can't open (not for us / tampered) is dropped silently.
+async function receivePost(sp: ServerPost): Promise<void> {
+  if (!sp.wrappedKey) return;
+  if (await get<Post>('posts', sp.id)) return;
+  const blob = await downloadBlob(sp.blobId);
+  if (!blob) return;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let payload: PostPayload;
+  try {
+    payload = openReceivedPost(bytes, sp.wrappedKey, getIdentityKeys().x.privateKey);
+  } catch {
+    return;
+  }
+  await put<Post>('posts', {
+    id: sp.id,
+    author: sp.author,
+    kind: payload.kind,
+    body: payload.body,
+    createdAt: sp.createdAt,
+    expiresAt: sp.expiresAt,
+    outgoing: false,
+    updatedAt: now(),
+  });
+}
+
+/** Pull new posts addressed to us and persist them (called on app open, on the
+ *  `post-new` WS nudge, and on reconnect). No-op while locked. */
+export async function syncPosts(): Promise<void> {
+  if (!isUnlockedNow()) return;
+  const cursor = (await getSetting<number>('postsCursor', 0)) ?? 0;
+  try {
+    const { posts, cursor: next } = await apiListPosts(cursor);
+    for (const sp of posts) await receivePost(sp);
+    if (next > cursor) await setSetting('postsCursor', next);
+  } catch {
+    /* offline / transient — retried on the next nudge */
+  }
+}
+
+/** All non-expired Wall posts on this device, newest-first (the Wall feed source). */
+export async function listWallPosts(): Promise<Post[]> {
+  const nowMs = now();
+  return (await getAll<Post>('posts'))
+    .filter((p) => !p.expiresAt || p.expiresAt > nowMs)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** A single Wall post by id (or null). */
+export async function getPost(id: string): Promise<Post | null> {
+  return (await get<Post>('posts', id)) ?? null;
+}
+
+/** Delete one of our own posts: best-effort server delete + remove the local copy. */
+export async function deletePost(id: string): Promise<void> {
+  await apiDeletePost(id).catch(() => {});
+  await remove('posts', id);
+}
+
+/** Remove posts (and, later, their engagement) whose lifetime has elapsed. Wired into
+ *  the existing disappearing-message sweep. */
+export async function sweepExpiredPosts(): Promise<void> {
+  const nowMs = now();
+  for (const p of await getAll<Post>('posts')) {
+    if (p.expiresAt && p.expiresAt <= nowMs) await remove('posts', p.id);
+  }
 }
 
 /* ---- account termination ("Ghosted") ---- */

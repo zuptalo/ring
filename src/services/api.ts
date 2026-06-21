@@ -67,6 +67,61 @@ export async function fetchPeerBundle(userId: string): Promise<PeerBundleRespons
   return (await res.json()) as PeerBundleResponse;
 }
 
+/* ---- social Wall (spec 0003) ---- */
+
+/** A post envelope on the wire: a recipient + their wrapped K_post. */
+export interface PostEnvelopeWire {
+  recipient: string;
+  wrappedKey: string;
+}
+
+/** Create a post: opaque blob id + per-recipient wrapped-key envelopes + coarse
+ *  expiry. The server stores ciphertext only and addresses delivery to the envelopes;
+ *  it rejects (403) any recipient who isn't an accepted friend. */
+export async function createPost(req: {
+  id: string;
+  blobId: string;
+  size: number;
+  expiresAt?: number;
+  envelopes: PostEnvelopeWire[];
+}): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`create post failed: ${res.status}`);
+}
+
+/** A post as delivered to the caller. `wrappedKey` is the caller's envelope (absent
+ *  for the caller's own posts). All content is in the opaque blob. */
+export interface ServerPost {
+  id: string;
+  author: string;
+  blobId: string;
+  size: number;
+  createdAt: number;
+  expiresAt?: number;
+  wrappedKey?: string;
+}
+
+/** Pull posts addressed to the caller (and their own) newer than `since`, newest
+ *  first, with a cursor to pass next time. */
+export async function listPosts(since = 0): Promise<{ posts: ServerPost[]; cursor: number }> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts?since=${since}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`list posts failed: ${res.status}`);
+  return (await res.json()) as { posts: ServerPost[]; cursor: number };
+}
+
+/** Delete one of the caller's own posts (author-only server-side). Idempotent. */
+export async function deletePost(id: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`delete post failed: ${res.status}`);
+}
+
 /** Delete (terminate) the current account. The server wipes all per-user data
  *  (tokens, prekeys, relay queue, sync records, recovery wrap, push, blocks) but
  *  KEEPS the user row flipped to 'terminated' so the id can't be re-registered and

@@ -271,6 +271,13 @@ export interface ConnectUpdateFrame {
   state: string; // 'accepted' | 'rejected'
 }
 
+/** Content-free nudge that a Wall post addressed to us arrived (spec 0003). Carries
+ *  only the author id; the client reconciles by pulling GET /v1/posts. */
+export interface PostNewFrame {
+  t: 'post-new';
+  from: string;
+}
+
 /* ---- ephemeral activity indicators (spec 1009): typing / recording ---- */
 
 /** What a peer is doing in a conversation right now (sealed on the wire). */
@@ -317,6 +324,7 @@ export type Frame =
   | ActivityFrame
   | ConnectReqFrame
   | ConnectUpdateFrame
+  | PostNewFrame
   | CallFrame;
 
 export interface Transport {

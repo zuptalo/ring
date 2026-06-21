@@ -136,6 +136,23 @@ const routes: RouteRecordRaw[] = [
     path: '/settings/calls-declines',
     component: () => import('@/views/detail/CallsDeclinesPage.vue'),
   },
+  // Social Wall (spec 0003).
+  {
+    path: '/wall',
+    component: () => import('@/views/detail/WallPage.vue'),
+  },
+  {
+    path: '/wall/compose',
+    component: () => import('@/views/detail/PostComposerPage.vue'),
+  },
+  {
+    path: '/wall/post/:id',
+    component: () => import('@/views/detail/PostDetailPage.vue'),
+  },
+  {
+    path: '/settings/close-friends',
+    component: () => import('@/views/detail/CloseFriendsPage.vue'),
+  },
   {
     path: '/settings/:section',
     component: () => import('@/views/detail/SettingDetailPage.vue'),

@@ -97,7 +97,6 @@ import {
 import {
   createInvitation, deleteAccount, fetchPeerBundle,
   listConnections as apiListConnections,
-  connectLink as apiConnectLink,
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
 import { notifyBanners } from '@/services/notify';
@@ -107,6 +106,7 @@ import {
   rejectConnect as storeRejectConnect, withdrawConnect as storeWithdrawConnect,
   refreshConnections as storeRefreshConnections,
   incomingRequests as storeIncomingRequests,
+  linkConnect as storeLinkConnect,
 } from '@/services/connections';
 import { subscribePresence, sendActivity } from '@/composables/useSync';
 import { peerPresence } from '@/composables/usePresence';
@@ -684,7 +684,7 @@ export function installTestHook(): void {
     // Drive the real client store actions (import + mark-connected + reconcile),
     // not the raw API, so e2e exercises the actual friend-request behavior.
     connectRequest: (target: string) => storeRequestConnect(target),
-    connectLink: (target: string) => apiConnectLink(target),
+    connectLink: (target: string) => storeLinkConnect(target),
     connectAccept: (requester: string) => storeAcceptConnect(requester),
     connectReject: (requester: string, block: boolean) => storeRejectConnect(requester, block),
     connectWithdraw: (target: string) => storeWithdrawConnect(target),
