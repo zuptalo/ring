@@ -137,12 +137,27 @@ func (s *Store) PostAudience(ctx context.Context, postID string) ([]string, erro
 
 // SubmitEngagement records one opaque engagement item (reaction/comment/tombstone) on a
 // post. The payload is sealed under K_post; the server stores it without reading it.
+// Keep-alive (rolling 72h of inactivity): any engagement extends the post's expiry to
+// now+72h, so an actively-engaged post stays alive (mirrors the client bump).
 func (s *Store) SubmitEngagement(ctx context.Context, postID, id, actor, kind, payload string) error {
-	_, err := s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO post_engagement (id, post_id, actor, kind, payload) VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (id) DO NOTHING`,
-		id, postID, actor, kind, payload)
-	return err
+		id, postID, actor, kind, payload); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE posts SET expires_at = now() + interval '72 hours'
+		  WHERE id = $1 AND (expires_at IS NULL OR expires_at < now() + interval '72 hours')`,
+		postID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // PostEngagementRow is one opaque engagement item delivered to an audience member.

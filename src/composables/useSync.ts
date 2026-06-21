@@ -22,7 +22,7 @@ import {
   type TransportState,
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement } from '@/db/queries';
+import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -297,8 +297,12 @@ function start(): void {
     // Connect-request notifications: re-read the authoritative state, and alert on a
     // new incoming request (so it surfaces like a friend request).
     if (f.t === 'post-new') {
-      // A Wall post addressed to us arrived (spec 0003). Content-free nudge → pull.
-      void syncPosts();
+      // A Wall post addressed to us arrived (spec 0003). Content-free nudge → pull,
+      // then surface an in-app banner ("X shared a photo").
+      void (async () => {
+        await syncPosts();
+        if (f.from) await notifyNewPost(f.from);
+      })();
       return;
     }
     if (f.t === 'post-engagement') {

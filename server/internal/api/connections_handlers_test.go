@@ -20,6 +20,7 @@ type fakeConnNotifier struct {
 
 func (f *fakeConnNotifier) Notify(context.Context, string)     {}
 func (f *fakeConnNotifier) NotifyCall(context.Context, string) {}
+func (f *fakeConnNotifier) NotifyPost(context.Context, string) {}
 func (f *fakeConnNotifier) NotifyConn(_ context.Context, userID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

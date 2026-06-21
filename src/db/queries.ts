@@ -2066,6 +2066,7 @@ export async function createPost(opts: {
     mediaId,
     audience: opts.audience,
     createdAt,
+    lastActivityAt: createdAt,
     expiresAt,
     outgoing: true,
     postKey: built.postKey,
@@ -2110,6 +2111,7 @@ async function receivePost(sp: ServerPost): Promise<void> {
       });
     }
   }
+  const prev = await get<Post>('posts', sp.id);
   await put<Post>('posts', {
     id: sp.id,
     author: sp.author,
@@ -2117,12 +2119,14 @@ async function receivePost(sp: ServerPost): Promise<void> {
     body: payload.body,
     mediaId,
     createdAt: sp.createdAt,
+    lastActivityAt: Math.max(prev?.lastActivityAt ?? 0, sp.createdAt),
     expiresAt: sp.expiresAt,
     outgoing: false,
     postKey,
     updatedAt: now(),
   });
-  // Pull any engagement (reactions) that already exists on this post.
+  // Pull any engagement (reactions/comments) that already exists on this post (also
+  // applies keep-alive from past interactions).
   void syncEngagement(sp.id);
 }
 
@@ -2140,12 +2144,49 @@ export async function syncPosts(): Promise<void> {
   }
 }
 
-/** All non-expired Wall posts on this device, newest-first (the Wall feed source). */
+/** Human label for what was shared, used in notifications. */
+function postShareLabel(kind: Post['kind']): string {
+  return kind === 'image'
+    ? 'shared a photo'
+    : kind === 'video'
+      ? 'shared a video'
+      : kind === 'voice'
+        ? 'shared a voice message'
+        : 'shared a post';
+}
+
+// Posts we've already notified about this session (avoids a repeat banner if the
+// `post-new` nudge fires again for the same post).
+const notifiedPostIds = new Set<string>();
+
+/** Surface an in-app banner / system notification for a freshly-arrived post from
+ *  `authorId` ("X shared a photo"). Called from the live `post-new` nudge, so it only
+ *  fires for genuinely new posts (a recency guard backs that up). */
+export async function notifyNewPost(authorId: string): Promise<void> {
+  const recent = (await getAll<Post>('posts'))
+    .filter((p) => p.author === authorId && !p.outgoing && !notifiedPostIds.has(p.id))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const p = recent[0];
+  if (!p || now() - p.createdAt > 5 * 60_000) return;
+  notifiedPostIds.add(p.id);
+  const c = await getContact(authorId);
+  void notifyIncoming({
+    kind: 'system',
+    name: c?.name ?? 'Someone',
+    body: postShareLabel(p.kind),
+    avatar: c?.avatar,
+    url: '/tabs/wall',
+  });
+}
+
+/** All non-expired Wall posts on this device, ordered by last activity — so a brand-
+ *  new post AND a post that just got a reaction/comment both rise to the top. */
 export async function listWallPosts(): Promise<Post[]> {
   const nowMs = now();
+  const activity = (p: Post) => p.lastActivityAt ?? p.createdAt;
   return (await getAll<Post>('posts'))
     .filter((p) => !p.expiresAt || p.expiresAt > nowMs)
-    .sort((a, b) => b.createdAt - a.createdAt);
+    .sort((a, b) => activity(b) - activity(a));
 }
 
 /** A single Wall post by id (or null). */
@@ -2186,32 +2227,58 @@ interface ReactionData {
   remove?: boolean;
 }
 
-/** React to a post (audience-visible). Toggles: tapping your current emoji removes it.
- *  Sealed under the post's K_post and submitted; the server fans it out to the
- *  audience, who each apply it last-write-wins per actor. */
-export async function reactToPost(postId: string, emoji: string): Promise<void> {
+// Keep-alive (rolling 72h of inactivity): any interaction extends the post's life to
+// (interaction time + 72h) and bumps its last-activity, so an actively-engaged post
+// stays alive and jumps to the top of the feed. Local mirror of the server bump.
+const POST_KEEPALIVE_MS = MAX_POST_TTL_MS;
+async function bumpPostActivity(postId: string, atMs: number): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post) return;
+  const lastActivityAt = Math.max(post.lastActivityAt ?? post.createdAt, atMs);
+  const expiresAt = Math.max(post.expiresAt ?? 0, atMs + POST_KEEPALIVE_MS);
+  if (lastActivityAt === (post.lastActivityAt ?? post.createdAt) && expiresAt === (post.expiresAt ?? 0)) return;
+  await put<Post>('posts', { ...post, lastActivityAt, expiresAt, updatedAt: now() });
+}
+
+/** React to a post (audience-visible), mirroring chat: up to MAX_REACTIONS_PER_USER
+ *  emoji per person and MAX_DISTINCT_REACTIONS distinct emoji per post; tapping your
+ *  own emoji again removes it. Sealed under K_post and fanned out; applied LWW per
+ *  (actor, emoji). Returns what happened so the UI can surface a cap. */
+export async function reactToPost(
+  postId: string,
+  emoji: string,
+): Promise<'added' | 'removed' | 'limit' | 'limit-emojis' | 'noop'> {
   const self = getSelfUserId();
   const post = await get<Post>('posts', postId);
-  if (!self || !post?.postKey) return;
+  if (!self || !post?.postKey) return 'noop';
+  const rows = (await getByIndex<PostEngagement>('postEngagement', 'postId', postId)).filter(
+    (e) => e.type === 'reaction' && !e.deleted,
+  );
+  const mine = rows.filter((r) => r.actor === self);
+  const has = mine.some((r) => r.emoji === emoji);
+  if (!has) {
+    if (mine.length >= MAX_REACTIONS_PER_USER) return 'limit';
+    const distinct = new Set(rows.map((r) => r.emoji));
+    if (!distinct.has(emoji) && distinct.size >= MAX_DISTINCT_REACTIONS) return 'limit-emojis';
+  }
+  const remove = has;
   const at = now();
-  const mineId = `${postId}:reaction:${self}`;
-  const mine = await get<PostEngagement>('postEngagement', mineId);
-  const removing = !!mine && !mine.deleted && mine.emoji === emoji;
-  const data: ReactionData = { emoji, at, remove: removing || undefined };
-  // Optimistic local apply.
   await put<PostEngagement>('postEngagement', {
-    id: mineId, postId, type: 'reaction', actor: self, emoji, at,
-    deleted: removing || undefined, updatedAt: at,
+    id: `${postId}:reaction:${self}:${emoji}`, postId, type: 'reaction', actor: self, emoji, at,
+    deleted: remove || undefined, updatedAt: at,
   });
+  if (!remove) void recordEmojiUse(emoji); // most-used drives the quick-react order
+  await bumpPostActivity(postId, at);
   try {
     await apiSubmitEngagement(postId, {
       id: uid(),
       kind: 'reaction',
-      payload: sealPostEngagement(post.postKey, data),
+      payload: sealPostEngagement(post.postKey, { emoji, at, remove } satisfies ReactionData),
     });
   } catch {
     /* offline — the optimistic local row stands; a later sync reconciles */
   }
+  return remove ? 'removed' : 'added';
 }
 
 interface CommentData {
@@ -2227,6 +2294,7 @@ export async function syncEngagement(postId: string): Promise<void> {
   if (!post?.postKey) return;
   try {
     const { items } = await apiListEngagement(postId);
+    let latestActivity = 0; // newest reaction/comment time seen → keep-alive
     for (const it of items) {
       if (it.kind === 'reaction') {
         let data: ReactionData;
@@ -2235,9 +2303,10 @@ export async function syncEngagement(postId: string): Promise<void> {
         } catch {
           continue;
         }
-        const id = `${postId}:reaction:${it.actor}`;
+        latestActivity = Math.max(latestActivity, data.at);
+        const id = `${postId}:reaction:${it.actor}:${data.emoji}`;
         const existing = await get<PostEngagement>('postEngagement', id);
-        if (existing && existing.at >= data.at) continue; // LWW
+        if (existing && existing.at >= data.at) continue; // LWW per (actor, emoji)
         await put<PostEngagement>('postEngagement', {
           id, postId, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at,
           deleted: data.remove || undefined, updatedAt: now(),
@@ -2250,6 +2319,7 @@ export async function syncEngagement(postId: string): Promise<void> {
         } catch {
           continue;
         }
+        latestActivity = Math.max(latestActivity, data.at);
         await put<PostEngagement>('postEngagement', {
           id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at, updatedAt: now(),
         });
@@ -2261,6 +2331,7 @@ export async function syncEngagement(postId: string): Promise<void> {
         }
       }
     }
+    if (latestActivity) await bumpPostActivity(postId, latestActivity);
   } catch {
     /* offline / transient */
   }
@@ -2270,6 +2341,11 @@ export async function syncEngagement(postId: string): Promise<void> {
 export async function listPostReactions(postId: string): Promise<PostEngagement[]> {
   const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
   return rows.filter((e) => e.type === 'reaction' && !e.deleted).sort((a, b) => a.at - b.at);
+}
+
+/** All engagement rows (for the feed, which groups them by post in one live query). */
+export async function listAllPostEngagement(): Promise<PostEngagement[]> {
+  return getAll<PostEngagement>('postEngagement');
 }
 
 /** Live comments on a post (non-deleted), oldest-first (timestamp then id tiebreak). */
@@ -2291,6 +2367,7 @@ export async function commentOnPost(postId: string, text: string): Promise<void>
   await put<PostEngagement>('postEngagement', {
     id: engId, postId, type: 'comment', actor: self, text: body, at, updatedAt: at,
   });
+  await bumpPostActivity(postId, at);
   try {
     await apiSubmitEngagement(postId, {
       id: engId,

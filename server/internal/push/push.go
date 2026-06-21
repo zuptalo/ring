@@ -32,6 +32,11 @@ var (
 	// service only learns "a connection event occurred for this endpoint", the same
 	// privacy class as msg/call).
 	tickleConn = []byte(`{"t":"conn"}`)
+	// ticklePost wakes a device for a new Wall post addressed to it (spec 0003). It
+	// carries NO content; the SW shows a generic "new post" notification when the app
+	// is closed and nudges a live page to pull + show the rich "X shared a photo"
+	// in-app banner. Same zero-knowledge class as msg/conn.
+	ticklePost = []byte(`{"t":"post"}`)
 )
 
 const (
@@ -66,6 +71,11 @@ const (
 	// never collapsed away by a message burst (and vice versa).
 	connTopic = "ring-conn"
 
+	// postTTL / postTopic: a Wall post wake is worth holding until the device next
+	// comes online (like a message), collapsed per subscription so a burst is one wake.
+	postTTL   = 7 * 24 * 60 * 60 // 604800s
+	postTopic = "ring-post"
+
 	// sendBudget bounds one subscription's whole delivery attempt (incl. retries),
 	// so one slow/hung endpoint can't starve a user's other devices.
 	sendBudget = 10 * time.Second
@@ -90,6 +100,9 @@ var (
 	}
 	connParams = func() pushParams {
 		return pushParams{payload: tickleConn, ttl: connTTL, urgency: webpush.UrgencyHigh, topic: connTopic}
+	}
+	postParams = func() pushParams {
+		return pushParams{payload: ticklePost, ttl: postTTL, urgency: webpush.UrgencyHigh, topic: postTopic}
 	}
 )
 
@@ -167,6 +180,14 @@ func (n *Notifier) NotifyCall(ctx context.Context, userID string) {
 // reconciles the actual state from GET /v1/connections. Carries no identity.
 func (n *Notifier) NotifyConn(ctx context.Context, userID string) {
 	n.notify(ctx, userID, connParams())
+}
+
+// NotifyPost pushes a content-free WALL-POST tickle (spec 0003): long-ish lived +
+// collapsible like a message, so an offline device still learns of it on wake; the SW
+// then shows a generic "new post" notification (closed) or nudges a live page to pull
+// + show the rich in-app banner. Carries no identity.
+func (n *Notifier) NotifyPost(ctx context.Context, userID string) {
+	n.notify(ctx, userID, postParams())
 }
 
 func (n *Notifier) notify(ctx context.Context, userID string, p pushParams) {

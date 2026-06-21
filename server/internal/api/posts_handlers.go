@@ -47,7 +47,7 @@ func (h *Handlers) notifyPost(ctx context.Context, recipient, author string) {
 		}
 	}
 	if h.Notifier != nil {
-		h.Notifier.Notify(ctx, recipient)
+		h.Notifier.NotifyPost(ctx, recipient)
 	}
 }
 

@@ -36,21 +36,23 @@
 
         <p v-if="post.body" class="body"><EmojiText :text="post.body" big /></p>
 
-        <p v-if="post.expiresAt" class="expiry">
-          Disappears {{ when(post.expiresAt) }}
+        <p v-if="post.expiresAt" class="expiry" :title="when(post.expiresAt)">
+          <ion-icon :icon="timeOutline" /> Disappears in {{ leftLabel }}
         </p>
 
-        <!-- Reactions (audience-visible). -->
+        <!-- Reactions (audience-visible): pills + the shared quick-react picker. -->
         <div class="reactions">
-          <div class="picker">
+          <div class="rrow">
             <button
-              v-for="e in EMOJIS"
-              :key="e"
-              class="emoji"
-              :class="{ mine: myEmoji === e }"
-              :aria-label="'React ' + e"
-              @click="react(e)"
-            ><Emoji :emoji="e" /></button>
+              v-for="g in grouped"
+              :key="g.emoji"
+              class="rpill"
+              :class="{ mine: g.mine }"
+              @click="react(g.emoji)"
+            ><Emoji :emoji="g.emoji" /><span class="rc">{{ g.count }}</span></button>
+            <button class="raddbtn" aria-label="React" @click="openPicker($event)">
+              <ion-icon :icon="happyOutline" />
+            </button>
           </div>
           <ul v-if="grouped.length" class="rlist">
             <li v-for="g in grouped" :key="g.emoji">
@@ -107,14 +109,18 @@ import {
   IonContent, IonAvatar, IonIcon, IonTextarea, onIonViewWillEnter, onIonViewWillLeave, alertController,
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
-import { trashOutline } from 'ionicons/icons';
+import { trashOutline, happyOutline, timeOutline } from 'ionicons/icons';
+import { timeLeft } from '@/utils/post-time';
+import { toastController } from '@ionic/vue';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
   getPost, getContact, getMedia, deletePost,
   listPostReactions, reactToPost, syncEngagement, listContacts,
   listPostComments, commentOnPost, deleteComment, recordPostView, listPostViews,
+  MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { useSelfProfile } from '@/composables/useSelfProfile';
@@ -130,30 +136,50 @@ const authorName = ref('Unknown');
 const authorAvatar = ref('');
 const authorUsername = ref<string | undefined>(undefined);
 const mediaUrl = ref<string | undefined>(undefined);
+const leftLabel = computed(() => (post.value?.expiresAt ? timeLeft(post.value.expiresAt, Date.now()) : ''));
 
-// The same canonical quick-react set the chat uses (rendered via the Noto Emoji
-// component for visual + animation consistency).
-const EMOJIS = ['👍', '❤️', '😂', '😮', '🙏'];
 const reactions = useLiveQuery(() => listPostReactions(postId), ['postEngagement'], [] as PostEngagement[]);
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+const { openQuick } = useReactionPicker();
 
-const myEmoji = computed(() => reactions.value.find((r) => r.actor === selfId)?.emoji);
-// Group reactions by emoji with a human "who" label.
+const myEmojis = computed(() => reactions.value.filter((r) => r.actor === selfId).map((r) => r.emoji ?? ''));
+// Reaction pills (emoji + count + whether I reacted), plus a "who reacted" line.
 const grouped = computed(() => {
   const byId = new Map(contacts.value.map((c) => [c.id, c.name] as const));
-  const map = new Map<string, string[]>();
+  const map = new Map<string, { who: string[]; count: number; mine: boolean }>();
   for (const r of reactions.value) {
     if (!r.emoji) continue;
-    const who = r.actor === selfId ? 'You' : byId.get(r.actor) ?? 'Someone';
-    const list = map.get(r.emoji) ?? [];
-    list.push(who);
-    map.set(r.emoji, list);
+    const g = map.get(r.emoji) ?? { who: [], count: 0, mine: false };
+    g.who.push(r.actor === selfId ? 'You' : byId.get(r.actor) ?? 'Someone');
+    g.count += 1;
+    if (r.actor === selfId) g.mine = true;
+    map.set(r.emoji, g);
   }
-  return [...map.entries()].map(([emoji, names]) => ({ emoji, who: names.join(', ') }));
+  return [...map.entries()].map(([emoji, g]) => ({ emoji, who: g.who.join(', '), count: g.count, mine: g.mine }));
 });
 
-function react(emoji: string): void {
-  void reactToPost(postId, emoji);
+async function react(emoji: string): Promise<void> {
+  const res = await reactToPost(postId, emoji);
+  if (res === 'limit' || res === 'limit-emojis') {
+    const t = await toastController.create({
+      message:
+        res === 'limit-emojis'
+          ? `This post already has ${MAX_DISTINCT_REACTIONS} different reactions — tap one of those instead.`
+          : `You can add up to ${MAX_REACTIONS_PER_USER} reactions.`,
+      duration: 1600,
+      position: 'top',
+    });
+    await t.present();
+  }
+}
+function openPicker(ev: Event): void {
+  const existing = grouped.value.map((g) => g.emoji);
+  void openQuick(ev, {
+    myEmojis: myEmojis.value,
+    existing,
+    atEmojiCap: existing.length >= MAX_DISTINCT_REACTIONS,
+    onPick: react,
+  });
 }
 
 const nameOf = (actorId: string): string => {
@@ -310,22 +336,42 @@ async function confirmDelete(): Promise<void> {
 .reactions {
   margin-top: 20px;
 }
-.reactions .picker {
+.reactions .rrow {
   display: flex;
+  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
-.reactions .emoji {
-  font-size: 22px;
-  line-height: 1;
-  padding: 6px 8px;
+.reactions .rpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 16px;
+  padding: 4px 10px;
   border: none;
   border-radius: 999px;
   background: var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
   cursor: pointer;
 }
-.reactions .emoji.mine {
-  background: var(--ion-color-primary);
+.reactions .rpill.mine {
+  background: color-mix(in srgb, var(--ion-color-primary) 22%, transparent);
+}
+.reactions .rpill .rc {
+  font-size: 12px;
+  color: var(--ion-color-medium);
+}
+.reactions .raddbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
+  color: var(--ion-color-medium);
+  font-size: 20px;
+  cursor: pointer;
 }
 .reactions .rlist {
   list-style: none;

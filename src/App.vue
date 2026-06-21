@@ -47,7 +47,7 @@ import { callState } from '@/composables/useCall';
 import { stopAudio } from '@/composables/useAudioPlayer';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate } from '@/composables/useAppUpdate';
-import { countPendingRequests, listChats, listFailedMessages, retryAllFailed } from '@/db/queries';
+import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import type { Message } from '@/db/types';
 
@@ -169,6 +169,8 @@ function onServiceWorkerMessage(ev: MessageEvent): void {
   if (!data) return;
   if (data.type === 'ring:navigate') {
     void routeRelevant(data.url);
+  } else if (data.type === 'ring:posts') {
+    void syncPosts(); // a Wall-post push woke us → pull (the in-app banner fires on the WS frame)
   } else if (data.type === 'ring:drain') {
     nudgeReconnect(); // pull queued messages now
     // We're a live page: if we're UNLOCKED we'll surface the message in-app

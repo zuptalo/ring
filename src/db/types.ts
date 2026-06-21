@@ -353,8 +353,12 @@ export interface Post {
   body?: string; // decrypted text / caption
   mediaId?: string; // local `media` store id for voice/video/image
   audience?: 'friends' | 'close'; // own posts only (display-only on received)
-  createdAt: number; // author timestamp; feed ordering
-  expiresAt?: number; // epoch ms; absent = keep
+  createdAt: number; // author timestamp
+  // Last activity = max(createdAt, latest reaction/comment). Drives feed ordering (a
+  // post with fresh interaction jumps to the top) and, with keep-alive, tracks the
+  // rolling 72h-of-inactivity window. Absent on legacy rows → treated as createdAt.
+  lastActivityAt?: number;
+  expiresAt?: number; // epoch ms; with keep-alive = last activity + 72h
   outgoing: boolean; // true for self-authored
   // The post's content key K_post (b64url). Every audience member holds it (the author
   // generated it; recipients unwrap it from their envelope) and uses it to seal/open
