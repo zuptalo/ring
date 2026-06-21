@@ -191,12 +191,14 @@ async function showVersionNotification(): Promise<void> {
   });
 }
 
-/** Generic, identity-safe notification for a new Wall post (spec 0003). Shown only
- *  when the app is closed; a live page shows the rich "X shared a photo" banner via
- *  the post-new WS frame, so the SW stays silent there to avoid a duplicate. */
+/** Generic, identity-safe notification for Wall activity — a new post OR engagement
+ *  (reaction/comment), which share the one content-free post tickle. Shown only when the
+ *  app is closed; a live page shows the rich in-app banner / live update via the WS
+ *  frame, so the SW stays silent there to avoid a duplicate. "Activity" rather than
+ *  "post" so it reads honestly for a reaction/comment too. */
 async function showPostNotification(): Promise<void> {
   await self.registration.showNotification('Ring', {
-    body: 'New post on your Wall',
+    body: 'New activity on your Wall',
     icon: ICON,
     badge: ICON,
     tag: 'ring:post',

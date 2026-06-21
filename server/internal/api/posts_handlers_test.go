@@ -5,11 +5,48 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 
 	"ring/server/internal/store"
 	"ring/server/internal/ws"
 )
+
+// recordingNotifier records who was woken via NotifyPost, so a test can assert which
+// engagement actually wakes a device (vs. only syncing live).
+type recordingNotifier struct {
+	mu    sync.Mutex
+	posts []string
+}
+
+func (n *recordingNotifier) Notify(context.Context, string)     {}
+func (n *recordingNotifier) NotifyCall(context.Context, string) {}
+func (n *recordingNotifier) NotifyConn(context.Context, string) {}
+func (n *recordingNotifier) NotifyPost(_ context.Context, userID string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.posts = append(n.posts, userID)
+}
+func (n *recordingNotifier) postPushCount() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.posts)
+}
+func (n *recordingNotifier) pushedTo(userID string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, u := range n.posts {
+		if u == userID {
+			return true
+		}
+	}
+	return false
+}
+func (n *recordingNotifier) reset() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.posts = nil
+}
 
 // fakePostConn is a ConnectionStore whose Connected() answers from an explicit
 // friendship set, so post-audience authorization can be exercised.
@@ -194,10 +231,16 @@ func (f *fakePostStore) RecentCommentCount(_ context.Context, postID, actor stri
 }
 
 func newPostTestServer(conn ConnectionStore, posts PostStore) http.Handler {
+	return newPostTestServerN(conn, posts, nil)
+}
+
+// newPostTestServerN is newPostTestServer with an injectable Notifier, so a test can
+// assert which engagement wakes an offline device (NotifyPost).
+func newPostTestServerN(conn ConnectionStore, posts PostStore, notifier ws.Notifier) http.Handler {
 	as := newFakeStore()
 	return NewRouter(&Handlers{
 		Store: as, Directory: as, Contacts: as, Blocks: as, Relay: as,
-		Connections: conn, Posts: posts, Hub: ws.NewHub(),
+		Connections: conn, Posts: posts, Hub: ws.NewHub(), Notifier: notifier,
 		Keys: newFakeKeysStore(), Blobs: newFakeBlobStore(), Sync: newFakeSyncStore(),
 		Push: newFakePushStore(), Invites: as,
 		PublicURL: "https://ring.example", VapidPublicKey: "VAPID_PUB",
@@ -535,5 +578,48 @@ func TestCommentRateLimitedPerPost(t *testing.T) {
 	eng := `{"id":"` + pid(3, maxCommentsPerPostWindow) + `","kind":"comment","payload":"SEALED"}`
 	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, eng); rr.Code != http.StatusTooManyRequests {
 		t.Fatalf("over-cap comment status = %d, want 429; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestReactionDoesNotPushButCommentDoes: a reaction (add OR remove) syncs live but
+// never wakes a device; only a new comment fires a web push to the audience. The server
+// can't see add-vs-remove (sealed under K_post), so it gates on the unsealed kind.
+func TestReactionDoesNotPushButCommentDoes(t *testing.T) {
+	conn := newFakePostConn()
+	notif := &recordingNotifier{}
+	srv := newPostTestServerN(conn, newFakePostStore(), notif)
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	// A brand-new post DOES push its audience; clear the recorder to isolate engagement.
+	if !notif.pushedTo(bobID) {
+		t.Fatalf("expected the new post to push the audience (bob)")
+	}
+	notif.reset()
+
+	// Bob reacts → the audience syncs live but NO device is woken.
+	react := `{"id":"22222222-2222-2222-2222-222222222222","kind":"reaction","payload":"SEALED"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, react); rr.Code != http.StatusCreated {
+		t.Fatalf("react status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if n := notif.postPushCount(); n != 0 {
+		t.Errorf("reaction pushed %d device(s); want 0 (reactions never wake a device)", n)
+	}
+
+	// Bob comments → the post author (alice) IS pushed; the actor (bob) never is.
+	comment := `{"id":"33333333-3333-3333-3333-333333333333","kind":"comment","payload":"SEALED"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, comment); rr.Code != http.StatusCreated {
+		t.Fatalf("comment status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if !notif.pushedTo(aliceID) {
+		t.Errorf("expected the comment to push the post author (alice)")
+	}
+	if notif.pushedTo(bobID) {
+		t.Errorf("a comment must not push its own author (bob)")
 	}
 }
