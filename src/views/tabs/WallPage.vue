@@ -385,6 +385,18 @@ async function confirmDeletePost(post: WallPost): Promise<void> {
   background: var(--ion-card-background, var(--ion-item-background, #fff));
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
 }
+/* Swipe actions are shaped like the card they sit under: same 8px vertical inset and
+   16px corners, so as the card slides they're revealed from behind its edge as a
+   rounded pill rather than a full-height square button flush to the screen edge.
+   (The options are siblings of .postitem inside ion-item-sliding, not descendants.) */
+ion-item-sliding ion-item-option {
+  margin: 8px 6px;
+  border-radius: 16px;
+  --border-radius: 16px;
+  overflow: hidden;
+  font-weight: 600;
+  min-width: 76px;
+}
 .phead {
   display: flex;
   align-items: center;

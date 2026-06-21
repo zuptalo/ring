@@ -444,11 +444,25 @@ async function confirmDelete(): Promise<void> {
   background: transparent;
 }
 .comments .citem {
-  --background: transparent;
+  /* Opaque tinted row surface (the app's standard row wash, matching the post card)
+     rather than transparent, so that as the row slides back it slides OVER the swipe
+     action and hides it — otherwise the action shows through the row and then blinks
+     out when the slider collapses. */
+  --background: var(--ion-item-background);
   --padding-start: 0;
   --inner-padding-end: 0;
   --min-height: 0;
   align-items: flex-start;
+}
+/* Match the swipe-to-delete action to the comment row: a rounded, vertically-inset
+   pill that's revealed from behind the row as it slides, not a tall square button. */
+.comments ion-item-option {
+  margin: 6px 0 6px 8px;
+  border-radius: 12px;
+  --border-radius: 12px;
+  overflow: hidden;
+  font-weight: 600;
+  min-width: 72px;
 }
 .comments .cavatar {
   width: 32px;
