@@ -50,11 +50,11 @@
               :class="{ mine: myEmoji === e }"
               :aria-label="'React ' + e"
               @click="react(e)"
-            >{{ e }}</button>
+            ><Emoji :emoji="e" /></button>
           </div>
           <ul v-if="grouped.length" class="rlist">
             <li v-for="g in grouped" :key="g.emoji">
-              <span class="e">{{ g.emoji }}</span>
+              <Emoji class="e" :emoji="g.emoji" />
               <span class="who">{{ g.who }}</span>
             </li>
           </ul>
@@ -108,6 +108,7 @@ import {
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { trashOutline } from 'ionicons/icons';
+import Emoji from '@/components/Emoji.vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import {
   getPost, getContact, getMedia, deletePost,
@@ -129,7 +130,9 @@ const authorAvatar = ref('');
 const authorUsername = ref<string | undefined>(undefined);
 const mediaUrl = ref<string | undefined>(undefined);
 
-const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+// The same canonical quick-react set the chat uses (rendered via the Noto Emoji
+// component for visual + animation consistency).
+const EMOJIS = ['👍', '❤️', '😂', '😮', '🙏'];
 const reactions = useLiveQuery(() => listPostReactions(postId), ['postEngagement'], [] as PostEngagement[]);
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
 
