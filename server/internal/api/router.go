@@ -119,8 +119,12 @@ type PostStore interface {
 	DeletePost(ctx context.Context, author, id string) error
 	CanSeePost(ctx context.Context, postID, user string) (bool, error)
 	PostAudience(ctx context.Context, postID string) ([]string, error)
+	PostAuthor(ctx context.Context, postID string) (string, error)
 	SubmitEngagement(ctx context.Context, postID, id, actor, kind, payload string) error
+	EngagementActor(ctx context.Context, postID, engID string) (string, error)
 	ListEngagement(ctx context.Context, postID string) ([]store.PostEngagementRow, error)
+	RecordView(ctx context.Context, postID, viewer string) error
+	ListViews(ctx context.Context, postID string) ([]store.PostView, error)
 }
 
 // Handlers carries the dependencies the HTTP handlers need.
@@ -234,6 +238,8 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	mux.Handle("DELETE /v1/posts/{id}", authMW(http.HandlerFunc(h.deletePost)))
 	mux.Handle("POST /v1/posts/{id}/engagement", authMW(http.HandlerFunc(h.submitEngagement)))
 	mux.Handle("GET /v1/posts/{id}/engagement", authMW(http.HandlerFunc(h.listEngagement)))
+	mux.Handle("POST /v1/posts/{id}/view", authMW(http.HandlerFunc(h.recordView)))
+	mux.Handle("GET /v1/posts/{id}/views", authMW(http.HandlerFunc(h.listViews)))
 
 	// Public in-network directory: discover any member, fetch one profile, update
 	// your own profile, and (legacy) claim a username. The literal /me/* patterns

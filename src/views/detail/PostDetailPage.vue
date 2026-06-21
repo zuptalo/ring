@@ -60,7 +60,40 @@
           </ul>
         </div>
 
-        <!-- Comments and the viewer list arrive with US6/US7. -->
+        <!-- Comments (audience-visible thread). -->
+        <div class="comments">
+          <h3>Comments</h3>
+          <ul v-if="comments.length" class="clist">
+            <li v-for="c in comments" :key="c.id">
+              <div class="cmeta">
+                <span class="cname">{{ nameOf(c.actor) }}</span>
+                <span class="ctime">{{ ago(c.at) }}</span>
+                <button v-if="canModerate(c)" class="cdel" aria-label="Delete comment" @click="removeComment(c)">
+                  <ion-icon :icon="trashOutline" />
+                </button>
+              </div>
+              <p class="ctext">{{ c.text }}</p>
+            </li>
+          </ul>
+          <p v-else class="empty">No comments yet.</p>
+          <div class="cinput">
+            <ion-textarea
+              :auto-grow="true"
+              :rows="1"
+              placeholder="Add a comment…"
+              dir="auto"
+              :value="commentText"
+              @ion-input="onComment"
+            />
+            <ion-button size="small" :disabled="!commentText.trim()" @click="sendComment">Post</ion-button>
+          </div>
+        </div>
+
+        <!-- Author-only: who viewed this post (seen-receipts gated). -->
+        <div v-if="post.outgoing && viewers.length" class="viewers">
+          <h3>Viewed by</h3>
+          <p>{{ viewers.map(nameOf).join(', ') }}</p>
+        </div>
       </div>
       <div v-else class="missing">This post is no longer available.</div>
     </ion-content>
@@ -71,7 +104,7 @@
 import { computed, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
-  IonContent, IonAvatar, IonIcon, onIonViewWillEnter, onIonViewWillLeave, alertController,
+  IonContent, IonAvatar, IonIcon, IonTextarea, onIonViewWillEnter, onIonViewWillLeave, alertController,
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { trashOutline } from 'ionicons/icons';
@@ -79,6 +112,7 @@ import { useLiveQuery } from '@/composables/useLiveQuery';
 import {
   getPost, getContact, getMedia, deletePost,
   listPostReactions, reactToPost, syncEngagement, listContacts,
+  listPostComments, commentOnPost, deleteComment, recordPostView, listPostViews,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { useSelfProfile } from '@/composables/useSelfProfile';
@@ -118,6 +152,33 @@ function react(emoji: string): void {
   void reactToPost(postId, emoji);
 }
 
+const nameOf = (actorId: string): string => {
+  if (actorId === selfId) return 'You';
+  return contacts.value.find((c) => c.id === actorId)?.name ?? 'Someone';
+};
+
+// Comments thread.
+const comments = useLiveQuery(() => listPostComments(postId), ['postEngagement'], [] as PostEngagement[]);
+const commentText = ref('');
+function onComment(e: CustomEvent): void {
+  commentText.value = (e.detail as { value?: string | null }).value ?? '';
+}
+async function sendComment(): Promise<void> {
+  const t = commentText.value.trim();
+  if (!t) return;
+  commentText.value = '';
+  await commentOnPost(postId, t);
+}
+function canModerate(c: PostEngagement): boolean {
+  return c.actor === selfId || !!post.value?.outgoing;
+}
+function removeComment(c: PostEngagement): void {
+  void deleteComment(postId, c.id);
+}
+
+// Author-only view list.
+const viewers = ref<string[]>([]);
+
 onIonViewWillEnter(async () => {
   void syncEngagement(postId); // refresh reactions from the server
   post.value = await getPost(postId);
@@ -136,6 +197,12 @@ onIonViewWillEnter(async () => {
     authorAvatar.value = c?.avatar ?? '';
     authorUsername.value = c?.username;
   }
+  // Views: record ours on someone else's post; load the list on our own.
+  if (post.value.outgoing) {
+    viewers.value = await listPostViews(postId);
+  } else {
+    void recordPostView(postId);
+  }
 });
 
 onIonViewWillLeave(() => {
@@ -150,6 +217,13 @@ function initial(name: string): string {
 }
 function when(ts: number): string {
   return new Date(ts).toLocaleString();
+}
+function ago(ts: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
 }
 
 async function confirmDelete(): Promise<void> {
@@ -266,6 +340,73 @@ async function confirmDelete(): Promise<void> {
 .reactions .rlist .who {
   color: var(--ion-color-medium);
   font-size: 14px;
+}
+.comments {
+  margin-top: 24px;
+}
+.comments h3,
+.viewers h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+.comments .clist {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.comments .clist li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
+}
+.comments .cmeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.comments .cname {
+  font-weight: 600;
+  font-size: 14px;
+}
+.comments .ctime {
+  color: var(--ion-color-medium);
+  font-size: 12px;
+}
+.comments .cdel {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--ion-color-medium);
+  cursor: pointer;
+  font-size: 16px;
+}
+.comments .ctext {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+.comments .empty {
+  color: var(--ion-color-medium);
+  font-size: 14px;
+}
+.comments .cinput {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.comments .cinput ion-textarea {
+  flex: 1;
+  --background: var(--ion-color-step-100, rgba(120, 120, 128, 0.1));
+  --padding-start: 12px;
+  --padding-end: 12px;
+  border-radius: 18px;
+}
+.viewers {
+  margin-top: 20px;
+  color: var(--ion-color-medium);
+  font-size: 14px;
+}
+.viewers p {
+  margin: 0;
 }
 .missing {
   padding: 56px 24px;

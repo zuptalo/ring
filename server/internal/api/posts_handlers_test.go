@@ -42,10 +42,42 @@ func (c *fakePostConn) OutgoingRequests(context.Context, string) ([]store.Connec
 type fakePostStore struct {
 	posts map[string]store.NewPost
 	eng   map[string][]store.PostEngagementRow
+	views map[string][]string
 }
 
 func newFakePostStore() *fakePostStore {
-	return &fakePostStore{posts: map[string]store.NewPost{}, eng: map[string][]store.PostEngagementRow{}}
+	return &fakePostStore{
+		posts: map[string]store.NewPost{},
+		eng:   map[string][]store.PostEngagementRow{},
+		views: map[string][]string{},
+	}
+}
+func (f *fakePostStore) PostAuthor(_ context.Context, postID string) (string, error) {
+	return f.posts[postID].Author, nil
+}
+func (f *fakePostStore) EngagementActor(_ context.Context, postID, engID string) (string, error) {
+	for _, e := range f.eng[postID] {
+		if e.ID == engID {
+			return e.Actor, nil
+		}
+	}
+	return "", nil
+}
+func (f *fakePostStore) RecordView(_ context.Context, postID, viewer string) error {
+	for _, v := range f.views[postID] {
+		if v == viewer {
+			return nil
+		}
+	}
+	f.views[postID] = append(f.views[postID], viewer)
+	return nil
+}
+func (f *fakePostStore) ListViews(_ context.Context, postID string) ([]store.PostView, error) {
+	out := make([]store.PostView, 0, len(f.views[postID]))
+	for _, v := range f.views[postID] {
+		out = append(out, store.PostView{Viewer: v})
+	}
+	return out, nil
 }
 func (f *fakePostStore) CreatePost(_ context.Context, p store.NewPost) error {
 	f.posts[p.ID] = p
@@ -226,6 +258,79 @@ func TestEngagementAudienceOnly(t *testing.T) {
 	}
 	if len(resp.Items) != 1 || resp.Items[0].Actor != bobID || resp.Items[0].Payload != "SEALED" {
 		t.Errorf("engagement = %+v, want one from bob with opaque payload", resp.Items)
+	}
+}
+
+// TestCommentTombstoneAuthz: a commenter may remove their own comment and the post
+// author may remove any, but a third audience member may not (FR-034).
+func TestCommentTombstoneAuthz(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice") // post author
+	tokB, bobID, _ := registerNamed(t, srv, "bob")      // commenter
+	tokC, carolID, _ := registerNamed(t, srv, "carol")  // other audience member
+	conn.befriend(aliceID, bobID)
+	conn.befriend(aliceID, carolID)
+
+	post := `{"id":"` + postID + `","blobId":"cap1","envelopes":[` +
+		`{"recipient":"` + bobID + `","wrappedKey":"WK"},{"recipient":"` + carolID + `","wrappedKey":"WK2"}]}`
+	do(t, srv, http.MethodPost, "/v1/posts", tokA, post)
+
+	const commentID = "33333333-3333-3333-3333-333333333333"
+	do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB,
+		`{"id":"`+commentID+`","kind":"comment","payload":"SEALED"}`)
+
+	tomb := func(tok, id string) int {
+		return do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tok,
+			`{"id":"`+id+`","kind":"tombstone","target":"`+commentID+`"}`).Code
+	}
+	// Carol (neither the commenter nor the post author) may NOT remove Bob's comment.
+	if code := tomb(tokC, "44444444-4444-4444-4444-444444444444"); code != http.StatusForbidden {
+		t.Errorf("carol tombstone = %d, want 403", code)
+	}
+	// Bob (the commenter) may remove his own comment.
+	if code := tomb(tokB, "55555555-5555-5555-5555-555555555555"); code != http.StatusCreated {
+		t.Errorf("bob tombstone own = %d, want 201", code)
+	}
+	// Alice (the post author) may remove any comment.
+	if code := tomb(tokA, "66666666-6666-6666-6666-666666666666"); code != http.StatusCreated {
+		t.Errorf("alice tombstone any = %d, want 201", code)
+	}
+}
+
+// TestPostViewsAuthorOnly: a viewer's view is recorded and only the author can read
+// the view list (FR-037).
+func TestPostViewsAuthorOnly(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	do(t, srv, http.MethodPost, "/v1/posts", tokA,
+		`{"id":"`+postID+`","blobId":"cap1","envelopes":[{"recipient":"`+bobID+`","wrappedKey":"WK"}]}`)
+
+	// Bob views the post.
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/view", tokB, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("view status = %d, want 204", rr.Code)
+	}
+	// Bob (not the author) cannot read the view list.
+	if rr := do(t, srv, http.MethodGet, "/v1/posts/"+postID+"/views", tokB, ""); rr.Code != http.StatusForbidden {
+		t.Errorf("bob list views = %d, want 403", rr.Code)
+	}
+	// Alice (the author) sees Bob in the list.
+	rr := do(t, srv, http.MethodGet, "/v1/posts/"+postID+"/views", tokA, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("alice list views = %d, want 200", rr.Code)
+	}
+	var resp struct {
+		Views []struct {
+			Viewer string `json:"viewer"`
+		} `json:"views"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if len(resp.Views) != 1 || resp.Views[0].Viewer != bobID {
+		t.Errorf("views = %+v, want [bob]", resp.Views)
 	}
 }
 

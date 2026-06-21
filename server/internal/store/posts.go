@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Social Wall persistence (spec 0003). The server holds only opaque ciphertext +
@@ -149,6 +152,69 @@ type PostEngagementRow struct {
 	Kind      string
 	Payload   string
 	CreatedMs int64
+}
+
+// PostAuthor returns a post's author id (or "" if the post is gone).
+func (s *Store) PostAuthor(ctx context.Context, postID string) (string, error) {
+	var author string
+	err := s.pool.QueryRow(ctx, `SELECT author::text FROM posts WHERE id = $1`, postID).Scan(&author)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return author, nil
+}
+
+// EngagementActor returns who authored a given engagement item on a post (or "" if not
+// found) — used to authorize a tombstone (a commenter may delete their own comment).
+func (s *Store) EngagementActor(ctx context.Context, postID, engID string) (string, error) {
+	var actor string
+	err := s.pool.QueryRow(ctx,
+		`SELECT actor::text FROM post_engagement WHERE id = $1 AND post_id = $2`, engID, postID).Scan(&actor)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	return actor, nil
+}
+
+// RecordView records that `viewer` saw a post (idempotent), delivered to the author
+// only. Gated client-side by the viewer's seen-receipts setting.
+func (s *Store) RecordView(ctx context.Context, postID, viewer string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO post_views (post_id, viewer) VALUES ($1, $2) ON CONFLICT (post_id, viewer) DO NOTHING`,
+		postID, viewer)
+	return err
+}
+
+// PostView is one viewer of a post (author-only).
+type PostView struct {
+	Viewer   string
+	ViewedMs int64
+}
+
+// ListViews returns a post's viewers (the handler restricts this to the post author).
+func (s *Store) ListViews(ctx context.Context, postID string) ([]PostView, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT viewer::text, (extract(epoch from viewed_at)*1000)::bigint
+		   FROM post_views WHERE post_id = $1 ORDER BY viewed_at DESC`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PostView
+	for rows.Next() {
+		var v PostView
+		if err := rows.Scan(&v.Viewer, &v.ViewedMs); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // ListEngagement returns all engagement on a post, oldest-first (the caller must

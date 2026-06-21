@@ -150,8 +150,9 @@ func (h *Handlers) listPosts(w http.ResponseWriter, r *http.Request) {
 
 type engagementReq struct {
 	ID      string `json:"id"`
-	Kind    string `json:"kind"`    // reaction | comment | tombstone
-	Payload string `json:"payload"` // opaque, sealed under K_post
+	Kind    string `json:"kind"`             // reaction | comment | tombstone
+	Payload string `json:"payload"`          // opaque, sealed under K_post
+	Target  string `json:"target,omitempty"` // tombstone: the engagement id being removed
 }
 
 func validEngagementKind(k string) bool {
@@ -173,8 +174,17 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req engagementReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil ||
-		!uuidRE.MatchString(req.ID) || !validEngagementKind(req.Kind) || req.Payload == "" {
+	tombstone := false
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err == nil {
+		tombstone = req.Kind == "tombstone"
+	} else {
+		httpx.Error(w, http.StatusBadRequest, "invalid engagement")
+		return
+	}
+	// A tombstone removes a target engagement and needs no payload; reaction/comment
+	// carry a sealed payload.
+	if !uuidRE.MatchString(req.ID) || !validEngagementKind(req.Kind) ||
+		(!tombstone && req.Payload == "") || (tombstone && !uuidRE.MatchString(req.Target)) {
 		httpx.Error(w, http.StatusBadRequest, "invalid engagement")
 		return
 	}
@@ -187,7 +197,27 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "not in this post's audience")
 		return
 	}
-	if err := h.Posts.SubmitEngagement(r.Context(), postID, req.ID, uid, req.Kind, req.Payload); err != nil {
+	// Moderation: only the original author of the targeted engagement, or the POST's
+	// author, may tombstone it (FR-034).
+	if tombstone {
+		postAuthor, err1 := h.Posts.PostAuthor(r.Context(), postID)
+		engActor, err2 := h.Posts.EngagementActor(r.Context(), postID, req.Target)
+		if err1 != nil || err2 != nil {
+			httpx.Error(w, http.StatusInternalServerError, "could not authorize")
+			return
+		}
+		if uid != postAuthor && uid != engActor {
+			httpx.Error(w, http.StatusForbidden, "cannot remove this item")
+			return
+		}
+	}
+	// A tombstone carries its (cleartext) target engagement id in place of a sealed
+	// payload, so recipients know which item to remove.
+	payload := req.Payload
+	if tombstone {
+		payload = req.Target
+	}
+	if err := h.Posts.SubmitEngagement(r.Context(), postID, req.ID, uid, req.Kind, payload); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not submit engagement")
 		return
 	}
@@ -250,6 +280,74 @@ func (h *Handlers) listEngagement(w http.ResponseWriter, r *http.Request) {
 		items = append(items, engagementOut{ID: e.ID, Actor: e.Actor, Kind: e.Kind, Payload: e.Payload, CreatedAt: e.CreatedMs})
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// recordView (POST /v1/posts/{id}/view) records that the caller viewed a post,
+// delivered to the author only. The caller sends this ONLY when their seen-receipts
+// setting is on (client-gated). Must be in the post's audience.
+func (h *Handlers) recordView(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	postID := r.PathValue("id")
+	if !uuidRE.MatchString(postID) {
+		httpx.Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	canSee, err := h.Posts.CanSeePost(r.Context(), postID, uid)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not authorize")
+		return
+	}
+	if !canSee {
+		httpx.Error(w, http.StatusForbidden, "not in this post's audience")
+		return
+	}
+	if err := h.Posts.RecordView(r.Context(), postID, uid); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not record view")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type viewOut struct {
+	Viewer   string `json:"viewer"`
+	ViewedAt int64  `json:"viewedAt"`
+}
+
+// listViews (GET /v1/posts/{id}/views) returns who viewed a post — author-only.
+func (h *Handlers) listViews(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	postID := r.PathValue("id")
+	if !uuidRE.MatchString(postID) {
+		httpx.Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	author, err := h.Posts.PostAuthor(r.Context(), postID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not authorize")
+		return
+	}
+	if author == "" || author != uid {
+		httpx.Error(w, http.StatusForbidden, "only the author can see views")
+		return
+	}
+	rows, err := h.Posts.ListViews(r.Context(), postID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not list views")
+		return
+	}
+	views := make([]viewOut, 0, len(rows))
+	for _, v := range rows {
+		views = append(views, viewOut{Viewer: v.Viewer, ViewedAt: v.ViewedMs})
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"views": views})
 }
 
 // deletePost (DELETE /v1/posts/{id}) deletes the caller's own post (author-only; the

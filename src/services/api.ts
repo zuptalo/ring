@@ -126,7 +126,7 @@ export async function deletePost(id: string): Promise<void> {
  *  out to the post's audience. Only audience members (or the author) may engage. */
 export async function submitEngagement(
   postId: string,
-  req: { id: string; kind: string; payload: string },
+  req: { id: string; kind: string; payload?: string; target?: string },
 ): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement`, {
     method: 'POST',
@@ -134,6 +134,25 @@ export async function submitEngagement(
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`submit engagement failed: ${res.status}`);
+}
+
+/** Record that the caller viewed a post (delivered to the author only). Sent only when
+ *  the caller's seen-receipts setting is on. Idempotent. */
+export async function recordPostView(postId: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/view`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`record view failed: ${res.status}`);
+}
+
+/** Author-only: who viewed a post. */
+export async function listPostViews(postId: string): Promise<{ views: { viewer: string; viewedAt: number }[] }> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/views`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`list views failed: ${res.status}`);
+  return (await res.json()) as { views: { viewer: string; viewedAt: number }[] };
 }
 
 /** One opaque engagement item; `payload` is sealed under K_post (decrypted client-side). */

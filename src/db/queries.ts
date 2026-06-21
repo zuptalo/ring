@@ -10,7 +10,7 @@ import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, type ServerPost } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
 import { buildPost, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
@@ -2214,7 +2214,13 @@ export async function reactToPost(postId: string, emoji: string): Promise<void> 
   }
 }
 
-/** Pull + decrypt engagement for a post and apply it (reactions only, LWW per actor). */
+interface CommentData {
+  text: string;
+  at: number;
+}
+
+/** Pull + decrypt a post's engagement and apply it: reactions (LWW per actor),
+ *  comments (append, keyed by engagement id), and tombstones (mark target removed). */
 export async function syncEngagement(postId: string): Promise<void> {
   if (!isUnlockedNow()) return;
   const post = await get<Post>('posts', postId);
@@ -2222,20 +2228,38 @@ export async function syncEngagement(postId: string): Promise<void> {
   try {
     const { items } = await apiListEngagement(postId);
     for (const it of items) {
-      if (it.kind !== 'reaction') continue;
-      let data: ReactionData;
-      try {
-        data = openPostEngagement<ReactionData>(post.postKey, it.payload);
-      } catch {
-        continue; // not decryptable / tampered
+      if (it.kind === 'reaction') {
+        let data: ReactionData;
+        try {
+          data = openPostEngagement<ReactionData>(post.postKey, it.payload);
+        } catch {
+          continue;
+        }
+        const id = `${postId}:reaction:${it.actor}`;
+        const existing = await get<PostEngagement>('postEngagement', id);
+        if (existing && existing.at >= data.at) continue; // LWW
+        await put<PostEngagement>('postEngagement', {
+          id, postId, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at,
+          deleted: data.remove || undefined, updatedAt: now(),
+        });
+      } else if (it.kind === 'comment') {
+        if (await get<PostEngagement>('postEngagement', it.id)) continue; // already have it
+        let data: CommentData;
+        try {
+          data = openPostEngagement<CommentData>(post.postKey, it.payload);
+        } catch {
+          continue;
+        }
+        await put<PostEngagement>('postEngagement', {
+          id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at, updatedAt: now(),
+        });
+      } else if (it.kind === 'tombstone') {
+        // The tombstone's payload is the (cleartext) target engagement id.
+        const target = await get<PostEngagement>('postEngagement', it.payload);
+        if (target && !target.deleted) {
+          await put<PostEngagement>('postEngagement', { ...target, deleted: true, updatedAt: now() });
+        }
       }
-      const id = `${postId}:reaction:${it.actor}`;
-      const existing = await get<PostEngagement>('postEngagement', id);
-      if (existing && existing.at >= data.at) continue; // LWW
-      await put<PostEngagement>('postEngagement', {
-        id, postId, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at,
-        deleted: data.remove || undefined, updatedAt: now(),
-      });
     }
   } catch {
     /* offline / transient */
@@ -2246,6 +2270,75 @@ export async function syncEngagement(postId: string): Promise<void> {
 export async function listPostReactions(postId: string): Promise<PostEngagement[]> {
   const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
   return rows.filter((e) => e.type === 'reaction' && !e.deleted).sort((a, b) => a.at - b.at);
+}
+
+/** Live comments on a post (non-deleted), oldest-first (timestamp then id tiebreak). */
+export async function listPostComments(postId: string): Promise<PostEngagement[]> {
+  const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
+  return rows
+    .filter((e) => e.type === 'comment' && !e.deleted)
+    .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+}
+
+/** Add an audience-visible comment to a post (sealed under K_post; fanned out). */
+export async function commentOnPost(postId: string, text: string): Promise<void> {
+  const self = getSelfUserId();
+  const post = await get<Post>('posts', postId);
+  const body = text.trim();
+  if (!self || !post?.postKey || !body) return;
+  const at = now();
+  const engId = uid(); // local id == server engagement id, so tombstones can target it
+  await put<PostEngagement>('postEngagement', {
+    id: engId, postId, type: 'comment', actor: self, text: body, at, updatedAt: at,
+  });
+  try {
+    await apiSubmitEngagement(postId, {
+      id: engId,
+      kind: 'comment',
+      payload: sealPostEngagement(post.postKey, { text: body, at } satisfies CommentData),
+    });
+  } catch {
+    /* offline — local stands; a later sync reconciles */
+  }
+}
+
+/** Remove a comment (the commenter's own, or any comment if you authored the post).
+ *  Best-effort propagation: delivered copies can't be cryptographically recalled. */
+export async function deleteComment(postId: string, commentId: string): Promise<void> {
+  const target = await get<PostEngagement>('postEngagement', commentId);
+  if (target) await put<PostEngagement>('postEngagement', { ...target, deleted: true, updatedAt: now() });
+  try {
+    await apiSubmitEngagement(postId, { id: uid(), kind: 'tombstone', target: commentId });
+  } catch {
+    /* offline — local stands; a later sync reconciles */
+  }
+}
+
+/* ---- view receipts (spec 0003, US7) ---- */
+
+/** Record that we viewed a post — only if our seen-receipts setting is on (reciprocal
+ *  with the chat setting) and it isn't our own post. */
+export async function recordPostView(postId: string): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post || post.outgoing) return;
+  if (!(await getSetting<boolean>('privacy.seenReceipts', true))) return;
+  try {
+    await apiRecordPostView(postId);
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Author-only view list for our own post, gated by our own seen-receipts setting
+ *  (reciprocity). Returns viewer ids (resolve names in the UI). */
+export async function listPostViews(postId: string): Promise<string[]> {
+  if (!(await getSetting<boolean>('privacy.seenReceipts', true))) return [];
+  try {
+    const { views } = await apiListPostViews(postId);
+    return views.map((v) => v.viewer);
+  } catch {
+    return [];
+  }
 }
 
 /* ---- account termination ("Ghosted") ---- */
