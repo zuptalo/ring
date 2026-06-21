@@ -38,6 +38,17 @@ const maxPostEnvelopes = 1024
 // server-side regardless of the client (spec 0003, FR-012).
 const maxPostLifetime = 72 * time.Hour
 
+// FR-008 anti-flood volume limits. Enforced using ONLY routing metadata the server
+// already holds (counts of recent rows by author / actor / post) — never by reading
+// content. The windows are deliberately generous: a real person never hits them, but
+// a script that tries to flood a Wall or a viewer is throttled with 429.
+const (
+	rateWindowSec            = 60 // sliding window for all three caps
+	maxPostsPerWindow        = 20 // posts a single author may create per window
+	maxEngagementsPerWindow  = 60 // reactions+comments a single actor may submit per window
+	maxCommentsPerPostWindow = 10 // comments one actor may add to ONE post per window
+)
+
 // notifyPost sends a content-free "a post is waiting" nudge to a recipient: a live WS
 // frame if connected, and an offline push tickle otherwise. Carries no content — the
 // client reconciles via GET /v1/posts — preserving the zero-knowledge boundary.
@@ -85,6 +96,12 @@ func (h *Handlers) createPost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		envs = append(envs, store.NewPostEnvelope{Recipient: e.Recipient, WrappedKey: e.WrappedKey})
+	}
+	// FR-008 per-author post-rate limit (anti-flood) — counts only the author's own
+	// recent posts, no content involved.
+	if n, err := h.Posts.RecentPostCount(r.Context(), uid, rateWindowSec); err == nil && n >= maxPostsPerWindow {
+		httpx.Error(w, http.StatusTooManyRequests, "posting too fast, please slow down")
+		return
 	}
 	// Wall posts are ALWAYS ephemeral: clamp the expiry to at most 72h from now,
 	// whatever the client sent (including "no expiry"). This guarantees the
@@ -243,6 +260,21 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 	if !canSee {
 		httpx.Error(w, http.StatusForbidden, "not in this post's audience")
 		return
+	}
+	// FR-008 anti-flood volume limits (skip tombstones — removing your own item is not
+	// flooding). Per-actor engagement rate guards a viewer against being spammed; the
+	// per-post comment rate guards a single Wall thread. Counts only, never content.
+	if !tombstone {
+		if n, err := h.Posts.RecentEngagementCount(r.Context(), uid, rateWindowSec); err == nil && n >= maxEngagementsPerWindow {
+			httpx.Error(w, http.StatusTooManyRequests, "engaging too fast, please slow down")
+			return
+		}
+		if req.Kind == "comment" {
+			if n, err := h.Posts.RecentCommentCount(r.Context(), postID, uid, rateWindowSec); err == nil && n >= maxCommentsPerPostWindow {
+				httpx.Error(w, http.StatusTooManyRequests, "commenting too fast, please slow down")
+				return
+			}
+		}
 	}
 	// Moderation: only the original author of the targeted engagement, or the POST's
 	// author, may tombstone it (FR-034).

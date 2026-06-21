@@ -119,6 +119,9 @@ type PostStore interface {
 	DeletePost(ctx context.Context, author, id string) error
 	RemovePostRecipient(ctx context.Context, postID, author, recipient string) (bool, error)
 	ListRevocations(ctx context.Context, recipient string) ([]string, error)
+	RecentPostCount(ctx context.Context, author string, withinSec int) (int, error)
+	RecentEngagementCount(ctx context.Context, actor string, withinSec int) (int, error)
+	RecentCommentCount(ctx context.Context, postID, actor string, withinSec int) (int, error)
 	CanSeePost(ctx context.Context, postID, user string) (bool, error)
 	PostAudience(ctx context.Context, postID string) ([]string, error)
 	PostAuthor(ctx context.Context, postID string) (string, error)

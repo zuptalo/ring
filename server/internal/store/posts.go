@@ -159,6 +159,42 @@ func (s *Store) ListRevocations(ctx context.Context, recipient string) ([]string
 	return out, rows.Err()
 }
 
+/* ---- FR-008 anti-flood counts (routing metadata only, never content) ---- */
+
+// RecentPostCount returns how many posts `author` created within the last withinSec
+// seconds — the input to the per-author post-rate limit.
+func (s *Store) RecentPostCount(ctx context.Context, author string, withinSec int) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM posts
+		  WHERE author::text = $1 AND created_at > now() - make_interval(secs => $2)`,
+		author, withinSec).Scan(&n)
+	return n, err
+}
+
+// RecentEngagementCount returns how many engagement items `actor` submitted (any post)
+// within the last withinSec seconds — the input to the per-user engagement-rate limit.
+func (s *Store) RecentEngagementCount(ctx context.Context, actor string, withinSec int) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM post_engagement
+		  WHERE actor::text = $1 AND created_at > now() - make_interval(secs => $2)`,
+		actor, withinSec).Scan(&n)
+	return n, err
+}
+
+// RecentCommentCount returns how many comments `actor` added to ONE post within the
+// last withinSec seconds — the input to the per-post comment-rate limit.
+func (s *Store) RecentCommentCount(ctx context.Context, postID, actor string, withinSec int) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM post_engagement
+		  WHERE post_id = $1 AND actor::text = $2 AND kind = 'comment'
+		    AND created_at > now() - make_interval(secs => $3)`,
+		postID, actor, withinSec).Scan(&n)
+	return n, err
+}
+
 /* ---- engagement (reactions/comments) — US4 ---- */
 
 // CanSeePost reports whether `user` is in a post's audience (has an envelope) or is its

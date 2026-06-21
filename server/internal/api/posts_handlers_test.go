@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -157,6 +158,39 @@ func (f *fakePostStore) RemovePostRecipient(_ context.Context, postID, author, r
 }
 func (f *fakePostStore) ListRevocations(_ context.Context, recipient string) ([]string, error) {
 	return f.revoked[recipient], nil
+}
+
+// Rate-limit counts (FR-008). The fake ignores the time window and counts everything
+// the author/actor has done in the test — each test uses a fresh store, so this is
+// enough to exercise the handler's cap logic.
+func (f *fakePostStore) RecentPostCount(_ context.Context, author string, _ int) (int, error) {
+	n := 0
+	for _, p := range f.posts {
+		if p.Author == author {
+			n++
+		}
+	}
+	return n, nil
+}
+func (f *fakePostStore) RecentEngagementCount(_ context.Context, actor string, _ int) (int, error) {
+	n := 0
+	for _, rows := range f.eng {
+		for _, e := range rows {
+			if e.Actor == actor {
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+func (f *fakePostStore) RecentCommentCount(_ context.Context, postID, actor string, _ int) (int, error) {
+	n := 0
+	for _, e := range f.eng[postID] {
+		if e.Actor == actor && e.Kind == "comment" {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func newPostTestServer(conn ConnectionStore, posts PostStore) http.Handler {
@@ -424,5 +458,82 @@ func TestRemovePostRecipientAuthorOnly(t *testing.T) {
 	}
 	if len(resp.Revoked) != 1 || resp.Revoked[0] != postID {
 		t.Errorf("revoked = %v, want [%s]", resp.Revoked, postID)
+	}
+}
+
+// pid builds a distinct valid UUID for the i-th post/engagement in a loop.
+func pid(prefix int, i int) string {
+	return fmt.Sprintf("%08x-%04x-1111-1111-111111111111", prefix, i)
+}
+
+// TestCreatePostRateLimited: FR-008 per-author post-rate limit — once an author exceeds
+// maxPostsPerWindow recent posts, further creates are rejected with 429.
+func TestCreatePostRateLimited(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	_, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	for i := 0; i < maxPostsPerWindow; i++ {
+		body := `{"id":"` + pid(1, i) + `","blobId":"cap","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+		if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+			t.Fatalf("post %d status = %d, want 201; body=%s", i, rr.Code, rr.Body.String())
+		}
+	}
+	// One past the cap → throttled.
+	body := `{"id":"` + pid(1, maxPostsPerWindow) + `","blobId":"cap","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-cap post status = %d, want 429; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestEngagementRateLimited: FR-008 per-user engagement-rate limit — once an actor
+// exceeds maxEngagementsPerWindow recent items, further engagement is rejected with 429.
+func TestEngagementRateLimited(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", rr.Code)
+	}
+	for i := 0; i < maxEngagementsPerWindow; i++ {
+		eng := `{"id":"` + pid(2, i) + `","kind":"reaction","payload":"SEALED"}`
+		if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, eng); rr.Code != http.StatusCreated {
+			t.Fatalf("engagement %d status = %d, want 201; body=%s", i, rr.Code, rr.Body.String())
+		}
+	}
+	eng := `{"id":"` + pid(2, maxEngagementsPerWindow) + `","kind":"reaction","payload":"SEALED"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, eng); rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-cap engagement status = %d, want 429; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestCommentRateLimitedPerPost: FR-008 per-post comment-rate limit — one actor can add
+// at most maxCommentsPerPostWindow comments to a single post per window.
+func TestCommentRateLimitedPerPost(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", rr.Code)
+	}
+	for i := 0; i < maxCommentsPerPostWindow; i++ {
+		eng := `{"id":"` + pid(3, i) + `","kind":"comment","payload":"SEALED"}`
+		if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, eng); rr.Code != http.StatusCreated {
+			t.Fatalf("comment %d status = %d, want 201; body=%s", i, rr.Code, rr.Body.String())
+		}
+	}
+	eng := `{"id":"` + pid(3, maxCommentsPerPostWindow) + `","kind":"comment","payload":"SEALED"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, eng); rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-cap comment status = %d, want 429; body=%s", rr.Code, rr.Body.String())
 	}
 }

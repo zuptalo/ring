@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -27,31 +28,48 @@ func (f *fakeConnNotifier) NotifyConn(_ context.Context, userID string) {
 	f.conn = append(f.conn, userID)
 }
 func (f *fakeConnNotifier) woke(userID string) bool {
+	return f.wokeCount(userID) > 0
+}
+func (f *fakeConnNotifier) wokeCount(userID string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	n := 0
 	for _, u := range f.conn {
 		if u == userID {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // fakeConn is a minimal in-memory ConnectionsStore for handler tests. It records
 // the last withdraw so the test can assert the handler called the store correctly.
 type fakeConn struct {
 	withdrawn map[[2]string]bool // (requester,target) -> true
+	rejected  map[[2]string]bool // (requester,target) declined → suppressed (FR-007)
 }
 
-func newFakeConn() *fakeConn { return &fakeConn{withdrawn: map[[2]string]bool{}} }
+func newFakeConn() *fakeConn {
+	return &fakeConn{withdrawn: map[[2]string]bool{}, rejected: map[[2]string]bool{}}
+}
 
-func (c *fakeConn) Connected(_ context.Context, _, _ string) (bool, error)          { return false, nil }
-func (c *fakeConn) ConnectionState(_ context.Context, _, _ string) (string, error)  { return "", nil }
-func (c *fakeConn) RequestConnection(_ context.Context, _, _ string) (string, error) {
+func (c *fakeConn) Connected(_ context.Context, _, _ string) (bool, error)         { return false, nil }
+func (c *fakeConn) ConnectionState(_ context.Context, _, _ string) (string, error) { return "", nil }
+
+// RequestConnection models FR-007: once requester→target was declined it stays
+// "rejected" (the cooldown is always "active" in tests since no wall-clock passes), so
+// the handler won't re-notify the target. Otherwise it's a fresh pending request.
+func (c *fakeConn) RequestConnection(_ context.Context, requester, target string) (string, error) {
+	if c.rejected[[2]string{requester, target}] {
+		return "rejected", nil
+	}
 	return "pending", nil
 }
-func (c *fakeConn) AcceptConnection(_ context.Context, _, _ string) error        { return nil }
-func (c *fakeConn) RejectConnection(_ context.Context, _, _ string, _ bool) error { return nil }
+func (c *fakeConn) AcceptConnection(_ context.Context, _, _ string) error { return nil }
+func (c *fakeConn) RejectConnection(_ context.Context, target, requester string, _ bool) error {
+	c.rejected[[2]string{requester, target}] = true
+	return nil
+}
 func (c *fakeConn) WithdrawConnection(_ context.Context, requester, target string) error {
 	c.withdrawn[[2]string{requester, target}] = true
 	return nil
@@ -134,6 +152,39 @@ func TestRejectWakesRequester(t *testing.T) {
 	}
 	if !notif.woke(aliceID) {
 		t.Errorf("reject: expected alice (%s) to be woken via NotifyConn", aliceID)
+	}
+}
+
+// TestFriendRequestSuppressedAfterDecline verifies FR-007: once a request is declined,
+// a repeat request from the same sender is suppressed (state stays "rejected") and the
+// target is NOT notified again, so a declined sender cannot harass via re-requests.
+func TestFriendRequestSuppressedAfterDecline(t *testing.T) {
+	notif := &fakeConnNotifier{}
+	srv, _, _ := newConnTestServerN(newFakeConn(), notif)
+
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+
+	// alice → request bob (pending): bob is woken once.
+	if rr := do(t, srv, http.MethodPost, "/v1/connections/request", tokA, `{"target":"`+bobID+`"}`); rr.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	// bob declines alice (no block).
+	if rr := do(t, srv, http.MethodPost, "/v1/connections/reject", tokB, `{"requester":"`+aliceID+`"}`); rr.Code != http.StatusNoContent {
+		t.Fatalf("reject status = %d, want 204; body=%s", rr.Code, rr.Body.String())
+	}
+	wokeBefore := notif.wokeCount(bobID)
+
+	// alice re-requests bob: suppressed → state "rejected", bob NOT woken again.
+	rr := do(t, srv, http.MethodPost, "/v1/connections/request", tokA, `{"target":"`+bobID+`"}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("re-request status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Body.String(); !strings.Contains(got, `"rejected"`) {
+		t.Errorf("re-request after decline: state = %s, want rejected (suppressed)", got)
+	}
+	if after := notif.wokeCount(bobID); after != wokeBefore {
+		t.Errorf("re-request after decline woke bob again (%d → %d); FR-007 expects suppression", wokeBefore, after)
 	}
 }
 

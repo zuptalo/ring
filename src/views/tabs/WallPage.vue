@@ -299,7 +299,7 @@ function tomorrow9am(): number {
 async function openMuteMenu(): Promise<void> {
   const buttons = [
     { text: 'Mute for 1 hour', handler: () => void mute(Date.now() + 60 * 60_000) },
-    { text: 'Mute for 8 hours', handler: () => void mute(Date.now() + 8 * 60 * 60_000) },
+    { text: 'Mute for 24 hours', handler: () => void mute(Date.now() + 24 * 60 * 60_000) },
     { text: 'Mute until 9 AM tomorrow', handler: () => void mute(tomorrow9am()) },
     { text: 'Mute until I turn it back on', handler: () => void mute(Number.MAX_SAFE_INTEGER) },
   ];

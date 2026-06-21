@@ -57,15 +57,31 @@ func (s *Store) RequestConnection(ctx context.Context, requester, target string)
 	} else if connected {
 		return "accepted", nil
 	}
+	// FR-007 anti-harassment: a request that was REJECTED stays rejected during a
+	// cooldown, so a declined sender cannot re-open (and re-notify) by spamming new
+	// requests. After the cooldown a fresh request is allowed again. updated_at is NOT
+	// bumped while suppressed, so repeated attempts don't extend the window — it expires
+	// rejectCooldownSecs after the actual rejection. An accepted pair stays accepted.
 	var state string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO connections (requester, target, state) VALUES ($1, $2, 'pending')
 		 ON CONFLICT (requester, target) DO UPDATE SET
-		     state = CASE WHEN connections.state = 'accepted' THEN 'accepted' ELSE 'pending' END,
-		     updated_at = now()
-		 RETURNING state`, requester, target).Scan(&state)
+		     state = CASE
+		         WHEN connections.state = 'accepted' THEN 'accepted'
+		         WHEN connections.state = 'rejected'
+		              AND connections.updated_at > now() - make_interval(secs => $3) THEN 'rejected'
+		         ELSE 'pending' END,
+		     updated_at = CASE
+		         WHEN connections.state = 'rejected'
+		              AND connections.updated_at > now() - make_interval(secs => $3) THEN connections.updated_at
+		         ELSE now() END
+		 RETURNING state`, requester, target, rejectCooldownSecs).Scan(&state)
 	return state, err
 }
+
+// rejectCooldownSecs is how long a declined request is suppressed before the same
+// sender may try again (FR-007). 24 hours.
+const rejectCooldownSecs = 24 * 60 * 60
 
 // AcceptConnection marks the request requester->target accepted (target accepts).
 func (s *Store) AcceptConnection(ctx context.Context, target, requester string) error {
