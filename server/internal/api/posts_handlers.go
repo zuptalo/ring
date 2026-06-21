@@ -306,17 +306,22 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 			if u == uid {
 				continue
 			}
+			// The content-free WS nudge fires for ALL engagement (live reconciliation —
+			// a reaction appearing/disappearing must reach online viewers immediately).
 			if h.Hub != nil {
 				if b, e := json.Marshal(map[string]any{"t": "post-engagement", "post": postID}); e == nil {
 					h.Hub.Send(u, b)
 				}
 			}
-			// Wall engagement is a WALL event, so wake offline devices with the POST
-			// tickle, NOT the message tickle: the service worker's post handler suppresses
-			// the system notification whenever a window client exists (so an in-app user
-			// only gets the live in-app update, never a web-push), and a closed device
-			// shows the Wall notification — not a mislabeled "New message".
-			if h.Notifier != nil {
+			// A web push (which can WAKE an offline device) fires ONLY for a new comment.
+			// Reactions (add AND remove) and comment tombstones sync live but never wake a
+			// device — removing a reaction or deleting a comment isn't worth a notification,
+			// and the server can't tell an add from a remove anyway (the `remove` flag is
+			// sealed under K_post), so gating on the unsealed `kind` is the zero-knowledge-
+			// clean way to silence them. It's a WALL event, so use the POST tickle (the SW
+			// suppresses the system notification when a window client exists, and a closed
+			// device shows the Wall notification — not a mislabeled "New message").
+			if h.Notifier != nil && req.Kind == "comment" {
 				h.Notifier.NotifyPost(r.Context(), u)
 			}
 		}
