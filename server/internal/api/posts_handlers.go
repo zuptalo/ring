@@ -311,8 +311,13 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 					h.Hub.Send(u, b)
 				}
 			}
+			// Wall engagement is a WALL event, so wake offline devices with the POST
+			// tickle, NOT the message tickle: the service worker's post handler suppresses
+			// the system notification whenever a window client exists (so an in-app user
+			// only gets the live in-app update, never a web-push), and a closed device
+			// shows the Wall notification — not a mislabeled "New message".
 			if h.Notifier != nil {
-				h.Notifier.Notify(r.Context(), u)
+				h.Notifier.NotifyPost(r.Context(), u)
 			}
 		}
 	}
