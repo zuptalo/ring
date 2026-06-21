@@ -9,10 +9,15 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
 /**
- * An emoji that plays its Noto Lottie animation a few times when it scrolls into
- * view, then freezes. The Lottie is served from our own server's cached proxy
- * (/v1/emoji/...), never a third-party CDN. Falls back to the native glyph when
- * animation is off, the emoji has no Noto Lottie, or the server can't reach it.
+ * An emoji that plays its Noto Lottie animation in a continuous loop WHILE it is
+ * visible on screen, and PAUSES the moment it scrolls off — so a long feed full of
+ * animated emoji only ever animates the handful actually in view (bounded CPU). The
+ * Lottie is served from our own server's cached proxy (/v1/emoji/...), never a
+ * third-party CDN. Falls back to the native glyph when animation is off, the emoji has
+ * no Noto Lottie, or the server can't reach it.
+ *
+ * (`plays` is accepted but ignored — playback is now visibility-driven, not count-
+ * capped — so existing callers don't break.)
  */
 const props = withDefaults(
   defineProps<{ emoji: string; animate?: boolean; large?: boolean; plays?: number }>(),
@@ -26,15 +31,18 @@ const showNative = ref(true); // native glyph shows until (and unless) Lottie lo
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let anim: any = null;
 let observer: IntersectionObserver | null = null;
-let started = false;
+let loading = false;
+let visible = false;
 
 function codepoints(): string {
   return [...props.emoji].map((c) => (c.codePointAt(0) ?? 0).toString(16)).join('_');
 }
 
-async function play(): Promise<void> {
-  if (started || !props.animate || !anchor.value) return;
-  started = true;
+// Lazily load the Lottie on first visibility, then loop it. Subsequent visibility
+// changes just resume/pause the already-loaded animation.
+async function ensureLoaded(): Promise<void> {
+  if (anim || loading || !props.animate || !anchor.value) return;
+  loading = true;
   try {
     // Self-hosted: proxied + cached by our own server (never a third-party CDN).
     const res = await fetch(`/v1/emoji/${codepoints()}/lottie.json`);
@@ -46,37 +54,41 @@ async function play(): Promise<void> {
       container: anchor.value,
       renderer: 'svg',
       loop: true,
-      autoplay: true,
+      autoplay: false,
       animationData: data,
     });
     showNative.value = false;
-    let loops = 0;
-    anim.addEventListener('loopComplete', () => {
-      loops += 1;
-      if (loops >= props.plays) anim.pause(); // freeze on the final frame
-    });
+    if (visible) anim.play(); // it became (or stayed) visible while loading
   } catch {
     /* keep the native glyph */
+  } finally {
+    loading = false;
+  }
+}
+
+function setVisible(on: boolean): void {
+  visible = on;
+  if (on) {
+    void ensureLoaded();
+    anim?.play();
+  } else {
+    anim?.pause();
   }
 }
 
 onMounted(() => {
   if (!props.animate) return;
   if (!('IntersectionObserver' in window)) {
-    void play();
+    setVisible(true); // no IO → just play (rare/legacy)
     return;
   }
+  // Keep observing (don't disconnect) so the emoji pauses/resumes as it scrolls in
+  // and out of view, not just on the first appearance.
   observer = new IntersectionObserver(
     (entries) => {
-      for (const e of entries) {
-        if (e.isIntersecting) {
-          void play();
-          observer?.disconnect();
-          observer = null;
-        }
-      }
+      for (const e of entries) setVisible(e.isIntersecting);
     },
-    { threshold: 0.5 },
+    { threshold: 0.1 },
   );
   if (rootEl.value) observer.observe(rootEl.value);
 });
