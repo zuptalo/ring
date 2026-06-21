@@ -63,12 +63,34 @@
               </span>
             </div>
 
-            <!-- Media + body (tap → full post). -->
-            <div v-if="p.mediaUrl" class="thumb" @click="open(p.id)">
-              <img v-if="p.kind === 'image'" :src="p.mediaUrl" :alt="p.body || 'Photo'" />
-              <video v-else-if="p.kind === 'video'" :src="p.mediaUrl" muted playsinline preload="metadata" />
-              <div v-else class="voice"><ion-icon :icon="micOutline" /> Voice message</div>
-              <ion-icon v-if="p.kind === 'video'" class="play" :icon="playCircleOutline" />
+            <!-- Media + body (tap → full post). The image/video box reserves the
+                 media's aspect ratio with a skeleton so the feed doesn't jump as it
+                 decodes; a placeholder box also shows before the blob URL resolves. -->
+            <div
+              v-if="p.kind === 'image' || p.kind === 'video'"
+              class="thumb"
+              :class="{ loading: !mediaLoaded[p.id] }"
+              :style="mediaStyle(p)"
+              @click="open(p.id)"
+            >
+              <img
+                v-if="p.kind === 'image' && p.mediaUrl"
+                :src="p.mediaUrl"
+                :alt="p.body || 'Photo'"
+                @load="onMediaLoad(p.id)"
+              />
+              <video
+                v-else-if="p.kind === 'video' && p.mediaUrl"
+                :src="p.mediaUrl"
+                muted
+                playsinline
+                preload="metadata"
+                @loadeddata="onMediaLoad(p.id)"
+              />
+              <ion-icon v-if="p.kind === 'video' && p.mediaUrl" class="play" :icon="playCircleOutline" />
+            </div>
+            <div v-else-if="p.mediaUrl && p.kind === 'voice'" class="voice" @click="open(p.id)">
+              <ion-icon :icon="micOutline" /> Voice message
             </div>
             <p v-if="p.body" class="body" @click="open(p.id)"><EmojiText :text="p.body" /></p>
 
@@ -166,6 +188,16 @@ const router = useRouter();
 const { wall, now, loaded } = useWall();
 const { openQuick } = useReactionPicker();
 const draft = reactive<Record<string, string>>({});
+
+// Reserve the media's aspect ratio (fallback 4:3) so the card height is fixed before
+// the image/video decodes; track which have loaded to drop the skeleton shimmer.
+const mediaLoaded = reactive<Record<string, boolean>>({});
+function onMediaLoad(id: string): void {
+  mediaLoaded[id] = true;
+}
+function mediaStyle(p: WallPost): Record<string, string> {
+  return { aspectRatio: p.mediaW && p.mediaH ? `${p.mediaW} / ${p.mediaH}` : '4 / 3' };
+}
 
 // Search across a post's body, its comments, and the author's name/username.
 const search = ref('');
@@ -399,20 +431,38 @@ async function confirmDeletePost(post: WallPost): Promise<void> {
 .thumb {
   position: relative;
   cursor: pointer;
+  width: 100%;
+  max-height: 60vh;
+  overflow: hidden;
+  background: var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
+}
+/* Skeleton shimmer while the media hasn't painted yet (box height is already
+   reserved by aspect-ratio, so nothing jumps when it loads). */
+.thumb.loading {
+  animation: thumb-pulse 1.4s ease-in-out infinite;
+}
+@keyframes thumb-pulse {
+  0%, 100% {
+    background-color: var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
+  }
+  50% {
+    background-color: var(--ion-color-step-200, rgba(120, 120, 128, 0.22));
+  }
 }
 .thumb img,
 .thumb video {
   width: 100%;
-  max-height: 360px;
+  height: 100%;
   object-fit: cover;
   display: block;
 }
-.thumb .voice {
+.voice {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 14px;
   color: var(--ion-color-medium);
+  cursor: pointer;
 }
 .thumb .play {
   position: absolute;

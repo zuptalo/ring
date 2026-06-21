@@ -2034,6 +2034,8 @@ export async function createPost(opts: {
   // keep a local Media copy so the author renders it immediately.
   const kind: Post['kind'] = opts.media ? opts.media.kind : 'text';
   let mediaId: string | undefined;
+  let mediaW: number | undefined;
+  let mediaH: number | undefined;
   const payload: PostPayload = { kind, body };
   if (opts.media) {
     // Posts only ship SD or HD (never the original): compress images/videos to the
@@ -2045,7 +2047,10 @@ export async function createPost(opts: {
         : opts.media.kind === 'video'
           ? await compressVideo(opts.media.blob, q)
           : opts.media.blob;
-    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { quality: q });
+    // Dimensions → reserve an aspect-ratio box in the feed (no layout jump).
+    if (opts.media.kind === 'image') ({ width: mediaW, height: mediaH } = await readImageMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
+    else if (opts.media.kind === 'video') ({ width: mediaW, height: mediaH } = await readVideoMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
+    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { width: mediaW, height: mediaH, quality: q });
     payload.media = ref;
     mediaId = uid();
     await put<Media>('media', {
@@ -2075,6 +2080,8 @@ export async function createPost(opts: {
     kind,
     body,
     mediaId,
+    mediaW,
+    mediaH,
     audience: opts.audience,
     createdAt,
     lastActivityAt: createdAt,
@@ -2130,6 +2137,8 @@ async function receivePost(sp: ServerPost): Promise<void> {
     kind: payload.kind,
     body: payload.body,
     mediaId,
+    mediaW: payload.media?.width,
+    mediaH: payload.media?.height,
     createdAt: sp.createdAt,
     lastActivityAt: Math.max(prev?.lastActivityAt ?? 0, sp.createdAt),
     expiresAt: sp.expiresAt,

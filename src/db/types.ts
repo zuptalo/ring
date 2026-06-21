@@ -352,6 +352,10 @@ export interface Post {
   kind: 'text' | 'voice' | 'video' | 'image';
   body?: string; // decrypted text / caption
   mediaId?: string; // local `media` store id for voice/video/image
+  // Pixel dimensions of the attachment, so the feed can reserve an aspect-ratio box
+  // (with a skeleton) before the media loads — no layout jump as it decodes.
+  mediaW?: number;
+  mediaH?: number;
   audience?: 'friends' | 'close'; // own posts only (display-only on received)
   createdAt: number; // author timestamp
   // Last activity = max(createdAt, latest reaction/comment). Drives feed ordering (a

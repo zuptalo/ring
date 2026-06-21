@@ -28,11 +28,11 @@
           </div>
         </div>
 
-        <div v-if="mediaUrl" class="media">
+        <div v-if="mediaUrl && (post.kind === 'image' || post.kind === 'video')" class="media" :style="mediaBoxStyle">
           <img v-if="post.kind === 'image'" :src="mediaUrl" :alt="post.body || 'Photo'" />
-          <video v-else-if="post.kind === 'video'" :src="mediaUrl" controls playsinline />
-          <audio v-else-if="post.kind === 'voice'" :src="mediaUrl" controls />
+          <video v-else :src="mediaUrl" controls playsinline />
         </div>
+        <audio v-else-if="mediaUrl && post.kind === 'voice'" class="vaudio" :src="mediaUrl" controls />
 
         <p v-if="post.body" class="body"><EmojiText :text="post.body" big /></p>
 
@@ -148,6 +148,12 @@ const authorAvatar = ref('');
 const authorUsername = ref<string | undefined>(undefined);
 const mediaUrl = ref<string | undefined>(undefined);
 const leftLabel = computed(() => (post.value?.expiresAt ? timeLeft(post.value.expiresAt, Date.now()) : ''));
+// Reserve the media's aspect ratio so the page doesn't reflow as it decodes.
+const mediaBoxStyle = computed(() =>
+  post.value?.mediaW && post.value?.mediaH
+    ? { aspectRatio: `${post.value.mediaW} / ${post.value.mediaH}` }
+    : {},
+);
 
 const reactions = useLiveQuery(() => listPostReactions(postId), ['postEngagement'], [] as PostEngagement[]);
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
@@ -334,17 +340,22 @@ async function confirmDelete(): Promise<void> {
 }
 .media {
   margin: 16px 0 0;
+  width: 100%;
+  max-height: 70vh;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #000;
 }
 .media img,
 .media video {
   width: 100%;
-  max-height: 60vh;
-  border-radius: 14px;
+  height: 100%;
   object-fit: contain;
-  background: #000;
+  display: block;
 }
-.media audio {
+.vaudio {
   width: 100%;
+  margin: 16px 0 0;
 }
 .body {
   margin: 16px 0 0;
