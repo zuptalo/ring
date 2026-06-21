@@ -21,7 +21,7 @@ import { watch } from 'vue';
 import { useRegisterSW } from 'virtual:pwa-register/vue';
 import { toastController, modalController } from '@ionic/vue';
 import { fetchServerConfig } from '@/services/api';
-import { computeDelta, displayVersion, type ReleaseNote } from '@/services/release-notes';
+import { computeDelta, userFacing, displayVersion, type ReleaseNote } from '@/services/release-notes';
 import WhatsNewSheet from '@/components/WhatsNewSheet.vue';
 
 /** Present the "What's new" sheet with the per-user delta. Resolves true when the
@@ -107,8 +107,10 @@ export function useAppUpdate(): void {
     const shown = displayVersion(version);
     const label = version && version !== running ? `Ring ${shown} is ready to install.` : 'A new version of Ring is ready.';
 
-    // Per-user delta: the changes the incoming build adds that this one didn't have.
-    const delta = computeDelta(incoming, __RELEASE_NOTES__ ?? []);
+    // Per-user delta: the changes the incoming build adds that this one didn't have,
+    // narrowed to what a regular user cares about (features/fixes, not CI/test/docs/
+    // chores) so "What's new" reads as improvements rather than a developer changelog.
+    const delta = userFacing(computeDelta(incoming, __RELEASE_NOTES__ ?? []));
 
     const buttons: { text: string; role?: 'cancel'; handler?: () => boolean | void }[] = [];
     if (delta.length) {

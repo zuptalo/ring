@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeDelta, prettify, displayVersion, type ReleaseNote } from './release-notes';
+import { computeDelta, userFacing, isUserFacing, prettify, displayVersion, type ReleaseNote } from './release-notes';
 
 const note = (sha: string, subject = 'feat: x'): ReleaseNote => ({ sha, subject });
 
@@ -46,6 +46,39 @@ describe('computeDelta', () => {
   });
 });
 
+describe('isUserFacing / userFacing', () => {
+  it('keeps features, fixes, perf, and non-conforming subjects', () => {
+    expect(isUserFacing(note('a', 'feat(wall): add voice posts'))).toBe(true);
+    expect(isUserFacing(note('b', 'fix(call): no echo'))).toBe(true);
+    expect(isUserFacing(note('c', 'perf: faster boot'))).toBe(true);
+    expect(isUserFacing(note('d', 'security: rotate keys'))).toBe(true); // unknown type → shown
+    expect(isUserFacing(note('e', 'just some words'))).toBe(true); // non-conforming → shown
+  });
+
+  it('drops build/CI/test/docs/chore/refactor/style/deps noise', () => {
+    for (const t of ['build', 'chore', 'ci', 'deps', 'docs', 'refactor', 'style', 'test']) {
+      expect(isUserFacing(note('x', `${t}(scope): whatever`))).toBe(false);
+      expect(isUserFacing(note('x', `${t}: whatever`))).toBe(false);
+    }
+  });
+
+  it('filters a mixed list down to the user-facing notes, order preserved', () => {
+    const notes = [
+      note('a', 'feat: shiny new thing'),
+      note('b', 'ci: bump actions'),
+      note('c', 'fix: a real bug'),
+      note('d', 'docs: update readme'),
+      note('e', 'chore: tidy'),
+    ];
+    expect(userFacing(notes).map((n) => n.sha)).toEqual(['a', 'c']);
+  });
+
+  it('is case-insensitive on the type', () => {
+    expect(isUserFacing(note('x', 'CI: uppercase noise'))).toBe(false);
+    expect(isUserFacing(note('y', 'Feat: uppercase feature'))).toBe(true);
+  });
+});
+
 describe('prettify', () => {
   it('drops the conventional-commit prefix and capitalizes', () => {
     expect(prettify('fix(sync): stabilize message status')).toBe('Stabilize message status');
@@ -55,6 +88,18 @@ describe('prettify', () => {
   it('handles a breaking-change marker and scopes', () => {
     expect(prettify('feat!: drop legacy API')).toBe('Drop legacy API');
     expect(prettify('refactor(call/sfu): simplify routing')).toBe('Simplify routing');
+  });
+
+  it('strips a trailing spec / issue / PR reference', () => {
+    expect(prettify('feat(notifications): reliable push + redesigned in-app notifications (spec 1015)')).toBe(
+      'Reliable push + redesigned in-app notifications',
+    );
+    expect(prettify('fix(media): correct thumbnails (#248)')).toBe('Correct thumbnails');
+    expect(prettify('feat: add search (gh-12)')).toBe('Add search');
+  });
+
+  it('keeps a meaningful trailing parenthetical that is not a reference', () => {
+    expect(prettify('feat: add dark mode (finally)')).toBe('Add dark mode (finally)');
   });
 
   it('passes a non-conforming subject through, just capitalized', () => {
