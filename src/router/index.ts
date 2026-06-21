@@ -152,6 +152,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/detail/PostDetailPage.vue'),
   },
   {
+    path: '/wall/muted',
+    component: () => import('@/views/detail/WallManagePage.vue'),
+  },
+  {
     path: '/settings/close-friends',
     component: () => import('@/views/detail/CloseFriendsPage.vue'),
   },

@@ -2232,6 +2232,22 @@ export async function isWallUserMuted(id: string): Promise<boolean> {
   return !!(await getWallMutedUsers())[id];
 }
 
+/** Everyone you've muted or hidden on the Wall, with their profile, for the manage
+ *  screen (so a hidden user — whose posts no longer appear — can be un-hidden). */
+export async function listWallManagedUsers(): Promise<
+  { id: string; name: string; avatar: string; muted: boolean; hidden: boolean }[]
+> {
+  const hidden = await getWallHiddenUsers();
+  const muted = await getWallMutedUsers();
+  const ids = new Set([...Object.keys(hidden), ...Object.keys(muted)]);
+  const out: { id: string; name: string; avatar: string; muted: boolean; hidden: boolean }[] = [];
+  for (const id of ids) {
+    const c = await getContact(id);
+    out.push({ id, name: c?.name ?? 'Someone', avatar: c?.avatar ?? '', muted: !!muted[id], hidden: !!hidden[id] });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** Temporary global mute of Wall notifications until this epoch ms (0 = not muted). */
 export async function getWallMuteUntil(): Promise<number> {
   return (await getSetting<number>('wall.muteUntil', 0)) ?? 0;

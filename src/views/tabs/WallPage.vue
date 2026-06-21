@@ -249,7 +249,11 @@ async function openMuteMenu(): Promise<void> {
   if (muted.value) buttons.unshift({ text: 'Turn notifications back on', handler: () => void mute(0) });
   const sheet = await actionSheetController.create({
     header: 'Wall notifications',
-    buttons: [...buttons, { text: 'Cancel', role: 'cancel' }],
+    buttons: [
+      ...buttons,
+      { text: 'Hidden & muted people', handler: () => void router.push('/wall/muted') },
+      { text: 'Cancel', role: 'cancel' },
+    ],
   });
   await sheet.present();
 }
