@@ -99,6 +99,43 @@ func devProxy(cfg config.Config) string {
 	return ""
 }
 
+// lastAnnouncedVersionKey is the app_meta key holding the version we last broadcast a
+// "what's new" push for.
+const lastAnnouncedVersionKey = "last_announced_version"
+
+// announceVersionIfChanged broadcasts a version-announcement push when the running
+// build's version differs from the one we last announced, then records the new version.
+// It is deliberately conservative about WHEN it actually pushes:
+//   - skip the local `dev` build (no real release to announce);
+//   - skip when there is no previously recorded version (fresh DB / first run after this
+//     feature ships) — record a baseline instead, so we never blast on a rollout deploy;
+//   - skip an unchanged version (a plain restart);
+// otherwise record the new version and fan the tickle out in the background (never
+// blocking boot). Best-effort: a metadata error just logs and skips the broadcast.
+func announceVersionIfChanged(ctx context.Context, st *store.Store, notifier *push.Notifier, version string) {
+	if version == "" || version == "dev" || notifier == nil {
+		return
+	}
+	prev, err := st.GetAppMeta(ctx, lastAnnouncedVersionKey)
+	if err != nil {
+		slog.Warn("version announce: read last-announced failed", "err", err)
+		return
+	}
+	if prev == version {
+		return // same version (restart) → nothing to announce
+	}
+	if err := st.SetAppMeta(ctx, lastAnnouncedVersionKey, version); err != nil {
+		slog.Warn("version announce: record version failed", "err", err)
+		return
+	}
+	if prev == "" {
+		slog.Info("version announce: recording baseline (no broadcast on first run)", "version", version)
+		return
+	}
+	slog.Info("version announce: new version deployed, broadcasting", "from", prev, "to", version)
+	go notifier.BroadcastVersion(context.Background())
+}
+
 // ensureBootstrapInvite guarantees an empty system can onboard its first user.
 // When there are no accounts, it reuses an existing claimable invitation code or
 // mints one, and surfaces it in the logs. The code lives in the invitations
@@ -280,6 +317,15 @@ func run() error {
 		st,
 	)
 
+	// Version-announcement push: when a freshly-deployed binary boots with a version
+	// different from the one we last announced, fan a content-free "new version" tickle
+	// out to every subscription. The SW turns it into a user-friendly "what's new" from
+	// the public /v1/config. Deduped via app_meta so a plain restart (same version)
+	// stays silent; skipped on the very first run after this feature ships (no recorded
+	// previous version → we can't claim a "change", and don't want to blast on the
+	// rollout deploy itself) and for local `dev` builds.
+	announceVersionIfChanged(ctx, st, notifier, version)
+
 	// Embedded TURN/STUN relay for WebRTC calls. Media is relayed opaquely (the
 	// server never sees DTLS keys). In dev it runs plaintext on TurnListen; in
 	// prod it terminates TLS (TURNS) for the SNI host the L4 proxy routes to us.
@@ -363,7 +409,7 @@ func run() error {
 
 	handler := api.NewRouter(&api.Handlers{
 		Store: st, Directory: st, Contacts: st, Connections: st, Blocks: st, Keys: st, Relay: st, Hub: hub, Blobs: st, Sync: st, Push: st,
-		Invites: st, Notifier: notifier, RequireConnection: cfg.RequireConnection,
+		Invites: st, Posts: st, Notifier: notifier, RequireConnection: cfg.RequireConnection,
 		PublicURL: cfg.PublicURL, VapidPublicKey: secs.VapidPublicKey, MaxBlobBytes: cfg.MaxBlobBytes,
 		Version:      version,
 		ReleaseNotes: decodeReleaseNotes(releaseNotesB64),

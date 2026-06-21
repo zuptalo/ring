@@ -99,6 +99,7 @@ type Notifier interface {
 	Notify(ctx context.Context, userID string)
 	NotifyCall(ctx context.Context, userID string)
 	NotifyConn(ctx context.Context, userID string)
+	NotifyPost(ctx context.Context, userID string)
 }
 
 // frame is the wire shape. The relay only reads t/id/to/from/refId/messageId;

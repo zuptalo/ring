@@ -22,7 +22,7 @@ import {
   type TransportState,
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported } from '@/db/queries';
+import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, pruneLocalPost } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -296,6 +296,26 @@ function start(): void {
   transport.onMessage((f) => {
     // Connect-request notifications: re-read the authoritative state, and alert on a
     // new incoming request (so it surfaces like a friend request).
+    if (f.t === 'post-new') {
+      // A Wall post addressed to us arrived (spec 0003). Content-free nudge → pull,
+      // then surface an in-app banner ("X shared a photo").
+      void (async () => {
+        await syncPosts();
+        if (f.from) await notifyNewPost(f.from);
+      })();
+      return;
+    }
+    if (f.t === 'post-engagement') {
+      // A reaction landed on a post we can see → pull that post's engagement.
+      void syncEngagement(f.post);
+      return;
+    }
+    if (f.t === 'post-revoke') {
+      // The author revoked a post from us (e.g. dropped us from close friends) →
+      // remove our local copy immediately.
+      void pruneLocalPost(f.post);
+      return;
+    }
     if (f.t === 'connect-req') {
       void refreshConnections();
       // FR-012a: a brand-new requester isn't a contact yet → a generic, identity-safe
@@ -379,6 +399,11 @@ function start(): void {
   // vanish on both sides shortly after their timer elapses even mid-session.
   void sweepExpiredMessages();
   setInterval(() => void sweepExpiredMessages(), 30_000);
+  // Wall posts (spec 0003): pull any addressed to us, and sweep expired ones on the
+  // same cadence as disappearing messages so they vanish shortly after their timer.
+  void syncPosts();
+  void sweepExpiredPosts();
+  setInterval(() => void sweepExpiredPosts(), 30_000);
   // Periodically confirm downloaded media to senders (catches background auto-downloads in
   // chats we haven't opened), so they can free the blobs without waiting for a reconnect.
   setInterval(() => void sendDownloadedReceipts(), 30_000);
@@ -433,6 +458,7 @@ function start(): void {
         // connected flips to "Ghosted" on return (reconnect alone won't fire if
         // the socket stayed up). Cheap batch call; errors are swallowed.
         if (isUnlocked.value) void refreshContactStatuses();
+        if (isUnlocked.value) void syncPosts(); // catch Wall posts that arrived while away
         // Re-assert push on a warm reopen (no reconnect event fires), so a device
         // whose subscription silently lapsed while closed heals on foreground.
         // Throttled internally, so this is cheap to run every time.

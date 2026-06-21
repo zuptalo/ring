@@ -113,10 +113,14 @@ export async function withdrawConnect(userId: string): Promise<void> {
   await refreshConnections();
 }
 
-/** Unilaterally connect to a group co-member (membership = consent). Best-effort. */
+/** Unilaterally connect to a group co-member (membership = consent). Best-effort. A
+ *  linked connection is accepted server-side, so mark the peer connected locally too —
+ *  otherwise the local connected-peers ledger (which drives e.g. the Wall friends
+ *  audience, spec 0003) misses them. */
 export async function linkConnect(userId: string): Promise<void> {
   try {
     await apiLink(userId);
+    await markContactConnected(userId);
   } catch {
     /* best effort; a later interaction retries */
   }

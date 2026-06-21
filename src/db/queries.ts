@@ -10,11 +10,13 @@ import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
-import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob } from '@/services/media-transfer';
+import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
+import { buildPost, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
+import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
-import { isUnlockedNow } from '@/services/crypto/identity';
+import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive } from '@/services/notify';
 import { compressImage, compressVideo } from '@/services/media-encode';
@@ -29,7 +31,7 @@ import type {
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement,
 } from './types';
 
 // WhatsApp-style cap on pinned chats.
@@ -1950,6 +1952,608 @@ export async function markContactConnected(id: string): Promise<void> {
   if (map[id]) return;
   map[id] = true;
   await put<Setting<Record<string, boolean>>>('settings', { key: 'connectedPeers', value: map });
+}
+
+/** Accepted friends: contacts whose peer is in the connected-peers ledger (i.e. an
+ *  accepted connection), excluding blocked/ghosted peers. This is the audience source
+ *  for Wall posts (spec 0003) — "all friends". */
+export async function listFriends(): Promise<Contact[]> {
+  const connected = await getConnectedPeers();
+  const all = await getAll<Contact>('contacts');
+  return all.filter((c) => connected[c.id] && !c.blocked && !c.ghosted);
+}
+
+/** Close friends: the curated subset of friends flagged `closeFriend`. Author-private
+ *  (the flag never leaves the device); drives the "close friends" Wall audience. */
+export async function listCloseFriends(): Promise<Contact[]> {
+  return (await listFriends()).filter((c) => c.closeFriend);
+}
+
+/** Set/clear the author-private close-friend flag on a contact (spec 0003, US5).
+ *  Demoting someone (close → not) revokes your close-only posts from them: their key
+ *  envelopes are dropped server-side and their device prunes the local copies, so a
+ *  removed close friend can no longer see posts that were meant only for close friends. */
+export async function setCloseFriend(id: string, value: boolean): Promise<void> {
+  const c = await getContact(id);
+  if (!c || !!c.closeFriend === value) return;
+  await put<Contact>('contacts', { ...c, closeFriend: value, updatedAt: Date.now() });
+  if (!value) await revokeCloseFriendPosts(id);
+}
+
+/** Revoke every still-live close-only post we authored from `userId` (called when they
+ *  are removed from close friends). Best-effort + idempotent: the server drops their
+ *  envelope and records a revocation; a post they never received is a harmless no-op. */
+export async function revokeCloseFriendPosts(userId: string): Promise<void> {
+  const self = getSelfUserId();
+  if (!self) return;
+  const nowMs = now();
+  const closePosts = (await getAll<Post>('posts')).filter(
+    (p) => p.outgoing && p.audience === 'close' && (!p.expiresAt || p.expiresAt > nowMs),
+  );
+  for (const p of closePosts) {
+    await apiRemovePostRecipient(p.id, userId).catch(() => {});
+  }
+}
+
+/* ---- spec 0003: Wall posts ---- */
+
+// Author-chosen post lifetime → ttl (ms). Wall posts are ALWAYS ephemeral: nothing
+// lives longer than 72 hours, whatever its type (text/photo/video/voice). There is no
+// "keep" option, and the server independently clamps to MAX_POST_TTL_MS as a backstop.
+export const MAX_POST_TTL_MS = 72 * 60 * 60 * 1000;
+const POST_TTL_MS: Record<string, number> = {
+  '1h': 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '72h': MAX_POST_TTL_MS,
+};
+export type PostLifetime = '1h' | '24h' | '72h';
+
+// Cache each friend's X25519 identity public key (stable per account) so building a
+// post doesn't re-fetch (and re-consume a one-time prekey) for every post. Lazily
+// filled from the peer bundle; this key is the wrap target for K_post.
+async function peerPostKey(userId: string): Promise<Uint8Array | null> {
+  const cache = (await getSetting<Record<string, string>>('postPeerKeys', {})) ?? {};
+  if (cache[userId]) return b64urlToBytes(cache[userId]);
+  const bundle = await fetchPeerBundle(userId).catch(() => null);
+  if (!bundle) return null;
+  cache[userId] = bundle.xPub;
+  await setSetting('postPeerKeys', cache);
+  return b64urlToBytes(bundle.xPub);
+}
+
+/**
+ * Create a Wall post: seal the payload under a fresh per-post key, wrap that key to
+ * each audience member, upload the opaque blob, register the post server-side, then
+ * persist it locally so the author sees it immediately. The server only ever holds
+ * ciphertext + the per-recipient envelope set.
+ */
+export async function createPost(opts: {
+  body?: string;
+  audience: 'friends' | 'close';
+  lifetime: PostLifetime;
+  // Optional attachment (image/video/voice). When present, it is compressed to the
+  // chosen quality (SD or HD — never original), encrypted + uploaded, and the media-ref
+  // rides sealed inside the post payload.
+  media?: { blob: Blob; kind: 'image' | 'video' | 'voice'; name: string; durationSec?: number; quality?: 'sd' | 'hd' };
+}): Promise<Post> {
+  const self = getSelfUserId();
+  if (!self) throw new Error('not signed in');
+  const body = opts.body?.trim() || undefined;
+  if (!body && !opts.media) throw new Error('Nothing to post.');
+  const friends = opts.audience === 'close' ? await listCloseFriends() : await listFriends();
+  if (!friends.length) throw new Error('No audience — add friends first.');
+  const audience: AudienceMember[] = [];
+  for (const f of friends) {
+    const pub = await peerPostKey(f.id);
+    if (pub) audience.push({ userId: f.id, pubKey: pub });
+  }
+  if (!audience.length) throw new Error('No reachable audience for this post.');
+
+  // Encrypt + upload the attachment first (its key rides sealed in the payload), and
+  // keep a local Media copy so the author renders it immediately.
+  const kind: Post['kind'] = opts.media ? opts.media.kind : 'text';
+  let mediaId: string | undefined;
+  let mediaW: number | undefined;
+  let mediaH: number | undefined;
+  const payload: PostPayload = { kind, body };
+  if (opts.media) {
+    // Posts only ship SD or HD (never the original): compress images/videos to the
+    // chosen quality before upload; voice is left as-is.
+    const q = opts.media.quality ?? 'hd';
+    const toUpload =
+      opts.media.kind === 'image'
+        ? await compressImage(opts.media.blob, q)
+        : opts.media.kind === 'video'
+          ? await compressVideo(opts.media.blob, q)
+          : opts.media.blob;
+    // Dimensions → reserve an aspect-ratio box in the feed (no layout jump).
+    if (opts.media.kind === 'image') ({ width: mediaW, height: mediaH } = await readImageMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
+    else if (opts.media.kind === 'video') ({ width: mediaW, height: mediaH } = await readVideoMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
+    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { width: mediaW, height: mediaH, quality: q });
+    payload.media = ref;
+    mediaId = uid();
+    await put<Media>('media', {
+      id: mediaId,
+      kind: opts.media.kind,
+      mime: ref.mime,
+      name: ref.name,
+      size: ref.size,
+      blob: toUpload,
+      durationSec: ref.durationSec,
+      updatedAt: now(),
+    });
+  }
+
+  const built = buildPost(payload, audience);
+  const blobId = await uploadBlob(new Blob([built.blob as BlobPart]));
+  const id = uid();
+  const createdAt = now();
+  // The chosen window (1h/24h/72h), capped at 72h. Keep-alive later resets the expiry
+  // to now + this same window on each interaction.
+  const ttlMs = Math.min(POST_TTL_MS[opts.lifetime] ?? MAX_POST_TTL_MS, MAX_POST_TTL_MS);
+  const expiresAt = createdAt + ttlMs;
+  await apiCreatePost({ id, blobId, size: built.blob.length, expiresAt, ttlMs, envelopes: built.envelopes });
+  const post: Post = {
+    id,
+    author: self,
+    kind,
+    body,
+    mediaId,
+    mediaW,
+    mediaH,
+    audience: opts.audience,
+    createdAt,
+    lastActivityAt: createdAt,
+    expiresAt,
+    ttlMs,
+    outgoing: true,
+    postKey: built.postKey,
+    updatedAt: createdAt,
+  };
+  await put<Post>('posts', post);
+  return post;
+}
+
+// Persist a single received post: unwrap K_post with our identity key, open the
+// payload, store it. Own posts come back without an envelope (already local) and are
+// skipped; anything we can't open (not for us / tampered) is dropped silently.
+async function receivePost(sp: ServerPost): Promise<void> {
+  if (!sp.wrappedKey) return;
+  if (await get<Post>('posts', sp.id)) return;
+  const blob = await downloadBlob(sp.blobId);
+  if (!blob) return;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let payload: PostPayload;
+  let postKey: string;
+  try {
+    ({ payload, postKey } = openReceivedPost(bytes, sp.wrappedKey, getIdentityKeys().x.privateKey));
+  } catch {
+    return;
+  }
+  // Pull + decrypt the attachment (if any) and store it as a local Media record so the
+  // Wall renders it like any other media.
+  let mediaId: string | undefined;
+  if (payload.media && payload.kind !== 'text') {
+    const mblob = await receiveIncomingMedia(payload.media).catch(() => null);
+    if (mblob) {
+      mediaId = uid();
+      await put<Media>('media', {
+        id: mediaId,
+        kind: payload.kind,
+        mime: payload.media.mime,
+        name: payload.media.name,
+        size: payload.media.size,
+        blob: mblob,
+        durationSec: payload.media.durationSec,
+        updatedAt: now(),
+      });
+    }
+  }
+  const prev = await get<Post>('posts', sp.id);
+  await put<Post>('posts', {
+    id: sp.id,
+    author: sp.author,
+    kind: payload.kind,
+    body: payload.body,
+    mediaId,
+    mediaW: payload.media?.width,
+    mediaH: payload.media?.height,
+    createdAt: sp.createdAt,
+    lastActivityAt: Math.max(prev?.lastActivityAt ?? 0, sp.createdAt),
+    expiresAt: sp.expiresAt,
+    ttlMs: sp.ttlMs,
+    outgoing: false,
+    postKey,
+    updatedAt: now(),
+  });
+  // Pull any engagement (reactions/comments) that already exists on this post (also
+  // applies keep-alive from past interactions).
+  void syncEngagement(sp.id);
+}
+
+/** Pull new posts addressed to us and persist them (called on app open, on the
+ *  `post-new` WS nudge, and on reconnect). No-op while locked. */
+export async function syncPosts(): Promise<void> {
+  if (!isUnlockedNow()) return;
+  const cursor = (await getSetting<number>('postsCursor', 0)) ?? 0;
+  try {
+    const { posts, cursor: next, revoked } = await apiListPosts(cursor);
+    for (const sp of posts) await receivePost(sp);
+    // Posts the author revoked from us (e.g. they dropped us from close friends) —
+    // prune any local copy. Idempotent: an id we never had is a harmless no-op.
+    for (const id of revoked) await pruneLocalPost(id);
+    if (next > cursor) await setSetting('postsCursor', next);
+  } catch {
+    /* offline / transient — retried on the next nudge */
+  }
+}
+
+/** Remove a post and its engagement from this device only (no server call). Used by
+ *  the sweep, by revocation pulls, and by the live `post-revoke` nudge. Idempotent. */
+export async function pruneLocalPost(id: string): Promise<void> {
+  if (!(await get<Post>('posts', id))) return;
+  await remove('posts', id);
+  for (const e of await getByIndex<PostEngagement>('postEngagement', 'postId', id)) {
+    await remove('postEngagement', e.id);
+  }
+}
+
+/** Human label for what was shared, used in notifications. */
+function postShareLabel(kind: Post['kind']): string {
+  return kind === 'image'
+    ? 'shared a photo'
+    : kind === 'video'
+      ? 'shared a video'
+      : kind === 'voice'
+        ? 'shared a voice message'
+        : 'shared a post';
+}
+
+// Posts we've already notified about this session (avoids a repeat banner if the
+// `post-new` nudge fires again for the same post).
+const notifiedPostIds = new Set<string>();
+
+/** Surface an in-app banner / system notification for a freshly-arrived post from
+ *  `authorId` ("X shared a photo"). Called from the live `post-new` nudge, so it only
+ *  fires for genuinely new posts (a recency guard backs that up). */
+export async function notifyNewPost(authorId: string): Promise<void> {
+  // Respect notification controls: master toggle, a temporary global mute, and a
+  // per-user mute/hide.
+  if (!(await getSetting<boolean>('notifications.wall.show', true))) return;
+  if (await isWallTempMuted()) return;
+  if (await isWallUserMuted(authorId)) return;
+  if (await isWallUserHidden(authorId)) return;
+  const recent = (await getAll<Post>('posts'))
+    .filter((p) => p.author === authorId && !p.outgoing && !notifiedPostIds.has(p.id))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const p = recent[0];
+  if (!p || now() - p.createdAt > 5 * 60_000) return;
+  notifiedPostIds.add(p.id);
+  const c = await getContact(authorId);
+  void notifyIncoming({
+    kind: 'system',
+    name: c?.name ?? 'Someone',
+    body: postShareLabel(p.kind),
+    avatar: c?.avatar,
+    url: '/tabs/wall',
+  });
+}
+
+/* ---- Wall mute / hide controls (client-only ledgers) ---- */
+
+async function getWallLedger(key: string): Promise<Record<string, boolean>> {
+  return (await getSetting<Record<string, boolean>>(key, {})) ?? {};
+}
+async function setWallLedgerEntry(key: string, id: string, on: boolean): Promise<void> {
+  const map = await getWallLedger(key);
+  if (!!map[id] === on) return;
+  if (on) map[id] = true;
+  else delete map[id];
+  await setSetting(key, map);
+}
+
+/** Users whose posts are hidden from your Wall entirely. */
+export async function getWallHiddenUsers(): Promise<Record<string, boolean>> {
+  return getWallLedger('wall.hiddenUsers');
+}
+/** Users whose Wall notifications you've muted (their posts still show). */
+export async function getWallMutedUsers(): Promise<Record<string, boolean>> {
+  return getWallLedger('wall.mutedUsers');
+}
+export async function setWallUserHidden(id: string, hidden: boolean): Promise<void> {
+  await setWallLedgerEntry('wall.hiddenUsers', id, hidden);
+}
+export async function setWallUserMuted(id: string, muted: boolean): Promise<void> {
+  await setWallLedgerEntry('wall.mutedUsers', id, muted);
+}
+export async function isWallUserHidden(id: string): Promise<boolean> {
+  return !!(await getWallHiddenUsers())[id];
+}
+export async function isWallUserMuted(id: string): Promise<boolean> {
+  return !!(await getWallMutedUsers())[id];
+}
+
+/** Everyone you've muted or hidden on the Wall, with their profile, for the manage
+ *  screen (so a hidden user — whose posts no longer appear — can be un-hidden). */
+export async function listWallManagedUsers(): Promise<
+  { id: string; name: string; avatar: string; muted: boolean; hidden: boolean }[]
+> {
+  const hidden = await getWallHiddenUsers();
+  const muted = await getWallMutedUsers();
+  const ids = new Set([...Object.keys(hidden), ...Object.keys(muted)]);
+  const out: { id: string; name: string; avatar: string; muted: boolean; hidden: boolean }[] = [];
+  for (const id of ids) {
+    const c = await getContact(id);
+    out.push({ id, name: c?.name ?? 'Someone', avatar: c?.avatar ?? '', muted: !!muted[id], hidden: !!hidden[id] });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Temporary global mute of Wall notifications until this epoch ms (0 = not muted). */
+export async function getWallMuteUntil(): Promise<number> {
+  return (await getSetting<number>('wall.muteUntil', 0)) ?? 0;
+}
+export async function setWallMuteUntil(ts: number): Promise<void> {
+  await setSetting('wall.muteUntil', ts);
+}
+export async function isWallTempMuted(): Promise<boolean> {
+  return (await getWallMuteUntil()) > now();
+}
+
+/** Mark the Wall as seen (clears the unread-post badge). Called when the Wall is open. */
+export async function markWallSeen(): Promise<void> {
+  await setSetting('wall.lastSeenAt', now());
+}
+
+/** Count of received (non-own), non-expired posts newer than the last time the Wall was
+ *  seen — drives the Wall tab + app icon badge. Hidden users are excluded. */
+export async function wallUnreadCount(): Promise<number> {
+  const since = (await getSetting<number>('wall.lastSeenAt', 0)) ?? 0;
+  const nowMs = now();
+  const hidden = await getWallHiddenUsers();
+  return (await getAll<Post>('posts')).filter(
+    (p) => !p.outgoing && p.createdAt > since && !hidden[p.author] && (!p.expiresAt || p.expiresAt > nowMs),
+  ).length;
+}
+
+/** All non-expired Wall posts on this device, ordered by last activity — so a brand-
+ *  new post AND a post that just got a reaction/comment both rise to the top. */
+export async function listWallPosts(): Promise<Post[]> {
+  const nowMs = now();
+  const hidden = await getWallHiddenUsers();
+  const activity = (p: Post) => p.lastActivityAt ?? p.createdAt;
+  return (await getAll<Post>('posts'))
+    .filter((p) => (!p.expiresAt || p.expiresAt > nowMs) && !hidden[p.author])
+    .sort((a, b) => activity(b) - activity(a));
+}
+
+/** A single Wall post by id (or null). */
+export async function getPost(id: string): Promise<Post | null> {
+  return (await get<Post>('posts', id)) ?? null;
+}
+
+/** A media record by id (for rendering a post's photo/video/voice). */
+export async function getMedia(id: string): Promise<Media | null> {
+  return (await get<Media>('media', id)) ?? null;
+}
+
+/** Delete one of our own posts: best-effort server delete + remove the local copy. */
+export async function deletePost(id: string): Promise<void> {
+  await apiDeletePost(id).catch(() => {});
+  await remove('posts', id);
+}
+
+/** Remove posts (and their engagement) whose lifetime has elapsed. Wired into the
+ *  existing disappearing-message sweep. */
+export async function sweepExpiredPosts(): Promise<void> {
+  const nowMs = now();
+  for (const p of await getAll<Post>('posts')) {
+    if (p.expiresAt && p.expiresAt <= nowMs) {
+      await remove('posts', p.id);
+      for (const e of await getByIndex<PostEngagement>('postEngagement', 'postId', p.id)) {
+        await remove('postEngagement', e.id);
+      }
+    }
+  }
+}
+
+/* ---- engagement: reactions (spec 0003, US4) ---- */
+
+interface ReactionData {
+  emoji: string;
+  at: number;
+  remove?: boolean;
+}
+
+// Keep-alive (rolling 72h of inactivity): any interaction extends the post's life to
+// (interaction time + 72h) and bumps its last-activity, so an actively-engaged post
+// stays alive and jumps to the top of the feed. Local mirror of the server bump.
+async function bumpPostActivity(postId: string, atMs: number): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post) return;
+  const window = Math.min(post.ttlMs ?? MAX_POST_TTL_MS, MAX_POST_TTL_MS);
+  const lastActivityAt = Math.max(post.lastActivityAt ?? post.createdAt, atMs);
+  const expiresAt = Math.max(post.expiresAt ?? 0, atMs + window);
+  if (lastActivityAt === (post.lastActivityAt ?? post.createdAt) && expiresAt === (post.expiresAt ?? 0)) return;
+  await put<Post>('posts', { ...post, lastActivityAt, expiresAt, updatedAt: now() });
+}
+
+/** React to a post (audience-visible), mirroring chat: up to MAX_REACTIONS_PER_USER
+ *  emoji per person and MAX_DISTINCT_REACTIONS distinct emoji per post; tapping your
+ *  own emoji again removes it. Sealed under K_post and fanned out; applied LWW per
+ *  (actor, emoji). Returns what happened so the UI can surface a cap. */
+export async function reactToPost(
+  postId: string,
+  emoji: string,
+): Promise<'added' | 'removed' | 'limit' | 'limit-emojis' | 'noop'> {
+  const self = getSelfUserId();
+  const post = await get<Post>('posts', postId);
+  if (!self || !post?.postKey) return 'noop';
+  const rows = (await getByIndex<PostEngagement>('postEngagement', 'postId', postId)).filter(
+    (e) => e.type === 'reaction' && !e.deleted,
+  );
+  const mine = rows.filter((r) => r.actor === self);
+  const has = mine.some((r) => r.emoji === emoji);
+  if (!has) {
+    if (mine.length >= MAX_REACTIONS_PER_USER) return 'limit';
+    const distinct = new Set(rows.map((r) => r.emoji));
+    if (!distinct.has(emoji) && distinct.size >= MAX_DISTINCT_REACTIONS) return 'limit-emojis';
+  }
+  const remove = has;
+  const at = now();
+  await put<PostEngagement>('postEngagement', {
+    id: `${postId}:reaction:${self}:${emoji}`, postId, type: 'reaction', actor: self, emoji, at,
+    deleted: remove || undefined, updatedAt: at,
+  });
+  if (!remove) void recordEmojiUse(emoji); // most-used drives the quick-react order
+  await bumpPostActivity(postId, at);
+  try {
+    await apiSubmitEngagement(postId, {
+      id: uid(),
+      kind: 'reaction',
+      payload: sealPostEngagement(post.postKey, { emoji, at, remove } satisfies ReactionData),
+    });
+  } catch {
+    /* offline — the optimistic local row stands; a later sync reconciles */
+  }
+  return remove ? 'removed' : 'added';
+}
+
+interface CommentData {
+  text: string;
+  at: number;
+}
+
+/** Pull + decrypt a post's engagement and apply it: reactions (LWW per actor),
+ *  comments (append, keyed by engagement id), and tombstones (mark target removed). */
+export async function syncEngagement(postId: string): Promise<void> {
+  if (!isUnlockedNow()) return;
+  const post = await get<Post>('posts', postId);
+  if (!post?.postKey) return;
+  try {
+    const { items } = await apiListEngagement(postId);
+    let latestActivity = 0; // newest reaction/comment time seen → keep-alive
+    for (const it of items) {
+      if (it.kind === 'reaction') {
+        let data: ReactionData;
+        try {
+          data = openPostEngagement<ReactionData>(post.postKey, it.payload);
+        } catch {
+          continue;
+        }
+        latestActivity = Math.max(latestActivity, data.at);
+        const id = `${postId}:reaction:${it.actor}:${data.emoji}`;
+        const existing = await get<PostEngagement>('postEngagement', id);
+        if (existing && existing.at >= data.at) continue; // LWW per (actor, emoji)
+        await put<PostEngagement>('postEngagement', {
+          id, postId, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at,
+          deleted: data.remove || undefined, updatedAt: now(),
+        });
+      } else if (it.kind === 'comment') {
+        if (await get<PostEngagement>('postEngagement', it.id)) continue; // already have it
+        let data: CommentData;
+        try {
+          data = openPostEngagement<CommentData>(post.postKey, it.payload);
+        } catch {
+          continue;
+        }
+        latestActivity = Math.max(latestActivity, data.at);
+        await put<PostEngagement>('postEngagement', {
+          id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at, updatedAt: now(),
+        });
+      } else if (it.kind === 'tombstone') {
+        // The tombstone's payload is the (cleartext) target engagement id.
+        const target = await get<PostEngagement>('postEngagement', it.payload);
+        if (target && !target.deleted) {
+          await put<PostEngagement>('postEngagement', { ...target, deleted: true, updatedAt: now() });
+        }
+      }
+    }
+    if (latestActivity) await bumpPostActivity(postId, latestActivity);
+  } catch {
+    /* offline / transient */
+  }
+}
+
+/** Live reactions on a post (non-removed), oldest-first. */
+export async function listPostReactions(postId: string): Promise<PostEngagement[]> {
+  const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
+  return rows.filter((e) => e.type === 'reaction' && !e.deleted).sort((a, b) => a.at - b.at);
+}
+
+/** All engagement rows (for the feed, which groups them by post in one live query). */
+export async function listAllPostEngagement(): Promise<PostEngagement[]> {
+  return getAll<PostEngagement>('postEngagement');
+}
+
+/** Live comments on a post (non-deleted), oldest-first (timestamp then id tiebreak). */
+export async function listPostComments(postId: string): Promise<PostEngagement[]> {
+  const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
+  return rows
+    .filter((e) => e.type === 'comment' && !e.deleted)
+    .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+}
+
+/** Add an audience-visible comment to a post (sealed under K_post; fanned out). */
+export async function commentOnPost(postId: string, text: string): Promise<void> {
+  const self = getSelfUserId();
+  const post = await get<Post>('posts', postId);
+  const body = text.trim();
+  if (!self || !post?.postKey || !body) return;
+  const at = now();
+  const engId = uid(); // local id == server engagement id, so tombstones can target it
+  await put<PostEngagement>('postEngagement', {
+    id: engId, postId, type: 'comment', actor: self, text: body, at, updatedAt: at,
+  });
+  await bumpPostActivity(postId, at);
+  try {
+    await apiSubmitEngagement(postId, {
+      id: engId,
+      kind: 'comment',
+      payload: sealPostEngagement(post.postKey, { text: body, at } satisfies CommentData),
+    });
+  } catch {
+    /* offline — local stands; a later sync reconciles */
+  }
+}
+
+/** Remove a comment (the commenter's own, or any comment if you authored the post).
+ *  Best-effort propagation: delivered copies can't be cryptographically recalled. */
+export async function deleteComment(postId: string, commentId: string): Promise<void> {
+  const target = await get<PostEngagement>('postEngagement', commentId);
+  if (target) await put<PostEngagement>('postEngagement', { ...target, deleted: true, updatedAt: now() });
+  try {
+    await apiSubmitEngagement(postId, { id: uid(), kind: 'tombstone', target: commentId });
+  } catch {
+    /* offline — local stands; a later sync reconciles */
+  }
+}
+
+/* ---- view receipts (spec 0003, US7) ---- */
+
+/** Record that we viewed a post — only if our seen-receipts setting is on (reciprocal
+ *  with the chat setting) and it isn't our own post. */
+export async function recordPostView(postId: string): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post || post.outgoing) return;
+  if (!(await getSetting<boolean>('privacy.seenReceipts', true))) return;
+  try {
+    await apiRecordPostView(postId);
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Author-only view list for our own post, gated by our own seen-receipts setting
+ *  (reciprocity). Returns viewer ids (resolve names in the UI). */
+export async function listPostViews(postId: string): Promise<string[]> {
+  if (!(await getSetting<boolean>('privacy.seenReceipts', true))) return [];
+  try {
+    const { views } = await apiListPostViews(postId);
+    return views.map((v) => v.viewer);
+  } catch {
+    return [];
+  }
 }
 
 /* ---- account termination ("Ghosted") ---- */

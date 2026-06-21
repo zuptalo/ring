@@ -22,6 +22,7 @@ import {
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { resubscribePush } from '@/services/sw-push';
+import { userFacing, prettify, displayVersion } from '@/services/release-notes';
 
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<string | { url: string; revision: string | null }>;
@@ -144,15 +145,63 @@ async function updateAppBadge(newCount: number): Promise<void> {
 /** Decode the content-free tickle's frame type ('call' shows a ring, 'conn' is a
  *  friend-request lifecycle event; anything else, including an unreadable/absent
  *  payload, is treated as a message). */
-function pushKind(event: PushEvent): 'call' | 'msg' | 'conn' {
+function pushKind(event: PushEvent): 'call' | 'msg' | 'conn' | 'post' | 'version' {
   try {
     const data = event.data?.json() as { t?: string } | undefined;
     if (data?.t === 'call') return 'call';
     if (data?.t === 'conn') return 'conn';
+    if (data?.t === 'post') return 'post';
+    if (data?.t === 'version') return 'version';
   } catch {
     /* not JSON → treat as a message */
   }
   return 'msg';
+}
+
+/** "What's new" notification after a new version is deployed. The version tickle is
+ *  content-free; the actual (public, non-secret) version + user-friendly notes come
+ *  from GET /v1/config, so nothing about the release rode through the push service.
+ *  Shown only when the app is fully closed; an open app gets the in-app update toast. */
+async function showVersionNotification(): Promise<void> {
+  let version = '';
+  let notes: { sha: string; subject: string }[] = [];
+  try {
+    const cfg = (await fetch('/v1/config', { cache: 'no-store' }).then((r) => r.json())) as {
+      version?: string;
+      notes?: { sha: string; subject: string }[];
+    };
+    version = cfg.version ?? '';
+    notes = cfg.notes ?? [];
+  } catch {
+    /* offline / unreachable → a generic announcement below still honors userVisibleOnly */
+  }
+  const friendly = userFacing(notes);
+  const items = friendly.slice(0, 3).map((n) => prettify(n.subject));
+  const shown = displayVersion(version);
+  const title = shown ? `Ring ${shown} is here` : 'Ring just got an update';
+  const body = items.length
+    ? `What's new: ${items.join(' · ')}${friendly.length > items.length ? ' …' : ''}`
+    : 'Tap to update and see what’s new.';
+  await self.registration.showNotification(title, {
+    body,
+    icon: ICON,
+    badge: ICON,
+    tag: 'ring:version',
+    data: { url: '/' },
+  });
+}
+
+/** Generic, identity-safe notification for a new Wall post (spec 0003). Shown only
+ *  when the app is closed; a live page shows the rich "X shared a photo" banner via
+ *  the post-new WS frame, so the SW stays silent there to avoid a duplicate. */
+async function showPostNotification(): Promise<void> {
+  await self.registration.showNotification('Ring', {
+    body: 'New post on your Wall',
+    icon: ICON,
+    badge: ICON,
+    tag: 'ring:post',
+    data: { url: '/tabs/wall' },
+  });
 }
 
 /** Show the generic friend-request notifications (identity-safe; no decryption). */
@@ -362,6 +411,24 @@ self.addEventListener('push', (event) => {
         // avoiding a duplicate. Still nudge any live client to reconcile its lists.
         for (const client of clients) client.postMessage({ type: 'ring:conn' });
         if (!clients.length) await showConnNotification();
+        return;
+      }
+      if (kind === 'post') {
+        // New Wall post. A live page owns the rich in-app banner (post-new WS frame
+        // via useSync), so the SW shows a generic notification only when the app is
+        // fully CLOSED. Nudge any live client to pull the post.
+        for (const client of clients) client.postMessage({ type: 'ring:posts' });
+        if (!clients.length) await showPostNotification();
+        return;
+      }
+      if (kind === 'version') {
+        // A new app version was deployed. A live page owns the alert (useAppUpdate
+        // shows the in-app "what's new" update toast), so nudge any open client to
+        // check immediately and show the system "what's new" notification only when
+        // the app is fully CLOSED — mirroring the post/conn pattern and keeping the
+        // userVisibleOnly contract (exactly one visible notification when closed).
+        for (const client of clients) client.postMessage({ type: 'ring:checkupdate' });
+        if (!clients.length) await showVersionNotification();
         return;
       }
       // Let a live, unlocked page own the notification (avoids a duplicate); the SW

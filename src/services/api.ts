@@ -67,6 +67,129 @@ export async function fetchPeerBundle(userId: string): Promise<PeerBundleRespons
   return (await res.json()) as PeerBundleResponse;
 }
 
+/* ---- social Wall (spec 0003) ---- */
+
+/** A post envelope on the wire: a recipient + their wrapped K_post. */
+export interface PostEnvelopeWire {
+  recipient: string;
+  wrappedKey: string;
+}
+
+/** Create a post: opaque blob id + per-recipient wrapped-key envelopes + coarse
+ *  expiry. The server stores ciphertext only and addresses delivery to the envelopes;
+ *  it rejects (403) any recipient who isn't an accepted friend. */
+export async function createPost(req: {
+  id: string;
+  blobId: string;
+  size: number;
+  expiresAt?: number;
+  ttlMs?: number;
+  envelopes: PostEnvelopeWire[];
+}): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`create post failed: ${res.status}`);
+}
+
+/** A post as delivered to the caller. `wrappedKey` is the caller's envelope (absent
+ *  for the caller's own posts). All content is in the opaque blob. */
+export interface ServerPost {
+  id: string;
+  author: string;
+  blobId: string;
+  size: number;
+  createdAt: number;
+  expiresAt?: number;
+  ttlMs?: number;
+  wrappedKey?: string;
+}
+
+/** Pull posts addressed to the caller (and their own) newer than `since`, newest
+ *  first, with a cursor to pass next time. `revoked` lists post ids the caller was
+ *  removed from (e.g. dropped from close friends) so the client prunes local copies. */
+export async function listPosts(
+  since = 0,
+): Promise<{ posts: ServerPost[]; cursor: number; revoked: string[] }> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts?since=${since}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`list posts failed: ${res.status}`);
+  const body = (await res.json()) as { posts: ServerPost[]; cursor: number; revoked?: string[] };
+  return { ...body, revoked: body.revoked ?? [] };
+}
+
+/** Delete one of the caller's own posts (author-only server-side). Idempotent. */
+export async function deletePost(id: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`delete post failed: ${res.status}`);
+}
+
+/** Remove one recipient from one of the caller's own posts (author-only). Used when
+ *  un-close-friending someone to revoke close-only posts: their key envelope is deleted
+ *  and a revocation is recorded so their device prunes the local copy. Idempotent. */
+export async function removePostRecipient(postId: string, userId: string): Promise<void> {
+  const res = await fetch(
+    `${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/recipient/${encodeURIComponent(userId)}`,
+    { method: 'DELETE', headers: authHeaders() },
+  );
+  if (!res.ok && res.status !== 404) throw new Error(`remove post recipient failed: ${res.status}`);
+}
+
+/** Submit one opaque engagement item (reaction/comment) on a post; the server fans it
+ *  out to the post's audience. Only audience members (or the author) may engage. */
+export async function submitEngagement(
+  postId: string,
+  req: { id: string; kind: string; payload?: string; target?: string },
+): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`submit engagement failed: ${res.status}`);
+}
+
+/** Record that the caller viewed a post (delivered to the author only). Sent only when
+ *  the caller's seen-receipts setting is on. Idempotent. */
+export async function recordPostView(postId: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/view`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`record view failed: ${res.status}`);
+}
+
+/** Author-only: who viewed a post. */
+export async function listPostViews(postId: string): Promise<{ views: { viewer: string; viewedAt: number }[] }> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/views`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`list views failed: ${res.status}`);
+  return (await res.json()) as { views: { viewer: string; viewedAt: number }[] };
+}
+
+/** One opaque engagement item; `payload` is sealed under K_post (decrypted client-side). */
+export interface ServerEngagement {
+  id: string;
+  actor: string;
+  kind: string;
+  payload: string;
+  createdAt: number;
+}
+
+/** Fetch the engagement on a post the caller can see. */
+export async function listEngagement(postId: string): Promise<{ items: ServerEngagement[] }> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`list engagement failed: ${res.status}`);
+  return (await res.json()) as { items: ServerEngagement[] };
+}
+
 /** Delete (terminate) the current account. The server wipes all per-user data
  *  (tokens, prekeys, relay queue, sync records, recovery wrap, push, blocks) but
  *  KEEPS the user row flipped to 'terminated' so the id can't be re-registered and

@@ -110,6 +110,28 @@ type InviteStore interface {
 	MintInvite(ctx context.Context) (string, error)
 }
 
+// PostStore is the social-Wall persistence (spec 0003): opaque post ciphertext +
+// per-recipient wrapped-key envelopes. *store.Store satisfies it. Engagement + view
+// methods are added with US4/US7.
+type PostStore interface {
+	CreatePost(ctx context.Context, p store.NewPost) error
+	ListPosts(ctx context.Context, recipient string, sinceMs int64) ([]store.PostForRecipient, error)
+	DeletePost(ctx context.Context, author, id string) error
+	RemovePostRecipient(ctx context.Context, postID, author, recipient string) (bool, error)
+	ListRevocations(ctx context.Context, recipient string) ([]string, error)
+	RecentPostCount(ctx context.Context, author string, withinSec int) (int, error)
+	RecentEngagementCount(ctx context.Context, actor string, withinSec int) (int, error)
+	RecentCommentCount(ctx context.Context, postID, actor string, withinSec int) (int, error)
+	CanSeePost(ctx context.Context, postID, user string) (bool, error)
+	PostAudience(ctx context.Context, postID string) ([]string, error)
+	PostAuthor(ctx context.Context, postID string) (string, error)
+	SubmitEngagement(ctx context.Context, postID, id, actor, kind, payload string) error
+	EngagementActor(ctx context.Context, postID, engID string) (string, error)
+	ListEngagement(ctx context.Context, postID string) ([]store.PostEngagementRow, error)
+	RecordView(ctx context.Context, postID, viewer string) error
+	ListViews(ctx context.Context, postID string) ([]store.PostView, error)
+}
+
 // Handlers carries the dependencies the HTTP handlers need.
 type Handlers struct {
 	Store       AuthStore
@@ -124,6 +146,7 @@ type Handlers struct {
 	Sync      SyncStore
 	Push      PushStore
 	Invites   InviteStore
+	Posts     PostStore
 	Notifier  ws.Notifier // sends push tickles when a relayed message can't be delivered live
 	// Public, non-secret config advertised at GET /v1/config.
 	PublicURL      string
@@ -213,6 +236,16 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	mux.Handle("POST /v1/connections/reject", authMW(http.HandlerFunc(h.rejectConnection)))
 	mux.Handle("POST /v1/connections/withdraw", authMW(http.HandlerFunc(h.withdrawConnection)))
 	mux.Handle("POST /v1/connections/link", authMW(http.HandlerFunc(h.linkConnection)))
+
+	// Social Wall (spec 0003): posts are opaque ciphertext + per-recipient envelopes.
+	mux.Handle("POST /v1/posts", authMW(http.HandlerFunc(h.createPost)))
+	mux.Handle("GET /v1/posts", authMW(http.HandlerFunc(h.listPosts)))
+	mux.Handle("DELETE /v1/posts/{id}", authMW(http.HandlerFunc(h.deletePost)))
+	mux.Handle("DELETE /v1/posts/{id}/recipient/{userId}", authMW(http.HandlerFunc(h.removePostRecipient)))
+	mux.Handle("POST /v1/posts/{id}/engagement", authMW(http.HandlerFunc(h.submitEngagement)))
+	mux.Handle("GET /v1/posts/{id}/engagement", authMW(http.HandlerFunc(h.listEngagement)))
+	mux.Handle("POST /v1/posts/{id}/view", authMW(http.HandlerFunc(h.recordView)))
+	mux.Handle("GET /v1/posts/{id}/views", authMW(http.HandlerFunc(h.listViews)))
 
 	// Public in-network directory: discover any member, fetch one profile, update
 	// your own profile, and (legacy) claim a username. The literal /me/* patterns

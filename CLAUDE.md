@@ -249,5 +249,5 @@ GitFlow. **`develop`** is the integration branch; **`main`** is production.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/1015-reliable-push-notifications/plan.md`
+`specs/0003-zero-knowledge-social/plan.md`
 <!-- SPECKIT END -->

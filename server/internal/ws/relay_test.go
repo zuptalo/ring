@@ -418,6 +418,7 @@ type fakeNotifier struct{ ch chan string }
 func (f *fakeNotifier) Notify(_ context.Context, userID string)     { f.ch <- userID }
 func (f *fakeNotifier) NotifyCall(_ context.Context, userID string) { f.ch <- userID }
 func (f *fakeNotifier) NotifyConn(_ context.Context, userID string) { f.ch <- userID }
+func (f *fakeNotifier) NotifyPost(_ context.Context, userID string) { f.ch <- userID }
 
 func TestRelayPushesWhenRecipientOffline(t *testing.T) {
 	relay := newMemRelay()
