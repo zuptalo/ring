@@ -26,6 +26,12 @@ export interface Contact {
   // list; the durable source is the `blockedPeers` settings ledger. Drives the
   // read-only/blocked chat UI; inbound from them is dropped, outbound disabled.
   blocked?: boolean;
+  // spec 0003: author-private "close friend" flag. A curated subset of friends used
+  // as the narrower Wall audience. Client-only — it rides encrypted own-data sync and
+  // is NEVER sent to the server (the server only ever sees a per-post recipient set,
+  // so it cannot tell the "all friends" tier from "close friends"). Distinct from the
+  // per-CHAT `Chat.favorite` pin.
+  closeFriend?: boolean;
   updatedAt: number;
 }
 
@@ -331,6 +337,51 @@ export interface FriendRequest {
   inviter?: string;
   memberPreview?: string;
   roster?: import('@/services/crypto/message').GroupMember[];
+}
+
+/* ---- spec 0003: social Wall ---- */
+
+/** A Wall post (status update). Stored decrypted on-device (the keystore wraps it
+ *  at rest like every other store); only the server-side copy is ciphertext. `body`
+ *  + optional `mediaId` are the decrypted content; `audience` is the author's chosen
+ *  tier (own posts only — received posts don't carry it). `expiresAt` drives the
+ *  disappearing-message sweep. */
+export interface Post {
+  id: string;
+  author: string; // userId; self for own posts, the peer for received
+  kind: 'text' | 'voice' | 'video' | 'image';
+  body?: string; // decrypted text / caption
+  mediaId?: string; // local `media` store id for voice/video/image
+  audience?: 'friends' | 'close'; // own posts only (display-only on received)
+  createdAt: number; // author timestamp; feed ordering
+  expiresAt?: number; // epoch ms; absent = keep
+  outgoing: boolean; // true for self-authored
+  updatedAt: number; // change-bus / dedup
+}
+
+/** Engagement on a post: a reaction, a comment, or a view receipt. Reactions and
+ *  views are one-per-actor (id `${postId}:${type}:${actor}`, last-write-wins);
+ *  comments are append-only with a uuid id. `deleted` tombstones a comment (removed
+ *  by its author or the post author) — content cannot be cryptographically recalled,
+ *  so this is best-effort propagation. */
+export interface PostEngagement {
+  id: string;
+  postId: string;
+  type: 'reaction' | 'comment' | 'view';
+  actor: string; // userId (profile resolved from contacts/directory)
+  emoji?: string; // reaction
+  text?: string; // comment (decrypted)
+  at: number; // actor timestamp; LWW for reaction/view, ordering for comment
+  deleted?: boolean; // comment tombstone
+  updatedAt: number;
+}
+
+/** Author-only view receipt, surfaced as a per-post "who viewed" list. Recorded only
+ *  when the viewer has seen-receipts enabled (reciprocal with the chat setting). */
+export interface ViewReceipt {
+  postId: string;
+  viewer: string;
+  at: number;
 }
 
 /** A "needs attention" item in the You tab, drives its badge. */

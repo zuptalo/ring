@@ -110,6 +110,15 @@ type InviteStore interface {
 	MintInvite(ctx context.Context) (string, error)
 }
 
+// PostStore is the social-Wall persistence (spec 0003): opaque post ciphertext +
+// per-recipient wrapped-key envelopes. *store.Store satisfies it. Engagement + view
+// methods are added with US4/US7.
+type PostStore interface {
+	CreatePost(ctx context.Context, p store.NewPost) error
+	ListPosts(ctx context.Context, recipient string, sinceMs int64) ([]store.PostForRecipient, error)
+	DeletePost(ctx context.Context, author, id string) error
+}
+
 // Handlers carries the dependencies the HTTP handlers need.
 type Handlers struct {
 	Store       AuthStore
@@ -124,6 +133,7 @@ type Handlers struct {
 	Sync      SyncStore
 	Push      PushStore
 	Invites   InviteStore
+	Posts     PostStore
 	Notifier  ws.Notifier // sends push tickles when a relayed message can't be delivered live
 	// Public, non-secret config advertised at GET /v1/config.
 	PublicURL      string
@@ -213,6 +223,11 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	mux.Handle("POST /v1/connections/reject", authMW(http.HandlerFunc(h.rejectConnection)))
 	mux.Handle("POST /v1/connections/withdraw", authMW(http.HandlerFunc(h.withdrawConnection)))
 	mux.Handle("POST /v1/connections/link", authMW(http.HandlerFunc(h.linkConnection)))
+
+	// Social Wall (spec 0003): posts are opaque ciphertext + per-recipient envelopes.
+	mux.Handle("POST /v1/posts", authMW(http.HandlerFunc(h.createPost)))
+	mux.Handle("GET /v1/posts", authMW(http.HandlerFunc(h.listPosts)))
+	mux.Handle("DELETE /v1/posts/{id}", authMW(http.HandlerFunc(h.deletePost)))
 
 	// Public in-network directory: discover any member, fetch one profile, update
 	// your own profile, and (legacy) claim a username. The literal /me/* patterns

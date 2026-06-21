@@ -22,6 +22,10 @@ export const STORES = [
   'tombstones', // soft-delete markers so pull can't resurrect rows
   // v5: user-defined chat filter lists (Chats-tab "lists").
   'chatlists',
+  // v9 (spec 0003): the social Wall. `posts` = received/own posts; `postEngagement`
+  // = reactions/comments/view-receipts keyed by postId. Both keyPath 'id'.
+  'posts',
+  'postEngagement',
 ] as const;
 export type StoreName = (typeof STORES)[number];
 
@@ -30,7 +34,9 @@ const DB_NAME = 'ring';
 // are additive optional Blob fields on existing records — IndexedDB needs no per-row transform for
 // that, so the version bump alone (which documents the schema evolution) is the whole migration;
 // existing rows are preserved unchanged and the tiers are filled in by the background backfill.
-const DB_VERSION = 8;
+// v9 (spec 0003): add the social-Wall stores `posts` + `postEngagement` (additive
+// createObjectStore in onupgradeneeded; existing data untouched).
+const DB_VERSION = 9;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -133,6 +139,14 @@ export function openDB(): Promise<IDBDatabase> {
       // v5: user-defined chat filter lists.
       if (!db.objectStoreNames.contains('chatlists'))
         db.createObjectStore('chatlists', { keyPath: 'id' });
+      // v9 (spec 0003): social-Wall stores. `postEngagement` indexes by postId so a
+      // post's reactions/comments/views can be read in one range query.
+      if (!db.objectStoreNames.contains('posts'))
+        db.createObjectStore('posts', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('postEngagement')) {
+        const s = db.createObjectStore('postEngagement', { keyPath: 'id' });
+        s.createIndex('postId', 'postId');
+      }
       // Forward message migrations (v6: spec 1010 "read"→"seen" rename; v7: spec 1013
       // seen-reported backfill). They run in ONE cursor pass so a multi-version upgrade
       // (e.g. v5→v7) does not open two racing cursors on the same store that could clobber

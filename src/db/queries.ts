@@ -1952,6 +1952,28 @@ export async function markContactConnected(id: string): Promise<void> {
   await put<Setting<Record<string, boolean>>>('settings', { key: 'connectedPeers', value: map });
 }
 
+/** Accepted friends: contacts whose peer is in the connected-peers ledger (i.e. an
+ *  accepted connection), excluding blocked/ghosted peers. This is the audience source
+ *  for Wall posts (spec 0003) — "all friends". */
+export async function listFriends(): Promise<Contact[]> {
+  const connected = await getConnectedPeers();
+  const all = await getAll<Contact>('contacts');
+  return all.filter((c) => connected[c.id] && !c.blocked && !c.ghosted);
+}
+
+/** Close friends: the curated subset of friends flagged `closeFriend`. Author-private
+ *  (the flag never leaves the device); drives the "close friends" Wall audience. */
+export async function listCloseFriends(): Promise<Contact[]> {
+  return (await listFriends()).filter((c) => c.closeFriend);
+}
+
+/** Set/clear the author-private close-friend flag on a contact (spec 0003, US5). */
+export async function setCloseFriend(id: string, value: boolean): Promise<void> {
+  const c = await getContact(id);
+  if (!c || !!c.closeFriend === value) return;
+  await put<Contact>('contacts', { ...c, closeFriend: value, updatedAt: Date.now() });
+}
+
 /* ---- account termination ("Ghosted") ---- */
 
 const GHOST_NAME = 'Ghosted';
