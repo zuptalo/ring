@@ -122,6 +122,38 @@ export async function deletePost(id: string): Promise<void> {
   if (!res.ok && res.status !== 404) throw new Error(`delete post failed: ${res.status}`);
 }
 
+/** Submit one opaque engagement item (reaction/comment) on a post; the server fans it
+ *  out to the post's audience. Only audience members (or the author) may engage. */
+export async function submitEngagement(
+  postId: string,
+  req: { id: string; kind: string; payload: string },
+): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`submit engagement failed: ${res.status}`);
+}
+
+/** One opaque engagement item; `payload` is sealed under K_post (decrypted client-side). */
+export interface ServerEngagement {
+  id: string;
+  actor: string;
+  kind: string;
+  payload: string;
+  createdAt: number;
+}
+
+/** Fetch the engagement on a post the caller can see. */
+export async function listEngagement(postId: string): Promise<{ items: ServerEngagement[] }> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`list engagement failed: ${res.status}`);
+  return (await res.json()) as { items: ServerEngagement[] };
+}
+
 /** Delete (terminate) the current account. The server wipes all per-user data
  *  (tokens, prekeys, relay queue, sync records, recovery wrap, push, blocks) but
  *  KEEPS the user row flipped to 'terminated' so the id can't be re-registered and

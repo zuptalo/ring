@@ -40,7 +40,27 @@
           Disappears {{ when(post.expiresAt) }}
         </p>
 
-        <!-- Reactions, comments and the viewer list arrive with US4/US6/US7. -->
+        <!-- Reactions (audience-visible). -->
+        <div class="reactions">
+          <div class="picker">
+            <button
+              v-for="e in EMOJIS"
+              :key="e"
+              class="emoji"
+              :class="{ mine: myEmoji === e }"
+              :aria-label="'React ' + e"
+              @click="react(e)"
+            >{{ e }}</button>
+          </div>
+          <ul v-if="grouped.length" class="rlist">
+            <li v-for="g in grouped" :key="g.emoji">
+              <span class="e">{{ g.emoji }}</span>
+              <span class="who">{{ g.who }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Comments and the viewer list arrive with US6/US7. -->
       </div>
       <div v-else class="missing">This post is no longer available.</div>
     </ion-content>
@@ -48,31 +68,59 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
-  IonContent, IonAvatar, IonIcon, onIonViewWillEnter, alertController,
+  IonContent, IonAvatar, IonIcon, onIonViewWillEnter, onIonViewWillLeave, alertController,
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
 import { trashOutline } from 'ionicons/icons';
-import { onIonViewWillLeave } from '@ionic/vue';
-import { getPost, getContact, getMedia, deletePost } from '@/db/queries';
+import { useLiveQuery } from '@/composables/useLiveQuery';
+import {
+  getPost, getContact, getMedia, deletePost,
+  listPostReactions, reactToPost, syncEngagement, listContacts,
+} from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { useSelfProfile } from '@/composables/useSelfProfile';
-import type { Post } from '@/db/types';
+import type { Post, PostEngagement, Contact } from '@/db/types';
 
 const route = useRoute();
 const router = useRouter();
 const self = useSelfProfile();
+const selfId = getSelfUserId();
+const postId = String(route.params.id);
 const post = ref<Post | null>(null);
 const authorName = ref('Unknown');
 const authorAvatar = ref('');
 const authorUsername = ref<string | undefined>(undefined);
 const mediaUrl = ref<string | undefined>(undefined);
 
+const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const reactions = useLiveQuery(() => listPostReactions(postId), ['postEngagement'], [] as PostEngagement[]);
+const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+
+const myEmoji = computed(() => reactions.value.find((r) => r.actor === selfId)?.emoji);
+// Group reactions by emoji with a human "who" label.
+const grouped = computed(() => {
+  const byId = new Map(contacts.value.map((c) => [c.id, c.name] as const));
+  const map = new Map<string, string[]>();
+  for (const r of reactions.value) {
+    if (!r.emoji) continue;
+    const who = r.actor === selfId ? 'You' : byId.get(r.actor) ?? 'Someone';
+    const list = map.get(r.emoji) ?? [];
+    list.push(who);
+    map.set(r.emoji, list);
+  }
+  return [...map.entries()].map(([emoji, names]) => ({ emoji, who: names.join(', ') }));
+});
+
+function react(emoji: string): void {
+  void reactToPost(postId, emoji);
+}
+
 onIonViewWillEnter(async () => {
-  const id = String(route.params.id);
-  post.value = await getPost(id);
+  void syncEngagement(postId); // refresh reactions from the server
+  post.value = await getPost(postId);
   if (!post.value) return;
   if (post.value.mediaId) {
     const md = await getMedia(post.value.mediaId);
@@ -180,6 +228,44 @@ async function confirmDelete(): Promise<void> {
   margin-top: 16px;
   font-size: 13px;
   color: var(--ion-color-medium);
+}
+.reactions {
+  margin-top: 20px;
+}
+.reactions .picker {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.reactions .emoji {
+  font-size: 22px;
+  line-height: 1;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 999px;
+  background: var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
+  cursor: pointer;
+}
+.reactions .emoji.mine {
+  background: var(--ion-color-primary);
+}
+.reactions .rlist {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.reactions .rlist li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+}
+.reactions .rlist .e {
+  font-size: 18px;
+}
+.reactions .rlist .who {
+  color: var(--ion-color-medium);
+  font-size: 14px;
 }
 .missing {
   padding: 56px 24px;

@@ -278,6 +278,13 @@ export interface PostNewFrame {
   from: string;
 }
 
+/** Content-free nudge that engagement (a reaction) landed on a post we can see; the
+ *  client reconciles by pulling that post's engagement. */
+export interface PostEngagementFrame {
+  t: 'post-engagement';
+  post: string;
+}
+
 /* ---- ephemeral activity indicators (spec 1009): typing / recording ---- */
 
 /** What a peer is doing in a conversation right now (sealed on the wire). */
@@ -325,6 +332,7 @@ export type Frame =
   | ConnectReqFrame
   | ConnectUpdateFrame
   | PostNewFrame
+  | PostEngagementFrame
   | CallFrame;
 
 export interface Transport {

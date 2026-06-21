@@ -39,12 +39,50 @@ func (c *fakePostConn) OutgoingRequests(context.Context, string) ([]store.Connec
 }
 
 // fakePostStore is an in-memory PostStore for handler tests.
-type fakePostStore struct{ posts map[string]store.NewPost }
+type fakePostStore struct {
+	posts map[string]store.NewPost
+	eng   map[string][]store.PostEngagementRow
+}
 
-func newFakePostStore() *fakePostStore { return &fakePostStore{posts: map[string]store.NewPost{}} }
+func newFakePostStore() *fakePostStore {
+	return &fakePostStore{posts: map[string]store.NewPost{}, eng: map[string][]store.PostEngagementRow{}}
+}
 func (f *fakePostStore) CreatePost(_ context.Context, p store.NewPost) error {
 	f.posts[p.ID] = p
 	return nil
+}
+func (f *fakePostStore) CanSeePost(_ context.Context, postID, user string) (bool, error) {
+	p, ok := f.posts[postID]
+	if !ok {
+		return false, nil
+	}
+	if p.Author == user {
+		return true, nil
+	}
+	for _, e := range p.Envelopes {
+		if e.Recipient == user {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+func (f *fakePostStore) PostAudience(_ context.Context, postID string) ([]string, error) {
+	p, ok := f.posts[postID]
+	if !ok {
+		return nil, nil
+	}
+	out := []string{p.Author}
+	for _, e := range p.Envelopes {
+		out = append(out, e.Recipient)
+	}
+	return out, nil
+}
+func (f *fakePostStore) SubmitEngagement(_ context.Context, postID, id, actor, kind, payload string) error {
+	f.eng[postID] = append(f.eng[postID], store.PostEngagementRow{ID: id, Actor: actor, Kind: kind, Payload: payload})
+	return nil
+}
+func (f *fakePostStore) ListEngagement(_ context.Context, postID string) ([]store.PostEngagementRow, error) {
+	return f.eng[postID], nil
 }
 func (f *fakePostStore) ListPosts(_ context.Context, recipient string, _ int64) ([]store.PostForRecipient, error) {
 	var out []store.PostForRecipient
@@ -140,6 +178,54 @@ func TestCreatePostDeliversToAudienceOnly(t *testing.T) {
 	}
 	if ids := listPostIDs(t, srv, tokA); len(ids) != 1 || ids[0] != postID {
 		t.Errorf("alice (author) sees %v, want [%s]", ids, postID)
+	}
+}
+
+// TestEngagementAudienceOnly: only the post's audience (or author) may submit/read
+// engagement; outsiders are rejected (FR-035/FR-036).
+func TestEngagementAudienceOnly(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	tokC, _, _ := registerNamed(t, srv, "carol")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", rr.Code)
+	}
+
+	const engID = "22222222-2222-2222-2222-222222222222"
+	eng := `{"id":"` + engID + `","kind":"reaction","payload":"SEALED"}`
+
+	// Bob (audience) may react.
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, eng); rr.Code != http.StatusCreated {
+		t.Fatalf("bob react status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	// Carol (not audience) may NOT react or read.
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokC, eng); rr.Code != http.StatusForbidden {
+		t.Errorf("carol react status = %d, want 403", rr.Code)
+	}
+	if rr := do(t, srv, http.MethodGet, "/v1/posts/"+postID+"/engagement", tokC, ""); rr.Code != http.StatusForbidden {
+		t.Errorf("carol list status = %d, want 403", rr.Code)
+	}
+	// Alice (author) reads the engagement.
+	rr := do(t, srv, http.MethodGet, "/v1/posts/"+postID+"/engagement", tokA, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("alice list status = %d, want 200", rr.Code)
+	}
+	var resp struct {
+		Items []struct {
+			Actor   string `json:"actor"`
+			Payload string `json:"payload"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].Actor != bobID || resp.Items[0].Payload != "SEALED" {
+		t.Errorf("engagement = %+v, want one from bob with opaque payload", resp.Items)
 	}
 }
 

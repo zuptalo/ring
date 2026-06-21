@@ -148,6 +148,110 @@ func (h *Handlers) listPosts(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"posts": posts, "cursor": cursor})
 }
 
+type engagementReq struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`    // reaction | comment | tombstone
+	Payload string `json:"payload"` // opaque, sealed under K_post
+}
+
+func validEngagementKind(k string) bool {
+	return k == "reaction" || k == "comment" || k == "tombstone"
+}
+
+// submitEngagement (POST /v1/posts/{id}/engagement) records one opaque engagement item
+// and nudges everyone who can see the post to pull it. Only audience members (or the
+// author) may engage; the server never reads the payload.
+func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	postID := r.PathValue("id")
+	if !uuidRE.MatchString(postID) {
+		httpx.Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req engagementReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil ||
+		!uuidRE.MatchString(req.ID) || !validEngagementKind(req.Kind) || req.Payload == "" {
+		httpx.Error(w, http.StatusBadRequest, "invalid engagement")
+		return
+	}
+	canSee, err := h.Posts.CanSeePost(r.Context(), postID, uid)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not authorize")
+		return
+	}
+	if !canSee {
+		httpx.Error(w, http.StatusForbidden, "not in this post's audience")
+		return
+	}
+	if err := h.Posts.SubmitEngagement(r.Context(), postID, req.ID, uid, req.Kind, req.Payload); err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not submit engagement")
+		return
+	}
+	// Nudge everyone who can see the post (content-free) to pull the new engagement.
+	if aud, err := h.Posts.PostAudience(r.Context(), postID); err == nil {
+		for _, u := range aud {
+			if u == uid {
+				continue
+			}
+			if h.Hub != nil {
+				if b, e := json.Marshal(map[string]any{"t": "post-engagement", "post": postID}); e == nil {
+					h.Hub.Send(u, b)
+				}
+			}
+			if h.Notifier != nil {
+				h.Notifier.Notify(r.Context(), u)
+			}
+		}
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]any{"id": req.ID})
+}
+
+type engagementOut struct {
+	ID        string `json:"id"`
+	Actor     string `json:"actor"`
+	Kind      string `json:"kind"`
+	Payload   string `json:"payload"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+// listEngagement (GET /v1/posts/{id}/engagement) returns the opaque engagement on a
+// post the caller can see; the client decrypts under K_post.
+func (h *Handlers) listEngagement(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	postID := r.PathValue("id")
+	if !uuidRE.MatchString(postID) {
+		httpx.Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	canSee, err := h.Posts.CanSeePost(r.Context(), postID, uid)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not authorize")
+		return
+	}
+	if !canSee {
+		httpx.Error(w, http.StatusForbidden, "not in this post's audience")
+		return
+	}
+	rows, err := h.Posts.ListEngagement(r.Context(), postID)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not list engagement")
+		return
+	}
+	items := make([]engagementOut, 0, len(rows))
+	for _, e := range rows {
+		items = append(items, engagementOut{ID: e.ID, Actor: e.Actor, Kind: e.Kind, Payload: e.Payload, CreatedAt: e.CreatedMs})
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 // deletePost (DELETE /v1/posts/{id}) deletes the caller's own post (author-only; the
 // store guards on author so a non-author delete is a no-op). Idempotent.
 func (h *Handlers) deletePost(w http.ResponseWriter, r *http.Request) {

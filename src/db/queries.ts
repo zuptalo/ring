@@ -10,10 +10,10 @@ import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, type ServerPost } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
-import { buildPost, openReceivedPost, type AudienceMember, type PostPayload } from '@/services/posts';
+import { buildPost, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
 import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
@@ -2068,6 +2068,7 @@ export async function createPost(opts: {
     createdAt,
     expiresAt,
     outgoing: true,
+    postKey: built.postKey,
     updatedAt: createdAt,
   };
   await put<Post>('posts', post);
@@ -2084,8 +2085,9 @@ async function receivePost(sp: ServerPost): Promise<void> {
   if (!blob) return;
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let payload: PostPayload;
+  let postKey: string;
   try {
-    payload = openReceivedPost(bytes, sp.wrappedKey, getIdentityKeys().x.privateKey);
+    ({ payload, postKey } = openReceivedPost(bytes, sp.wrappedKey, getIdentityKeys().x.privateKey));
   } catch {
     return;
   }
@@ -2117,8 +2119,11 @@ async function receivePost(sp: ServerPost): Promise<void> {
     createdAt: sp.createdAt,
     expiresAt: sp.expiresAt,
     outgoing: false,
+    postKey,
     updatedAt: now(),
   });
+  // Pull any engagement (reactions) that already exists on this post.
+  void syncEngagement(sp.id);
 }
 
 /** Pull new posts addressed to us and persist them (called on app open, on the
@@ -2159,13 +2164,88 @@ export async function deletePost(id: string): Promise<void> {
   await remove('posts', id);
 }
 
-/** Remove posts (and, later, their engagement) whose lifetime has elapsed. Wired into
- *  the existing disappearing-message sweep. */
+/** Remove posts (and their engagement) whose lifetime has elapsed. Wired into the
+ *  existing disappearing-message sweep. */
 export async function sweepExpiredPosts(): Promise<void> {
   const nowMs = now();
   for (const p of await getAll<Post>('posts')) {
-    if (p.expiresAt && p.expiresAt <= nowMs) await remove('posts', p.id);
+    if (p.expiresAt && p.expiresAt <= nowMs) {
+      await remove('posts', p.id);
+      for (const e of await getByIndex<PostEngagement>('postEngagement', 'postId', p.id)) {
+        await remove('postEngagement', e.id);
+      }
+    }
   }
+}
+
+/* ---- engagement: reactions (spec 0003, US4) ---- */
+
+interface ReactionData {
+  emoji: string;
+  at: number;
+  remove?: boolean;
+}
+
+/** React to a post (audience-visible). Toggles: tapping your current emoji removes it.
+ *  Sealed under the post's K_post and submitted; the server fans it out to the
+ *  audience, who each apply it last-write-wins per actor. */
+export async function reactToPost(postId: string, emoji: string): Promise<void> {
+  const self = getSelfUserId();
+  const post = await get<Post>('posts', postId);
+  if (!self || !post?.postKey) return;
+  const at = now();
+  const mineId = `${postId}:reaction:${self}`;
+  const mine = await get<PostEngagement>('postEngagement', mineId);
+  const removing = !!mine && !mine.deleted && mine.emoji === emoji;
+  const data: ReactionData = { emoji, at, remove: removing || undefined };
+  // Optimistic local apply.
+  await put<PostEngagement>('postEngagement', {
+    id: mineId, postId, type: 'reaction', actor: self, emoji, at,
+    deleted: removing || undefined, updatedAt: at,
+  });
+  try {
+    await apiSubmitEngagement(postId, {
+      id: uid(),
+      kind: 'reaction',
+      payload: sealPostEngagement(post.postKey, data),
+    });
+  } catch {
+    /* offline — the optimistic local row stands; a later sync reconciles */
+  }
+}
+
+/** Pull + decrypt engagement for a post and apply it (reactions only, LWW per actor). */
+export async function syncEngagement(postId: string): Promise<void> {
+  if (!isUnlockedNow()) return;
+  const post = await get<Post>('posts', postId);
+  if (!post?.postKey) return;
+  try {
+    const { items } = await apiListEngagement(postId);
+    for (const it of items) {
+      if (it.kind !== 'reaction') continue;
+      let data: ReactionData;
+      try {
+        data = openPostEngagement<ReactionData>(post.postKey, it.payload);
+      } catch {
+        continue; // not decryptable / tampered
+      }
+      const id = `${postId}:reaction:${it.actor}`;
+      const existing = await get<PostEngagement>('postEngagement', id);
+      if (existing && existing.at >= data.at) continue; // LWW
+      await put<PostEngagement>('postEngagement', {
+        id, postId, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at,
+        deleted: data.remove || undefined, updatedAt: now(),
+      });
+    }
+  } catch {
+    /* offline / transient */
+  }
+}
+
+/** Live reactions on a post (non-removed), oldest-first. */
+export async function listPostReactions(postId: string): Promise<PostEngagement[]> {
+  const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
+  return rows.filter((e) => e.type === 'reaction' && !e.deleted).sort((a, b) => a.at - b.at);
 }
 
 /* ---- account termination ("Ghosted") ---- */

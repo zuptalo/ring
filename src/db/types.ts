@@ -356,6 +356,10 @@ export interface Post {
   createdAt: number; // author timestamp; feed ordering
   expiresAt?: number; // epoch ms; absent = keep
   outgoing: boolean; // true for self-authored
+  // The post's content key K_post (b64url). Every audience member holds it (the author
+  // generated it; recipients unwrap it from their envelope) and uses it to seal/open
+  // audience-visible engagement (reactions/comments). The server never sees it.
+  postKey?: string;
   updatedAt: number; // change-bus / dedup
 }
 

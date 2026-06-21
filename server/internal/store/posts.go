@@ -97,3 +97,77 @@ func (s *Store) DeletePost(ctx context.Context, author, id string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM posts WHERE id = $1 AND author::text = $2`, id, author)
 	return err
 }
+
+/* ---- engagement (reactions/comments) — US4 ---- */
+
+// CanSeePost reports whether `user` is in a post's audience (has an envelope) or is its
+// author — the gate for both submitting and reading engagement.
+func (s *Store) CanSeePost(ctx context.Context, postID, user string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM posts WHERE id = $1 AND author::text = $2)
+		     OR EXISTS (SELECT 1 FROM post_envelopes WHERE post_id = $1 AND recipient::text = $2)`,
+		postID, user).Scan(&ok)
+	return ok, err
+}
+
+// PostAudience returns the post's recipient set plus its author (used to nudge everyone
+// who can see a post when engagement arrives).
+func (s *Store) PostAudience(ctx context.Context, postID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT recipient::text FROM post_envelopes WHERE post_id = $1
+		 UNION SELECT author::text FROM posts WHERE id = $1`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// SubmitEngagement records one opaque engagement item (reaction/comment/tombstone) on a
+// post. The payload is sealed under K_post; the server stores it without reading it.
+func (s *Store) SubmitEngagement(ctx context.Context, postID, id, actor, kind, payload string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO post_engagement (id, post_id, actor, kind, payload) VALUES ($1, $2, $3, $4, $5)
+		 ON CONFLICT (id) DO NOTHING`,
+		id, postID, actor, kind, payload)
+	return err
+}
+
+// PostEngagementRow is one opaque engagement item delivered to an audience member.
+type PostEngagementRow struct {
+	ID        string
+	Actor     string
+	Kind      string
+	Payload   string
+	CreatedMs int64
+}
+
+// ListEngagement returns all engagement on a post, oldest-first (the caller must
+// already be authorized via CanSeePost).
+func (s *Store) ListEngagement(ctx context.Context, postID string) ([]PostEngagementRow, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, actor::text, kind, payload, (extract(epoch from created_at)*1000)::bigint
+		   FROM post_engagement WHERE post_id = $1 ORDER BY created_at ASC`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PostEngagementRow
+	for rows.Next() {
+		var e PostEngagementRow
+		if err := rows.Scan(&e.ID, &e.Actor, &e.Kind, &e.Payload, &e.CreatedMs); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

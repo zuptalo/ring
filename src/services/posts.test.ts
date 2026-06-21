@@ -3,7 +3,7 @@
 // no plaintext a non-member could read.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { ready, x25519Keypair } from './crypto/primitives';
-import { buildPost, openReceivedPost } from './posts';
+import { buildPost, openReceivedPost, sealPostEngagement, openPostEngagement } from './posts';
 import { bytesToUtf8 } from './crypto/envelope';
 import type { PostPayload } from './crypto/post';
 
@@ -18,13 +18,14 @@ const payload: PostPayload = {
 };
 
 describe('buildPost / openReceivedPost', () => {
-  it('an audience member recovers the exact payload', () => {
+  it('an audience member recovers the exact payload + K_post', () => {
     const bob = x25519Keypair();
     const built = buildPost(payload, [{ userId: 'bob', pubKey: bob.publicKey }]);
     expect(built.envelopes).toHaveLength(1);
     expect(built.envelopes[0].recipient).toBe('bob');
     const got = openReceivedPost(built.blob, built.envelopes[0].wrappedKey, bob.privateKey);
-    expect(got).toEqual(payload);
+    expect(got.payload).toEqual(payload);
+    expect(got.postKey).toBe(built.postKey); // recipient derives the same K_post
   });
 
   it('each audience member gets a distinct wrapped key but recovers the same payload', () => {
@@ -35,8 +36,8 @@ describe('buildPost / openReceivedPost', () => {
       { userId: 'carol', pubKey: carol.publicKey },
     ]);
     expect(built.envelopes[0].wrappedKey).not.toEqual(built.envelopes[1].wrappedKey);
-    expect(openReceivedPost(built.blob, built.envelopes[0].wrappedKey, bob.privateKey)).toEqual(payload);
-    expect(openReceivedPost(built.blob, built.envelopes[1].wrappedKey, carol.privateKey)).toEqual(payload);
+    expect(openReceivedPost(built.blob, built.envelopes[0].wrappedKey, bob.privateKey).payload).toEqual(payload);
+    expect(openReceivedPost(built.blob, built.envelopes[1].wrappedKey, carol.privateKey).payload).toEqual(payload);
   });
 
   it('a non-member cannot open the post (wrong key)', () => {
@@ -44,6 +45,18 @@ describe('buildPost / openReceivedPost', () => {
     const outsider = x25519Keypair();
     const built = buildPost(payload, [{ userId: 'bob', pubKey: bob.publicKey }]);
     expect(() => openReceivedPost(built.blob, built.envelopes[0].wrappedKey, outsider.privateKey)).toThrow();
+  });
+
+  it('engagement seals under K_post: audience members read it, outsiders cannot', () => {
+    const bob = x25519Keypair();
+    const built = buildPost(payload, [{ userId: 'bob', pubKey: bob.publicKey }]);
+    const bobKey = openReceivedPost(built.blob, built.envelopes[0].wrappedKey, bob.privateKey).postKey;
+    // Bob (audience) reacts; the author (holds built.postKey) reads it back.
+    const wire = sealPostEngagement(bobKey, { emoji: '👍', at: 1 });
+    expect(wire).not.toContain('👍'); // sealed on the wire
+    expect(openPostEngagement<{ emoji: string }>(built.postKey, wire)).toEqual({ emoji: '👍', at: 1 });
+    // A wrong K_post (all-zero) cannot open it.
+    expect(() => openPostEngagement('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', wire)).toThrow();
   });
 
   it('the blob carries no plaintext (body is not present in the clear)', () => {

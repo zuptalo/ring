@@ -51,6 +51,19 @@ export function openPost(kPost: Uint8Array, env: Envelope): PostPayload {
   return openJson<PostPayload>(kPost, env);
 }
 
+/** Seal an engagement item (reaction/comment) under the post's K_post. Every audience
+ *  member holds K_post (they unwrapped it to read the post), so they can both seal
+ *  their own engagement and open everyone else's; the server, which lacks K_post,
+ *  cannot read the emoji or comment text. */
+export function sealEngagement(kPost: Uint8Array, value: unknown): Envelope {
+  return sealJson(kPost, value, 'posteng');
+}
+
+/** Open an engagement item sealed by {@link sealEngagement}. */
+export function openEngagement<T>(kPost: Uint8Array, env: Envelope): T {
+  return openJson<T>(kPost, env);
+}
+
 /** A per-recipient wrapped K_post: the ephemeral X25519 public key + the sealed key. */
 export interface WrappedPostKey {
   eph: string; // b64url ephemeral X25519 public key
