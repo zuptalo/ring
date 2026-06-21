@@ -37,6 +37,13 @@ var (
 	// is closed and nudges a live page to pull + show the rich "X shared a photo"
 	// in-app banner. Same zero-knowledge class as msg/conn.
 	ticklePost = []byte(`{"t":"post"}`)
+	// tickleVersion wakes every device after a new app version is deployed. It carries
+	// NO payload: the SW fetches the PUBLIC, non-sensitive release info from
+	// GET /v1/config (version + user-friendly notes) and shows a "what's new"
+	// notification. Even though that info isn't secret, keeping the push payload
+	// content-free preserves the single, auditable invariant that the server NEVER puts
+	// content in a push — the same zero-knowledge class as every other tickle.
+	tickleVersion = []byte(`{"t":"version"}`)
 )
 
 const (
@@ -76,6 +83,17 @@ const (
 	postTTL   = 7 * 24 * 60 * 60 // 604800s
 	postTopic = "ring-post"
 
+	// versionTTL / versionTopic: a "new version" announcement is worth holding a few
+	// days so a device offline over a weekend still learns of it, but a weeks-stale
+	// announcement is noise (the SW reads the CURRENT version from /v1/config on wake).
+	// Collapsed per subscription so multiple deploys while offline yield ONE wake.
+	versionTTL   = 3 * 24 * 60 * 60 // 259200s
+	versionTopic = "ring-version"
+
+	// broadcastConcurrency bounds in-flight deliveries during an all-users broadcast,
+	// so a fan-out to the whole subscription base can't open thousands of sockets at once.
+	broadcastConcurrency = 16
+
 	// sendBudget bounds one subscription's whole delivery attempt (incl. retries),
 	// so one slow/hung endpoint can't starve a user's other devices.
 	sendBudget = 10 * time.Second
@@ -104,11 +122,17 @@ var (
 	postParams = func() pushParams {
 		return pushParams{payload: ticklePost, ttl: postTTL, urgency: webpush.UrgencyHigh, topic: postTopic}
 	}
+	versionParams = func() pushParams {
+		// Low urgency: an announcement should never preempt battery-saving like a
+		// message/call wake does.
+		return pushParams{payload: tickleVersion, ttl: versionTTL, urgency: webpush.UrgencyLow, topic: versionTopic}
+	}
 )
 
 // SubStore is the subscription persistence the notifier needs.
 type SubStore interface {
 	SubscriptionsFor(ctx context.Context, userID string) ([]store.PushSubscription, error)
+	AllSubscriptions(ctx context.Context) ([]store.PushSubscription, error)
 	DeleteSubscriptionByEndpoint(ctx context.Context, endpoint string) error
 }
 
@@ -188,6 +212,41 @@ func (n *Notifier) NotifyConn(ctx context.Context, userID string) {
 // + show the rich in-app banner. Carries no identity.
 func (n *Notifier) NotifyPost(ctx context.Context, userID string) {
 	n.notify(ctx, userID, postParams())
+}
+
+// BroadcastVersion sends a content-free version-announcement tickle to EVERY push
+// subscription (a new app version was deployed). The SW renders the user-friendly
+// "what's new" from the public /v1/config. Deliveries are bounded by
+// broadcastConcurrency; dead endpoints are pruned and failures logged. Safe to call in
+// a goroutine — a panic is recovered, so a bad broadcast can never crash the server.
+func (n *Notifier) BroadcastVersion(ctx context.Context) {
+	defer recoverLog("push: broadcast")
+	subs, err := n.store.AllSubscriptions(ctx)
+	if err != nil {
+		slog.Error("push: load all subscriptions for broadcast", "err", err)
+		return
+	}
+	if len(subs) == 0 {
+		return
+	}
+	slog.Info("push: broadcasting version announcement", "subscriptions", len(subs))
+	p := versionParams()
+	sem := make(chan struct{}, broadcastConcurrency)
+	var wg sync.WaitGroup
+	for _, sub := range subs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(sub store.PushSubscription) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer recoverLog("push: broadcast deliver")
+			sctx, cancel := context.WithTimeout(ctx, sendBudget)
+			defer cancel()
+			n.deliver(sctx, sub, p)
+		}(sub)
+	}
+	wg.Wait()
+	slog.Info("push: version broadcast complete", "subscriptions", len(subs))
 }
 
 func (n *Notifier) notify(ctx context.Context, userID string, p pushParams) {

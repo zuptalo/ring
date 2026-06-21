@@ -30,6 +30,16 @@ func (m *memSubStore) SubscriptionsFor(_ context.Context, userID string) ([]stor
 	return append([]store.PushSubscription(nil), m.subs[userID]...), nil
 }
 
+func (m *memSubStore) AllSubscriptions(_ context.Context) ([]store.PushSubscription, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.PushSubscription
+	for _, subs := range m.subs {
+		out = append(out, subs...)
+	}
+	return out, nil
+}
+
 func (m *memSubStore) DeleteSubscriptionByEndpoint(_ context.Context, endpoint string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -261,6 +271,9 @@ type panicSubStore struct{}
 func (panicSubStore) SubscriptionsFor(context.Context, string) ([]store.PushSubscription, error) {
 	panic("boom: SubscriptionsFor")
 }
+func (panicSubStore) AllSubscriptions(context.Context) ([]store.PushSubscription, error) {
+	panic("boom: AllSubscriptions")
+}
 func (panicSubStore) DeleteSubscriptionByEndpoint(context.Context, string) error { return nil }
 
 // A panic in push delivery must never escape Notify - it runs in a bare goroutine
@@ -281,4 +294,66 @@ func TestNotifyRecoversPanicInFanout(t *testing.T) {
 	}}
 	n := NewNotifier(nil, st)
 	n.Notify(context.Background(), "u1") // returns only if the fan-out recover holds
+}
+
+// TestBroadcastVersionHeaders verifies the version-announcement push is a content-free
+// tickle that is low-urgency, a few days long, and collapsible under its own topic.
+func TestBroadcastVersionHeaders(t *testing.T) {
+	cap := &capturedReq{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.record(r)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p256dh, auth := newSubKeys(t)
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}},
+	}}
+	n := newNotifier(t, st)
+
+	n.BroadcastVersion(context.Background())
+	if cap.ttl != "259200" {
+		t.Errorf("version TTL = %q, want 259200 (3d)", cap.ttl)
+	}
+	if cap.urgency != "low" {
+		t.Errorf("version Urgency = %q, want low", cap.urgency)
+	}
+	if cap.topic != "ring-version" {
+		t.Errorf("version Topic = %q, want ring-version", cap.topic)
+	}
+}
+
+// TestBroadcastVersionReachesEveryDevice verifies the broadcast fans out to EVERY
+// subscription across ALL users (not just one user's devices).
+func TestBroadcastVersionReachesEveryDevice(t *testing.T) {
+	cap := &capturedReq{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.record(r)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	mk := func() store.PushSubscription {
+		p256dh, auth := newSubKeys(t)
+		return store.PushSubscription{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}
+	}
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"u1": {mk(), mk()}, // two devices
+		"u2": {mk()},
+		"u3": {mk()},
+	}}
+	n := newNotifier(t, st)
+
+	n.BroadcastVersion(context.Background())
+	if got := atomic.LoadInt32(&cap.hits); got != 4 {
+		t.Errorf("broadcast reached %d subscriptions, want 4 (all devices of all users)", got)
+	}
+}
+
+// TestBroadcastVersionRecoversPanic asserts a panic while loading subscriptions can't
+// escape the broadcast (it runs in a goroutine off boot).
+func TestBroadcastVersionRecoversPanic(t *testing.T) {
+	n := NewNotifier(nil, panicSubStore{})
+	n.BroadcastVersion(context.Background()) // AllSubscriptions panics; recover must contain it
 }
