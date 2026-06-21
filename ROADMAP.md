@@ -43,3 +43,4 @@ Specs are grouped by category band; status moves
 |------|-------|--------|
 | [2001](specs/2001-stabilize-message-status/spec.md) | Stabilize message status reporting around downloaded-blob receipts | 🟢 shipped |
 | [2002](specs/2002-media-thumbnails-stay/spec.md) | Media Thumbnails Stay Thumbnails (no autoplay storm) | 🟢 shipped |
+| [2003](specs/2003-android-install-gate/spec.md) | Fix Android install-gate false "browser can't install" warning | 🔵 in-review |
