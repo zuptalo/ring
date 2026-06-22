@@ -102,6 +102,23 @@
         </ion-item>
       </ion-list>
 
+      <!-- Some Android devices block the installed app via Play Protect ("unsafe" /
+           "built for an older version of Android"). That's a Chrome/Play-Protect quirk with
+           installed web apps — the WebAPK shell's target SDK is Google's, not Ring's — so we
+           can't fix it in the app; instead, guide the user. Shown only on a real Android
+           browser that can install (not iOS/desktop, not the in-app-browser callout above). -->
+      <div v-if="platform === 'android' && !installUnavailable" class="ion-padding">
+        <div class="install-help">
+          <ion-icon :icon="informationCircleOutline" />
+          <span>
+            If Android blocks Ring as “unsafe” or “built for an older version of Android,”
+            that’s a Google Play Protect quirk with installed web apps — not a problem with
+            Ring. Update Chrome and Google Play services, then try again. If it still shows,
+            tap “More details” → “Install anyway.”
+          </span>
+        </div>
+      </div>
+
       <div class="ion-padding ion-text-center">
         <ion-text color="medium">
           <p>Already added it? Open Ring from your Home Screen.</p>
@@ -118,7 +135,7 @@ import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonContent,
   IonText, IonButton, IonIcon, IonList, IonListHeader, IonItem, IonLabel, IonNote,
 } from '@ionic/vue';
-import { downloadOutline, shareOutline, warningOutline } from 'ionicons/icons';
+import { downloadOutline, shareOutline, warningOutline, informationCircleOutline } from 'ionicons/icons';
 import { useInstallGuard, promptInstall } from '@/composables/useInstallGuard';
 
 const { mustInstall, platform, canPrompt, installUnavailable } = useInstallGuard();
@@ -185,6 +202,24 @@ ion-page {
 .cant-install ion-icon {
   flex: none;
   font-size: 20px;
+  margin-top: 1px;
+}
+/* Calm, secondary help note (Play Protect "older Android" guidance). Deliberately muted —
+   NOT the warning colour of .cant-install — so it reassures rather than alarms. */
+.install-help {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ion-color-medium) 12%, transparent);
+  color: var(--ion-color-medium-shade, #6b6f76);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.install-help ion-icon {
+  flex: none;
+  font-size: 18px;
   margin-top: 1px;
 }
 /* One identical 24×24 start-slot wrapper per step. Putting a uniform element in
