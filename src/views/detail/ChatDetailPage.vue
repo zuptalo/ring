@@ -1769,7 +1769,7 @@ async function centerWhenRendered(id: string, tries: number, instant = false): P
 // back to the newest when seekTo swaps the window (the seek and a stickBottom scrollToNewest would
 // otherwise race). Read in the rows-watch below.
 let seeking = false;
-async function scrollToMessage(id: string, opts: { instant?: boolean } = {}): Promise<void> {
+async function scrollToMessage(id: string, opts: { instant?: boolean; silent?: boolean } = {}): Promise<boolean> {
   // Album photos render under ONE bubble keyed by the album's first message id, so a non-first
   // member has no row/DOM node of its own. Map any album member to that first id — otherwise
   // "Go to message"/jump on photo 2+ dead-ends with "Original message not available". Centralized
@@ -1785,12 +1785,14 @@ async function scrollToMessage(id: string, opts: { instant?: boolean } = {}): Pr
   try {
     if (document.querySelector(`[data-mid="${id}"]`)) {
       await centerWhenRendered(id, 1, opts.instant);
-      return;
+      return true;
     }
     const target = await getMessage(id);
     if (!target || target.chatId !== chatId) {
-      notAvailableToast();
-      return;
+      // `silent` (automatic positioning, e.g. open-at-first-unseen) must not error-toast —
+      // the user didn't ask to jump anywhere; only an EXPLICIT jump (reply/quote/go-to) does.
+      if (!opts.silent) notAvailableToast();
+      return false;
     }
     // Load a window centered on the target in one read-pair (fast even for a target 5,000
     // messages back — vs paging batch-by-batch, which is O(n²) reads and janky). D7. A concurrent
@@ -1803,8 +1805,8 @@ async function scrollToMessage(id: string, opts: { instant?: boolean } = {}): Pr
       await new Promise((r) => setTimeout(r, 60));
     }
     if (rows.value.findIndex((r) => r.id === id) < 0) {
-      notAvailableToast();
-      return;
+      if (!opts.silent) notAvailableToast();
+      return false;
     }
     // The whole loaded run is rendered, so the target now mounts; re-seed the spacers for the
     // new window and center it on screen (a tap-driven scroll, not a fling, so scrollIntoView
@@ -1812,7 +1814,11 @@ async function scrollToMessage(id: string, opts: { instant?: boolean } = {}): Pr
     // doesn't mark every message it would smooth-scroll past (spec 1013).
     await nextTick();
     reseedTopPad();
-    if (!(await centerWhenRendered(id, 20, opts.instant))) notAvailableToast();
+    if (!(await centerWhenRendered(id, 20, opts.instant))) {
+      if (!opts.silent) notAvailableToast();
+      return false;
+    }
+    return true;
   } finally {
     seeking = false;
   }
@@ -2442,9 +2448,13 @@ watch(
         // advances Seen; only fall back to the newest when caught up. This is the authoritative
         // initial-position decision, so it must own the pin (onIonViewDidEnter would race it).
         await recomputeUnread();
-        if (unreadCount.value > 0 && firstUnreadId.value) {
-          await scrollToMessage(firstUnreadId.value, { instant: true }); // jump, don't scroll past
-        } else {
+        // Automatic open position — never error-toast if the first-unseen target can't be
+        // landed (deleted/tombstoned row, virtualization race); fall back to the newest.
+        const landed =
+          unreadCount.value > 0 && firstUnreadId.value
+            ? await scrollToMessage(firstUnreadId.value, { instant: true, silent: true })
+            : false;
+        if (!landed) {
           stickBottom = true;
           await scrollToNewest();
         }
