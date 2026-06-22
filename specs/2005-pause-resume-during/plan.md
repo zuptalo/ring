@@ -6,11 +6,21 @@
 
 ## Summary
 
+> **Design revision (2026-06-22, after on-device testing):** the original plan was
+> pause/resume the same take. In testing, the resume (▶) glyph misled the user into
+> expecting *playback review*, and the clip auto-sent at max length. Per the user's
+> decision, the design changed to **Stop → review → Send/Retake**: tapping Stop ENDS the
+> take and plays it back for review; the user then Sends or Retakes; nothing is ever
+> auto-sent (max-length stops into review). This removed the pause/resume machinery (and
+> the `rec-clock.ts` helper/tests — recording is now a single continuous take). The
+> camera-clean-start (FR-009), right-sized capture (FR-010), and gallery-exclusion
+> (FR-011/012) work below is unchanged. See spec.md for the current FRs/SCs.
+
 Replace the inert red square in the round video-note recorder (`VideoNoteRecorder.vue`)
-with a working **Pause/Resume** button, mirroring the voice recorder's proven pattern:
-`MediaRecorder.pause()` / `resume()` plus accumulate-recorded-time accounting so the
-elapsed timer and progress ring count only recorded time (not paused gaps). Send/Delete
-keep working from either state. No server, crypto, or stored-data change.
+with a working **Stop** control that ends recording and enters a **review** state (the
+recorded clip plays back), offering **Send** or **Retake**. The clip is never sent without
+an explicit Send, and reaching the max length stops into review rather than auto-sending.
+No server, crypto, or stored-data change.
 
 ## Technical Context
 

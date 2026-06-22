@@ -1,4 +1,4 @@
-# Feature Specification: Video-message recording — pause/resume, clean start, right-sized, out of the gallery
+# Feature Specification: Video-message recording — stop & review before sending, clean start, right-sized, out of the gallery
 
 **Feature Branch**: `fix/2005-pause-resume-during`
 
@@ -10,21 +10,22 @@
 
 **Input**: A user reported that the "stop" button during video-message recording does
 nothing. Investigation: the round video-note recorder shows a red square in its action
-bar that looks like a stop/pause control, but it is a decorative element with no
-behavior. By contrast, the voice-message recorder has a working Pause/Resume control. The
-user confirmed the symptom (the red square does nothing) and chose the fix: the control
-should pause and resume the same recording, matching the voice recorder.
+bar that looks like a stop control, but it is a decorative element with no behavior — and
+there was no way to review a recording before it was sent (and it auto-sent at the max
+length). The user chose the fix: tapping Stop must END the recording and let them WATCH IT
+BACK, then explicitly Send or Retake — and a recording must never be sent without their
+confirmation.
 
 ## Overview
 
 Ring lets you record a round **video message** (hold the camera button in a chat). The
-recorder fills a progress ring toward a maximum length and offers Delete and Send. Between
-them sits a red square that reads as the universal "stop recording" control — but it is
-inert, so tapping it does nothing. Meanwhile the **voice-message** recorder already lets
-you Pause a take (halting capture and the timer) and Resume it, then Send. This change
-gives the video recorder the same working **Pause/Resume** control: a single tap pauses the
-in-progress take (freezing the elapsed time and the progress ring), another tap resumes the
-same take, and Send finalizes and sends from either state.
+recorder fills a progress ring toward a maximum length. The action bar had a red square
+that reads as the universal "stop recording" control — but it was inert, there was no way
+to preview a take before sending, and reaching the max length auto-sent the clip. This
+change makes **Stop** real: tapping it ENDS the recording and enters a **review** state
+where the clip plays back so the user can watch it, then choose **Send** or **Retake**
+(record again). Recording is a single continuous take; the clip is **never sent without an
+explicit Send**, and the max-length limit **stops into review** instead of auto-sending.
 
 While fixing the recorder, three adjacent video-message issues are corrected: (a) when the
 camera opens, the preview briefly shows a scaled-down whole frame before it fills the round
@@ -38,76 +39,76 @@ like nature — they must be excluded from that gallery (as voice messages alrea
 ## Bug & Root Cause
 
 - **Symptom**: during video-message recording, tapping the red square (which looks like a
-  stop button) has no effect; the recording cannot be paused.
+  stop button) has no effect; there is no way to watch a take back before it is sent, and
+  reaching the max length sends the clip automatically.
 - **Root cause**: the red square is a non-interactive decorative element — it was never
-  wired to any pause/stop behavior (it has been decorative since the feature was first
-  added). The recorder offers only "send" (which stops and sends in one action) and
-  "delete/cancel"; there is no way to pause and continue a take the way the voice recorder
-  allows.
+  wired to any stop behavior. The recorder only offered "send" (stop-and-send in one action)
+  and "delete/cancel", with no review step, and the max-length handler called the same
+  auto-send path. So a user could not stop to review and decide.
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Pause and resume a video-message recording (Priority: P1)
+### User Story 1 - Stop, review, then send or retake (Priority: P1)
 
-While recording a video message, a user taps the stop/pause control to pause the take; the
-elapsed time and the progress ring stop advancing. They tap it again to resume the SAME
-take, and the elapsed time and ring continue from where they left off. They then send the
-combined recording.
+While recording a video message, the user taps **Stop**. Recording ends and the recorder
+enters a **review** state that plays the clip back so they can watch it. They then either
+**Send** it or **Retake** (discard and record again). The clip is never sent until they tap
+Send.
 
 **Why this priority**: This is the reported broken control and the user's chosen fix — the
 whole point of the change.
 
-**Independent Test**: Start a video recording, pause it, confirm the timer/ring freeze,
-resume, confirm they continue, and send a single clip that includes footage from before and
-after the pause.
+**Independent Test**: Record a clip, tap Stop, confirm it enters review and plays back,
+confirm nothing is sent yet, then tap Send and confirm the clip is delivered.
 
 **Acceptance Scenarios**:
 
-1. **Given** a video recording is in progress, **When** the user taps the pause control,
-   **Then** recording pauses, the elapsed time stops advancing, and the progress ring stops
-   filling.
-2. **Given** the recording is paused, **When** the user taps the control again, **Then** the
-   same recording resumes and the elapsed time and ring continue from where they paused (not
-   restarted, not jumped forward by the paused duration).
-3. **Given** the recording was paused and resumed one or more times, **When** the user taps
-   Send, **Then** a single video message is sent containing the footage from all recorded
-   segments, with a duration equal to the recorded time (excluding paused gaps).
+1. **Given** a recording is in progress, **When** the user taps Stop, **Then** recording
+   ends and the recorder enters review, playing the recorded clip back (no message sent).
+2. **Given** the recorder is in review, **When** the user taps Send, **Then** that clip is
+   sent as a single video message and the recorder closes.
+3. **Given** the recorder is in review, **When** the user taps Retake, **Then** the clip is
+   discarded and a fresh recording begins (nothing sent).
 
-### User Story 2 - The control clearly reflects paused vs. recording (Priority: P2)
+### User Story 2 - Review playback and controls are clear (Priority: P2)
 
-The control visibly indicates its current state, so the user knows whether tapping it will
-pause or resume — consistent with how the voice recorder shows its Pause/Resume state.
+The review state clearly offers watching the clip back (play/pause) plus Send and Retake,
+and the recording state clearly offers a working Stop — each control reads correctly for
+its state.
 
-**Why this priority**: Without a clear state cue the user can't tell if they're paused;
-this is the difference between a control that "works" and one that's merely wired up.
+**Why this priority**: The original ▶-style glyph implied "play back" but resumed/ran the
+recording; controls must mean what they show.
 
-**Independent Test**: Observe the control while recording vs. paused and confirm it shows a
-distinct, understandable state in each.
+**Independent Test**: In recording, confirm a Stop affordance; after Stop, confirm a
+play/pause-back control plus Send and Retake.
 
 **Acceptance Scenarios**:
 
 1. **Given** a recording is in progress, **When** the user looks at the control, **Then** it
-   indicates that tapping will pause (a stop/pause affordance).
-2. **Given** the recording is paused, **When** the user looks at the control, **Then** it
-   indicates that tapping will resume (a resume affordance), and there is a clear paused
-   indication distinct from the actively-recording state.
+   shows a Stop affordance (not a play/back glyph) and ends the recording when tapped.
+2. **Given** the recorder is in review, **When** the user looks at the controls, **Then**
+   they show a play/pause control that plays the clip back, plus distinct Send and Retake.
 
-### User Story 3 - Send and delete work from either state (Priority: P2)
+### User Story 3 - Nothing is sent without confirmation (Priority: P1)
 
-Send and Delete behave correctly whether the recording is currently recording or paused.
+A video message is only ever sent when the user explicitly taps Send — including when a
+recording reaches the maximum length.
 
-**Why this priority**: A pause control that breaks send/delete would be a worse bug than the
-one being fixed; finalizing from a paused state must work.
+**Why this priority**: The reported failure was a clip auto-sending without review; this
+must not be possible.
 
-**Independent Test**: Pause a recording, then (a) Send and confirm the clip is sent, and
-separately (b) Delete and confirm the take is discarded with nothing sent.
+**Independent Test**: Record without tapping Send and confirm nothing is delivered; let a
+recording reach the max length and confirm it stops into review (not sent); Cancel and
+confirm nothing is delivered and the camera is released.
 
 **Acceptance Scenarios**:
 
-1. **Given** a paused recording, **When** the user taps Send, **Then** the recorded clip is
-   finalized and sent (no further user step required).
-2. **Given** a paused recording, **When** the user taps Delete/Cancel, **Then** the take is
-   discarded, nothing is sent, and the camera is released.
+1. **Given** a recording in progress, **When** the user has not tapped Send, **Then** no
+   video message is delivered.
+2. **Given** a recording reaches the maximum length, **When** the limit is hit, **Then** the
+   recording stops into review (it is NOT auto-sent).
+3. **Given** a recording or review, **When** the user taps Cancel/close, **Then** the take
+   is discarded, nothing is sent, and the camera is released.
 
 ### User Story 4 - The camera preview opens already framed (Priority: P2)
 
@@ -165,44 +166,41 @@ not listed; confirm it cannot be opened in the fullscreen viewer.
 
 ### Edge Cases
 
-- **Auto-stop at max length**: the recorder finalizes at a maximum duration; that maximum
-  must count only RECORDED time, so a paused recording does not auto-send while paused and
-  does not lose recorded time to the paused gap.
-- **Pause then immediately send**: sending right after pausing (without resuming) must still
-  produce a valid clip of the recorded duration.
-- **Multiple pause/resume cycles**: repeated pause/resume in one take must keep the elapsed
-  time and ring accurate (the sum of recorded segments).
-- **Flip camera / cancel while paused**: switching camera or cancelling from a paused state
-  must behave the same as from a recording state (current take discarded / restarted), with
-  no orphaned camera stream.
-- **Pause/resume unsupported by the platform**: on a platform that cannot pause a recording
-  mid-take, the control must degrade gracefully rather than corrupt the recording (see
-  Assumptions; the voice recorder already relies on the same capability on supported
-  platforms).
-- **Live preview while paused**: the camera preview may keep showing the live camera while
-  paused; pausing affects only what is recorded, not the preview.
+- **Max length reached**: at the maximum duration the recording stops INTO review (it is
+  never auto-sent); the user still chooses Send or Retake.
+- **Replay in review**: playing the clip back to its end and tapping play again replays it
+  from the start; Send is available whether or not it has been played.
+- **Retake**: discarding in review releases the prior clip and starts a fresh recording
+  (new countdown), with no leaked object URLs or orphaned camera stream.
+- **Cancel/close from recording or review**: discards the take, sends nothing, and releases
+  the camera in both states.
+- **Flip camera**: switching cameras restarts the take (discarding the current one) with no
+  orphaned stream.
+- **Review playback with sound**: the recorded clip plays back with audio (un-mirrored, as
+  the recipient will see it), distinct from the muted, mirrored live preview.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The video-message recorder MUST provide a working control that pauses an
-  in-progress recording and resumes the SAME recording, replacing the current non-functional
-  red square.
-- **FR-002**: While paused, the recorder MUST stop advancing the elapsed time and the
-  progress ring; on resume it MUST continue them from where they paused.
-- **FR-003**: The reported elapsed time and the duration of the sent video MUST reflect only
-  recorded time, excluding paused gaps.
-- **FR-004**: A video message sent after one or more pause/resume cycles MUST contain the
-  footage from all recorded segments as a single playable clip.
-- **FR-005**: The control MUST visibly indicate its current state — actively recording
-  (tap to pause) vs. paused (tap to resume) — consistent with the voice recorder's pattern.
-- **FR-006**: Send MUST finalize and send the recording from either the recording or the
-  paused state; Delete/Cancel MUST discard the take and release the camera from either state.
-- **FR-007**: The automatic finalize at the maximum recording length MUST be driven by
-  recorded time only, so a paused recording is not auto-finalized while paused.
-- **FR-008**: The behavior SHOULD match the voice-message recorder's Pause/Resume semantics
-  for consistency across the two recorders.
+- **FR-001**: The video-message recorder MUST provide a working **Stop** control that ends
+  the in-progress recording and enters a review state, replacing the non-functional red
+  square.
+- **FR-002**: In review, the recorder MUST play the recorded clip back and let the user
+  play/pause (and replay) it before deciding.
+- **FR-003**: In review, the user MUST be able to **Send** the clip (delivering a single
+  video message and closing the recorder) or **Retake** (discard it and record again).
+- **FR-004**: A video message MUST NOT be sent unless the user explicitly taps Send — there
+  is no auto-send.
+- **FR-005**: Controls MUST read correctly for their state: a Stop affordance while
+  recording (not a play/back glyph), and a play/pause-back control plus Send and Retake in
+  review.
+- **FR-006**: Cancel/close MUST discard the take, send nothing, and release the camera from
+  either the recording or the review state (no orphaned camera stream, no leaked clip).
+- **FR-007**: Reaching the maximum recording length MUST stop the recording into review,
+  NOT auto-send it.
+- **FR-008**: Recording is a single continuous take; the reported elapsed time and the sent
+  clip's duration MUST reflect the recorded length.
 - **FR-009**: When the recorder opens, the preview MUST remain covered until the camera has
   produced its first frame, so the brief scaled-down whole-frame render is never visible; the
   countdown/reveal MUST begin only once the framed preview is available (with a sensible
@@ -233,17 +231,16 @@ not listed; confirm it cannot be opened in the fullscreen viewer.
 
 ### Measurable Outcomes
 
-- **SC-001**: Tapping the pause control during a video recording pauses it in 100% of cases
-  on supported platforms (the timer and ring stop), and tapping again resumes the same take.
-- **SC-002**: After pausing for any duration and resuming, the elapsed time and sent-clip
-  duration equal the total RECORDED time, with the paused gap excluded (verified to within a
-  small rounding tolerance).
-- **SC-003**: A clip sent after one or more pause/resume cycles plays back as a single video
-  containing all recorded segments.
-- **SC-004**: The control shows a distinct, correct state for recording vs. paused in 100%
-  of cases.
-- **SC-005**: Send and Delete succeed from the paused state (clip sent / take discarded and
-  camera released), with no orphaned camera stream left running.
+- **SC-001**: Tapping Stop during a recording ends it and enters review in 100% of cases,
+  playing the recorded clip back.
+- **SC-002**: No video message is delivered until the user taps Send — including when a
+  recording reaches the maximum length (which stops into review, never auto-sends).
+- **SC-003**: From review, Send delivers exactly the reviewed clip and Retake discards it
+  and starts a fresh recording.
+- **SC-004**: Controls read correctly for their state (a Stop affordance while recording;
+  play/pause-back + Send + Retake in review) in 100% of cases.
+- **SC-005**: Cancel/close from recording or review discards the take, sends nothing, and
+  releases the camera, with no orphaned camera stream left running.
 - **SC-006**: Opening the recorder never shows a scaled-down whole-frame flash before the
   framed preview — the preview area stays covered until the first camera frame.
 - **SC-007**: A recorded video message's resolution/bitrate are constrained to the
@@ -254,14 +251,11 @@ not listed; confirm it cannot be opened in the fullscreen viewer.
 
 ## Assumptions
 
-- The platform's media recording supports pause/resume of an in-progress recording. The
-  voice-message recorder already uses this successfully on the user's platform, so video can
-  rely on the same capability; where it is unsupported the control degrades gracefully
-  (Edge Cases) rather than producing a corrupt clip.
-- "Pause" halts capture only; the live camera preview may continue to display the camera
-  feed while paused (freezing the preview is not required).
-- The maximum recording length and the existing Delete/Send/Flip/Cancel controls are kept;
-  this change adds the pause/resume control and corrects the elapsed-time accounting around
-  pauses.
-- No change to the recorded media format, the encryption, or the send path; the only output
-  difference is that a clip may now consist of multiple recorded segments from one take.
+- Recording is a single continuous take (no mid-take pause/continue); Stop finalizes it for
+  review. Review plays the finalized clip back from the recorded blob.
+- The maximum recording length and the existing Flip/Cancel controls are kept; this change
+  replaces the inert red square with a real Stop, adds the review (play-back) state with
+  Send/Retake, and makes max-length stop into review instead of auto-sending. (The remaining
+  Assumptions about quality and the gallery are unchanged.)
+- No change to the recorded media format, the encryption, or the send path; only the
+  capture size/bitrate (smaller) and the recorder's control flow change.

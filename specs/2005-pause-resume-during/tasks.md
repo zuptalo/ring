@@ -5,10 +5,20 @@
 **Input**: plan.md, research.md, data-model.md (no data model), quickstart.md. No contracts/
 (internal client UI; no external interface).
 
-**Tests**: TDD per Constitution Principle III. The elapsed-accounting bug is captured by a
-FAILING-first unit test on the extracted pure `recordedMs` helper. The recorder's
-`MediaRecorder`/UI is verified via a `drive/` fake-media scenario (recorded harness
-limitation — no recordable media device in vitest); see plan.md Constitution Check.
+**Tests**: TDD per Constitution Principle III. The recorder's `MediaRecorder`/UI is verified
+via a `drive/` fake-media scenario (recorded harness limitation — no recordable media device
+in vitest); see plan.md Constitution Check.
+
+> **Design revision (2026-06-22):** after on-device testing the design changed from
+> pause/resume to **Stop → review → Send/Retake** (never auto-send). T002/T003 (the
+> `rec-clock.ts` `recordedMs` helper + tests) and the pause/resume tasks T004–T010 below are
+> **superseded**: recording is now a single continuous take; `rec-clock.ts` was removed.
+> What shipped, in `VideoNoteRecorder.vue`: a real **Stop** (red square) that finalizes the
+> take into a **review** state which plays the clip back, with **Retake · Play/Pause · Send**
+> controls; max-length stops into review; nothing is sent without Send. T014–T016 (clean
+> camera start, right-sized capture, gallery exclusion) shipped as written. The drive
+> scenario (`video-note-pause.mjs`) was updated to verify stop→review→send + no auto-send.
+> See spec.md for the authoritative FRs/SCs.
 
 ---
 

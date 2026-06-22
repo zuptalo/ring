@@ -1,9 +1,11 @@
 <template>
-  <!-- Full-screen circular video-note recorder (WhatsApp-style). Starts recording
-       as soon as it opens; the ring fills toward the max length. -->
+  <!-- Full-screen circular video-note recorder (WhatsApp-style). Starts recording as soon
+       as it opens; the ring fills toward the max length. Tapping Stop ENDS the take and
+       drops into a review state where you can watch it back, then Send or Retake — it is
+       never sent without you tapping Send, and it never auto-sends at the max length. -->
   <div v-if="open" class="vn-overlay">
     <button class="vn-close" aria-label="Cancel" @click="cancel"><ion-icon :icon="close" /></button>
-    <div class="vn-timer">{{ fmt(elapsed) }}</div>
+    <div class="vn-timer" :class="{ review: phase === 'review' }">{{ fmt(elapsed) }}</div>
 
     <div class="vn-stage">
       <svg class="vn-ring" viewBox="0 0 100 100">
@@ -17,28 +19,46 @@
           :stroke-dashoffset="CIRC * (1 - progress)"
         />
       </svg>
-      <video ref="preview" class="vn-video" :class="{ mirror: facing === 'user', hidden: !ready }" autoplay muted playsinline></video>
+      <!-- One element shows the LIVE camera while recording (muted, mirrored selfie) and the
+           RECORDED clip while reviewing (with sound, un-mirrored — as the recipient sees it). -->
+      <video
+        ref="preview"
+        class="vn-video"
+        :class="{ mirror: facing === 'user' && phase !== 'review', hidden: phase !== 'review' && !ready }"
+        :muted="phase !== 'review'"
+        autoplay
+        playsinline
+        @timeupdate="onReviewTime"
+        @ended="onReviewEnd"
+        @play="reviewPlaying = true"
+        @pause="reviewPlaying = false"
+      ></video>
       <!-- Black overlay that fades to reveal the footage during the 3s countdown. -->
       <div class="vn-fade" :class="{ go: fading }"></div>
       <div v-if="countdown" class="vn-count">{{ countdown }}</div>
     </div>
 
-    <button class="vn-flip" aria-label="Flip camera" @click="flip"><ion-icon :icon="cameraReverseOutline" /></button>
+    <button v-if="phase !== 'review'" class="vn-flip" aria-label="Flip camera" @click="flip">
+      <ion-icon :icon="cameraReverseOutline" />
+    </button>
 
     <div class="vn-bar">
-      <button class="vn-btn" aria-label="Delete" @click="cancel"><ion-icon :icon="trashOutline" /></button>
-      <!-- Pause/resume the take. The recording cue (red square) is folded INTO this control:
-           it's the red live indicator while recording (tap to pause) and a resume ▶ when paused. -->
-      <button
-        class="vn-pause"
-        :class="{ paused }"
-        :aria-label="paused ? 'Resume recording' : 'Pause recording'"
-        @click="togglePause"
-      >
-        <ion-icon v-if="paused" :icon="play" />
-        <span v-else class="vn-pause-rec"></span>
-      </button>
-      <button class="vn-btn send" aria-label="Send" @click="stopAndSend"><ion-icon :icon="sendOutline" /></button>
+      <!-- Review: Retake (discard + record again) · Play/Pause (watch it back) · Send. -->
+      <template v-if="phase === 'review'">
+        <button class="vn-btn" aria-label="Retake" @click="retake"><ion-icon :icon="refreshOutline" /></button>
+        <button class="vn-btn" :aria-label="reviewPlaying ? 'Pause preview' : 'Play preview'" @click="toggleReview">
+          <ion-icon :icon="reviewPlaying ? pause : play" />
+        </button>
+        <button class="vn-btn send" aria-label="Send" @click="send"><ion-icon :icon="sendOutline" /></button>
+      </template>
+      <!-- Recording/countdown: Cancel · Stop (red square) · spacer (keeps Stop centred). -->
+      <template v-else>
+        <button class="vn-btn" aria-label="Cancel" @click="cancel"><ion-icon :icon="trashOutline" /></button>
+        <button class="vn-stop" aria-label="Stop recording" :disabled="phase !== 'recording'" @click="stopToReview">
+          <span class="vn-stop-sq"></span>
+        </button>
+        <span class="vn-btn-spacer" aria-hidden="true"></span>
+      </template>
     </div>
   </div>
 </template>
@@ -46,8 +66,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { IonIcon } from '@ionic/vue';
-import { close, cameraReverseOutline, trashOutline, sendOutline, play } from 'ionicons/icons';
-import { recordedMs } from '@/utils/rec-clock';
+import { close, cameraReverseOutline, trashOutline, sendOutline, play, pause, refreshOutline } from 'ionicons/icons';
 
 const MAX = 60; // seconds
 const CIRC = 2 * Math.PI * 48;
@@ -55,25 +74,32 @@ const CIRC = 2 * Math.PI * 48;
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: 'send', blob: Blob, dur: number, poster?: string): void; (e: 'cancel'): void }>();
 
+type Phase = 'countdown' | 'recording' | 'review';
+const phase = ref<Phase>('countdown');
 const preview = ref<HTMLVideoElement>();
-const elapsed = ref(0);
+const elapsed = ref(0); // seconds: recording time while recording, the clip length while reviewing
 const facing = ref<'user' | 'environment'>('user');
-const countdown = ref<number | null>(null); // 3..1 before recording starts (null = recording)
+const countdown = ref<number | null>(null); // 3..1 before recording starts (null otherwise)
 const fading = ref(false); // drives the black→footage fade during the countdown
-const paused = ref(false); // recording paused (tap the control to resume the same take)
 const ready = ref(false); // first camera frame painted → safe to reveal the framed preview
+const reviewPlaying = ref(false); // the recorded clip is currently playing back
+const playPos = ref(0); // playback position (s) during review, for the ring
 let stream: MediaStream | null = null;
 let recorder: MediaRecorder | null = null;
 let chunks: BlobPart[] = [];
-// Recorded-time accounting (mirrors the voice recorder): `accumMs` banks time from
-// completed segments, `segStartMs` marks the current segment's start. Elapsed/duration
-// are derived via recordedMs() so a paused gap is never counted (replaces a raw startMs).
-let accumMs = 0;
-let segStartMs = 0;
+let startMs = 0; // recording start (single continuous take — no pause)
 let timer: number | undefined;
 let countTimer: number | undefined;
+// Review state: the finalized clip + its object URL (revoked on send/retake/teardown).
+let reviewBlob: Blob | null = null;
+let reviewUrl: string | null = null;
+let reviewDur = 0;
+let reviewPoster: string | undefined;
 
-const progress = computed(() => Math.min(1, elapsed.value / MAX));
+const progress = computed(() => {
+  if (phase.value === 'review') return reviewDur ? Math.min(1, playPos.value / reviewDur) : 0;
+  return Math.min(1, elapsed.value / MAX);
+});
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 watch(
@@ -111,9 +137,12 @@ function firstFrame(v: HTMLVideoElement): Promise<void> {
 
 async function start(): Promise<void> {
   try {
+    phase.value = 'countdown';
     ready.value = false;
     countdown.value = null;
     fading.value = false;
+    elapsed.value = 0;
+    playPos.value = 0;
     // Right-size for the in-chat circle (a ~200px round bubble, never fullscreen): a small,
     // squarish capture keeps files small with no visible loss at that size.
     stream = await navigator.mediaDevices.getUserMedia({
@@ -128,6 +157,7 @@ async function start(): Promise<void> {
     });
     const v = preview.value;
     if (v) {
+      v.src = ''; // drop any prior review clip
       v.srcObject = stream;
       await firstFrame(v); // hold the black cover over the scaled-down initial render
     }
@@ -167,62 +197,19 @@ function beginRecording(): void {
   chunks = [];
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   recorder.start();
-  accumMs = 0;
-  segStartMs = Date.now();
-  paused.value = false;
+  phase.value = 'recording';
+  startMs = Date.now();
   elapsed.value = 0;
   timer = window.setInterval(() => {
-    // Drive the timer (and thus the progress ring) from RECORDED time, so it freezes while
-    // paused and the max-length auto-finalize never fires on a paused recording.
-    elapsed.value = recordedMs({ accumMs, segStartMs, paused: paused.value }, Date.now()) / 1000;
-    if (elapsed.value >= MAX) void stopAndSend();
+    elapsed.value = (Date.now() - startMs) / 1000;
+    // At the max length, STOP into review (never auto-send) — the user always decides.
+    if (elapsed.value >= MAX) void stopToReview();
   }, 100);
 }
 
-// Pause/resume the SAME take: bank the current segment and pause, or start a fresh segment
-// and resume. No-op during the 3-2-1 countdown (no recorder yet) or once stopped.
-function togglePause(): void {
-  if (!recorder || recorder.state === 'inactive') return;
-  if (paused.value) {
-    segStartMs = Date.now();
-    recorder.resume();
-    paused.value = false;
-  } else {
-    accumMs += Date.now() - segStartMs;
-    recorder.pause();
-    paused.value = true;
-  }
-}
-
-function teardown(): void {
-  if (timer) clearInterval(timer);
-  timer = undefined;
-  if (countTimer) clearInterval(countTimer);
-  countTimer = undefined;
-  countdown.value = null;
-  fading.value = false;
-  try {
-    if (recorder && recorder.state !== 'inactive') {
-      // Resume a paused recorder before stopping so it finalizes and releases cleanly.
-      if (recorder.state === 'paused') recorder.resume();
-      recorder.stop();
-    }
-  } catch {
-    /* ignore */
-  }
-  stream?.getTracks().forEach((t) => t.stop());
-  stream = null;
-  recorder = null;
-  paused.value = false;
-  ready.value = false;
-  accumMs = 0;
-  segStartMs = 0;
-}
-
-// Grab a still from the live preview as a thumbnail — reliable (we always have real
-// frames here), unlike decoding the recorded blob, which can fail on some devices.
-// drawImage reads the raw frame (the CSS mirror doesn't apply), so it matches the
-// recorded, un-mirrored video.
+// Grab a still from the LIVE preview as a thumbnail — reliable (we always have real frames
+// here), unlike decoding the recorded blob, which can fail on some devices. drawImage reads
+// the raw frame (the CSS mirror doesn't apply), so it matches the recorded, un-mirrored video.
 function capturePoster(): string | undefined {
   const v = preview.value;
   if (!v || !v.videoWidth) return undefined;
@@ -241,32 +228,113 @@ function capturePoster(): string | undefined {
   }
 }
 
-async function stopAndSend(): Promise<void> {
-  if (!recorder) return;
-  // Duration is the RECORDED time (excludes paused gaps), computed before we resume below.
-  const dur = Math.max(1, Math.round(recordedMs({ accumMs, segStartMs, paused: paused.value }, Date.now()) / 1000));
-  const poster = capturePoster(); // capture while the preview stream is still live
-  const rec = recorder;
-  const mime = rec.mimeType || 'video/webm';
+// End recording and drop into review: finalize the clip, release the camera, and play it
+// back so the user can watch before deciding to Send or Retake.
+async function stopToReview(): Promise<void> {
+  if (phase.value !== 'recording' || !recorder) return;
+  reviewPoster = capturePoster(); // capture while the live camera frame is still showing
+  reviewDur = Math.max(1, Math.round(elapsed.value));
   if (timer) clearInterval(timer);
   timer = undefined;
-  // Some browsers won't fire dataavailable/onstop cleanly while paused — resume first.
-  if (paused.value) {
-    try {
-      rec.resume();
-    } catch {
-      /* ignore */
-    }
-    paused.value = false;
-  }
+  const rec = recorder;
+  const mime = rec.mimeType || 'video/webm';
   const blob: Blob = await new Promise((res) => {
     rec.onstop = () => res(new Blob(chunks, { type: mime }));
     rec.stop();
   });
+  recorder = null;
+  stream?.getTracks().forEach((t) => t.stop()); // stop the camera; we have the clip now
+  stream = null;
+  reviewBlob = blob;
+  reviewUrl = URL.createObjectURL(blob);
+  elapsed.value = reviewDur; // the timer now shows the clip length
+  playPos.value = 0;
+  phase.value = 'review';
+  const v = preview.value;
+  if (v) {
+    v.srcObject = null;
+    v.src = reviewUrl;
+    v.loop = false;
+    v.currentTime = 0;
+    void v.play().catch(() => {
+      /* autoplay-with-sound may be blocked when reached via the max-length stop (no
+         gesture); the user can tap Play. */
+    });
+  }
+}
+
+function onReviewTime(): void {
+  if (phase.value === 'review' && preview.value) playPos.value = preview.value.currentTime;
+}
+function onReviewEnd(): void {
+  reviewPlaying.value = false;
+  if (phase.value === 'review') playPos.value = reviewDur; // leave the ring full
+}
+
+// Watch the clip back: play, pause, or replay from the start once it has ended.
+function toggleReview(): void {
+  const v = preview.value;
+  if (!v) return;
+  if (v.paused || v.ended) {
+    if (v.ended) v.currentTime = 0;
+    void v.play().catch(() => {});
+  } else {
+    v.pause();
+  }
+}
+
+function send(): void {
+  if (!reviewBlob) return;
+  const blob = reviewBlob;
+  const dur = reviewDur;
+  const poster = reviewPoster;
+  releaseReview();
+  emit('send', blob, dur, poster);
+}
+
+// Discard the reviewed clip and record again from scratch.
+async function retake(): Promise<void> {
+  releaseReview();
+  teardown();
+  await start();
+}
+
+function releaseReview(): void {
+  if (reviewUrl) {
+    URL.revokeObjectURL(reviewUrl);
+    reviewUrl = null;
+  }
+  reviewBlob = null;
+  reviewPoster = undefined;
+  reviewDur = 0;
+  reviewPlaying.value = false;
+}
+
+function teardown(): void {
+  if (timer) clearInterval(timer);
+  timer = undefined;
+  if (countTimer) clearInterval(countTimer);
+  countTimer = undefined;
+  countdown.value = null;
+  fading.value = false;
+  try {
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+  } catch {
+    /* ignore */
+  }
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
   recorder = null;
-  emit('send', blob, dur, poster);
+  releaseReview();
+  const v = preview.value;
+  if (v) {
+    v.srcObject = null;
+    v.src = '';
+  }
+  ready.value = false;
+  phase.value = 'countdown';
+  elapsed.value = 0;
+  playPos.value = 0;
 }
 
 function cancel(): void {
@@ -311,6 +379,11 @@ onBeforeUnmount(teardown);
   font-variant-numeric: tabular-nums;
   padding: 4px 12px;
   border-radius: 8px;
+}
+/* Reviewing is not recording — drop the red so the timer reads as a clip length, not a
+   live recording indicator. */
+.vn-timer.review {
+  background: rgba(0, 0, 0, 0.45);
 }
 .vn-stage {
   position: relative;
@@ -409,38 +482,44 @@ onBeforeUnmount(teardown);
   color: #fff;
   font-size: 24px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .vn-btn.send {
   background: var(--ion-color-primary);
 }
-/* Pause/resume control. Same circular footprint as the delete/send buttons; the red
-   recording indicator is folded in (the inner square) and swaps to a resume glyph when
-   paused, so one element both shows state and is the tap target. */
-.vn-pause {
+/* A no-op slot the same size as a button so the centred Stop stays centred. */
+.vn-btn-spacer {
+  width: 52px;
+  height: 52px;
+}
+/* Stop control: a circular button with a red square (the universal stop glyph). Disabled
+   during the countdown (nothing to stop yet). */
+.vn-stop {
   width: 52px;
   height: 52px;
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.12);
-  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
 }
-.vn-pause.paused {
-  background: rgba(255, 255, 255, 0.18);
+.vn-stop:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
-.vn-pause ion-icon {
-  font-size: 26px;
-}
-/* The live red square (the former recording dot), pulsing while actively recording. */
-.vn-pause-rec {
+.vn-stop-sq {
   width: 20px;
   height: 20px;
   border-radius: 4px;
   background: #ef4444;
   animation: vn-pulse 1.2s ease-in-out infinite;
+}
+.vn-stop:disabled .vn-stop-sq {
+  animation: none;
 }
 @keyframes vn-pulse {
   50% {

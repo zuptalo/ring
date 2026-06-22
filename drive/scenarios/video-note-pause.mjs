@@ -1,10 +1,10 @@
 /**
- * Spec 2005 check: pause/resume during video-message recording.
+ * Spec 2005 check: video-message recording → STOP → review → Send.
  *
  * Opens the round video-note recorder (long-press the camera button), lets it record,
- * then taps the new Pause control and confirms the timer FREEZES, taps Resume and confirms
- * it CONTINUES, and Sends — confirming a video message reaches the peer. Uses the driver's
- * fake camera/mic (already enabled in driver.mjs).
+ * taps Stop (which ENDS the take and enters review — never auto-sends), confirms the
+ * Play-preview control appears, plays the clip back, then Sends and confirms the peer
+ * receives it. Uses the driver's fake camera/mic (already enabled in driver.mjs).
  *
  *   HEADED=1 node drive/scenarios/video-note-pause.mjs
  *
@@ -32,34 +32,34 @@ await cam.dispatchEvent('pointerup');
 
 // 3-2-1 countdown, then recording begins. Wait it out plus a little recorded time.
 await alice.page.waitForTimeout(4500);
-await shot(alice, '2005-recording'); // red pulsing square (recording), timer advancing
+await shot(alice, '2005-recording'); // red square Stop; timer advancing
 
-const readElapsed = () => alice.page.locator('.vn-timer').textContent();
+// Stop → review. Recording ends; nothing is sent. The Play-preview control must appear.
+await alice.page.locator('[aria-label="Stop recording"]').click();
+await poll(
+  () => alice.page.locator('[aria-label="Play preview"], [aria-label="Pause preview"]').count().then((n) => n > 0),
+  Boolean,
+  { label: 'review controls appear', timeout: 5000 },
+);
+await alice.page.waitForTimeout(400);
+await shot(alice, '2005-review'); // Retake · Play/Pause · Send
 
-// Pause: the timer must FREEZE.
-await alice.page.locator('[aria-label="Pause recording"]').click();
-await alice.page.waitForTimeout(300);
-const atPause = await readElapsed();
-await shot(alice, '2005-paused'); // resume ▶ glyph
-await alice.page.waitForTimeout(1500);
-const afterPauseWait = await readElapsed();
-console.log(`[check] elapsed at pause=${atPause} after 1.5s paused=${afterPauseWait} (expect EQUAL)`);
-
-// Resume: the timer must CONTINUE.
-await alice.page.locator('[aria-label="Resume recording"]').click();
-await alice.page.waitForTimeout(1500);
-const afterResume = await readElapsed();
-console.log(`[check] elapsed after resume+1.5s=${afterResume} (expect GREATER than ${afterPauseWait})`);
-
-// Send from the (now recording) state and confirm Bob receives a video message.
-await alice.page.locator('.vn-bar [aria-label="Send"]').click();
+// Confirm NOTHING was auto-sent during/after recording (we are still in review).
 const bobChat = await chatWith(bob, alice.id);
+const early = await bob.page.evaluate((c) => window.__ringTest.messages(c), bobChat);
+const sentEarly = Array.isArray(early) && early.some((m) => m.kind === 'video');
+console.log(`[check] no auto-send before tapping Send: ${!sentEarly ? 'OK' : 'FAIL — a video was already sent'}`);
+
+// Play it back, then Send.
+await alice.page.locator('[aria-label="Play preview"]').click().catch(() => {});
+await alice.page.waitForTimeout(800);
+await alice.page.locator('.vn-bar [aria-label="Send"]').click();
 await poll(
   () => bob.page.evaluate((c) => window.__ringTest.messages(c), bobChat),
   (msgs) => Array.isArray(msgs) && msgs.some((m) => m.kind === 'video'),
-  { label: 'Bob receives the video note', timeout: 15000 },
+  { label: 'Bob receives the video message after Send', timeout: 15000 },
 );
-console.log('[check] Bob received a video message ✓');
+console.log('[check] Bob received the video message only after Send ✓');
 
 await sweep([alice, bob]);
 await done();
