@@ -47,3 +47,4 @@ Specs are grouped by category band; status moves
 | [2003](specs/2003-android-install-gate/spec.md) | Fix Android install-gate false "browser can't install" warning | 🟢 shipped |
 | [2004](specs/2004-unify-app-notifications/spec.md) | Unify in-app notifications/toasts + user-friendly "What's new" | 🟢 shipped |
 | [2005](specs/2005-pause-resume-during/spec.md) | Video-message recording — stop & review before sending, clean start, right-sized, out of the gallery | 🟡 in-progress |
+| [2006](specs/2006-install-page-guidance/spec.md) | Install-page guidance for a Play Protect "older Android" block | 🟡 in-progress |
