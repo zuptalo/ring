@@ -47,14 +47,36 @@ function detectPlatform(): InstallPlatform {
   return 'desktop';
 }
 
+/**
+ * Whether an Android user agent is an embedded WebView — the one common Android surface
+ * that genuinely CANNOT install a PWA (no "Install app" menu; "Add to Home" only makes a
+ * shortcut). Pure (UA-only) so it's unit-testable and deterministic.
+ *
+ * We deliberately do NOT infer incapability from a missing/slow `beforeinstallprompt`
+ * event: a fully capable, current Chrome can fire it late or not auto-fire it at all, so
+ * that signal produced false "your browser can't install / update Chrome" warnings for
+ * real users (spec 2003). Mainstream Android browsers (Chrome, Samsung Internet, Edge,
+ * Firefox) can all install via their own menu and are NOT WebViews.
+ *
+ * Detection: the modern WebView tags itself with "; wv)" in the platform section; the
+ * legacy signature is a "Version/x.x" token alongside "Chrome/" (real Chrome / Samsung /
+ * Edge on Android do not carry "Version/").
+ */
+export function isAndroidWebView(ua: string): boolean {
+  if (!/android/i.test(ua)) return false;
+  if (/;\s*wv[)]/i.test(ua)) return true;
+  return /\bVersion\/[\d.]+/i.test(ua) && /\bChrome\/[\d.]+/i.test(ua);
+}
+
 // Singleton state shared across the (single) guard component.
 const mustInstall = ref(false);
 const platform = ref<InstallPlatform>('desktop');
 const canPrompt = ref(false);
-// Android only: set true when we've waited for `beforeinstallprompt` and it never
-// fired, which means this browser (e.g. old Chrome / a WebView on Android 6) can't
-// install Ring as a real standalone PWA - "Add to Home" would only make a shortcut.
-// The guard uses it to explain that, instead of showing steps that won't work.
+// Android only: true ONLY for a genuinely-incapable surface — an embedded WebView, which
+// has no "Install app" path so "Add to Home" would just make a shortcut. Determined from
+// the user agent (isAndroidWebView), NOT from a missing/slow `beforeinstallprompt` event
+// (that was a false-negative source on capable Chrome — spec 2003). The guard uses it to
+// show accurate "open in your browser app" guidance instead of steps that won't work.
 const installUnavailable = ref(false);
 let deferredPrompt: BeforeInstallPromptEvent | null = null;
 let started = false;
@@ -65,13 +87,10 @@ function start(): void {
   platform.value = detectPlatform();
   mustInstall.value = !isStandalone() && !isLocalhost();
 
-  // On Android a capable Chrome fires `beforeinstallprompt` within a moment of load;
-  // if it hasn't after a short wait (and we're still gated), this browser can't do a
-  // real install, so surface the clearer guidance.
+  // Only an embedded Android WebView genuinely can't install Ring; a normal Android
+  // browser can (via its menu), even if `beforeinstallprompt` is slow or never auto-fires.
   if (platform.value === 'android' && mustInstall.value) {
-    setTimeout(() => {
-      if (!canPrompt.value) installUnavailable.value = true;
-    }, 2500);
+    installUnavailable.value = isAndroidWebView(navigator.userAgent || '');
   }
 
   // If the page is ever (re)evaluated as standalone, drop the gate.

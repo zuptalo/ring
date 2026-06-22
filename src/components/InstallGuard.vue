@@ -49,16 +49,17 @@
         </ion-text>
       </div>
 
-      <!-- Old Android / WebView that can't do a real PWA install (no
-           beforeinstallprompt): explain why, rather than show steps whose
-           "Add to Home" only makes a shortcut. -->
+      <!-- Embedded in-app browser (Android WebView): it has no "Install app" path, so
+           give accurate guidance to open Ring in a real browser app rather than the
+           (wrong) "update Chrome" advice. Shown only for a true WebView, never merely
+           because beforeinstallprompt was slow on a capable browser (spec 2003). -->
       <div v-if="platform === 'android' && installUnavailable" class="ion-padding">
         <div class="cant-install">
           <ion-icon :icon="warningOutline" />
           <span>
-            This browser can’t install Ring as an app, it would only add a shortcut
-            (which can’t run in the background or receive notifications). Update Chrome
-            to the latest version, or open Ring in a newer browser, then install.
+            You’ve opened Ring inside another app’s browser, which can’t install apps.
+            Tap the ⋮ menu and choose “Open in Chrome” (or your browser app), then install
+            Ring from there.
           </span>
         </div>
       </div>
