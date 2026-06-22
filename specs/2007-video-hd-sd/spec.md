@@ -236,6 +236,11 @@ byte-for-byte identical to the source (same size, same container/metadata).
   items. (The original is retained during encode/upload so a retry can re-encode it,
   and is swapped for the sent blob only on success. Original-quality sends keep the
   full bytes.)
+- **FR-015**: Media or documents DELETED to free space MUST NOT remain in the
+  "Media, links & docs" gallery (Media grid, Docs list) or its fullscreen viewer —
+  they leave a "removed to free space" placeholder in the chat itself, but no empty
+  tile/row in the gallery. Items "freed keeping previews" still appear (their preview
+  remains). Links are text, never blob-backed, so cleanup never affects them.
 
 ### Key Entities *(include if feature involves data)*
 

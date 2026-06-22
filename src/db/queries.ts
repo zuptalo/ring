@@ -989,7 +989,12 @@ export async function listChatMedia(chatId: string): Promise<Message[]> {
   // Round video NOTES are conversational/ephemeral (like voice messages, which are already
   // excluded here) and play inline only — keep them OUT of the "Media, links & docs" gallery
   // and its fullscreen viewer. Regular videos still appear.
-  return all.filter((m) => m.kind === 'image' || (m.kind === 'video' && !m.videoNote)).reverse();
+  // Media DELETED to free space (mediaCleared: record removed, mediaId gone) has nothing to
+  // show, so it's dropped from the gallery — otherwise it leaves an empty placeholder tile
+  // (spec 2007). "Freed keeping previews" is NOT cleared, so its preview still shows.
+  return all
+    .filter((m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && !m.mediaCleared)
+    .reverse();
 }
 /** All blob-backed media messages in a chat (image/video/voice/audio), oldest→newest.
  *  The chat list is windowed (useChatHistory) but the media viewer + audio playlist span
@@ -997,15 +1002,21 @@ export async function listChatMedia(chatId: string): Promise<Message[]> {
  *  far smaller than every message, and not the scroll hot path. */
 export async function listChatMediaAll(chatId: string): Promise<Message[]> {
   const all = await listMessages(chatId);
+  // Exclude media deleted to free space (mediaCleared) — there's nothing to view/play, so it
+  // must not produce a blank page in the fullscreen viewer or audio playlist (spec 2007).
   return all.filter(
-    (m) => m.kind === 'image' || m.kind === 'video' || m.kind === 'voice' || m.kind === 'audio',
+    (m) =>
+      (m.kind === 'image' || m.kind === 'video' || m.kind === 'voice' || m.kind === 'audio') &&
+      !m.mediaCleared,
   );
 }
-/** All file (document) messages in a chat, newest-first. */
+/** All file (document) messages in a chat, newest-first. Excludes docs deleted to free
+ *  space (mediaCleared) so they don't leave an empty row (spec 2007). */
 export async function listChatDocs(chatId: string): Promise<Message[]> {
-  return (await listMessages(chatId)).filter((m) => m.kind === 'file').reverse();
+  return (await listMessages(chatId)).filter((m) => m.kind === 'file' && !m.mediaCleared).reverse();
 }
-/** All text messages containing a link, newest-first. */
+/** All text messages containing a link, newest-first. (Links live in text bodies, not
+ *  blob media, so storage cleanup never clears them.) */
 export async function listChatLinks(chatId: string): Promise<Message[]> {
   return (await listMessages(chatId)).filter((m) => m.kind === 'text' && URL_RE.test(m.body)).reverse();
 }

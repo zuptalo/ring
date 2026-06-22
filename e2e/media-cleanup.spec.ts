@@ -121,3 +121,29 @@ test('storage: thumbnail-aware accounting, keep-previews, per-chat cleanup', asy
   const cDims2 = await a.page.evaluate((id) => (window as any).__ringTest.mediaTierDims(id), cMsg);
   expect(cDims2.bubble).not.toBeNull();
 });
+
+// spec 2007: media/docs DELETED to free space must vanish from the Media/Docs gallery
+// tabs, not leave empty placeholder tiles/rows (they keep a "removed to free space"
+// bubble in the chat itself, which is separate). Freed-with-previews items still show.
+test('gallery: media + docs deleted to free space leave no placeholder', async ({ browser }) => {
+  const a = await createAccount(await browser.newContext(), 'GALLERY1');
+  const chat = 'gallery-chat';
+  const seed = (kind: string, bytes: number) =>
+    a.page.evaluate(([c, k, b]) => (window as any).__ringTest.seedMedia(c, k, b), [chat, kind, bytes] as const);
+  const counts = () =>
+    a.page.evaluate(async (c) => {
+      const q = await import('/src/db/queries.ts');
+      return { media: (await q.listChatMedia(c)).length, docs: (await q.listChatDocs(c)).length };
+    }, chat);
+
+  await seed('image', 20 * 1024 * 1024);
+  await seed('video', 30 * 1024 * 1024);
+  await seed('file', 15 * 1024 * 1024);
+  await seed('image', 1024); // small image — survives a ">10MB" delete
+
+  expect(await counts()).toEqual({ media: 3, docs: 1 });
+
+  // Delete everything >10MB: those media + docs leave the gallery entirely.
+  await a.page.evaluate((c) => (window as any).__ringTest.deleteMediaLargerThan(10 * 1024 * 1024, c), chat);
+  expect(await counts()).toEqual({ media: 1, docs: 0 }); // only the small image remains
+});
