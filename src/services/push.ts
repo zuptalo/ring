@@ -78,7 +78,15 @@ export async function ensurePushSubscription(): Promise<boolean> {
     const p256dh = json.keys?.p256dh;
     const auth = json.keys?.auth;
     if (json.endpoint && p256dh && auth) {
-      await subscribePush({ endpoint: json.endpoint, keys: { p256dh, auth } });
+      // Report this device's running version + local UTC offset (spec 1016), refreshed on
+      // each (re)subscribe — app start + every foreground — so the 9-AM-local version
+      // announcement targets only devices that are behind, at their local morning.
+      await subscribePush({
+        endpoint: json.endpoint,
+        keys: { p256dh, auth },
+        installedVersion: __APP_VERSION__,
+        tzOffsetMinutes: new Date().getTimezoneOffset(),
+      });
       return true;
     }
     return false;

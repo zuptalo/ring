@@ -89,7 +89,7 @@ type SyncStore interface {
 
 // PushStore is the Web Push subscription persistence.
 type PushStore interface {
-	SaveSubscription(ctx context.Context, userID string, sub store.PushSubscription) error
+	SaveSubscription(ctx context.Context, userID string, sub store.PushSubscription, installedVersion *string, tzOffsetMinutes *int) error
 	DeleteSubscription(ctx context.Context, userID, endpoint string) error
 }
 

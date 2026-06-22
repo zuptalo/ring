@@ -83,16 +83,18 @@ const (
 	postTTL   = 7 * 24 * 60 * 60 // 604800s
 	postTopic = "ring-post"
 
-	// versionTTL / versionTopic: a "new version" announcement is worth holding a few
-	// days so a device offline over a weekend still learns of it, but a weeks-stale
-	// announcement is noise (the SW reads the CURRENT version from /v1/config on wake).
+	// versionTTL / versionTopic: a "new version" announcement is sent at ~09:00 in the
+	// device's local time (spec 1016), so it must EXPIRE by roughly local midday rather
+	// than be held for late delivery — otherwise a device that was offline at 9 AM would
+	// get woken that evening/night, the exact disturbance the 9-AM schedule exists to
+	// avoid. A short TTL (a few hours) means a missed-morning push is dropped, not held.
 	// Collapsed per subscription so multiple deploys while offline yield ONE wake.
-	versionTTL   = 3 * 24 * 60 * 60 // 259200s
+	versionTTL   = 3 * 60 * 60 // 10800s (~3h: expires by roughly local midday)
 	versionTopic = "ring-version"
 
-	// broadcastConcurrency bounds in-flight deliveries during an all-users broadcast,
-	// so a fan-out to the whole subscription base can't open thousands of sockets at once.
-	broadcastConcurrency = 16
+	// versionSweepConcurrency bounds in-flight deliveries during a version-announcement
+	// sweep, so a fan-out across the due subscriptions can't open thousands of sockets.
+	versionSweepConcurrency = 16
 
 	// sendBudget bounds one subscription's whole delivery attempt (incl. retries),
 	// so one slow/hung endpoint can't starve a user's other devices.
@@ -132,7 +134,6 @@ var (
 // SubStore is the subscription persistence the notifier needs.
 type SubStore interface {
 	SubscriptionsFor(ctx context.Context, userID string) ([]store.PushSubscription, error)
-	AllSubscriptions(ctx context.Context) ([]store.PushSubscription, error)
 	DeleteSubscriptionByEndpoint(ctx context.Context, endpoint string) error
 }
 
@@ -214,39 +215,16 @@ func (n *Notifier) NotifyPost(ctx context.Context, userID string) {
 	n.notify(ctx, userID, postParams())
 }
 
-// BroadcastVersion sends a content-free version-announcement tickle to EVERY push
-// subscription (a new app version was deployed). The SW renders the user-friendly
-// "what's new" from the public /v1/config. Deliveries are bounded by
-// broadcastConcurrency; dead endpoints are pruned and failures logged. Safe to call in
-// a goroutine — a panic is recovered, so a bad broadcast can never crash the server.
-func (n *Notifier) BroadcastVersion(ctx context.Context) {
-	defer recoverLog("push: broadcast")
-	subs, err := n.store.AllSubscriptions(ctx)
-	if err != nil {
-		slog.Error("push: load all subscriptions for broadcast", "err", err)
-		return
-	}
-	if len(subs) == 0 {
-		return
-	}
-	slog.Info("push: broadcasting version announcement", "subscriptions", len(subs))
-	p := versionParams()
-	sem := make(chan struct{}, broadcastConcurrency)
-	var wg sync.WaitGroup
-	for _, sub := range subs {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(sub store.PushSubscription) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			defer recoverLog("push: broadcast deliver")
-			sctx, cancel := context.WithTimeout(ctx, sendBudget)
-			defer cancel()
-			n.deliver(sctx, sub, p)
-		}(sub)
-	}
-	wg.Wait()
-	slog.Info("push: version broadcast complete", "subscriptions", len(subs))
+// SendVersion delivers the content-free version-announcement tickle to ONE subscription
+// (a device that is behind, at its local 09:00 — spec 1016). The SW renders the
+// user-friendly "what's new" from the public /v1/config; only the {"t":"version"} marker
+// crosses the push service. A dead endpoint is pruned; a panic is recovered so a bad send
+// can't crash the sweep. Satisfies the push.VersionSender used by SweepVersionAnnouncements.
+func (n *Notifier) SendVersion(ctx context.Context, sub store.PushSubscription) {
+	defer recoverLog("push: send version")
+	sctx, cancel := context.WithTimeout(ctx, sendBudget)
+	defer cancel()
+	n.deliver(sctx, sub, versionParams())
 }
 
 func (n *Notifier) notify(ctx context.Context, userID string, p pushParams) {

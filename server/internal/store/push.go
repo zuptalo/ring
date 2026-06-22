@@ -1,27 +1,35 @@
 package store
 
-import (
-	"context"
-	"errors"
+import "context"
 
-	"github.com/jackc/pgx/v5"
-)
-
-// PushSubscription is a browser Web Push subscription.
+// PushSubscription is a browser Web Push subscription. InstalledVersion + TZOffsetMinutes
+// are the per-device metadata for the 9-AM-local version announcement (spec 1016); they
+// are zero/empty on subscriptions that haven't reported them and on read paths that don't
+// select them.
 type PushSubscription struct {
-	Endpoint string
-	P256dh   string
-	Auth     string
+	Endpoint         string
+	P256dh           string
+	Auth             string
+	InstalledVersion string
+	TZOffsetMinutes  int
 }
 
-// SaveSubscription upserts a push subscription for a user (idempotent on the
-// endpoint, refreshing its keys).
-func (s *Store) SaveSubscription(ctx context.Context, userID string, sub PushSubscription) error {
+// SaveSubscription upserts a push subscription for a user (idempotent on the endpoint,
+// refreshing its keys). installedVersion / tzOffsetMinutes are the client's reported app
+// version + local UTC offset (minutes); each is updated ONLY when provided (non-nil), so a
+// version-less re-subscribe (e.g. the service-worker resubscribe path) preserves the
+// values the page reported (COALESCE). last_announced_version is never written here — only
+// the version scheduler sets it.
+func (s *Store) SaveSubscription(ctx context.Context, userID string, sub PushSubscription, installedVersion *string, tzOffsetMinutes *int) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (user_id, endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`,
-		userID, sub.Endpoint, sub.P256dh, sub.Auth)
+		`INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, installed_version, tz_offset_minutes)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (user_id, endpoint) DO UPDATE SET
+		     p256dh = EXCLUDED.p256dh,
+		     auth = EXCLUDED.auth,
+		     installed_version = COALESCE(EXCLUDED.installed_version, push_subscriptions.installed_version),
+		     tz_offset_minutes = COALESCE(EXCLUDED.tz_offset_minutes, push_subscriptions.tz_offset_minutes)`,
+		userID, sub.Endpoint, sub.P256dh, sub.Auth, installedVersion, tzOffsetMinutes)
 	return err
 }
 
@@ -32,8 +40,8 @@ func (s *Store) DeleteSubscription(ctx context.Context, userID, endpoint string)
 	return err
 }
 
-// DeleteSubscriptionByEndpoint removes a dead subscription (push service
-// returned 404/410), regardless of owner.
+// DeleteSubscriptionByEndpoint removes a dead subscription (push service returned
+// 404/410), regardless of owner.
 func (s *Store) DeleteSubscriptionByEndpoint(ctx context.Context, endpoint string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM push_subscriptions WHERE endpoint = $1`, endpoint)
 	return err
@@ -41,18 +49,8 @@ func (s *Store) DeleteSubscriptionByEndpoint(ctx context.Context, endpoint strin
 
 // SubscriptionsFor returns all of a user's push subscriptions.
 func (s *Store) SubscriptionsFor(ctx context.Context, userID string) ([]PushSubscription, error) {
-	return s.querySubscriptions(ctx,
+	rows, err := s.pool.Query(ctx,
 		`SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1`, userID)
-}
-
-// AllSubscriptions returns every push subscription across all users — used for the
-// version-announcement broadcast (the only fan-out that isn't addressed to one user).
-func (s *Store) AllSubscriptions(ctx context.Context) ([]PushSubscription, error) {
-	return s.querySubscriptions(ctx, `SELECT endpoint, p256dh, auth FROM push_subscriptions`)
-}
-
-func (s *Store) querySubscriptions(ctx context.Context, q string, args ...any) ([]PushSubscription, error) {
-	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -68,24 +66,39 @@ func (s *Store) querySubscriptions(ctx context.Context, q string, args ...any) (
 	return out, rows.Err()
 }
 
-// GetAppMeta reads a server-side metadata value (empty string if the key is absent).
-func (s *Store) GetAppMeta(ctx context.Context, key string) (string, error) {
-	var v string
-	err := s.pool.QueryRow(ctx, `SELECT value FROM app_meta WHERE key = $1`, key).Scan(&v)
+// SubscriptionsBehind returns the candidate subscriptions for a version announcement: those
+// that have reported a version AND a timezone offset, whose installed version differs from
+// currentVersion (behind), and that have not already been announced for currentVersion
+// (once-per-release dedup). The local-09:00 filter is applied in Go (dueAtNine) so it stays
+// unit-testable; this is the cheap SQL pre-filter. Each row carries its TZOffsetMinutes.
+func (s *Store) SubscriptionsBehind(ctx context.Context, currentVersion string) ([]PushSubscription, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT endpoint, p256dh, auth, COALESCE(tz_offset_minutes, 0)
+		   FROM push_subscriptions
+		  WHERE installed_version IS NOT NULL
+		    AND tz_offset_minutes IS NOT NULL
+		    AND installed_version <> $1
+		    AND (last_announced_version IS NULL OR last_announced_version <> $1)`, currentVersion)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil
-		}
-		return "", err
+		return nil, err
 	}
-	return v, nil
+	defer rows.Close()
+	var out []PushSubscription
+	for rows.Next() {
+		var sub PushSubscription
+		if err := rows.Scan(&sub.Endpoint, &sub.P256dh, &sub.Auth, &sub.TZOffsetMinutes); err != nil {
+			return nil, err
+		}
+		out = append(out, sub)
+	}
+	return out, rows.Err()
 }
 
-// SetAppMeta upserts a server-side metadata value.
-func (s *Store) SetAppMeta(ctx context.Context, key, value string) error {
+// MarkAnnounced records that this subscription was sent the announcement for `version`,
+// so it isn't notified again for the same release (dedup-on-send).
+func (s *Store) MarkAnnounced(ctx context.Context, endpoint, version string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO app_meta (key, value) VALUES ($1, $2)
-		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-		key, value)
+		`UPDATE push_subscriptions SET last_announced_version = $2 WHERE endpoint = $1`,
+		endpoint, version)
 	return err
 }
