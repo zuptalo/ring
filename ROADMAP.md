@@ -46,3 +46,4 @@ Specs are grouped by category band; status moves
 | [2002](specs/2002-media-thumbnails-stay/spec.md) | Media Thumbnails Stay Thumbnails (no autoplay storm) | 🟢 shipped |
 | [2003](specs/2003-android-install-gate/spec.md) | Fix Android install-gate false "browser can't install" warning | 🟢 shipped |
 | [2004](specs/2004-unify-app-notifications/spec.md) | Unify in-app notifications/toasts + user-friendly "What's new" | 🟢 shipped |
+| [2005](specs/2005-pause-resume-during/spec.md) | Pause/resume during video-message recording | 🟡 in-progress |

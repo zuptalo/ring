@@ -27,7 +27,17 @@
 
     <div class="vn-bar">
       <button class="vn-btn" aria-label="Delete" @click="cancel"><ion-icon :icon="trashOutline" /></button>
-      <span class="vn-recdot"></span>
+      <!-- Pause/resume the take. The recording cue (red square) is folded INTO this control:
+           it's the red live indicator while recording (tap to pause) and a resume ▶ when paused. -->
+      <button
+        class="vn-pause"
+        :class="{ paused }"
+        :aria-label="paused ? 'Resume recording' : 'Pause recording'"
+        @click="togglePause"
+      >
+        <ion-icon v-if="paused" :icon="play" />
+        <span v-else class="vn-pause-rec"></span>
+      </button>
       <button class="vn-btn send" aria-label="Send" @click="stopAndSend"><ion-icon :icon="sendOutline" /></button>
     </div>
   </div>
@@ -36,7 +46,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { IonIcon } from '@ionic/vue';
-import { close, cameraReverseOutline, trashOutline, sendOutline } from 'ionicons/icons';
+import { close, cameraReverseOutline, trashOutline, sendOutline, play } from 'ionicons/icons';
+import { recordedMs } from '@/utils/rec-clock';
 
 const MAX = 60; // seconds
 const CIRC = 2 * Math.PI * 48;
@@ -49,10 +60,15 @@ const elapsed = ref(0);
 const facing = ref<'user' | 'environment'>('user');
 const countdown = ref<number | null>(null); // 3..1 before recording starts (null = recording)
 const fading = ref(false); // drives the black→footage fade during the countdown
+const paused = ref(false); // recording paused (tap the control to resume the same take)
 let stream: MediaStream | null = null;
 let recorder: MediaRecorder | null = null;
 let chunks: BlobPart[] = [];
-let startMs = 0;
+// Recorded-time accounting (mirrors the voice recorder): `accumMs` banks time from
+// completed segments, `segStartMs` marks the current segment's start. Elapsed/duration
+// are derived via recordedMs() so a paused gap is never counted (replaces a raw startMs).
+let accumMs = 0;
+let segStartMs = 0;
 let timer: number | undefined;
 let countTimer: number | undefined;
 
@@ -99,12 +115,31 @@ function beginRecording(): void {
   chunks = [];
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   recorder.start();
-  startMs = Date.now();
+  accumMs = 0;
+  segStartMs = Date.now();
+  paused.value = false;
   elapsed.value = 0;
   timer = window.setInterval(() => {
-    elapsed.value = (Date.now() - startMs) / 1000;
+    // Drive the timer (and thus the progress ring) from RECORDED time, so it freezes while
+    // paused and the max-length auto-finalize never fires on a paused recording.
+    elapsed.value = recordedMs({ accumMs, segStartMs, paused: paused.value }, Date.now()) / 1000;
     if (elapsed.value >= MAX) void stopAndSend();
   }, 100);
+}
+
+// Pause/resume the SAME take: bank the current segment and pause, or start a fresh segment
+// and resume. No-op during the 3-2-1 countdown (no recorder yet) or once stopped.
+function togglePause(): void {
+  if (!recorder || recorder.state === 'inactive') return;
+  if (paused.value) {
+    segStartMs = Date.now();
+    recorder.resume();
+    paused.value = false;
+  } else {
+    accumMs += Date.now() - segStartMs;
+    recorder.pause();
+    paused.value = true;
+  }
 }
 
 function teardown(): void {
@@ -115,13 +150,20 @@ function teardown(): void {
   countdown.value = null;
   fading.value = false;
   try {
-    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    if (recorder && recorder.state !== 'inactive') {
+      // Resume a paused recorder before stopping so it finalizes and releases cleanly.
+      if (recorder.state === 'paused') recorder.resume();
+      recorder.stop();
+    }
   } catch {
     /* ignore */
   }
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
   recorder = null;
+  paused.value = false;
+  accumMs = 0;
+  segStartMs = 0;
 }
 
 // Grab a still from the live preview as a thumbnail — reliable (we always have real
@@ -148,12 +190,22 @@ function capturePoster(): string | undefined {
 
 async function stopAndSend(): Promise<void> {
   if (!recorder) return;
-  const dur = Math.max(1, Math.round(elapsed.value));
+  // Duration is the RECORDED time (excludes paused gaps), computed before we resume below.
+  const dur = Math.max(1, Math.round(recordedMs({ accumMs, segStartMs, paused: paused.value }, Date.now()) / 1000));
   const poster = capturePoster(); // capture while the preview stream is still live
   const rec = recorder;
   const mime = rec.mimeType || 'video/webm';
   if (timer) clearInterval(timer);
   timer = undefined;
+  // Some browsers won't fire dataavailable/onstop cleanly while paused — resume first.
+  if (paused.value) {
+    try {
+      rec.resume();
+    } catch {
+      /* ignore */
+    }
+    paused.value = false;
+  }
   const blob: Blob = await new Promise((res) => {
     rec.onstop = () => res(new Blob(chunks, { type: mime }));
     rec.stop();
@@ -303,10 +355,38 @@ onBeforeUnmount(teardown);
 .vn-btn.send {
   background: var(--ion-color-primary);
 }
-.vn-recdot {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
+/* Pause/resume control. Same circular footprint as the delete/send buttons; the red
+   recording indicator is folded in (the inner square) and swaps to a resume glyph when
+   paused, so one element both shows state and is the tap target. */
+.vn-pause {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.vn-pause.paused {
+  background: rgba(255, 255, 255, 0.18);
+}
+.vn-pause ion-icon {
+  font-size: 26px;
+}
+/* The live red square (the former recording dot), pulsing while actively recording. */
+.vn-pause-rec {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
   background: #ef4444;
+  animation: vn-pulse 1.2s ease-in-out infinite;
+}
+@keyframes vn-pulse {
+  50% {
+    opacity: 0.35;
+  }
 }
 </style>
