@@ -986,7 +986,10 @@ const URL_RE = /\bhttps?:\/\/[^\s]+/i;
 /** All image/video messages in a chat, newest-first. */
 export async function listChatMedia(chatId: string): Promise<Message[]> {
   const all = await listMessages(chatId);
-  return all.filter((m) => m.kind === 'image' || m.kind === 'video').reverse();
+  // Round video NOTES are conversational/ephemeral (like voice messages, which are already
+  // excluded here) and play inline only — keep them OUT of the "Media, links & docs" gallery
+  // and its fullscreen viewer. Regular videos still appear.
+  return all.filter((m) => m.kind === 'image' || (m.kind === 'video' && !m.videoNote)).reverse();
 }
 /** All blob-backed media messages in a chat (image/video/voice/audio), oldest→newest.
  *  The chat list is windowed (useChatHistory) but the media viewer + audio playlist span
