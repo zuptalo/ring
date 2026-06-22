@@ -385,6 +385,10 @@ export function installTestHook(): void {
      *  and the server blob id the SENDER kept for cleanup (undefined once it deletes it). */
     mediaInfo: async (messageId: string) => {
       const m = await dbGetMessage(messageId);
+      // The on-device stored copy's byte size (spec 2007): after a compressed send the
+      // sender keeps the SENT (smaller) blob, not the full original, so storedBytes
+      // should equal mediaSize.
+      const media = m?.mediaId ? await get<Media>('media', m.mediaId) : undefined;
       return {
         hasMedia: !!m?.mediaId,
         pending: !!m?.pendingMedia,
@@ -396,6 +400,7 @@ export function installTestHook(): void {
         mediaSize: m?.mediaSize ?? null,
         mediaWidth: m?.mediaWidth ?? null,
         mediaHeight: m?.mediaHeight ?? null,
+        storedBytes: media?.size ?? null,
       };
     },
     /** Download an incoming message's media (as the UI does on tap / auto-download). */

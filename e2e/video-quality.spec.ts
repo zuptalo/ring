@@ -94,6 +94,14 @@ test('HD and SD genuinely shrink the video; Original is byte-identical (FR-001/0
   expect(sd.mediaQuality).toBe('sd');
   expect(sd.mediaWidth).toBeLessThanOrEqual(640);
   expect(sd.mediaSize).toBeLessThan(hd.mediaSize);
+
+  // The sender's on-device copy is the SENT (smaller) blob, not the full original, so
+  // storage reflects what was sent (spec 2007). storedBytes tracks mediaSize.
+  expect(fhd.storedBytes).toBe(fhd.mediaSize);
+  expect(fhd.storedBytes).toBeLessThan(fhd.sourceSize);
+  expect(sd.storedBytes).toBe(sd.mediaSize);
+  // Original keeps the full bytes on device (nothing was re-encoded).
+  expect(original.storedBytes).toBe(original.sourceSize);
 });
 
 test('the picker offers only tiers a source can produce — no upscaling (FR-011)', async ({ browser }) => {

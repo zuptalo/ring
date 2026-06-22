@@ -229,6 +229,13 @@ byte-for-byte identical to the source (same size, same container/metadata).
   downscale is needed, to reduce a high-bitrate source's size and produce a
   cross-platform-playable H.264 result; if it cannot reduce the file, FR-007 applies
   (sent + labeled Original).
+- **FR-014**: After a media send completes, the sender's on-device copy MUST be the
+  media that was actually sent (the compressed blob for an HD/SD/Full HD send), not
+  the full original. The reported storage usage and the bubble badge MUST therefore
+  agree, and sent items MUST be counted and cleaned up the same way as received
+  items. (The original is retained during encode/upload so a retry can re-encode it,
+  and is swapped for the sent blob only on success. Original-quality sends keep the
+  full bytes.)
 
 ### Key Entities *(include if feature involves data)*
 
@@ -261,6 +268,9 @@ byte-for-byte identical to the source (same size, same container/metadata).
 - **SC-008**: A source ≥1080p offers SD, HD, Full HD, and Original and yields four
   descending sizes (SD < HD < Full HD < Original); a 720p source offers only SD, HD,
   and Original (never Full HD).
+- **SC-009**: After a compressed send, the sender's on-device stored bytes for that
+  item equal the sent size (not the original), so the storage figure in Settings
+  matches the badge; an Original send stores the full bytes.
 
 ## Assumptions
 

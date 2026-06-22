@@ -1379,7 +1379,9 @@ export async function sendMediaMessage(
   const caption = (opts?.caption ?? '').slice(0, CAPTION_MAX);
   await guardOutbound(await getChat(chatId)); // reject before storing media for a ghosted/blocked peer
   const mediaId = uid();
-  // The original blob is stored; the (possibly compressed) blob is uploaded.
+  // The original blob is stored first so the background job can (re-)encode + retry
+  // from it; runMediaJob swaps in the actually-sent (compressed) blob once the upload
+  // succeeds, so the on-device copy and storage footprint match what was sent.
   await put<Media>('media', {
     id: mediaId,
     kind,
@@ -1613,6 +1615,25 @@ async function runMediaJob(messageId: string): Promise<void> {
       console.info('[media-job] uploading', { id: messageId, bytes: uploadBlob.size });
       await sealMediaAndEnqueue(message, uploadBlob, (p) => setUploadProgress(messageId, p));
       console.info('[media-job] uploaded', { id: messageId });
+      // Replace the sender's local copy with what was ACTUALLY sent (spec 2007): we
+      // keep the original blob during the encode/upload so a retry can re-encode it,
+      // but once the send succeeds, storing the full original wastes space and
+      // overstates the storage footprint (storageByType sums Media.size) while the
+      // bubble badge shows the smaller sent size. The user's true original still lives
+      // in their photo library — Ring only ever held a copy. Only swap when a genuinely
+      // smaller blob was produced (`uploadBlob !== media.blob`; compress* returns the
+      // original ref otherwise), so 'original' sends are untouched. Done AFTER upload so
+      // a failed/retried send still re-encodes from the original.
+      if (uploadBlob !== media.blob && message.mediaId) {
+        const m = await get<Media>('media', message.mediaId);
+        if (m?.blob) {
+          m.blob = uploadBlob;
+          m.size = uploadBlob.size;
+          m.mime = uploadBlob.type || m.mime;
+          m.updatedAt = now();
+          await put('media', m);
+        }
+      }
       // Success → pending (the server 'sent' receipt will advance it further).
       const fresh = await getMessage(messageId);
       if (fresh && fresh.status === 'compressing') {
