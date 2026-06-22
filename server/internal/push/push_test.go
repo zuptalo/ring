@@ -296,9 +296,10 @@ func TestNotifyRecoversPanicInFanout(t *testing.T) {
 	n.Notify(context.Background(), "u1") // returns only if the fan-out recover holds
 }
 
-// TestBroadcastVersionHeaders verifies the version-announcement push is a content-free
-// tickle that is low-urgency, a few days long, and collapsible under its own topic.
-func TestBroadcastVersionHeaders(t *testing.T) {
+// TestSendVersionHeaders verifies the version-announcement push to ONE device is a
+// content-free tickle: low-urgency, SHORT-lived (expires by ~local midday, not days), and
+// collapsible under its own topic (spec 1016 FR-015).
+func TestSendVersionHeaders(t *testing.T) {
 	cap := &capturedReq{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cap.record(r)
@@ -307,14 +308,11 @@ func TestBroadcastVersionHeaders(t *testing.T) {
 	defer srv.Close()
 
 	p256dh, auth := newSubKeys(t)
-	st := &memSubStore{subs: map[string][]store.PushSubscription{
-		"u1": {{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}},
-	}}
-	n := newNotifier(t, st)
+	n := newNotifier(t, &memSubStore{subs: map[string][]store.PushSubscription{}})
 
-	n.BroadcastVersion(context.Background())
-	if cap.ttl != "259200" {
-		t.Errorf("version TTL = %q, want 259200 (3d)", cap.ttl)
+	n.SendVersion(context.Background(), store.PushSubscription{Endpoint: srv.URL, P256dh: p256dh, Auth: auth})
+	if cap.ttl != "10800" {
+		t.Errorf("version TTL = %q, want 10800 (~3h, expires by local midday)", cap.ttl)
 	}
 	if cap.urgency != "low" {
 		t.Errorf("version Urgency = %q, want low", cap.urgency)
@@ -324,36 +322,18 @@ func TestBroadcastVersionHeaders(t *testing.T) {
 	}
 }
 
-// TestBroadcastVersionReachesEveryDevice verifies the broadcast fans out to EVERY
-// subscription across ALL users (not just one user's devices).
-func TestBroadcastVersionReachesEveryDevice(t *testing.T) {
-	cap := &capturedReq{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cap.record(r)
-		w.WriteHeader(http.StatusCreated)
-	}))
-	defer srv.Close()
-
-	mk := func() store.PushSubscription {
-		p256dh, auth := newSubKeys(t)
-		return store.PushSubscription{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}
-	}
-	st := &memSubStore{subs: map[string][]store.PushSubscription{
-		"u1": {mk(), mk()}, // two devices
-		"u2": {mk()},
-		"u3": {mk()},
-	}}
-	n := newNotifier(t, st)
-
-	n.BroadcastVersion(context.Background())
-	if got := atomic.LoadInt32(&cap.hits); got != 4 {
-		t.Errorf("broadcast reached %d subscriptions, want 4 (all devices of all users)", got)
+// TestVersionPayloadContentFree asserts the version tickle carries ONLY the type marker —
+// no version string, notes, or any content (NFR-ZK-001). The device fetches the public
+// "what's new" itself; nothing about the release rides through the push service.
+func TestVersionPayloadContentFree(t *testing.T) {
+	if got := string(versionParams().payload); got != `{"t":"version"}` {
+		t.Errorf("version payload = %q, want exactly the content-free marker {\"t\":\"version\"}", got)
 	}
 }
 
-// TestBroadcastVersionRecoversPanic asserts a panic while loading subscriptions can't
-// escape the broadcast (it runs in a goroutine off boot).
-func TestBroadcastVersionRecoversPanic(t *testing.T) {
-	n := NewNotifier(nil, panicSubStore{})
-	n.BroadcastVersion(context.Background()) // AllSubscriptions panics; recover must contain it
+// TestSendVersionRecoversPanic asserts a panic during a single version send can't escape
+// (the sweep runs it in a goroutine).
+func TestSendVersionRecoversPanic(t *testing.T) {
+	n := NewNotifier(nil, panicSubStore{}) // nil sender → deliver panics on s.subject deref
+	n.SendVersion(context.Background(), store.PushSubscription{Endpoint: "https://x/y", P256dh: "x", Auth: "y"})
 }

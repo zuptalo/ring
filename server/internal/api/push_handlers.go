@@ -15,6 +15,10 @@ type pushSubscriptionDTO struct {
 		P256dh string `json:"p256dh"`
 		Auth   string `json:"auth"`
 	} `json:"keys"`
+	// Optional per-device metadata for the 9-AM-local version announcement (spec 1016).
+	// Pointers so an omitted field (e.g. the SW resubscribe path) preserves the stored value.
+	InstalledVersion *string `json:"installedVersion"`
+	TzOffsetMinutes  *int    `json:"tzOffsetMinutes"`
 }
 
 // subscribePush (POST /v1/push/subscribe) registers a browser push subscription.
@@ -31,7 +35,7 @@ func (h *Handlers) subscribePush(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.Push.SaveSubscription(r.Context(), uid, store.PushSubscription{
 		Endpoint: req.Endpoint, P256dh: req.Keys.P256dh, Auth: req.Keys.Auth,
-	}); err != nil {
+	}, req.InstalledVersion, req.TzOffsetMinutes); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not save subscription")
 		return
 	}

@@ -553,7 +553,15 @@ export async function listConnections(): Promise<{ incoming: ConnReq[]; outgoing
 }
 
 /** Register a browser push subscription with the backend. */
-export async function subscribePush(sub: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<void> {
+export async function subscribePush(sub: {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  // Optional per-device metadata for the 9-AM-local version announcement (spec 1016):
+  // the running client version and the device's local UTC offset in minutes. The server
+  // preserves prior values when these are omitted (e.g. the SW resubscribe path).
+  installedVersion?: string;
+  tzOffsetMinutes?: number;
+}): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/v1/push/subscribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
