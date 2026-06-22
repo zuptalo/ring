@@ -48,6 +48,13 @@ limitation — no recordable media device in vitest); see plan.md Constitution C
 - [X] T012 Run the full client gate: `npm run build` (vue-tsc + vite) and `npx vitest run` — both green.
 - [X] T013 Set spec `**Status**: in-progress` (→ shipped on merge) and run `make roadmap`; confirm the ROADMAP.md diff is intended (never hand-edit).
 
+## Phase 7: Adjacent video-message fixes (folded in)
+
+- [X] T014 [US4] In `VideoNoteRecorder.vue` `start()`, gate the 3-2-1 countdown + black-fade reveal on the camera's FIRST FRAME: keep the cover fully opaque (and the `<video>` hidden) until the preview fires `loadeddata`/`playing`, then begin the countdown; add a timeout fallback (e.g. ~1.5s) so a camera that never reports a frame doesn't hang. Fixes the scaled-down whole-frame flash (FR-009, SC-006).
+- [X] T015 [US5] In `VideoNoteRecorder.vue`, constrain capture: `getUserMedia` video `{ width: { ideal: 480 }, height: { ideal: 480 }, aspectRatio: { ideal: 1 }, frameRate: { ideal: 24, max: 30 } }`, and `new MediaRecorder(stream, { mimeType?, videoBitsPerSecond: ~800_000, audioBitsPerSecond: 64_000 })`. Right-sizes video messages for the in-chat circle (FR-010, SC-007).
+- [X] T016 [US6] Exclude video notes from the media gallery: in `src/db/queries.ts` `listChatMedia`, filter `m.kind === 'image' || (m.kind === 'video' && !m.videoNote)` (mirrors the viewer's existing `!m.videoNote`), so they don't appear in "Media, links & docs" and have no fullscreen entry point (FR-011/FR-012, SC-008).
+- [X] T017 Re-verify: `npm run build` + `npx vitest run` green; re-run `drive/scenarios/video-note-pause.mjs` (clean camera open, pause/resume, send); then rebuild `dist/` so ring-dev (:8443 `STATIC_DIR=dist`) serves the changes for on-device testing.
+
 ---
 
 ## Dependencies

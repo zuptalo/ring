@@ -17,7 +17,7 @@
           :stroke-dashoffset="CIRC * (1 - progress)"
         />
       </svg>
-      <video ref="preview" class="vn-video" :class="{ mirror: facing === 'user' }" autoplay muted playsinline></video>
+      <video ref="preview" class="vn-video" :class="{ mirror: facing === 'user', hidden: !ready }" autoplay muted playsinline></video>
       <!-- Black overlay that fades to reveal the footage during the 3s countdown. -->
       <div class="vn-fade" :class="{ go: fading }"></div>
       <div v-if="countdown" class="vn-count">{{ countdown }}</div>
@@ -61,6 +61,7 @@ const facing = ref<'user' | 'environment'>('user');
 const countdown = ref<number | null>(null); // 3..1 before recording starts (null = recording)
 const fading = ref(false); // drives the black→footage fade during the countdown
 const paused = ref(false); // recording paused (tap the control to resume the same take)
+const ready = ref(false); // first camera frame painted → safe to reveal the framed preview
 let stream: MediaStream | null = null;
 let recorder: MediaRecorder | null = null;
 let chunks: BlobPart[] = [];
@@ -83,11 +84,56 @@ watch(
   },
 );
 
+// Resolve once the <video> has an actual frame to show (or a short timeout), so the black
+// cover can stay opaque over the brief scaled-down whole-frame render the camera paints
+// before object-fit settles. Without this the countdown's fade-out races the camera and the
+// glitch leaks through.
+function firstFrame(v: HTMLVideoElement): Promise<void> {
+  return new Promise((resolve) => {
+    if (v.readyState >= 2 && v.videoWidth > 0) {
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      v.removeEventListener('loadeddata', finish);
+      v.removeEventListener('playing', finish);
+      clearTimeout(to);
+      resolve();
+    };
+    v.addEventListener('loadeddata', finish);
+    v.addEventListener('playing', finish);
+    const to = window.setTimeout(finish, 1500); // never hang if no frame event fires
+  });
+}
+
 async function start(): Promise<void> {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing.value }, audio: true });
-    if (preview.value) preview.value.srcObject = stream;
-    // 3-2-1 countdown with the preview fading up from black, THEN begin recording.
+    ready.value = false;
+    countdown.value = null;
+    fading.value = false;
+    // Right-size for the in-chat circle (a ~200px round bubble, never fullscreen): a small,
+    // squarish capture keeps files small with no visible loss at that size.
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: facing.value,
+        width: { ideal: 480 },
+        height: { ideal: 480 },
+        aspectRatio: { ideal: 1 },
+        frameRate: { ideal: 24, max: 30 },
+      },
+      audio: true,
+    });
+    const v = preview.value;
+    if (v) {
+      v.srcObject = stream;
+      await firstFrame(v); // hold the black cover over the scaled-down initial render
+    }
+    if (!stream) return; // closed (teardown) while awaiting the first frame
+    ready.value = true;
+    // Now the framed preview exists: run the 3-2-1 countdown, fading up from black.
     countdown.value = 3;
     fading.value = false;
     requestAnimationFrame(() => (fading.value = true)); // trigger the CSS fade-out
@@ -111,7 +157,13 @@ function beginRecording(): void {
   if (!stream) return;
   const types = ['video/webm', 'video/mp4'];
   const mt = types.find((t) => MediaRecorder.isTypeSupported?.(t));
-  recorder = new MediaRecorder(stream, mt ? { mimeType: mt } : undefined);
+  // Modest bitrate to match the small-circle capture — ~0.8 Mbps video is plenty for a
+  // ~200px round bubble, keeping video messages small.
+  recorder = new MediaRecorder(stream, {
+    ...(mt ? { mimeType: mt } : {}),
+    videoBitsPerSecond: 800_000,
+    audioBitsPerSecond: 64_000,
+  });
   chunks = [];
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   recorder.start();
@@ -162,6 +214,7 @@ function teardown(): void {
   stream = null;
   recorder = null;
   paused.value = false;
+  ready.value = false;
   accumMs = 0;
   segStartMs = 0;
 }
@@ -295,6 +348,11 @@ onBeforeUnmount(teardown);
 /* Mirror the front (selfie) camera preview so it behaves like a mirror. */
 .vn-video.mirror {
   transform: scaleX(-1);
+}
+/* Keep the preview invisible until the first real frame, so the brief scaled-down whole-
+   frame render the camera paints on open is never seen (the black cover sits over it too). */
+.vn-video.hidden {
+  opacity: 0;
 }
 /* Countdown: a black disc over the preview that fades out over the 3s, revealing the
    footage, with the count drawn on top. */

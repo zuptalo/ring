@@ -1,4 +1,4 @@
-# Feature Specification: Pause/resume during video-message recording
+# Feature Specification: Video-message recording — pause/resume, clean start, right-sized, out of the gallery
 
 **Feature Branch**: `fix/2005-pause-resume-during`
 
@@ -25,6 +25,15 @@ you Pause a take (halting capture and the timer) and Resume it, then Send. This 
 gives the video recorder the same working **Pause/Resume** control: a single tap pauses the
 in-progress take (freezing the elapsed time and the progress ring), another tap resumes the
 same take, and Send finalizes and sends from either state.
+
+While fixing the recorder, three adjacent video-message issues are corrected: (a) when the
+camera opens, the preview briefly shows a scaled-down whole frame before it fills the round
+window — the recorder must hide that initial render so the user only ever sees the framed
+preview; (b) video messages are recorded at the camera's full default quality even though
+they only ever play in a small in-chat circle (never fullscreen) — they must be captured at
+a size/bitrate appropriate for that small circle; and (c) video messages appear in the
+chat's "Media, links & docs" gallery, which doesn't fit their conversational, voice-message-
+like nature — they must be excluded from that gallery (as voice messages already are).
 
 ## Bug & Root Cause
 
@@ -100,6 +109,60 @@ separately (b) Delete and confirm the take is discarded with nothing sent.
 2. **Given** a paused recording, **When** the user taps Delete/Cancel, **Then** the take is
    discarded, nothing is sent, and the camera is released.
 
+### User Story 4 - The camera preview opens already framed (Priority: P2)
+
+When the recorder opens, the user sees a black/countdown cover that gives way to a correctly
+framed round preview — never a brief scaled-down whole-frame flash before it fills.
+
+**Why this priority**: A visible glitch on every open; the existing countdown was meant to
+hide it but races the camera and doesn't.
+
+**Independent Test**: Open the recorder repeatedly and confirm the framed preview appears
+without a scaled-down intermediate render.
+
+**Acceptance Scenarios**:
+
+1. **Given** the recorder is opening, **When** the camera has not yet produced a frame,
+   **Then** the preview area stays covered (no scaled-down whole-frame render is shown).
+2. **Given** the camera has produced its first frame, **When** the cover gives way,
+   **Then** the preview is already framed to fill the round window.
+
+### User Story 5 - Video messages are right-sized for in-chat playback (Priority: P2)
+
+Video messages are captured at a size and bitrate suited to their small in-chat circle (they
+never play fullscreen), so files stay small without visible loss at that display size.
+
+**Why this priority**: Recording at full camera quality wastes storage/bandwidth for content
+shown only in a ~200px circle.
+
+**Independent Test**: Record a video message and confirm its captured resolution/bitrate are
+materially below the camera's uncapped default while looking crisp in the in-chat circle.
+
+**Acceptance Scenarios**:
+
+1. **Given** a video message is recorded, **When** it is captured, **Then** its resolution
+   and bitrate are constrained to a small-circle-appropriate target, not the camera default.
+2. **Given** the constrained capture, **When** it plays in the chat, **Then** it looks crisp
+   in the circle (no obvious quality regression at that size).
+
+### User Story 6 - Video messages stay out of the media gallery (Priority: P2)
+
+Video messages do not appear in the chat's "Media, links & docs" gallery and cannot be
+opened in the fullscreen media viewer — they live in the conversation, like voice messages.
+
+**Why this priority**: They are conversational/ephemeral; listing them in the gallery (and
+allowing a fullscreen open they don't support well) is inconsistent with voice messages.
+
+**Independent Test**: Send a video message, open the chat's media gallery, and confirm it is
+not listed; confirm it cannot be opened in the fullscreen viewer.
+
+**Acceptance Scenarios**:
+
+1. **Given** a chat with video messages, **When** the user opens "Media, links & docs",
+   **Then** video messages are not shown in the media grid (consistent with voice messages).
+2. **Given** a video message in the conversation, **When** the user interacts with it,
+   **Then** it plays inline only and does not open the fullscreen media viewer.
+
 ### Edge Cases
 
 - **Auto-stop at max length**: the recorder finalizes at a maximum duration; that maximum
@@ -140,6 +203,18 @@ separately (b) Delete and confirm the take is discarded with nothing sent.
   recorded time only, so a paused recording is not auto-finalized while paused.
 - **FR-008**: The behavior SHOULD match the voice-message recorder's Pause/Resume semantics
   for consistency across the two recorders.
+- **FR-009**: When the recorder opens, the preview MUST remain covered until the camera has
+  produced its first frame, so the brief scaled-down whole-frame render is never visible; the
+  countdown/reveal MUST begin only once the framed preview is available (with a sensible
+  timeout fallback so a camera that never reports a frame doesn't hang the recorder).
+- **FR-010**: Video messages MUST be captured at a resolution and bitrate targeted at their
+  small in-chat circle (not the camera's uncapped default), keeping files small without an
+  obvious quality regression at that display size.
+- **FR-011**: Video messages MUST be excluded from the chat's "Media, links & docs" gallery
+  (the media grid), consistent with how voice messages are already excluded.
+- **FR-012**: Video messages MUST NOT be openable in the fullscreen media viewer; they play
+  inline in the conversation only. (Already true in the chat bubble; FR-011's gallery change
+  must not reintroduce a fullscreen entry point.)
 
 ### Key Entities
 
@@ -169,6 +244,13 @@ separately (b) Delete and confirm the take is discarded with nothing sent.
   of cases.
 - **SC-005**: Send and Delete succeed from the paused state (clip sent / take discarded and
   camera released), with no orphaned camera stream left running.
+- **SC-006**: Opening the recorder never shows a scaled-down whole-frame flash before the
+  framed preview — the preview area stays covered until the first camera frame.
+- **SC-007**: A recorded video message's resolution/bitrate are constrained to the
+  small-circle target (materially below the camera default), with no obvious quality loss in
+  the in-chat circle.
+- **SC-008**: Video messages do not appear in the chat's media gallery and cannot be opened
+  in the fullscreen viewer (0 video-note entries in the media grid).
 
 ## Assumptions
 
