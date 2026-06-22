@@ -120,6 +120,12 @@ export async function webcodecsTranscode(
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
     fastStart: 'in-memory',
+    // Normalize both tracks so the first sample is at t=0 (preserving A/V sync). An
+    // iPhone clip's first decoded frame often has a non-zero presentation time; left as
+    // muxed, QuickTime/iOS Safari report a 0:00 duration and refuse to play (Chromium
+    // and macOS are lenient — which is why this only showed up on the iPhone). This also
+    // makes the compressed clip play for iOS *recipients*, not just the sender (spec 2007).
+    firstTimestampBehavior: 'cross-track-offset',
     video: { codec: 'avc', width: tw, height: th },
     audio: aTrack
       ? { codec: 'aac', sampleRate: aTrack.audio.sample_rate, numberOfChannels: aTrack.audio.channel_count }
