@@ -1,6 +1,8 @@
-# CI: runs the full build + test suite on every develop push and on every PR
-# (including PRs into main, so the merge that cuts a release is already proven
-# green). On a develop push it also publishes the rolling develop image.
+# CI: runs the full build + test suite on every develop push and PR that touches
+# code (path-filtered — doc/spec/tooling-only changes skip it), including PRs into
+# main so the merge that cuts a release is already proven green. A develop push that
+# changed code also publishes the rolling develop image; a docs-only develop push
+# skips both the suite and the image rebuild (the app is byte-identical).
 name: CI
 
 on:
@@ -58,13 +60,17 @@ jobs:
               - '.dockerignore'
               - '.github/workflows/**'
 
-  # The full build + test suite. Path-filtering only optimizes PR CI: a doc/spec-only
-  # PR skips this (the CI gate still reports a single required status). A push to
-  # develop or a manual workflow_dispatch ALWAYS runs it, so the develop image is
-  # rebuilt for every develop commit and `workflow_dispatch` reliably republishes.
+  # The full build + test suite. Path-filtering gates it on BOTH PRs and develop
+  # pushes: a doc/spec/tooling-only change (markdown, specs/, .specify/, ROADMAP.md,
+  # scripts/) skips the heavy suite — and, because the develop image job chains off
+  # `verify`, also skips the image rebuild — since the built app is byte-identical to
+  # the previous commit. The always-on roadmap guard is the real gate for those.
+  # Anything in app/server/e2e/deps/configs/Dockerfile/workflows still runs the full
+  # suite. `workflow_dispatch` ALWAYS runs it, so a manual run reliably republishes
+  # the develop image even when nothing code-relevant changed.
   verify:
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.code == 'true' }}
     uses: ./.github/workflows/build-test.yml
 
   # Gate the one merge that actually ships: a PR into main must carry a version
