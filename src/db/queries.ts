@@ -1366,7 +1366,7 @@ export async function sendMediaMessage(
     albumName?: string;
     videoNote?: boolean;
     audio?: AudioMeta;
-    quality?: 'sd' | 'hd' | 'fhd' | '4k' | 'original';
+    quality?: 'sd' | 'hd' | 'fhd' | 'original';
     /** A ready-made thumbnail (data URL) to embed, e.g. a frame captured live by the
      *  video-note recorder — more reliable than decoding the recorded blob. */
     poster?: string;
@@ -1408,7 +1408,7 @@ export async function sendMediaMessage(
     // All media goes through the background job (compress if needed → upload),
     // so every attachment gets uniform progress + retry/failed handling.
     status: 'compressing',
-    compressQuality: compressible ? (opts!.quality as 'sd' | 'hd' | 'fhd' | '4k') : undefined,
+    compressQuality: compressible ? (opts!.quality as 'sd' | 'hd' | 'fhd') : undefined,
     // The HD/SD/Original badge shown on photo/video bubbles (both sides).
     mediaQuality: kind === 'image' || kind === 'video' ? (opts?.quality ?? 'original') : undefined,
     jobAttempts: 0,

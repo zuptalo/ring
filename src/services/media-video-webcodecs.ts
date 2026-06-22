@@ -134,18 +134,12 @@ export async function webcodecsTranscode(
   });
 
   // --- pick a supported H.264 encoder config (Safari is picky about profile/level) ---
-  // Order matters on two axes (spec 2007):
-  //  • Profile: Main / Constrained-Baseline before High — iOS Safari's H.264 encoder
-  //    reports/handles High (avc1.64*) the least reliably (w3c/webcodecs#686/#492).
-  //  • Level: the level (last byte) must cover the TARGET resolution. Level ≤4.0 tops
-  //    out around 1080p, so a 4K tier (up to 2160p) needs Level 5.1/5.2 — we list the
-  //    ≤4.0 configs first (chosen for ≤1080p targets) then 5.1/5.2 (chosen for 4K).
-  // isConfigSupported filters out any the device + target resolution can't do.
+  // Order matters: Main / Constrained-Baseline before High — iOS Safari's H.264 encoder
+  // reports/handles High (avc1.64*) the least reliably (spec 2007; w3c/webcodecs#686/#492).
+  // Level 4.0 covers the top tier (Full HD / 1080p); isConfigSupported filters out any
+  // profile/level the device + target resolution can't do.
   const base = { width: tw, height: th, bitrate: preset.bitrate, framerate: vTrack.video?.frame_rate || 30 };
-  const candidates = [
-    'avc1.4d0028', 'avc1.42e028', 'avc1.42001f', 'avc1.42e01e', 'avc1.640028', // ≤ Level 4.0 (≤1080p)
-    'avc1.4d0033', 'avc1.640033', 'avc1.4d0034', 'avc1.640034', // Level 5.1 / 5.2 (up to 4K)
-  ];
+  const candidates = ['avc1.4d0028', 'avc1.42e028', 'avc1.42001f', 'avc1.42e01e', 'avc1.640028'];
   let encoderConfig: VideoEncoderConfig | null = null;
   for (const codec of candidates) {
     const cfg: VideoEncoderConfig = { codec, ...base };

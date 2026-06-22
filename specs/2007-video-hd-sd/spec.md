@@ -70,6 +70,16 @@ quality tiers and only offer tiers suitable for the chosen media.
   offered. For a batch, suitability is based on the **largest** source. When only
   Original applies (a source smaller than the smallest tier), the picker is skipped.
 
+### Session 2026-06-23 (4K dropped after on-device testing)
+
+- Q: Keep the 4K (2160p) tier? → A: **No — dropped for both photos and videos.**
+  On-device testing on an iPhone 15 Pro showed: (a) the 4K **video** re-encode is
+  unreliable and very slow (the iOS hardware H.264 encoder stalls at 2160p, then
+  falls back to Original), and (b) a 4K **photo** re-encode gives no meaningful size
+  reduction over Original. Full HD (1080p) becomes the top tier — it delivers a
+  large, reliable reduction — with Original for full fidelity. SD / HD / Full HD all
+  verified working on-device with correct resolution, size, and metadata.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Choosing HD or SD actually shrinks the video (Priority: P1)
@@ -207,15 +217,16 @@ byte-for-byte identical to the source (same size, same container/metadata).
 - **FR-010**: The system MUST NOT upscale a source that is already below the
   selected tier; it sends the source as-is and labels it truthfully.
 - **FR-011**: The send-quality picker MUST offer the tiers SD, HD (720p), Full HD
-  (1080p), 4K (2160p), and Original, for both photos and videos. Each non-Original
-  tier re-encodes the media to that tier's target resolution + bitrate/quality.
+  (1080p), and Original, for both photos and videos. Each non-Original tier
+  re-encodes the media to that tier's target resolution + bitrate/quality. (A 4K
+  tier was evaluated and dropped — see Clarifications 2026-06-23.)
 - **FR-012**: The picker MUST offer only tiers a given source can actually produce:
   a tier is shown only when the source's longest edge is at least that tier's
   resolution (never upscaling); Original is always offered. For multiple items chosen
   together, suitability is based on the largest source. When only Original applies,
   the quality choice MAY be skipped.
-- **FR-013**: The 4K (and Full HD) tier MUST re-encode at its target resolution even
-  when no downscale is needed, to reduce a high-bitrate source's size and produce a
+- **FR-013**: The Full HD tier MUST re-encode at its target resolution even when no
+  downscale is needed, to reduce a high-bitrate source's size and produce a
   cross-platform-playable H.264 result; if it cannot reduce the file, FR-007 applies
   (sent + labeled Original).
 
@@ -247,9 +258,9 @@ byte-for-byte identical to the source (same size, same container/metadata).
 - **SC-007**: For the exact reported scenario (2160p · 0:22 · 66.8 MB), sending the
   same clip at Original, HD, and SD yields three visibly different sizes and the
   HD/SD versions report lower resolutions than the original.
-- **SC-008**: A 4K source offers all five tiers and yields five descending sizes
-  (SD < HD < Full HD < 4K < Original); a 720p source offers only SD, HD, and Original
-  (never Full HD or 4K).
+- **SC-008**: A source ≥1080p offers SD, HD, Full HD, and Original and yields four
+  descending sizes (SD < HD < Full HD < Original); a 720p source offers only SD, HD,
+  and Original (never Full HD).
 
 ## Assumptions
 

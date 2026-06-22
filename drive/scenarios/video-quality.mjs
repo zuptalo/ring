@@ -53,9 +53,9 @@ if (!canEncode) {
   console.log('  this browser cannot encode H.264 via WebCodecs — skipping Part B.');
   console.log('  (the real-shrink path is covered by the e2e suite + the on-device iPhone check.)');
 } else {
-  // A high-bitrate 4K source so every tier (incl. 4K @ ~18 Mbps) genuinely shrinks it.
+  // A 4K source so Full HD (the top tier) genuinely downscales it.
   const results = {};
-  for (const quality of ['original', '4k', 'fhd', 'hd', 'sd']) {
+  for (const quality of ['original', 'fhd', 'hd', 'sd']) {
     const { messageId, sourceSize } = await a.page.evaluate(
       ([c, q]) => window.__ringTest.sendRealVideoQuality(c, q, 3840, 2160, 2, 45_000_000),
       [chatId, quality],
@@ -69,18 +69,15 @@ if (!canEncode) {
   const ok =
     results.sd.mediaSize < results.hd.mediaSize &&
     results.hd.mediaSize < results.fhd.mediaSize &&
-    results.fhd.mediaSize < results['4k'].mediaSize &&
-    results['4k'].mediaSize < results.original.mediaSize &&
+    results.fhd.mediaSize < results.original.mediaSize &&
     results.sd.mediaWidth <= 640 &&
     results.hd.mediaWidth <= 1280 &&
     results.fhd.mediaWidth <= 1920 &&
-    results['4k'].mediaWidth <= 3840 &&
     results.sd.mediaQuality === 'sd' &&
     results.hd.mediaQuality === 'hd' &&
     results.fhd.mediaQuality === 'fhd' &&
-    results['4k'].mediaQuality === '4k' &&
     results.original.mediaQuality === 'original';
-  console.log(`  VERDICT: ${ok ? 'OK — SD < HD < FullHD < 4K < Original, labels honest' : 'MISMATCH — see sizes above'}`);
+  console.log(`  VERDICT: ${ok ? 'OK — SD < HD < FullHD < Original, labels honest' : 'MISMATCH — see sizes above'}`);
 
   // Suitability: a 720p source must NOT offer Full HD / 4K (pure function, but assert live).
   const offered720 = await a.page.evaluate(async () => {

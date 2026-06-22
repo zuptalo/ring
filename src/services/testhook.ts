@@ -455,7 +455,7 @@ export function installTestHook(): void {
         videoNote: true,
       }),
     /** Send a photo/video at a quality → exercises the background compression job. */
-    sendMediaQuality: (chatId: string, kind: 'image' | 'video', name: string, quality: 'sd' | 'hd' | 'fhd' | '4k' | 'original') =>
+    sendMediaQuality: (chatId: string, kind: 'image' | 'video', name: string, quality: 'sd' | 'hd' | 'fhd' | 'original') =>
       dbSendMediaMessage(
         chatId,
         kind,
@@ -470,7 +470,7 @@ export function installTestHook(): void {
      *  without a committed binary fixture (spec 2007). Returns the source byte size. */
     sendRealVideoQuality: async (
       chatId: string,
-      quality: 'sd' | 'hd' | 'fhd' | '4k' | 'original',
+      quality: 'sd' | 'hd' | 'fhd' | 'original',
       w = 1920,
       h = 1080,
       seconds = 2,

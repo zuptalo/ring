@@ -108,8 +108,8 @@ test('the picker offers only tiers a source can produce — no upscaling (FR-011
       tiny: availableQualities(480),
     };
   });
-  expect(offered.uhd).toEqual(['sd', 'hd', 'fhd', '4k', 'original']);
-  expect(offered.fhd).toEqual(['sd', 'hd', 'fhd', 'original']); // no 4K (would upscale)
-  expect(offered.hd).toEqual(['sd', 'hd', 'original']); // no Full HD/4K
+  expect(offered.uhd).toEqual(['sd', 'hd', 'fhd', 'original']); // Full HD is the top tier
+  expect(offered.fhd).toEqual(['sd', 'hd', 'fhd', 'original']);
+  expect(offered.hd).toEqual(['sd', 'hd', 'original']); // no Full HD (would upscale)
   expect(offered.tiny).toEqual(['original']); // nothing to downscale to
 });

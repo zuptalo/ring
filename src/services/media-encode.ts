@@ -7,7 +7,7 @@
  */
 import { compressVideoAdaptive } from './media-video';
 
-export type Quality = 'sd' | 'hd' | 'fhd' | '4k' | 'original';
+export type Quality = 'sd' | 'hd' | 'fhd' | 'original';
 export type Tier = Exclude<Quality, 'original'>;
 
 /**
@@ -16,20 +16,23 @@ export type Tier = Exclude<Quality, 'original'>;
  * tiers the picker offers for a given source (spec 2007). A tier is offered only when
  * the source is at least that resolution — `maxEdge` doubles as the suitability
  * threshold, so we never offer a tier that would upscale. Names are resolution-based
- * (720p/1080p/2160p) and mean the same pixels for photos and videos.
+ * (720p/1080p) and mean the same pixels for photos and videos.
+ *
+ * Full HD (1080p) is the top tier: a 4K re-encode tier was tried and dropped — on-device
+ * H.264 encoding at 2160p is unreliable/very slow (notably the iOS hardware encoder),
+ * and a 4K photo re-encode barely beats Original. Full HD already delivers a large,
+ * reliable reduction; Original remains for full fidelity.
  */
 export const QUALITY_TIERS: { key: Tier; maxEdge: number; label: string }[] = [
   { key: 'sd', maxEdge: 640, label: 'SD' },
   { key: 'hd', maxEdge: 1280, label: 'HD' },
   { key: 'fhd', maxEdge: 1920, label: 'Full HD' },
-  { key: '4k', maxEdge: 3840, label: '4K' },
 ];
 
 const QUALITY_LABELS: Record<Quality, string> = {
   sd: 'SD',
   hd: 'HD',
   fhd: 'Full HD',
-  '4k': '4K',
   original: 'Original',
 };
 
@@ -60,7 +63,6 @@ const IMAGE_PRESETS: Record<Tier, ImagePreset> = {
   sd: { maxEdge: 640, quality: 0.6 },
   hd: { maxEdge: 1280, quality: 0.72 },
   fhd: { maxEdge: 1920, quality: 0.8 },
-  '4k': { maxEdge: 3840, quality: 0.85 },
 };
 
 /** Re-encode a photo to the SD/HD preset (downscaled JPEG). Returns the original

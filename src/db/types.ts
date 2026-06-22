@@ -244,7 +244,7 @@ export interface Message {
   outgoing: boolean;
   status: MessageStatus;
   sentAt?: number; // when the server actually accepted it (shown as the send time)
-  compressQuality?: 'sd' | 'hd' | 'fhd' | '4k'; // the quality to (re)compress at, drives resume
+  compressQuality?: 'sd' | 'hd' | 'fhd'; // the quality to (re)compress at, drives resume
   jobAttempts?: number; // background-job (compress + seal/upload) failure count
   failReason?: 'too-large'; // why a send failed permanently (drives a specific toast)
   deliveredAt?: number; // 1:1: when the peer's device confirmed delivery
@@ -266,7 +266,7 @@ export interface Message {
   mediaWidth?: number;
   mediaHeight?: number;
   mediaSize?: number;
-  mediaQuality?: 'sd' | 'hd' | 'fhd' | '4k' | 'original'; // send quality → badge (SD/HD/Full HD/4K/Original)
+  mediaQuality?: 'sd' | 'hd' | 'fhd' | 'original'; // send quality → badge (SD/HD/Full HD/Original)
   posterData?: string; // video thumbnail (data URL) sent by the sender → shown
   // before/without downloading the full clip
   // Set on a received media message that hasn't been downloaded yet (auto-download

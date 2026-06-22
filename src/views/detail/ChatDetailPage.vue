@@ -3139,7 +3139,7 @@ function pickQuality(longEdge?: number): Promise<Quality | null> {
   const opts = availableQualities(longEdge);
   // Only 'original' is suitable → nothing to choose; use it without a sheet.
   if (opts.length === 1) return Promise.resolve('original');
-  // Highest fidelity first (Original, then 4K → SD), mirroring WhatsApp's ordering.
+  // Highest fidelity first (Original, then Full HD → SD), mirroring WhatsApp's ordering.
   const tiers = opts.filter((q) => q !== 'original').reverse();
   return new Promise((resolve) => {
     const buttons: import('@ionic/vue').ActionSheetButton[] = [
