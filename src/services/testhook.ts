@@ -156,6 +156,59 @@ import {
   inboundVideoFrames,
 } from '@/composables/useCall';
 
+/**
+ * Mint a real, decodable H.264 mp4 entirely in-browser (WebCodecs + mp4-muxer, both
+ * already app deps) for the spec-2007 video-quality tests. Frames carry moving
+ * high-frequency detail so the encoder is bitrate-bound, not trivially compressible —
+ * that way re-encoding to a lower resolution/bitrate yields a genuinely smaller file
+ * and SD < HD < Original sizes are stable. Avoids a committed binary fixture and the
+ * need for host ffmpeg. Throws if the browser can't encode H.264 (caller falls back).
+ */
+async function makeTestVideo(w: number, h: number, seconds: number, bitrate = 12_000_000, fps = 30): Promise<Blob> {
+  const { Muxer, ArrayBufferTarget } = await import('mp4-muxer');
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(),
+    fastStart: 'in-memory',
+    video: { codec: 'avc', width: w, height: h },
+  });
+  // Level must cover the resolution: High@5.1 / Main@4.0 handle up to 4K / 1080p; pick
+  // the first VideoEncoder accepts for this size (High@5.1 first so 2160p is encodable).
+  const candidates = ['avc1.640033', 'avc1.4d0028', 'avc1.42e028', 'avc1.640028', 'avc1.42001f'];
+  let codec = '';
+  for (const c of candidates) {
+    const cfg = { codec: c, width: w, height: h, bitrate, framerate: fps };
+    const sup = (VideoEncoder as unknown as { isConfigSupported?: (x: unknown) => Promise<{ supported?: boolean }> }).isConfigSupported;
+    if (!sup || (await sup(cfg)).supported) { codec = c; break; }
+  }
+  if (!codec) throw new Error('no H.264 encoder available to mint a test video');
+
+  const errs: unknown[] = [];
+  const encoder = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => errs.push(e) });
+  encoder.configure({ codec, width: w, height: h, bitrate, framerate: fps });
+
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d')!;
+  const total = Math.max(1, Math.round(seconds * fps));
+  for (let i = 0; i < total; i++) {
+    ctx.fillStyle = `hsl(${(i * 9) % 360}, 70%, 45%)`;
+    ctx.fillRect(0, 0, w, h);
+    // ~200 moving tiles of varied colour → high-frequency detail the codec must spend bits on.
+    for (let k = 0; k < 200; k++) {
+      ctx.fillStyle = `hsl(${(i * 13 + k * 31) % 360}, 90%, ${30 + ((k * 7) % 50)}%)`;
+      const x = (i * 17 + k * 53) % w;
+      const y = (i * 23 + k * 97) % h;
+      ctx.fillRect(x, y, w / 20, h / 20);
+    }
+    const frame = new VideoFrame(canvas, { timestamp: (i / fps) * 1e6, duration: (1 / fps) * 1e6 });
+    encoder.encode(frame, { keyFrame: i % 30 === 0 });
+    frame.close();
+  }
+  await encoder.flush();
+  muxer.finalize();
+  if (errs.length) throw errs[0];
+  return new Blob([(muxer.target as InstanceType<typeof ArrayBufferTarget>).buffer], { type: 'video/mp4' });
+}
+
 export function installTestHook(): void {
   const api = {
     /** Register with an invite code + username. Tests may omit the username; a
@@ -336,6 +389,13 @@ export function installTestHook(): void {
         hasMedia: !!m?.mediaId,
         pending: !!m?.pendingMedia,
         sentBlobId: m?.sentBlobId ?? null,
+        // spec 2007: the ACHIEVED quality + the transmitted facts, so tests can assert
+        // the badge never claims a tier the bytes aren't, and that HD/SD really shrink.
+        status: m?.status ?? null,
+        mediaQuality: m?.mediaQuality ?? null,
+        mediaSize: m?.mediaSize ?? null,
+        mediaWidth: m?.mediaWidth ?? null,
+        mediaHeight: m?.mediaHeight ?? null,
       };
     },
     /** Download an incoming message's media (as the UI does on tap / auto-download). */
@@ -395,7 +455,7 @@ export function installTestHook(): void {
         videoNote: true,
       }),
     /** Send a photo/video at a quality → exercises the background compression job. */
-    sendMediaQuality: (chatId: string, kind: 'image' | 'video', name: string, quality: 'sd' | 'hd' | 'original') =>
+    sendMediaQuality: (chatId: string, kind: 'image' | 'video', name: string, quality: 'sd' | 'hd' | 'fhd' | '4k' | 'original') =>
       dbSendMediaMessage(
         chatId,
         kind,
@@ -404,6 +464,23 @@ export function installTestHook(): void {
         undefined,
         { quality },
       ),
+    /** Generate a REAL, decodable H.264 mp4 of the given pixel size + duration (animated
+     *  high-frequency content so re-encoding to a smaller resolution genuinely shrinks the
+     *  bytes) and send it at the chosen quality. Drives the real transcode end-to-end
+     *  without a committed binary fixture (spec 2007). Returns the source byte size. */
+    sendRealVideoQuality: async (
+      chatId: string,
+      quality: 'sd' | 'hd' | 'fhd' | '4k' | 'original',
+      w = 1920,
+      h = 1080,
+      seconds = 2,
+      bitrate = 12_000_000,
+      name = 'clip.mp4',
+    ): Promise<{ messageId: string; sourceSize: number }> => {
+      const blob = await makeTestVideo(w, h, seconds, bitrate);
+      const messageId = await dbSendMediaMessage(chatId, 'video', blob, name, seconds, { quality });
+      return { messageId, sourceSize: blob.size };
+    },
     /** Send a REAL, decodable image of the given pixel dimensions (a gradient, so JPEG
      *  downscales produce genuinely different-sized tiers) at original quality — used to
      *  exercise the spec-1014 bubble/grid/strip thumbnail tiers end-to-end. */

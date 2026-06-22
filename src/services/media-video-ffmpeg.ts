@@ -8,11 +8,25 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import type { VideoPreset } from './media-video';
 
-// Single-thread UMD core, served locally from public/ffmpeg (no CDN, no COOP/COEP).
-// Loaded via toBlobURL (a plain fetch wrapped in a blob: URL) so the ffmpeg worker
-// imports it directly instead of going through Vite's module transform; passing
-// the bare /ffmpeg path as coreURL makes Vite try to transform a public file.
+// Single-thread ESM core, served locally from public/ffmpeg (no CDN, no COOP/COEP).
+// It MUST be the ESM build: @ffmpeg/ffmpeg 0.12 runs the core in a *module* worker,
+// where `importScripts` is illegal — the worker therefore `await import()`s the core
+// and needs its `default` export. The UMD build has no export, so it silently failed
+// to load ("failed to import ffmpeg-core.js") and the whole ffmpeg fallback was dead
+// (spec 2007). Loaded via toBlobURL (a plain fetch wrapped in a blob: URL) so the
+// worker imports it directly instead of going through Vite's module transform.
 const CORE_BASE = '/ffmpeg';
+
+// ffmpeg.wasm is single-threaded and software-only with a ~2 GB memory wall; feeding
+// it a full 4K clip reliably triggers an unrecoverable wasm Out-of-Memory that CRASHES
+// the tab (a JS timeout can't catch that — only not starting can). So we refuse inputs
+// above a conservative ceiling and let the caller fall through to the original (which
+// is then labeled honestly). WebCodecs — hardware, memory-safe — is the primary path
+// for large clips; ffmpeg is only the fallback for browsers without WebCodecs, where
+// the inputs that reach it are small enough to be safe (spec 2007, research Decision 2).
+const FFMPEG_MAX_INPUT_BYTES = 64 * 1024 * 1024;
+// Wall-clock cap so a wedged transcode fails (→ fallback) instead of hanging the send.
+const FFMPEG_TIMEOUT_MS = 120_000;
 
 let instance: FFmpeg | null = null;
 let loading: Promise<FFmpeg> | null = null;
@@ -41,6 +55,14 @@ export async function ffmpegTranscode(
   preset: VideoPreset,
   onProgress?: (p: number) => void,
 ): Promise<Blob> {
+  // Refuse oversize inputs BEFORE loading the 30 MB core or decoding a frame — a 4K
+  // decode here would OOM-crash the tab (see FFMPEG_MAX_INPUT_BYTES). Throwing lets the
+  // orchestrator fall through to the original, sent honestly as 'original'.
+  if (blob.size > FFMPEG_MAX_INPUT_BYTES) {
+    throw new Error(
+      `input too large for ffmpeg.wasm (${blob.size} > ${FFMPEG_MAX_INPUT_BYTES}); skipping to avoid OOM`,
+    );
+  }
   const ff = await getFFmpeg();
   const input = 'input';
   const output = 'output.mp4';
@@ -57,7 +79,7 @@ export async function ffmpegTranscode(
       '-c:a', 'aac', '-b:a', '128k',
       '-movflags', '+faststart',
       output,
-    ]);
+    ], FFMPEG_TIMEOUT_MS);
     const data = (await ff.readFile(output)) as Uint8Array;
     const out = new Blob([data.buffer as ArrayBuffer], { type: 'video/mp4' });
     // Keep whichever is smaller (re-encoding a small clip can grow it).

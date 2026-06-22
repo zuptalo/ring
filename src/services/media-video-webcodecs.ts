@@ -40,16 +40,40 @@ function trackDescription(file: any, trackId: number): Uint8Array | undefined {
   return undefined;
 }
 
-/** The audio AudioSpecificConfig (esds DecoderSpecificInfo) for a copied track. */
+/** The audio AudioSpecificConfig (esds DecoderSpecificInfo) for a copied track.
+ *  mp4box nests the descriptor differently across containers (iPhone .mov vs .mp4),
+ *  so we walk the descriptor tree for the first entry that carries `.data` rather
+ *  than assuming a fixed `descs[0].descs[0]` path. */
 function audioSpecificConfig(file: any, trackId: number): Uint8Array | undefined {
   try {
     const trak = file.getTrackById(trackId);
-    const esds = trak.mdia.minf.stbl.stsd.entries[0]?.esds;
-    const asc = esds?.esd?.descs?.[0]?.descs?.[0]?.data;
-    return asc ? new Uint8Array(asc) : undefined;
+    const esds = trak.mdia.minf.stbl.stsd.entries.map((e: any) => e?.esds).find(Boolean);
+    if (!esds) return undefined;
+    // Depth-first search for a DecoderSpecificInfo node (the one carrying `.data`).
+    const stack: any[] = [esds.esd, ...(esds.esd?.descs ?? [])];
+    while (stack.length) {
+      const node = stack.shift();
+      if (!node) continue;
+      if (node.data) return new Uint8Array(node.data);
+      if (Array.isArray(node.descs)) stack.push(...node.descs);
+    }
+    return undefined;
   } catch {
     return undefined;
   }
+}
+
+/** Standard AAC-LC AudioSpecificConfig (2 bytes) synthesized from the sample rate +
+ *  channel count, used when the container's esds can't be parsed. iPhone audio is
+ *  AAC-LC and we copy the samples through unchanged, so a synthesized config is
+ *  correct and lets the transcode proceed (spec 2007) instead of failing the send. */
+export function synthAacAsc(sampleRate?: number, channels?: number): Uint8Array | undefined {
+  const FREQS = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+  const fi = FREQS.indexOf(sampleRate ?? 0);
+  const ch = channels ?? 0;
+  if (fi < 0 || ch < 1 || ch > 7) return undefined;
+  const objectType = 2; // AAC-LC
+  return new Uint8Array([(objectType << 3) | (fi >> 1), ((fi & 1) << 7) | (ch << 3)]);
 }
 
 export async function webcodecsTranscode(
@@ -60,9 +84,21 @@ export async function webcodecsTranscode(
   if (!webCodecsSupported()) throw new Error('WebCodecs unavailable');
 
   const file = MP4Box.createFile();
+  // mp4box fires NEITHER onReady nor onError for an input it can't parse (a corrupt or
+  // non-mp4 container, or too-few bytes), which would hang the whole send forever in
+  // 'compressing'. A timeout turns that into a clean rejection so the orchestrator falls
+  // through to ffmpeg/original and the send is never blocked (spec 2007 FR-006).
+  const READY_TIMEOUT_MS = 15_000;
   const info = await new Promise<any>((resolve, reject) => {
-    file.onReady = resolve;
-    file.onError = (e: string) => reject(new Error(`mp4box: ${e}`));
+    const timer = setTimeout(() => reject(new Error('mp4box: parse timed out (unsupported container?)')), READY_TIMEOUT_MS);
+    file.onReady = (i: any) => {
+      clearTimeout(timer);
+      resolve(i);
+    };
+    file.onError = (e: string) => {
+      clearTimeout(timer);
+      reject(new Error(`mp4box: ${e}`));
+    };
     const ab = blob.arrayBuffer() as Promise<ArrayBuffer & { fileStart?: number }>;
     void ab.then((buf) => {
       (buf as any).fileStart = 0;
@@ -98,8 +134,18 @@ export async function webcodecsTranscode(
   });
 
   // --- pick a supported H.264 encoder config (Safari is picky about profile/level) ---
+  // Order matters on two axes (spec 2007):
+  //  • Profile: Main / Constrained-Baseline before High — iOS Safari's H.264 encoder
+  //    reports/handles High (avc1.64*) the least reliably (w3c/webcodecs#686/#492).
+  //  • Level: the level (last byte) must cover the TARGET resolution. Level ≤4.0 tops
+  //    out around 1080p, so a 4K tier (up to 2160p) needs Level 5.1/5.2 — we list the
+  //    ≤4.0 configs first (chosen for ≤1080p targets) then 5.1/5.2 (chosen for 4K).
+  // isConfigSupported filters out any the device + target resolution can't do.
   const base = { width: tw, height: th, bitrate: preset.bitrate, framerate: vTrack.video?.frame_rate || 30 };
-  const candidates = ['avc1.640028', 'avc1.4d0028', 'avc1.42e028', 'avc1.42001f', 'avc1.42e01e'];
+  const candidates = [
+    'avc1.4d0028', 'avc1.42e028', 'avc1.42001f', 'avc1.42e01e', 'avc1.640028', // ≤ Level 4.0 (≤1080p)
+    'avc1.4d0033', 'avc1.640033', 'avc1.4d0034', 'avc1.640034', // Level 5.1 / 5.2 (up to 4K)
+  ];
   let encoderConfig: VideoEncoderConfig | null = null;
   for (const codec of candidates) {
     const cfg: VideoEncoderConfig = { codec, ...base };
@@ -120,11 +166,18 @@ export async function webcodecsTranscode(
   if (!encoderConfig) throw new Error('no supported H.264 encoder config (Safari may not encode H.264)');
 
   // --- video re-encode pipeline ---
+  // WebCodecs surfaces decode/encode failures through the async `error` callback, NOT
+  // by throwing from encode()/decode(). Capturing the first error here (and rethrowing
+  // after flush) makes the failure deterministic: webcodecsTranscode rejects and the
+  // orchestrator falls cleanly through to ffmpeg/original instead of hanging or
+  // throwing into an unhandled context (spec 2007).
+  let fatalError: Error | null = null;
+  const fail = (e: unknown) => {
+    fatalError ??= e instanceof Error ? e : new Error(String(e));
+  };
   const encoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    error: (e) => {
-      throw e;
-    },
+    error: fail,
   });
   encoder.configure(encoderConfig);
   console.info('[webcodecs] encoder configured', encoderConfig.codec);
@@ -143,9 +196,7 @@ export async function webcodecsTranscode(
       n++;
       if (vTrack.nb_samples) onProgress?.(n / vTrack.nb_samples);
     },
-    error: (e) => {
-      throw e;
-    },
+    error: fail,
   });
   const decoderConfig: VideoDecoderConfig = {
     codec: vTrack.codec,
@@ -162,15 +213,46 @@ export async function webcodecsTranscode(
   decoder.configure(decoderConfig);
 
   // --- collect samples (video → decoder, audio → copied into muxer) ---
-  const asc = aTrack ? audioSpecificConfig(file, aTrack.id) : undefined;
-  console.info('[webcodecs] audio config', { hasAudio: !!aTrack, ascBytes: asc?.byteLength ?? 0 });
+  // Prefer the container's real ASC; fall back to a synthesized AAC-LC config from the
+  // track's sample rate/channels (iPhone .mov esds often isn't parseable here). Only
+  // truly give up — and let the orchestrator fall through — if neither is available.
+  const asc = aTrack
+    ? (audioSpecificConfig(file, aTrack.id) ?? synthAacAsc(aTrack.audio?.sample_rate, aTrack.audio?.channel_count))
+    : undefined;
+  console.info('[webcodecs] audio config', {
+    hasAudio: !!aTrack,
+    ascBytes: asc?.byteLength ?? 0,
+    synthesized: !!aTrack && !audioSpecificConfig(file, aTrack.id) && !!asc,
+  });
   if (aTrack && !asc) throw new Error('cannot read audio config'); // avoid a silent result
   const videoChunks: EncodedVideoChunk[] = [];
   let audioCount = 0;
 
+  // Collect ALL samples before decoding. mp4box delivers samples across one or more
+  // onSamples callbacks; we must wait for genuine completion (every track's full
+  // nb_samples received), counting cumulatively rather than guessing from the last
+  // batch's sample number. The previous `setTimeout(resolve, 0)` "safety" could
+  // resolve BEFORE the batches arrived, yielding truncated/empty output that then
+  // tripped the "not smaller"/"audio dropped" guards and fell into the OOM-prone
+  // ffmpeg leg — the silent degrade-to-original on large iPhone 4K clips (spec 2007).
+  // A real wall-clock timeout now REJECTS (a clean failure → fallback), never resolves
+  // a partial result as success.
+  const EXTRACT_TIMEOUT_MS = 60_000;
   await new Promise<void>((resolve, reject) => {
-    let done = 0;
-    const total = aTrack ? 2 : 1;
+    const timer = setTimeout(
+      () => reject(new Error('mp4box sample extraction timed out')),
+      EXTRACT_TIMEOUT_MS,
+    );
+    const finish = (err?: Error) => {
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
+    };
+    const checkDone = () => {
+      const vDone = videoChunks.length >= vTrack.nb_samples;
+      const aDone = !aTrack || audioCount >= aTrack.nb_samples;
+      if (vDone && aDone) finish();
+    };
     file.onSamples = (id: number, _u: any, samples: any[]) => {
       try {
         if (id === vTrack.id) {
@@ -183,10 +265,6 @@ export async function webcodecsTranscode(
                 data: s.data,
               }),
             );
-          }
-          if (samples.length && samples[samples.length - 1].number + 1 >= vTrack.nb_samples) {
-            done++;
-            if (done >= total) resolve();
           }
         } else if (aTrack && id === aTrack.id) {
           for (const s of samples) {
@@ -206,26 +284,27 @@ export async function webcodecsTranscode(
             } as any);
             audioCount++;
           }
-          if (samples.length && samples[samples.length - 1].number + 1 >= aTrack.nb_samples) {
-            done++;
-            if (done >= total) resolve();
-          }
         }
+        checkDone();
       } catch (e) {
-        reject(e as Error);
+        finish(e as Error);
       }
     };
     file.setExtractionOptions(vTrack.id, null, { nbSamples: Number.POSITIVE_INFINITY });
     if (aTrack) file.setExtractionOptions(aTrack.id, null, { nbSamples: Number.POSITIVE_INFINITY });
     file.start();
     file.flush();
-    // Safety: if onSamples never reports completion, resolve after extraction.
-    setTimeout(resolve, 0);
+    // mp4box delivers everything it can synchronously during start()/flush(); if the
+    // counts already satisfy completion, resolve now. Otherwise the timeout guards it.
+    checkDone();
   });
 
   for (const chunk of videoChunks) decoder.decode(chunk);
   await decoder.flush();
   await encoder.flush();
+  // A decode/encode error reported asynchronously (captured by `fail`) becomes a
+  // deterministic rejection here, so the orchestrator falls through cleanly.
+  if (fatalError) throw fatalError;
   muxer.finalize();
 
   if (aTrack && audioCount === 0) throw new Error('audio was dropped'); // guard

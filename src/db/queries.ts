@@ -19,7 +19,7 @@ import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive } from '@/services/notify';
-import { compressImage, compressVideo } from '@/services/media-encode';
+import { compressImage, compressVideo, achievedQuality } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
 import { THUMB_TIERS } from '@/utils/thumbs';
@@ -1366,7 +1366,7 @@ export async function sendMediaMessage(
     albumName?: string;
     videoNote?: boolean;
     audio?: AudioMeta;
-    quality?: 'sd' | 'hd' | 'original';
+    quality?: 'sd' | 'hd' | 'fhd' | '4k' | 'original';
     /** A ready-made thumbnail (data URL) to embed, e.g. a frame captured live by the
      *  video-note recorder — more reliable than decoding the recorded blob. */
     poster?: string;
@@ -1374,7 +1374,7 @@ export async function sendMediaMessage(
      *  under the photo/video. Clamped to CAPTION_MAX. */
     caption?: string;
   },
-): Promise<void> {
+): Promise<string> {
   const ts = now();
   const caption = (opts?.caption ?? '').slice(0, CAPTION_MAX);
   await guardOutbound(await getChat(chatId)); // reject before storing media for a ghosted/blocked peer
@@ -1408,7 +1408,7 @@ export async function sendMediaMessage(
     // All media goes through the background job (compress if needed → upload),
     // so every attachment gets uniform progress + retry/failed handling.
     status: 'compressing',
-    compressQuality: compressible ? (opts!.quality as 'sd' | 'hd') : undefined,
+    compressQuality: compressible ? (opts!.quality as 'sd' | 'hd' | 'fhd' | '4k') : undefined,
     // The HD/SD/Original badge shown on photo/video bubbles (both sides).
     mediaQuality: kind === 'image' || kind === 'video' ? (opts?.quality ?? 'original') : undefined,
     jobAttempts: 0,
@@ -1444,6 +1444,7 @@ export async function sendMediaMessage(
 
   resetJobProgress(message.id);
   void processMediaJob(message.id); // background: (compress →) upload → pending / failed
+  return message.id;
 }
 
 /** Encrypt + upload the media ciphertext, then seal a MediaRef into the payload
@@ -1539,7 +1540,21 @@ async function runMediaJob(messageId: string): Promise<void> {
         }
       }
       setCompressProgress(messageId, 1); // encoding done
-      console.info('[media-job] encoded', { id: messageId, kind: message.kind, bytes: uploadBlob.size });
+      // Honest badge (spec 2007): label by what we actually sent, never by what was
+      // requested. If the transcode couldn't shrink the clip it returns the original
+      // blob, and this becomes 'original' so we never claim an HD/SD we didn't achieve.
+      // sealMediaAndEnqueue copies message.mediaQuality onto the recipient's MediaRef,
+      // so correcting it here fixes the badge on BOTH sides.
+      if (message.kind === 'image' || message.kind === 'video') {
+        message.mediaQuality = achievedQuality(message.compressQuality, media.blob.size, uploadBlob);
+      }
+      console.info('[media-job] encoded', {
+        id: messageId,
+        kind: message.kind,
+        bytes: uploadBlob.size,
+        requested: message.compressQuality ?? 'original',
+        achieved: message.mediaQuality,
+      });
       // Tag the bubble with resolution / length / size (persisted FIRST so the badge
       // shows even if the thumbnail step is slow), then best-effort thumbnail.
       if (message.kind === 'video') {
@@ -2069,10 +2084,15 @@ export async function createPost(opts: {
         : opts.media.kind === 'video'
           ? await compressVideo(opts.media.blob, q)
           : opts.media.blob;
+    // Honest badge (spec 2007): label posts by the quality actually achieved. When a
+    // transcode can't shrink the clip it returns the original, so we don't claim an
+    // SD/HD the feed item isn't. (Voice isn't transcoded — keep its requested value.)
+    const achieved =
+      opts.media.kind === 'voice' ? q : achievedQuality(q, opts.media.blob.size, toUpload);
     // Dimensions → reserve an aspect-ratio box in the feed (no layout jump).
     if (opts.media.kind === 'image') ({ width: mediaW, height: mediaH } = await readImageMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
     else if (opts.media.kind === 'video') ({ width: mediaW, height: mediaH } = await readVideoMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
-    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { width: mediaW, height: mediaH, quality: q });
+    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { width: mediaW, height: mediaH, quality: achieved });
     payload.media = ref;
     mediaId = uid();
     await put<Media>('media', {

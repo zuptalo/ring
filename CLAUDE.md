@@ -263,5 +263,5 @@ but the subject is the real lever.)
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/2005-pause-resume-during/plan.md`
+`specs/2007-video-hd-sd/plan.md`
 <!-- SPECKIT END -->
