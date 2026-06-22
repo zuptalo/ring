@@ -32,6 +32,7 @@ import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { warmAll, clearWarm } from '@/composables/warmStores';
 import { IonApp, IonRouterOutlet, toastController } from '@ionic/vue';
 import { inviteNeedsProfile } from '@/services/invites';
+import { appToast } from '@/services/toast';
 import { useViewportHeight } from '@/composables/useViewportHeight';
 import { useTheme } from '@/composables/useTheme';
 import { useAppBadge } from '@/composables/useAppBadge';
@@ -96,12 +97,7 @@ watch(inviteNeedsProfile, async (needs) => {
   // While still in the sign-in/onboarding flow (/auth), the mandatory profile step
   // there already collects name + photo; don't race it with a second prompt.
   if (router.currentRoute.value.path === '/auth') return;
-  const t = await toastController.create({
-    message: 'Add your name and photo so people know it’s you.',
-    duration: 2800,
-    position: 'top',
-  });
-  await t.present();
+  await appToast({ message: 'Add your name and photo so people know it’s you.', duration: 2800 });
   router.push('/settings/profile');
 });
 
@@ -273,41 +269,24 @@ body.keyboard-open ion-footer {
   overflow: hidden;
 }
 
-/* The "update available" toast is styled to MATCH the in-app notification banners
-   (NotificationBanners.vue), so every in-app notification + toast shares one look:
-   the brand-green translucent card with blur, white text, 18px corners, sitting just
-   below the app header (same safe-area + 56px offset as the banner stack) rather than
-   pinned to the very top. */
-ion-toast.app-update-toast {
-  --background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.9);
-  --color: #fff;
-  --border-radius: 18px;
+/* Functional toasts (confirmations like "Muted"/"Copied" and errors) all go through the
+   shared appToast() helper (src/services/toast.ts) with this one cssClass, so they share a
+   single look — rounded corners, sitting just below the app header (same safe-area + 56px
+   offset as the in-app banner stack) rather than pinned to the very top — tunable here in
+   one place. (The "update available" prompt is NOT a toast; it renders as a persistent
+   card through the in-app banner overlay, NotificationBanners.vue.) */
+ion-toast.app-toast {
+  --border-radius: 14px;
   --max-width: 560px;
-  --box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
-  --button-color: #fff;
+  --box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
 }
-/* Push the box below the header and give it the banner's frosted blur. (The visible
-   box is the `container` part; offsetting it lines the toast up with the banners.) */
-ion-toast.app-update-toast::part(container) {
+/* Offset the visible box (the `container` part) below the header so a functional toast
+   lines up with the in-app banners instead of overlapping the status bar / header. */
+ion-toast.app-toast::part(container) {
   margin-top: calc(env(safe-area-inset-top, 0px) + 56px);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
 }
-/* Defensive: never let a long unbreakable token (e.g. a version with a git sha)
-   wrap one character per line and blow up the toast. */
-ion-toast.app-update-toast::part(message) {
+/* Defensive: never let a long unbreakable token wrap one character per line. */
+ion-toast.app-toast::part(message) {
   overflow-wrap: anywhere;
-}
-ion-toast.app-update-toast::part(button) {
-  color: #fff;
-}
-ion-toast.app-update-toast::part(icon) {
-  color: #fff;
-}
-/* Match the banners' slightly stronger fill in dark mode. */
-@media (prefers-color-scheme: dark) {
-  ion-toast.app-update-toast {
-    --background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.95);
-  }
 }
 </style>

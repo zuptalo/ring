@@ -47,8 +47,9 @@ import { useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
   IonContent, IonText, IonList, IonItem, IonInput, IonButton,
-  onIonViewDidEnter, toastController,
+  onIonViewDidEnter,
 } from '@ionic/vue';
+import { appToast } from '@/services/toast';
 import { requestFriend } from '@/db/queries';
 
 const UUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
@@ -75,8 +76,7 @@ async function paste() {
 }
 
 async function toast(message: string, color?: string) {
-  const t = await toastController.create({ message, duration: 1500, position: 'top', color });
-  await t.present();
+  await appToast({ message, duration: 1500, color });
 }
 
 async function send() {

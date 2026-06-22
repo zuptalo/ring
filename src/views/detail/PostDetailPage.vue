@@ -125,7 +125,7 @@ import {
 import { useRoute, useRouter } from 'vue-router';
 import { trashOutline, happyOutline, timeOutline } from 'ionicons/icons';
 import { timeLeft, formatPostDateTime } from '@/utils/post-time';
-import { toastController } from '@ionic/vue';
+import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
 import { vEnterSend } from '@/directives/enter-send';
@@ -182,15 +182,13 @@ const grouped = computed(() => {
 async function react(emoji: string): Promise<void> {
   const res = await reactToPost(postId, emoji);
   if (res === 'limit' || res === 'limit-emojis') {
-    const t = await toastController.create({
+    await appToast({
       message:
         res === 'limit-emojis'
           ? `This post already has ${MAX_DISTINCT_REACTIONS} different reactions — tap one of those instead.`
           : `You can add up to ${MAX_REACTIONS_PER_USER} reactions.`,
       duration: 1600,
-      position: 'top',
     });
-    await t.present();
   }
 }
 function openPicker(ev: Event): void {

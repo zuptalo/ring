@@ -62,15 +62,29 @@ export function displayVersion(v: string): string {
 // Conventional-Commit prefix: type, optional (scope), optional `!`, then `: `.
 const CC_PREFIX = /^[a-z]+(\([^)]*\))?!?:\s*/i;
 
-// A trailing developer reference users don't need: `(spec 1015)`, `(#248)`, or a bare
-// PR/issue number like `(#248)` at the end of the subject. Stripped for display.
-const TRAILING_REF = /\s*\((?:spec\s*\d+|#\d+|gh-\d+)\)\s*$/i;
+// A trailing developer reference users don't need, stripped for display. Covers
+// `(spec 1015)`, a spec ref that carries extra detail like `(spec 1013 US2/US3)` or
+// `(spec 1015 FR-014)`, a PR/issue number `(#248)`, and a `(gh-12)` reference. The
+// `spec\s*\d+[^)]*` form deliberately swallows any suffix after the number (US/FR/task
+// labels) — the leak the iOS user saw — while `(finally)` and other prose parentheticals
+// are left alone because they don't start with `spec`/`#`/`gh-`.
+const TRAILING_REF = /\s*\((?:spec\s*\d+[^)]*|#\d+|gh-\d+)\)\s*$/i;
+
+// A trailing `(+ …)` developer aside (e.g. `(+ flaky test fix)`) — a parenthetical the
+// author tacked on, not user-facing. Only strips parens that OPEN with `+`, so genuine
+// notes like `(finally)` survive.
+const TRAILING_ASIDE = /\s*\(\+[^)]*\)\s*$/;
 
 /** Turn a commit subject into clean user-facing text: drop the `type(scope):` prefix,
- *  strip a trailing spec/issue/PR reference, and upper-case the first letter. A
- *  non-conforming subject is passed through (just trimmed + capitalized), never dropped. */
+ *  strip a trailing spec/issue/PR reference and any `(+ …)` aside, and upper-case the
+ *  first letter. A non-conforming subject is passed through (just trimmed + capitalized),
+ *  never dropped. */
 export function prettify(subject: string): string {
-  const stripped = subject.replace(CC_PREFIX, '').replace(TRAILING_REF, '').trim();
+  const stripped = subject
+    .replace(CC_PREFIX, '')
+    .replace(TRAILING_ASIDE, '')
+    .replace(TRAILING_REF, '')
+    .trim();
   const text = stripped || subject.trim();
   return text.charAt(0).toUpperCase() + text.slice(1);
 }

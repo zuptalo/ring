@@ -16,15 +16,23 @@
       <button class="nb-close" aria-label="Dismiss notification" @click.stop="dismissBanner(b.id)" @pointerdown.stop>
         <ion-icon :icon="closeOutline" />
       </button>
-      <!-- Header: tap anywhere here to open the full chat. -->
-      <div class="nb-main" role="button" tabindex="0" @click="open(b)" @keydown.enter="open(b)">
-        <div class="nb-avatar" :class="{ 'nb-system': b.kind === 'system' && !b.avatar }">
+      <!-- Header: tap anywhere here to open the full chat. An 'action' card (the update
+           prompt) is not a link — it carries its own buttons — so it isn't clickable. -->
+      <div
+        class="nb-main"
+        :class="{ 'nb-main-static': b.kind === 'action' }"
+        :role="b.kind === 'action' ? undefined : 'button'"
+        :tabindex="b.kind === 'action' ? undefined : 0"
+        @click="b.kind === 'action' ? undefined : open(b)"
+        @keydown.enter="b.kind === 'action' ? undefined : open(b)"
+      >
+        <div class="nb-avatar" :class="{ 'nb-system': (b.kind === 'system' || b.kind === 'action') && !b.avatar }">
           <img v-if="b.avatar" :src="b.avatar" :alt="b.name" />
           <ion-icon v-else :icon="bannerIcon(b)" />
         </div>
         <div class="nb-text">
           <div class="nb-name">{{ b.name }}</div>
-          <div class="nb-body">{{ sentId === b.id ? 'Sent' : b.body }}</div>
+          <div class="nb-body" :class="{ 'nb-body-wrap': b.kind === 'action' }">{{ sentId === b.id ? 'Sent' : b.body }}</div>
         </div>
         <ion-icon v-if="sentId === b.id" :icon="checkmarkCircle" class="nb-sent" />
       </div>
@@ -72,6 +80,18 @@
           <span class="nb-handle" aria-hidden="true" />
         </div>
       </template>
+      <!-- Action card (update prompt): its buttons (What's new / Update / Later). -->
+      <div v-else-if="b.kind === 'action' && b.actions?.length" class="nb-actions">
+        <button
+          v-for="(a, i) in b.actions"
+          :key="i"
+          class="nb-action"
+          :class="{ cancel: a.role === 'cancel' }"
+          @click.stop="onAction(b, a)"
+        >
+          {{ a.text }}
+        </button>
+      </div>
       <span v-else class="nb-handle nb-handle-static" aria-hidden="true" />
     </div>
   </div>
@@ -79,23 +99,38 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { IonIcon, IonTextarea, toastController } from '@ionic/vue';
+import { IonIcon, IonTextarea } from '@ionic/vue';
 import {
   personAddOutline, chatbubbleEllipsesOutline, sendOutline, checkmarkCircle, closeOutline,
+  sparklesOutline,
 } from 'ionicons/icons';
 import router from '@/router';
 import {
-  notifyBanners, dismissBanner, holdBanner, pinBanner, unpinBanner, type NotifyBanner,
+  notifyBanners, dismissBanner, holdBanner, pinBanner, unpinBanner,
+  type NotifyBanner, type NotifyAction,
 } from '@/services/notify';
 import { sendMessage } from '@/db/queries';
+import { appToast } from '@/services/toast';
 import { normalizeOutgoing } from '@/utils/text';
 
 const banners = notifyBanners;
 
-// The glyph for a banner with no avatar: a system notice carries its own icon; a
-// request shows the add-person icon; a message falls back to the chat bubble.
+// The glyph for a banner with no avatar: a system / action notice carries its own icon;
+// a request shows the add-person icon; an action card falls back to sparkles; a message
+// falls back to the chat bubble.
 function bannerIcon(b: NotifyBanner): string {
-  return b.icon || (b.kind === 'request' ? personAddOutline : chatbubbleEllipsesOutline);
+  if (b.icon) return b.icon;
+  if (b.kind === 'request') return personAddOutline;
+  if (b.kind === 'action') return sparklesOutline;
+  return chatbubbleEllipsesOutline;
+}
+
+// An action card's button: run its handler, then dismiss the card. Mirrors the old
+// update toast where any button closed it; dismissing fires the banner's onDismiss, which
+// lets useAppUpdate re-surface the prompt next foreground if the user chose "Later".
+function onAction(b: NotifyBanner, a: NotifyAction): void {
+  a.handler();
+  dismissBanner(b.id);
 }
 
 // Reply state is keyed by the banner's URL (its dedup identity), so a follow-up
@@ -155,13 +190,7 @@ async function sendReply(b: NotifyBanner): Promise<void> {
     await sendMessage(b.chatId, text);
   } catch {
     // Keep the reply open with the draft intact so it can be retried or opened fully.
-    const t = await toastController.create({
-      message: "Couldn't send. Tap the banner to open the chat.",
-      duration: 2200,
-      position: 'top',
-      color: 'danger',
-    });
-    await t.present();
+    await appToast({ message: "Couldn't send. Tap the banner to open the chat.", duration: 2200, color: 'danger' });
     return;
   }
   draft.value = '';
@@ -337,6 +366,10 @@ watch(
   gap: 12px;
   cursor: pointer;
 }
+/* An action card's header is informational (the prompt's title + body), not a link. */
+.nb-main-static {
+  cursor: default;
+}
 .nb-avatar {
   flex: none;
   width: 40px;
@@ -383,6 +416,13 @@ watch(
   text-overflow: ellipsis;
   unicode-bidi: plaintext;
   text-align: start;
+}
+/* The update prompt's body is a full sentence (and a version string that must not blow up
+   the layout) — let it wrap and break an unbreakable token instead of truncating. */
+.nb-body-wrap {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
 }
 .nb-sent {
   flex: none;
@@ -466,5 +506,35 @@ watch(
 }
 .nb-handle-static {
   margin-top: 4px;
+}
+/* Action-card button row (update prompt). Buttons read on the saturated green using the
+   same translucent-white treatment as the quick-reply send button, so the card stays one
+   coherent surface; the cancel ("Later") option is quieter. */
+.nb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 2px;
+}
+.nb-action {
+  border: none;
+  border-radius: 14px;
+  padding: 7px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.nb-action:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+.nb-action.cancel {
+  background: transparent;
+  font-weight: 500;
+  opacity: 0.85;
 }
 </style>

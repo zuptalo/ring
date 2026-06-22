@@ -171,7 +171,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
   IonItem, IonItemSliding, IonItemOption, IonItemOptions, IonAvatar, IonIcon, IonTextarea, IonSearchbar,
-  toastController, actionSheetController, alertController,
+  actionSheetController, alertController,
   onIonViewWillEnter, onIonViewWillLeave,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
@@ -179,6 +179,7 @@ import {
   createOutline, sparklesOutline, micOutline, playCircleOutline, happyOutline, timeOutline,
   notificationsOutline, notificationsOffOutline,
 } from 'ionicons/icons';
+import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
 import { vEnterSend } from '@/directives/enter-send';
@@ -240,15 +241,13 @@ const left = (p: WallPost): string => timeLeft(p.expiresAt, now.value);
 async function onReact(post: WallPost, emoji: string): Promise<void> {
   const res = await reactToPost(post.id, emoji);
   if (res === 'limit' || res === 'limit-emojis') {
-    const t = await toastController.create({
+    await appToast({
       message:
         res === 'limit-emojis'
           ? `This post already has ${MAX_DISTINCT_REACTIONS} different reactions — tap one of those instead.`
           : `You can add up to ${MAX_REACTIONS_PER_USER} reactions.`,
       duration: 1600,
-      position: 'top',
     });
-    await t.present();
   }
 }
 function openPicker(post: WallPost, ev: Event): void {
@@ -322,21 +321,17 @@ async function mute(until: number): Promise<void> {
 // --- per-user mute / hide (swipe-right = mute, swipe-left = hide) ---
 async function toggleMute(post: WallPost): Promise<void> {
   await setWallUserMuted(post.author, !post.muted);
-  const t = await toastController.create({
+  await appToast({
     message: post.muted ? `Unmuted ${post.authorName}` : `Muted ${post.authorName}'s Wall notifications`,
     duration: 1400,
-    position: 'top',
   });
-  await t.present();
 }
 async function hideUser(post: WallPost): Promise<void> {
   await setWallUserHidden(post.author, true);
-  const t = await toastController.create({
+  await appToast({
     message: `Hid ${post.authorName}'s posts. Undo from the bell menu.`,
     duration: 1800,
-    position: 'top',
   });
-  await t.present();
 }
 
 // --- delete your own post (swipe-left, with confirmation) ---

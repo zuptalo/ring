@@ -192,7 +192,7 @@ import {
   IonItemDivider, IonAvatar, IonLabel, IonNote,
   IonInfiniteScroll, IonInfiniteScrollContent,
   IonItemSliding, IonItemOptions, IonItemOption,
-  actionSheetController, alertController, toastController, onIonViewWillEnter,
+  actionSheetController, alertController, onIonViewWillEnter,
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import { personAddOutline, trashOutline, ellipsisHorizontal, compassOutline, banOutline } from 'ionicons/icons';
@@ -200,6 +200,7 @@ import {
   incomingRequests, outgoingRequests, acceptConnect, rejectConnect, withdrawConnect, refreshConnections,
   type ConnItem,
 } from '@/services/connections';
+import { appToast } from '@/services/toast';
 import { formatStamp } from '@/utils/time';
 import {
   deleteContact, listContacts,
@@ -300,8 +301,7 @@ function inviteStatus(code: string): string {
 }
 
 async function toast(message: string): Promise<void> {
-  const t = await toastController.create({ message, duration: 1800, position: 'top' });
-  await t.present();
+  await appToast({ message, duration: 1800 });
 }
 
 async function inviteActions(inv: PendingInvite): Promise<void> {

@@ -11,7 +11,7 @@
  * owns the 1:1 path and the shared reactive state/UI surface.
  */
 import { ref, computed, watch } from 'vue';
-import { toastController } from '@ionic/vue';
+import { appToast } from '@/services/toast';
 import router from '@/router';
 import { uid } from '@/utils/uid';
 import {
@@ -321,8 +321,7 @@ function setState(s: CallState): void {
 }
 
 async function toast(message: string): Promise<void> {
-  const t = await toastController.create({ message, duration: 1800, position: 'top' });
-  await t.present();
+  await appToast({ message, duration: 1800 });
 }
 
 function gumConstraints(kind: CallKind): MediaStreamConstraints {

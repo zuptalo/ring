@@ -73,9 +73,11 @@ async function ensurePrefs(): Promise<NotifyPrefs> {
 }
 
 // 'message' and 'request' are person-to-person; 'system' is an app event (e.g. an
-// invitee joining) — it has no chat/avatar, so it shows an ICON instead. All three
-// flow through the SAME banner (NotificationBanners.vue); only the payload differs.
-export type IncomingKind = 'message' | 'request' | 'system';
+// invitee joining) — it has no chat/avatar, so it shows an ICON instead. 'action' is a
+// persistent card carrying its own buttons (the app-update prompt). All flow through the
+// SAME banner (NotificationBanners.vue); only the payload differs — so every in-app
+// notification, the update prompt included, sits and looks identical (one component).
+export type IncomingKind = 'message' | 'request' | 'system' | 'action';
 
 // Default glyph for a system notice that doesn't name its own icon, so every system
 // banner shows an icon (parity with the avatar/chat-icon on person notifications).
@@ -93,15 +95,26 @@ export interface IncomingNotice {
 
 /* ---- in-app notification banners (custom green overlay; see NotificationBanners.vue) ---- */
 
+// One action button on an 'action' banner (the app-update prompt). `role: 'cancel'`
+// marks the dismissive option (e.g. "Later") so the component can style it quietly.
+export interface NotifyAction {
+  text: string;
+  role?: 'cancel';
+  handler: () => void;
+}
+
 export interface NotifyBanner {
   id: string;
   kind: IncomingKind;
   name: string;
   body: string;
   avatar: string;
-  icon?: string; // system banners: shown in the avatar circle instead of an image
+  icon?: string; // system / action banners: shown in the avatar circle instead of an image
   url: string;
   chatId?: string; // message banners only: target for inline quick-reply
+  actions?: NotifyAction[]; // 'action' banners: buttons rendered under the body
+  persistent?: boolean; // no auto-dismiss timer + exempt from the cap; stays until acted on
+  onDismiss?: () => void; // fired when the banner is removed (mirror of toast.onDidDismiss)
 }
 // Live list the overlay renders. Capped + deduped by target so a chatty
 // conversation collapses to one banner instead of stacking.
@@ -118,18 +131,65 @@ const pinnedUrls = new Set<string>();
 
 function showBanner(b: Omit<NotifyBanner, 'id'>): void {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  // A persistent banner (the update prompt) is pinned so the cap can never evict it, and
+  // gets no auto-dismiss timer below — it stays until the user acts or closes it.
+  if (b.persistent) pinnedUrls.add(b.url);
   // Replacing a same-target banner: clear its old timer so it can't dismiss the new one.
+  // (A re-prompt of the persistent update banner lands here and simply replaces by url,
+  // never stacking a duplicate.)
   for (const old of notifyBanners.value.filter((x) => x.url === b.url)) clearBannerTimer(old.id);
   const merged = [...notifyBanners.value.filter((x) => x.url !== b.url), { ...b, id }];
-  // Keep every pinned (open-reply) banner, then fill the remaining slots with the most
-  // recent others, instead of a blind tail-slice that could drop a pinned banner.
+  // Keep every pinned (open-reply / persistent) banner, then fill the remaining slots with
+  // the most recent others, instead of a blind tail-slice that could drop a pinned banner.
   const pinned = merged.filter((x) => pinnedUrls.has(x.url));
   const room = Math.max(0, MAX_BANNERS - pinned.length);
   const others = merged.filter((x) => !pinnedUrls.has(x.url)).slice(-room);
   const kept = new Set([...pinned, ...others].map((x) => x.id));
   for (const dropped of merged.filter((x) => !kept.has(x.id))) clearBannerTimer(dropped.id);
   notifyBanners.value = merged.filter((x) => kept.has(x.id)); // preserves arrival order
-  bannerTimers.set(id, setTimeout(() => dismissBanner(id), BANNER_MS));
+  if (!b.persistent) bannerTimers.set(id, setTimeout(() => dismissBanner(id), BANNER_MS));
+}
+
+// The fixed identity of the (single) app-update prompt: a constant `url` means a
+// re-prompt REPLACES the existing card via showBanner's dedup, never stacks a duplicate.
+const UPDATE_BANNER_URL = 'app-update';
+
+/**
+ * Surface the app-update prompt as a persistent in-app notification card carrying its
+ * own action buttons — the SAME overlay/component as message/request/system banners, so
+ * it renders identically (rounded card below the header) on every platform. Replaces any
+ * existing update card (idempotent) and never auto-dismisses.
+ */
+export function showActionBanner(opts: {
+  name: string;
+  body: string;
+  icon?: string;
+  actions: NotifyAction[];
+  onDismiss?: () => void;
+}): void {
+  showBanner({
+    kind: 'action',
+    name: opts.name,
+    body: opts.body,
+    avatar: '',
+    icon: opts.icon,
+    url: UPDATE_BANNER_URL,
+    actions: opts.actions,
+    persistent: true,
+    onDismiss: opts.onDismiss,
+  });
+}
+
+/** Whether the app-update card is currently on screen (so the driver can avoid a needless
+ *  re-fetch/re-show while it's already showing). */
+export function actionBannerShowing(url = UPDATE_BANNER_URL): boolean {
+  return notifyBanners.value.some((b) => b.url === url);
+}
+
+/** Dismiss the app-update card (e.g. its "Later" action). */
+export function dismissActionBanner(url = UPDATE_BANNER_URL): void {
+  const b = notifyBanners.value.find((x) => x.url === url);
+  if (b) dismissBanner(b.id);
 }
 
 function clearBannerTimer(id: string): void {
@@ -159,6 +219,9 @@ export function dismissBanner(id: string): void {
   const gone = notifyBanners.value.find((b) => b.id === id);
   if (gone) pinnedUrls.delete(gone.url);
   notifyBanners.value = notifyBanners.value.filter((b) => b.id !== id);
+  // Mirror of toast.onDidDismiss: let the opener react (the update prompt resets its
+  // re-prompt guard here so it surfaces again next foreground if the user chose "Later").
+  gone?.onDismiss?.();
 }
 
 /* ---- which chat is on screen (set by ChatDetailPage) ---- */

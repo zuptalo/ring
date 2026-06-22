@@ -225,6 +225,20 @@ GitFlow. **`develop`** is the integration branch; **`main`** is production.
 `feat(call): ...`, `fix(media): ...`, `feat(server): ...`, `test(e2e): ...`,
 `ci: ...`, `docs: ...`. The subject describes user-facing behavior, not internals.
 
+**Release-note subjects for end users** (constitution Principle VII). For user-facing
+types (`feat`, `fix`, `perf`, `security`) the subject *after* the `type(scope):` prefix is
+shown verbatim to users as the "What's new" line on update. Write it as plain-language,
+benefit-focused release-note copy — no internal jargon, no implementation shorthand, and
+no spec/issue/PR references (`(spec 1016)`, `(#248)`, `US2/US3`, `FR-014`).
+
+- ✅ `feat(notifications): show update reminders in the morning, not overnight`
+- ❌ `feat(notifications): 9 AM-local, behind-only version-announcement push (spec 1016)`
+
+Non-user-facing types (`chore`, `ci`, `build`, `docs`, `refactor`, `style`, `test`,
+`deps`) never reach "What's new", so they keep developer phrasing. (The client also
+strips trailing spec/issue refs at display time as a safety net — `release-notes.ts` —
+but the subject is the real lever.)
+
 ### Working in this environment
 
 - Develop on the branch the task assigns; create it locally if missing. Commit
@@ -249,5 +263,5 @@ GitFlow. **`develop`** is the integration branch; **`main`** is production.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/1016-9-am-local/plan.md`
+`specs/2004-unify-app-notifications/plan.md`
 <!-- SPECKIT END -->

@@ -1,17 +1,22 @@
 <!--
 Sync Impact Report
-- Version: 1.0.0 → 1.1.0 (MINOR: new principle added)
-- Added: Principle XI — Ionic-First UI (stock Ionic components + existing theme
-  tokens; custom only when no Ionic primitive exists, composed from Ionic).
-- Modified: none (Principle X unchanged; XI complements it).
+- Version: 1.1.0 → 1.2.0 (MINOR: Principle VII expanded with a new normative rule)
+- Added: Principle VII now mandates that user-facing commit subjects (feat/fix/perf/
+  security) be plain-language, benefit-focused, reference-free release-note copy, since
+  they are shown verbatim to end users as the "What's new" line.
+- Modified: Principle VII — added the release-note-copy rule; corrected the update-flow
+  wording from "toast-and-accept" to "prompt-and-accept" (the prompt now renders through
+  the shared in-app notification surface, not a separate toast). No other principle changed.
 - Removed: none.
 - Templates / docs reviewed for sync:
   - .specify/templates/plan-template.md — ✅ no change needed (Constitution Check is
-    derived generically from this file; XI is picked up automatically).
+    derived generically from this file).
   - .specify/templates/spec-template.md — ✅ no change needed (no new mandatory section).
   - .specify/templates/tasks-template.md — ✅ no change needed.
-  - CLAUDE.md — ✅ already advises Ionic-native components + the settings schema;
-    consistent with XI, no edit required.
+  - CLAUDE.md — ✅ updated: "Commit messages" now carries matching release-note-subject
+    guidance with a good/bad example (spec 2004).
+- Prior amendment (1.1.0): Added Principle XI — Ionic-First UI (stock Ionic components +
+  existing theme tokens; custom only when no Ionic primitive exists, composed from Ionic).
 - Deferred TODOs: none.
 -->
 # Ring Constitution
@@ -116,8 +121,18 @@ The server holds no state outside Postgres, and the schema only moves forward.
   coverage floors pass; and e2e passes where behavior changed.
 - Commits follow Conventional Commits with a scope describing user-facing behavior
   (`feat(call):`, `fix(media):`, `test(e2e):`, `ci:`, `docs:`).
+- Release-note copy: for user-facing commit types (`feat`, `fix`, `perf`,
+  `security`) the subject AFTER the `type(scope):` prefix is shown verbatim to end
+  users as the "What's new" line, so it MUST read as plain-language, benefit-focused
+  release-note copy — no internal jargon, no implementation shorthand, and no
+  spec/issue/PR references (`(spec 1016)`, `(#248)`, `US2/US3`, `FR-014`). Write what
+  the user gains ("Update reminders now arrive in the morning, not overnight"), not how
+  it was built ("9 AM-local, behind-only version-announcement push (spec 1016)").
+  Non-user-facing types (`chore`, `ci`, `build`, `docs`, `refactor`, `style`, `test`,
+  `deps`) are exempt — they never reach "What's new".
 - The PWA stays `registerType: 'prompt'`: a deploy MUST NOT silently reload; the
-  toast-and-accept update flow is preserved.
+  prompt-and-accept update flow is preserved (the prompt itself renders through the
+  shared in-app notification surface, not a separate toast).
 
 ### VIII. Traceable, Auto-Closing Delivery
 
@@ -221,4 +236,4 @@ These are project-specific guardrails every relevant spec MUST respect.
 - Runtime engineering guidance that is not constitutional lives in `CLAUDE.md` and
   `CONTRIBUTING.md`; where they conflict with this document, this document wins.
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-06-16
+**Version**: 1.2.0 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-06-22
