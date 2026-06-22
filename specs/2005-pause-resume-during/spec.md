@@ -174,8 +174,9 @@ not listed; confirm it cannot be opened in the fullscreen viewer.
   (new countdown), with no leaked object URLs or orphaned camera stream.
 - **Cancel/close from recording or review**: discards the take, sends nothing, and releases
   the camera in both states.
-- **Flip camera**: switching cameras restarts the take (discarding the current one) with no
-  orphaned stream.
+- **Flip camera mid-recording**: switching front/back DURING a recording continues the same
+  take — the clip keeps recording across the switch as one continuous video (no restart, no
+  countdown), with no orphaned camera stream. Audio is uninterrupted across the flip.
 - **Review playback with sound**: the recorded clip plays back with audio (un-mirrored, as
   the recipient will see it), distinct from the muted, mirrored live preview.
 
@@ -213,6 +214,9 @@ not listed; confirm it cannot be opened in the fullscreen viewer.
 - **FR-012**: Video messages MUST NOT be openable in the fullscreen media viewer; they play
   inline in the conversation only. (Already true in the chat bubble; FR-011's gallery change
   must not reintroduce a fullscreen entry point.)
+- **FR-013**: The user MUST be able to flip the camera (front/back) DURING a recording and
+  have the take continue as one continuous clip — the recording does not stop, restart, or
+  re-run the countdown when the camera is switched, and audio is uninterrupted.
 
 ### Key Entities
 
@@ -248,6 +252,9 @@ not listed; confirm it cannot be opened in the fullscreen viewer.
   the in-chat circle.
 - **SC-008**: Video messages do not appear in the chat's media gallery and cannot be opened
   in the fullscreen viewer (0 video-note entries in the media grid).
+- **SC-009**: Flipping the camera during a recording continues the same take (recording stays
+  active, the timer keeps advancing rather than resetting, no countdown reappears), and the
+  delivered clip is a single continuous video spanning the switch.
 
 ## Assumptions
 

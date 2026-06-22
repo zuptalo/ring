@@ -65,6 +65,10 @@ in vitest); see plan.md Constitution Check.
 - [X] T016 [US6] Exclude video notes from the media gallery: in `src/db/queries.ts` `listChatMedia`, filter `m.kind === 'image' || (m.kind === 'video' && !m.videoNote)` (mirrors the viewer's existing `!m.videoNote`), so they don't appear in "Media, links & docs" and have no fullscreen entry point (FR-011/FR-012, SC-008).
 - [X] T017 Re-verify: `npm run build` + `npx vitest run` green; re-run `drive/scenarios/video-note-pause.mjs` (clean camera open, pause/resume, send); then rebuild `dist/` so ring-dev (:8443 `STATIC_DIR=dist`) serves the changes for on-device testing.
 
+## Phase 8: Flip-during-recording (folded in after device testing)
+
+- [X] T018 [US?] Make camera flip continue the SAME take (FR-013/SC-009): switch the recorder to a **canvas capture pipeline** in `VideoNoteRecorder.vue` — draw the live camera (centre-cropped square) into an offscreen canvas and record `canvas.captureStream()` + a persistent audio track via `MediaRecorder`. On flip, acquire the other camera and swap only the preview feed; the canvas draw loop, audio track, and recorder keep running, so the clip continues uninterrupted (no restart/countdown). `stopToReview`/`teardown` stop the camera, mic, and canvas streams; the poster is captured from the canvas. Verified by the drive scenario's flip-keeps-recording check.
+
 ---
 
 ## Dependencies

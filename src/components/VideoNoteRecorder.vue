@@ -2,7 +2,10 @@
   <!-- Full-screen circular video-note recorder (WhatsApp-style). Starts recording as soon
        as it opens; the ring fills toward the max length. Tapping Stop ENDS the take and
        drops into a review state where you can watch it back, then Send or Retake — it is
-       never sent without you tapping Send, and it never auto-sends at the max length. -->
+       never sent without you tapping Send, and it never auto-sends at the max length.
+       The camera can be flipped MID-RECORDING and the take continues as one clip (the feed
+       is drawn into a canvas that MediaRecorder records, so swapping the camera doesn't
+       interrupt the recording). -->
   <div v-if="open" class="vn-overlay">
     <button class="vn-close" aria-label="Cancel" @click="cancel"><ion-icon :icon="close" /></button>
     <div class="vn-timer" :class="{ review: phase === 'review' }">{{ fmt(elapsed) }}</div>
@@ -70,6 +73,7 @@ import { close, cameraReverseOutline, trashOutline, sendOutline, play, pause, re
 
 const MAX = 60; // seconds
 const CIRC = 2 * Math.PI * 48;
+const SIZE = 480; // square capture edge (matches the small in-chat circle)
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: 'send', blob: Blob, dur: number, poster?: string): void; (e: 'cancel'): void }>();
@@ -84,10 +88,21 @@ const fading = ref(false); // drives the black→footage fade during the countdo
 const ready = ref(false); // first camera frame painted → safe to reveal the framed preview
 const reviewPlaying = ref(false); // the recorded clip is currently playing back
 const playPos = ref(0); // playback position (s) during review, for the ring
-let stream: MediaStream | null = null;
+
+// Capture pipeline: the live camera feeds a square <canvas> (`canvasStream`), and the audio
+// track is acquired once. MediaRecorder records the CANVAS stream + that audio, so flipping
+// the camera (swap `cameraStream`, keep drawing into the same canvas) never interrupts the
+// take. Audio persists across flips.
+let cameraStream: MediaStream | null = null;
+let audioStream: MediaStream | null = null;
+let canvasStream: MediaStream | null = null;
+let recordStream: MediaStream | null = null;
+let canvas: HTMLCanvasElement | null = null;
+let canvasCtx: CanvasRenderingContext2D | null = null;
+let drawRaf: number | undefined;
 let recorder: MediaRecorder | null = null;
 let chunks: BlobPart[] = [];
-let startMs = 0; // recording start (single continuous take — no pause)
+let startMs = 0; // recording start (single continuous take)
 let timer: number | undefined;
 let countTimer: number | undefined;
 // Review state: the finalized clip + its object URL (revoked on send/retake/teardown).
@@ -109,6 +124,20 @@ watch(
     else teardown();
   },
 );
+
+/** getUserMedia for the camera only, at the small square target. */
+function cameraConstraints(): MediaStreamConstraints {
+  return {
+    video: {
+      facingMode: facing.value,
+      width: { ideal: SIZE },
+      height: { ideal: SIZE },
+      aspectRatio: { ideal: 1 },
+      frameRate: { ideal: 24, max: 30 },
+    },
+    audio: false,
+  };
+}
 
 // Resolve once the <video> has an actual frame to show (or a short timeout), so the black
 // cover can stay opaque over the brief scaled-down whole-frame render the camera paints
@@ -135,6 +164,29 @@ function firstFrame(v: HTMLVideoElement): Promise<void> {
   });
 }
 
+// Continuously draw the live camera (centre-cropped to a square) into the canvas that
+// MediaRecorder records. Keeps running across a camera flip, so the recording is seamless.
+function startDraw(): void {
+  if (drawRaf != null) return;
+  const loop = (): void => {
+    const v = preview.value;
+    if (canvasCtx && v && v.videoWidth) {
+      const side = Math.min(v.videoWidth, v.videoHeight);
+      const sx = (v.videoWidth - side) / 2;
+      const sy = (v.videoHeight - side) / 2;
+      canvasCtx.drawImage(v, sx, sy, side, side, 0, 0, SIZE, SIZE);
+    }
+    drawRaf = requestAnimationFrame(loop);
+  };
+  drawRaf = requestAnimationFrame(loop);
+}
+function stopDraw(): void {
+  if (drawRaf != null) {
+    cancelAnimationFrame(drawRaf);
+    drawRaf = undefined;
+  }
+}
+
 async function start(): Promise<void> {
   try {
     phase.value = 'countdown';
@@ -143,26 +195,27 @@ async function start(): Promise<void> {
     fading.value = false;
     elapsed.value = 0;
     playPos.value = 0;
-    // Right-size for the in-chat circle (a ~200px round bubble, never fullscreen): a small,
-    // squarish capture keeps files small with no visible loss at that size.
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: facing.value,
-        width: { ideal: 480 },
-        height: { ideal: 480 },
-        aspectRatio: { ideal: 1 },
-        frameRate: { ideal: 24, max: 30 },
-      },
-      audio: true,
-    });
+    // Audio once (persists across flips); camera for the current facing.
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    cameraStream = await navigator.mediaDevices.getUserMedia(cameraConstraints());
     const v = preview.value;
     if (v) {
       v.src = ''; // drop any prior review clip
-      v.srcObject = stream;
+      v.srcObject = cameraStream;
       await firstFrame(v); // hold the black cover over the scaled-down initial render
     }
-    if (!stream) return; // closed (teardown) while awaiting the first frame
+    if (!cameraStream) return; // closed (teardown) while awaiting the first frame
     ready.value = true;
+    // Set up the canvas capture pipeline and start drawing the live camera into it.
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+      canvasCtx = canvas.getContext('2d');
+    }
+    startDraw();
+    canvasStream = canvas.captureStream(30);
+    recordStream = new MediaStream([...canvasStream.getVideoTracks(), ...(audioStream?.getAudioTracks() ?? [])]);
     // Now the framed preview exists: run the 3-2-1 countdown, fading up from black.
     countdown.value = 3;
     fading.value = false;
@@ -184,12 +237,12 @@ async function start(): Promise<void> {
 }
 
 function beginRecording(): void {
-  if (!stream) return;
+  if (!recordStream) return;
   const types = ['video/webm', 'video/mp4'];
   const mt = types.find((t) => MediaRecorder.isTypeSupported?.(t));
   // Modest bitrate to match the small-circle capture — ~0.8 Mbps video is plenty for a
   // ~200px round bubble, keeping video messages small.
-  recorder = new MediaRecorder(stream, {
+  recorder = new MediaRecorder(recordStream, {
     ...(mt ? { mimeType: mt } : {}),
     videoBitsPerSecond: 800_000,
     audioBitsPerSecond: 64_000,
@@ -207,32 +260,37 @@ function beginRecording(): void {
   }, 100);
 }
 
-// Grab a still from the LIVE preview as a thumbnail — reliable (we always have real frames
-// here), unlike decoding the recorded blob, which can fail on some devices. drawImage reads
-// the raw frame (the CSS mirror doesn't apply), so it matches the recorded, un-mirrored video.
-function capturePoster(): string | undefined {
-  const v = preview.value;
-  if (!v || !v.videoWidth) return undefined;
+// Flip front/back WITHOUT interrupting the take: swap only the camera feed; the canvas draw
+// loop, audio track, and MediaRecorder keep running, so the clip continues as one video.
+async function flip(): Promise<void> {
+  if (phase.value === 'review') return; // no live camera to flip while reviewing
+  const wanted = facing.value === 'user' ? 'environment' : 'user';
+  facing.value = wanted;
   try {
-    const maxEdge = 320;
-    const scale = Math.min(1, maxEdge / Math.max(v.videoWidth, v.videoHeight));
-    const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.round(v.videoWidth * scale));
-    c.height = Math.max(1, Math.round(v.videoHeight * scale));
-    const cx = c.getContext('2d');
-    if (!cx) return undefined;
-    cx.drawImage(v, 0, 0, c.width, c.height);
-    return c.toDataURL('image/jpeg', 0.6);
+    const next = await navigator.mediaDevices.getUserMedia(cameraConstraints());
+    cameraStream?.getTracks().forEach((t) => t.stop()); // release the old camera (audio untouched)
+    cameraStream = next;
+    if (preview.value) preview.value.srcObject = next;
+  } catch {
+    facing.value = facing.value === 'user' ? 'environment' : 'user'; // revert if that camera failed
+  }
+}
+
+// A thumbnail straight from the canvas — exactly what was recorded (square, un-mirrored).
+function capturePoster(): string | undefined {
+  if (!canvas) return undefined;
+  try {
+    return canvas.toDataURL('image/jpeg', 0.6);
   } catch {
     return undefined;
   }
 }
 
-// End recording and drop into review: finalize the clip, release the camera, and play it
+// End recording and drop into review: finalize the clip, release the camera/mic, and play it
 // back so the user can watch before deciding to Send or Retake.
 async function stopToReview(): Promise<void> {
   if (phase.value !== 'recording' || !recorder) return;
-  reviewPoster = capturePoster(); // capture while the live camera frame is still showing
+  reviewPoster = capturePoster(); // from the canvas, while it still holds the last frame
   reviewDur = Math.max(1, Math.round(elapsed.value));
   if (timer) clearInterval(timer);
   timer = undefined;
@@ -243,8 +301,8 @@ async function stopToReview(): Promise<void> {
     rec.stop();
   });
   recorder = null;
-  stream?.getTracks().forEach((t) => t.stop()); // stop the camera; we have the clip now
-  stream = null;
+  stopDraw();
+  releaseStreams(); // stop camera, mic, and canvas capture — we have the clip now
   reviewBlob = blob;
   reviewUrl = URL.createObjectURL(blob);
   elapsed.value = reviewDur; // the timer now shows the clip length
@@ -299,6 +357,16 @@ async function retake(): Promise<void> {
   await start();
 }
 
+function releaseStreams(): void {
+  cameraStream?.getTracks().forEach((t) => t.stop());
+  audioStream?.getTracks().forEach((t) => t.stop());
+  canvasStream?.getTracks().forEach((t) => t.stop());
+  cameraStream = null;
+  audioStream = null;
+  canvasStream = null;
+  recordStream = null;
+}
+
 function releaseReview(): void {
   if (reviewUrl) {
     URL.revokeObjectURL(reviewUrl);
@@ -317,14 +385,14 @@ function teardown(): void {
   countTimer = undefined;
   countdown.value = null;
   fading.value = false;
+  stopDraw();
   try {
     if (recorder && recorder.state !== 'inactive') recorder.stop();
   } catch {
     /* ignore */
   }
-  stream?.getTracks().forEach((t) => t.stop());
-  stream = null;
   recorder = null;
+  releaseStreams();
   releaseReview();
   const v = preview.value;
   if (v) {
@@ -340,12 +408,6 @@ function teardown(): void {
 function cancel(): void {
   teardown();
   emit('cancel');
-}
-
-async function flip(): Promise<void> {
-  facing.value = facing.value === 'user' ? 'environment' : 'user';
-  teardown(); // restart with the other camera (current take is discarded)
-  await start();
 }
 
 onBeforeUnmount(teardown);

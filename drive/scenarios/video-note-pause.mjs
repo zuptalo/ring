@@ -34,6 +34,19 @@ await cam.dispatchEvent('pointerup');
 await alice.page.waitForTimeout(4500);
 await shot(alice, '2005-recording'); // red square Stop; timer advancing
 
+// Flip the camera mid-recording: the take must CONTINUE (same recording), not restart —
+// the Stop control stays present (still phase=recording), no countdown reappears, and the
+// timer keeps advancing rather than resetting to 0:00.
+const beforeFlip = (await alice.page.locator('.vn-timer').textContent())?.trim();
+await alice.page.locator('[aria-label="Flip camera"]').click();
+await alice.page.waitForTimeout(1500);
+const stopStillThere = (await alice.page.locator('[aria-label="Stop recording"]').count()) > 0;
+const countdownGone = (await alice.page.locator('.vn-count').count()) === 0;
+const afterFlip = (await alice.page.locator('.vn-timer').textContent())?.trim();
+console.log(
+  `[check] flip keeps recording the same take: stop-present=${stopStillThere}, no-countdown=${countdownGone}, timer ${beforeFlip}→${afterFlip} (expect advanced, not 0:00)`,
+);
+
 // Stop → review. Recording ends; nothing is sent. The Play-preview control must appear.
 await alice.page.locator('[aria-label="Stop recording"]').click();
 await poll(
