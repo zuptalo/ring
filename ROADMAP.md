@@ -15,7 +15,7 @@ Specs are grouped by category band; status moves
 |------|-------|--------|
 | [0001](specs/0001-show-what-changed/spec.md) | Show what changed in the update toast (release-note delta) | 🟢 shipped |
 | [0002](specs/0002-connections-and-friendship/spec.md) | Connections & Friendship | 🟢 shipped |
-| [0003](specs/0003-zero-knowledge-social/spec.md) | Zero-Knowledge Social Wall | ⚪ planned |
+| [0003](specs/0003-zero-knowledge-social/spec.md) | Zero-Knowledge Social Wall | 🟢 shipped |
 
 ## ⚡ Ad-hoc (1001–1999)
 
@@ -36,7 +36,7 @@ Specs are grouped by category band; status moves
 | [1013](specs/1013-jump-pill-seen-receipts/spec.md) | Expanding "Jump to Latest" Pill + Visibility-Driven Seen Receipts | 🟢 shipped |
 | [1014](specs/1014-image-thumbnails-album/spec.md) | Multi-Size Image Thumbnails + Album-View Overhaul | 🟢 shipped |
 | [1015](specs/1015-reliable-push-notifications/spec.md) | Reliable Push & Redesigned In-App Notifications | 🟢 shipped |
-| [1016](specs/1016-9-am-local/spec.md) | 9-AM-Local Version-Announcement Push (Per-Device, Behind-Only) | 🔵 in-review |
+| [1016](specs/1016-9-am-local/spec.md) | 9-AM-Local Version-Announcement Push (Per-Device, Behind-Only) | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
@@ -44,5 +44,5 @@ Specs are grouped by category band; status moves
 |------|-------|--------|
 | [2001](specs/2001-stabilize-message-status/spec.md) | Stabilize message status reporting around downloaded-blob receipts | 🟢 shipped |
 | [2002](specs/2002-media-thumbnails-stay/spec.md) | Media Thumbnails Stay Thumbnails (no autoplay storm) | 🟢 shipped |
-| [2003](specs/2003-android-install-gate/spec.md) | Fix Android install-gate false "browser can't install" warning | 🔵 in-review |
-| [2004](specs/2004-unify-app-notifications/spec.md) | Unify in-app notifications/toasts + user-friendly "What's new" | 🟡 in-progress |
+| [2003](specs/2003-android-install-gate/spec.md) | Fix Android install-gate false "browser can't install" warning | 🟢 shipped |
+| [2004](specs/2004-unify-app-notifications/spec.md) | Unify in-app notifications/toasts + user-friendly "What's new" | 🟢 shipped |

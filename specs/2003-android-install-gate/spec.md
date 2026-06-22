@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-22
 
-**Status**: in-review
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      The directory number sets the category (2001+ = hotfix/bug). -->
 
