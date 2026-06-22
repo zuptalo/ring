@@ -53,12 +53,13 @@ zero-knowledge impact; forward-only (no migration).
   message is encrypted and sent via the unchanged media pipeline. Spec's Zero-Knowledge
   Impact = none; crypto/ZK **checklist not required**.
 - **II. Spec-Driven Development** — PASS. Full pipeline; branch/commits/PR trace to 2005.
-- **III. Test-Driven Development** — PASS with a noted limit. The over-counting bug is
-  captured by a FAILING-first unit test on an extracted pure helper (`recordedMs(...)`).
-  The recorder's `MediaRecorder` wiring + UI isn't unit-testable in the harness (no
-  getUserMedia/DOM-recorder in vitest); verified via a `drive/` scenario with Chromium
-  fake-media flags + screenshots — a justified, recorded deviation (same as spec 2004). This
-  is a bug fix (2001+); the regression test reproduces the paused-gap over-count.
+- **III. Test-Driven Development** — PASS with a noted limit. After the design revision the
+  feature has no pure-logic seam (the `recordedMs` helper was removed with pause/resume); the
+  whole behavior is `MediaRecorder`/getUserMedia/DOM, which isn't unit-testable in this
+  harness. The regression is instead locked behaviorally by the `drive/` fake-media scenario,
+  which asserts the exact reported failure cannot recur: **nothing is delivered before Send**,
+  Stop enters review, and the clip is delivered **only after Send**. Justified, recorded
+  deviation (same class as spec 2004's drive-verified UI).
 - **IV. Crypto Discipline** — PASS (N/A). No crypto.
 - **V. Offline-First** — PASS (N/A). No object-store change.
 - **VI. Forward-Only Migrations** — PASS (N/A). No DB migration.
