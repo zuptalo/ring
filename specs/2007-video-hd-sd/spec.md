@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-22
 
-**Status**: in-progress
+**Status**: in-review
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
@@ -241,6 +241,11 @@ byte-for-byte identical to the source (same size, same container/metadata).
   they leave a "removed to free space" placeholder in the chat itself, but no empty
   tile/row in the gallery. Items "freed keeping previews" still appear (their preview
   remains). Links are text, never blob-backed, so cleanup never affects them.
+- **FR-016**: An on-device transcoded video MUST be playable on the platforms Ring
+  targets, including iOS Safari / the installed iOS PWA (QuickTime is stricter than
+  Chromium/macOS). The muxed output MUST start both tracks at t=0 with A/V sync
+  preserved, so iOS reports a valid duration and plays it — for both the sender's
+  stored copy and recipients.
 
 ### Key Entities *(include if feature involves data)*
 
