@@ -71,7 +71,7 @@
 import { computed, ref } from 'vue';
 import {
   IonItemSliding, IonItem, IonItemOptions, IonItemOption, IonAvatar, IonLabel, IonNote,
-  IonBadge, IonIcon, toastController,
+  IonBadge, IonIcon,
 } from '@ionic/vue';
 import {
   pinOutline, archiveOutline, ellipsisHorizontal, mailOpenOutline, mailUnreadOutline,
@@ -82,6 +82,7 @@ import {
 import {
   markChatRead, markChatUnread, setChatPinned, setChatArchived, MAX_PINNED_CHATS,
 } from '@/db/queries';
+import { appToast } from '@/services/toast';
 import { peerPresence } from '@/composables/usePresence';
 import { activityFor, activityKindLabel } from '@/composables/useTyping';
 import { formatTime } from '@/utils/time';
@@ -128,12 +129,10 @@ async function toggleRead(): Promise<void> {
 async function togglePin(): Promise<void> {
   const ok = await setChatPinned(props.chat.id, !props.chat.pinned);
   if (!ok) {
-    const t = await toastController.create({
+    await appToast({
       message: `You can only pin ${MAX_PINNED_CHATS} chats.`,
       duration: 2200,
-      position: 'top',
     });
-    await t.present();
   }
   closeSwipe();
 }

@@ -121,7 +121,7 @@ import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
   IonContent, IonAvatar, IonButton, IonIcon, IonList, IonItem, IonLabel, IonNote, IonToggle,
-  toastController, alertController, actionSheetController,
+  alertController, actionSheetController,
 } from '@ionic/vue';
 import {
   chatbubbleOutline, searchOutline, banOutline, imagesOutline,
@@ -132,6 +132,7 @@ import {
   getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl,
   getPresenceOverrides, setPresenceOverride, setChatNotifyPrefs, type ChatNotifyContent,
 } from '@/db/queries';
+import { appToast } from '@/services/toast';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { forceReconnect } from '@/composables/useSync';
 import type { Contact, Chat } from '@/db/types';
@@ -310,9 +311,7 @@ async function block() {
             try {
               await blockContact(contactId);
             } catch {
-              void toastController
-                .create({ message: 'Could not block. Try again.', duration: 1500, position: 'top', color: 'danger' })
-                .then((t) => t.present());
+              void appToast({ message: 'Could not block. Try again.', duration: 1500, color: 'danger' });
             }
           })();
         },
@@ -338,9 +337,7 @@ async function unblock() {
               // blocked (the offline queue only flushes on connect).
               forceReconnect();
             } catch {
-              void toastController
-                .create({ message: 'Could not unblock. Try again.', duration: 1500, position: 'top', color: 'danger' })
-                .then((t) => t.present());
+              void appToast({ message: 'Could not unblock. Try again.', duration: 1500, color: 'danger' });
             }
           })();
         },
@@ -353,7 +350,7 @@ async function unblock() {
 function copyUsername() {
   if (!contact.value?.username) return;
   void navigator.clipboard?.writeText(`@${contact.value.username}`);
-  void toastController.create({ message: 'Username copied', duration: 1200, position: 'top' }).then((t) => t.present());
+  void appToast({ message: 'Username copied', duration: 1200 });
 }
 </script>
 

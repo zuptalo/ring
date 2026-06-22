@@ -58,8 +58,9 @@ import { useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonContent,
   IonSearchbar, IonList, IonItem, IonAvatar, IonLabel, IonNote, IonSpinner,
-  actionSheetController, toastController,
+  actionSheetController,
 } from '@ionic/vue';
+import { appToast } from '@/services/toast';
 import { fetchDirectory, type DirectoryUser } from '@/services/api';
 import { requestConnect, incomingRequests, outgoingRequests, refreshConnections } from '@/services/connections';
 import { getContact, startDirectChat, listContacts } from '@/db/queries';
@@ -138,15 +139,12 @@ async function connect(u: DirectoryUser): Promise<void> {
       if (c) router.push(`/chat/${await startDirectChat(c)}`);
       return;
     }
-    const t = await toastController.create({
+    await appToast({
       message: state === 'rejected' ? 'Your request was declined.' : 'Connection request sent.',
       duration: 1800,
-      position: 'top',
     });
-    await t.present();
   } catch {
-    const t = await toastController.create({ message: 'Could not send request. Try again.', duration: 1500, position: 'top', color: 'danger' });
-    await t.present();
+    await appToast({ message: 'Could not send request. Try again.', duration: 1500, color: 'danger' });
   }
 }
 

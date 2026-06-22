@@ -3,9 +3,9 @@
  *
  * The PWA is built with registerType: 'prompt' (vite.config.ts), so a freshly
  * deployed build installs its service worker but WAITS rather than taking over.
- * When that happens we surface a toast that NAMES the new version (read from
- * /v1/config, since the SW update event itself carries no version string) and let
- * the user pull it immediately (skipWaiting + reload) or defer. Deferring keeps the
+ * When that happens we surface an in-app notification card that NAMES the new version
+ * (read from /v1/config, since the SW update event itself carries no version string) and
+ * let the user pull it immediately (skipWaiting + reload) or defer. Deferring keeps the
  * current version running; the prompt REAPPEARS every time the app returns to the
  * foreground (and on next launch) until accepted, so a user who taps "Later" and
  * never fully closes the app is reminded again instead of having to hunt for a
@@ -19,9 +19,10 @@
  */
 import { watch } from 'vue';
 import { useRegisterSW } from 'virtual:pwa-register/vue';
-import { toastController, modalController } from '@ionic/vue';
+import { modalController } from '@ionic/vue';
 import { sparklesOutline } from 'ionicons/icons';
 import { fetchServerConfig } from '@/services/api';
+import { showActionBanner, type NotifyAction } from '@/services/notify';
 import { computeDelta, userFacing, displayVersion, type ReleaseNote } from '@/services/release-notes';
 import WhatsNewSheet from '@/components/WhatsNewSheet.vue';
 
@@ -82,16 +83,18 @@ export function useAppUpdate(): void {
 
   let prompting = false;
 
-  // Build + present the update toast. Idempotent while one is already showing
-  // (prompting) and a no-op when nothing is waiting (needRefresh false). Driven by
-  // BOTH the needRefresh watch (a new worker just appeared) and every return to the
-  // foreground, so tapping "Later" doesn't bury the update forever for someone who
-  // never fully closes the app — it comes back next time they reopen it.
+  // Build + present the update prompt as a persistent in-app notification card (the SAME
+  // shared overlay as message/request/system banners — NotificationBanners.vue — so it
+  // renders identically: a rounded card below the header, never a top-pinned toast).
+  // Idempotent while one is already showing (prompting) and a no-op when nothing is waiting
+  // (needRefresh false). Driven by BOTH the needRefresh watch (a new worker just appeared)
+  // and every return to the foreground, so tapping "Later" doesn't bury the update forever
+  // for someone who never fully closes the app — it comes back next time they reopen it.
   async function maybePrompt(): Promise<void> {
     if (!needRefresh.value || prompting) return;
     prompting = true;
     // The waiting SW IS the new build; ask the (already-deployed) server which
-    // version that is AND its release notes, so the toast can name the version and
+    // version that is AND its release notes, so the card can name the version and
     // offer a per-user "What's new". A miss just drops both (generic message).
     let version = '';
     let incoming: ReleaseNote[] = [];
@@ -104,7 +107,7 @@ export function useAppUpdate(): void {
     }
     const running = __APP_VERSION__;
     // Display version strips the long +<sha> build metadata (it's an unbreakable
-    // token that otherwise wraps one char per line and wrecks the toast).
+    // token that otherwise wraps one char per line and wrecks the layout).
     const shown = displayVersion(version);
     const label = version && version !== running ? `Ring ${shown} is ready to install.` : 'A new version of Ring is ready.';
 
@@ -113,12 +116,13 @@ export function useAppUpdate(): void {
     // chores) so "What's new" reads as improvements rather than a developer changelog.
     const delta = userFacing(computeDelta(incoming, __RELEASE_NOTES__ ?? []));
 
-    const buttons: { text: string; role?: 'cancel'; handler?: () => boolean | void }[] = [];
+    const actions: NotifyAction[] = [];
     if (delta.length) {
-      buttons.push({
+      actions.push({
         text: `What's new (${delta.length})`,
-        // No `return false`: tapping this dismisses the toast and opens the sheet,
-        // which carries its own Update / Later actions.
+        // Opens the sheet, which carries its own Update / Later actions. The card is
+        // dismissed by NotificationBanners' onAction; if the user closes the sheet without
+        // updating, the prompt re-appears on the next foreground (prompting is reset below).
         handler: () => {
           void presentWhatsNew(shown, delta).then((wantsUpdate) => {
             if (wantsUpdate) void updateServiceWorker(true);
@@ -126,30 +130,22 @@ export function useAppUpdate(): void {
         },
       });
     }
-    buttons.push({ text: 'Update', handler: () => void updateServiceWorker(true) });
-    buttons.push({ text: 'Later', role: 'cancel' });
+    actions.push({ text: 'Update', handler: () => void updateServiceWorker(true) });
+    // "Later": the card dismisses (NotificationBanners' onAction), which fires onDismiss
+    // below and re-arms the prompt for the next foreground.
+    actions.push({ text: 'Later', role: 'cancel', handler: () => {} });
 
-    const toast = await toastController.create({
-      header: 'Update available',
-      message: label,
+    showActionBanner({
+      name: 'Update available',
+      body: label,
       icon: sparklesOutline, // leading glyph, matching the in-app banners' icon/avatar
-
-      // Top of the screen, where every other notification (banners, error
-      // toasts) surfaces; see the .app-update-toast rules in App.vue.
-      position: 'top',
-      cssClass: 'app-update-toast',
-      // Stack the buttons BELOW the message. The default 'baseline' layout puts
-      // the (three) buttons inline with the message and reserves their width, so
-      // on a phone the message gets squeezed into a sliver and wraps one word per
-      // line. Stacked gives the message the full toast width.
-      layout: 'stacked',
-      // No duration: stay until the user chooses.
-      buttons,
+      actions,
+      // Mirror of the old toast.onDidDismiss: re-allow a prompt once the card is gone, so a
+      // deferred update resurfaces next foreground (or when a still-newer build appears).
+      onDismiss: () => {
+        prompting = false;
+      },
     });
-    void toast.onDidDismiss().then(() => {
-      prompting = false; // allow a re-prompt on next foreground / a still-newer build
-    });
-    await toast.present();
   }
 
   // Fire when a new worker first appears; immediate covers an update that was

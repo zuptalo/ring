@@ -98,6 +98,18 @@ describe('prettify', () => {
     expect(prettify('feat: add search (gh-12)')).toBe('Add search');
   });
 
+  it('strips a trailing reference that carries extra detail', () => {
+    // The reported jargon leak: a spec ref with user-story suffix slipped through.
+    expect(prettify('feat(chat): visibility-driven Seen + catch-up (spec 1013 US2/US3)')).toBe(
+      'Visibility-driven Seen + catch-up',
+    );
+    expect(prettify('feat(notifications): reliable push (spec 1015 FR-014)')).toBe('Reliable push');
+  });
+
+  it('strips a trailing developer "(+ …)" note', () => {
+    expect(prettify('feat(media): album-view overhaul (+ flaky test fix)')).toBe('Album-view overhaul');
+  });
+
   it('keeps a meaningful trailing parenthetical that is not a reference', () => {
     expect(prettify('feat: add dark mode (finally)')).toBe('Add dark mode (finally)');
   });

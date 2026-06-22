@@ -54,8 +54,9 @@ import { onMounted, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
   IonContent, IonAvatar, IonText, IonImg, IonSpinner, IonList, IonItem, IonLabel,
-  IonButton, toastController,
+  IonButton,
 } from '@ionic/vue';
+import { appToast } from '@/services/toast';
 import { getSecret } from '@/db/secrets';
 import { initialsAvatar } from '@/db/avatars';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
@@ -71,7 +72,7 @@ function copyHandle(): void {
   if (!username.value) return;
   void navigator.clipboard?.writeText(`@${username.value}`);
   copied.value = true;
-  void toastController.create({ message: 'Username copied', duration: 1200, position: 'top' }).then((t) => t.present());
+  void appToast({ message: 'Username copied', duration: 1200 });
 }
 
 onMounted(async () => {

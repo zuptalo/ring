@@ -26,10 +26,11 @@ import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
-  IonContent, IonText, onIonViewDidEnter, onIonViewWillLeave, toastController,
+  IonContent, IonText, onIonViewDidEnter, onIonViewWillLeave,
 } from '@ionic/vue';
 import { BrowserQRCodeReader, type IScannerControls } from '@zxing/browser';
 import { requestFriend } from '@/db/queries';
+import { appToast } from '@/services/toast';
 
 const router = useRouter();
 const videoEl = ref<HTMLVideoElement | null>(null);
@@ -55,7 +56,7 @@ async function onDecoded(text: string): Promise<void> {
   handled = true;
   stopCamera();
   await requestFriend(id);
-  void toastController.create({ message: 'Friend request sent', duration: 1400, position: 'top' }).then((t) => t.present());
+  void appToast({ message: 'Friend request sent', duration: 1400 });
   router.replace('/tabs/contacts');
 }
 

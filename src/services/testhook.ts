@@ -114,7 +114,7 @@ import {
   listConnections as apiListConnections,
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
-import { notifyBanners } from '@/services/notify';
+import { notifyBanners, showActionBanner } from '@/services/notify';
 import { syncContactEdges } from '@/services/directory';
 import {
   requestConnect as storeRequestConnect, acceptConnect as storeAcceptConnect,
@@ -231,6 +231,18 @@ export function installTestHook(): void {
     /** Current in-app notification banners (kind/name/body) for asserting alerting. */
     notices: (): { kind: string; name: string; body: string }[] =>
       notifyBanners.value.map((b) => ({ kind: b.kind, name: b.name, body: b.body })),
+    /** Surface a sample app-update "action" banner (spec 2004) for visual checks — the
+     *  same shared overlay the real update prompt uses, via the app's notify instance. */
+    showUpdateBanner: (body = 'Ring 0.3.0 is ready to install.', whatsNewCount = 3): void =>
+      showActionBanner({
+        name: 'Update available',
+        body,
+        actions: [
+          ...(whatsNewCount > 0 ? [{ text: `What's new (${whatsNewCount})`, handler: () => {} }] : []),
+          { text: 'Update', handler: () => {} },
+          { text: 'Later' as const, role: 'cancel' as const, handler: () => {} },
+        ],
+      }),
     /** Ids of current (non-pending) contacts. */
     contactIds: async (): Promise<string[]> => (await listContacts()).map((c) => c.id),
     /** Set a known contact's display name (the name you'd have saved locally). */

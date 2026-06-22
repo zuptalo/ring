@@ -5,8 +5,9 @@
  * your QR / Add by Ring ID. All stock Ionic overlays (action sheet + alert).
  */
 import { useRouter } from 'vue-router';
-import { alertController, actionSheetController, toastController } from '@ionic/vue';
+import { alertController, actionSheetController } from '@ionic/vue';
 import { addPendingInvite } from '@/db/queries';
+import { appToast } from '@/services/toast';
 import { createInvitation } from '@/services/api';
 import { ensureProfile } from '@/composables/useProfileGate';
 
@@ -56,9 +57,7 @@ export function useConnect() {
               handler: (data: { label?: string }) => {
                 const label = (data?.label ?? '').toString().trim();
                 if (!label) {
-                  void toastController
-                    .create({ message: 'Please add a nickname for this invite.', duration: 1600, position: 'top' })
-                    .then((t) => t.present());
+                  void appToast({ message: 'Please add a nickname for this invite.', duration: 1600 });
                   return false; // keep the alert open until they enter one
                 }
                 resolve(label);
@@ -100,7 +99,7 @@ export function useConnect() {
 
     const copy = (text: string, note: string): boolean => {
       void navigator.clipboard?.writeText(text);
-      void toastController.create({ message: note, duration: 1200, position: 'top' }).then((t) => t.present());
+      void appToast({ message: note, duration: 1200 });
       return false; // keep the alert open so multiple copies are possible
     };
 

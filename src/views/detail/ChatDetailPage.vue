@@ -905,7 +905,7 @@ import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
   IonBackButton, IonIcon, IonSearchbar, IonContent, IonFooter, IonTextarea,
-  IonAvatar, IonNote, IonModal, IonSpinner, IonDatetime, actionSheetController, alertController, popoverController, toastController,
+  IonAvatar, IonNote, IonModal, IonSpinner, IonDatetime, actionSheetController, alertController, popoverController,
   IonInfiniteScroll, IonInfiniteScrollContent, IonFab, IonFabButton,
   onIonViewWillEnter, onIonViewDidEnter, onIonViewWillLeave,
 } from '@ionic/vue';
@@ -930,6 +930,7 @@ import {
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
   backfillThumbTiers,
 } from '@/db/queries';
+import { appToast } from '@/services/toast';
 import { groupProgress } from '@/services/message-status';
 import { getSelfUserId } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
@@ -1057,8 +1058,7 @@ async function onUnblock() {
   try {
     await unblockContact(pid);
   } catch {
-    const t = await toastController.create({ message: 'Could not unblock. Try again.', duration: 1500, position: 'top', color: 'danger' });
-    await t.present();
+    await appToast({ message: 'Could not unblock. Try again.', duration: 1500, color: 'danger' });
   }
 }
 
@@ -1073,8 +1073,7 @@ async function onPickDate(ev: CustomEvent): Promise<void> {
   day.setHours(0, 0, 0, 0);
   const id = await firstMessageOnOrAfter(chatId, day.getTime());
   if (!id) {
-    const t = await toastController.create({ message: 'No messages on or after that date', duration: 1500, position: 'top' });
-    await t.present();
+    await appToast({ message: 'No messages on or after that date', duration: 1500 });
     return;
   }
   showSearch.value = false;
@@ -1195,15 +1194,13 @@ const myEmojisFor = (m: Message) =>
 async function onReact(messageId: string, emoji: string): Promise<void> {
   const result = await reactToMessage(messageId, emoji);
   if (result === 'limit' || result === 'limit-emojis') {
-    const t = await toastController.create({
+    await appToast({
       message:
         result === 'limit-emojis'
           ? `This message already has ${MAX_DISTINCT_REACTIONS} different reactions — tap one of those instead.`
           : `You can add up to ${MAX_REACTIONS_PER_USER} reactions.`,
       duration: 1600,
-      position: 'top',
     });
-    await t.present();
   }
 }
 
@@ -1339,13 +1336,11 @@ async function saveMediaForMessages(ids: string[]): Promise<void> {
   }
   const msg = result === 'downloaded' ? 'Saved to your device' : result === 'empty' ? 'Nothing to save' : '';
   if (!msg) return;
-  const t = await toastController.create({
+  await appToast({
     message: msg,
     duration: 1500,
-    position: 'top',
     color: result === 'empty' ? 'danger' : undefined,
   });
-  await t.present();
 }
 async function onViewerCaption(id: string): Promise<void> {
   const m = viewerMsg(id);
@@ -1579,8 +1574,7 @@ async function onForwardSend(chatIds: string[]): Promise<void> {
   }
   forwardIds.value = [];
   exitSelect();
-  const t = await toastController.create({ message: 'Forwarded', duration: 1200, position: 'top' });
-  await t.present();
+  await appToast({ message: 'Forwarded', duration: 1200 });
 }
 
 /* ---- multi-select (bulk forward / delete) ----
@@ -1751,9 +1745,7 @@ function notAvailableToast(): void {
   // The quoted message isn't on this device, e.g. a reply to a message sent before we
   // joined this group. The quote bubble still renders from its embedded snapshot; there's
   // just nothing to scroll to.
-  void toastController
-    .create({ message: 'Original message not available', duration: 1400, position: 'top' })
-    .then((t) => t.present());
+  void appToast({ message: 'Original message not available', duration: 1400 });
 }
 // Poll briefly for the target row to mount, then center it (it may need a tick after a
 // window change). Returns true once it scrolled to it.
@@ -3439,8 +3431,7 @@ async function startRecording() {
     startSampler();
     startActivity('recording-audio'); // tell the peer we're recording a voice message (spec 1009)
   } catch {
-    const t = await toastController.create({ message: 'Microphone unavailable', duration: 1500, position: 'top' });
-    await t.present();
+    await appToast({ message: 'Microphone unavailable', duration: 1500 });
   }
 }
 

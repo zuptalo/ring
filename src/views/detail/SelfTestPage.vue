@@ -43,9 +43,10 @@
 import { computed, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
-  IonContent, IonButton, IonList, IonItem, IonLabel, IonIcon, toastController,
+  IonContent, IonButton, IonList, IonItem, IonLabel, IonIcon,
 } from '@ionic/vue';
 import { checkmarkCircle, closeCircle } from 'ionicons/icons';
+import { appToast } from '@/services/toast';
 import { runSelfTest, type CheckResult } from '@/services/crypto/selftest';
 
 const running = ref(false);
@@ -62,13 +63,11 @@ async function run(): Promise<void> {
     results.value = r;
     const pass = r.filter((x) => x.ok).length;
     summary.value = `${pass}/${r.length} checks passed`;
-    const t = await toastController.create({
+    await appToast({
       message: summary.value,
       duration: 2500,
-      position: 'top',
       color: pass === r.length ? 'success' : 'danger',
     });
-    await t.present();
   } catch (e) {
     summary.value = e instanceof Error ? e.message : String(e);
   } finally {
