@@ -3132,13 +3132,11 @@ async function maxSourceLongEdge(
 
 // Ask the send quality for photos/videos (WhatsApp-style), offering ONLY the tiers a
 // source of this resolution can actually produce — no upscaling, no "4K" on a 720p clip
-// (spec 2007). `longEdge` is the largest source's longest pixel edge. When only Original
-// is applicable (a source smaller than the smallest tier) we skip the sheet entirely.
-// Returns null if the user cancels.
+// (spec 2007). `longEdge` is the largest source's longest pixel edge. The sheet always
+// appears for photos/videos (predictable, and the existing flows depend on it); when the
+// source is below the smallest tier it simply lists Original alone. Returns null on cancel.
 function pickQuality(longEdge?: number): Promise<Quality | null> {
   const opts = availableQualities(longEdge);
-  // Only 'original' is suitable → nothing to choose; use it without a sheet.
-  if (opts.length === 1) return Promise.resolve('original');
   // Highest fidelity first (Original, then Full HD → SD), mirroring WhatsApp's ordering.
   const tiers = opts.filter((q) => q !== 'original').reverse();
   return new Promise((resolve) => {
