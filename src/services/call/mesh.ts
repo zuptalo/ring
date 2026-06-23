@@ -258,6 +258,13 @@ export class MeshSession {
 
   /** Tear down every leg and stop metering. */
   leave(): void {
+    // Tell the SERVER we've left so it removes us from the room and broadcasts the new roster:
+    // that's how the others learn we're gone (their onRoster closes our leg → our tile waves
+    // off and they stop trying to reconnect to us). Without this the server only finds out via
+    // our socket disconnecting (after the grace window) — or never, if the socket stays up —
+    // leaving a hung tile + reconnect attempts on every other client. (Server is the membership
+    // orchestrator; the roster is the authoritative "who's in".)
+    void sendLive({ t: 'call-leave', roomId: this.roomId });
     this.stopDiag();
     this.stopAudioMonitor();
     if (this.audioCtx) {
