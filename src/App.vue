@@ -276,14 +276,32 @@ body.keyboard-open ion-footer {
    one place. (The "update available" prompt is NOT a toast; it renders as a persistent
    card through the in-app banner overlay, NotificationBanners.vue.) */
 ion-toast.app-toast {
-  --border-radius: 14px;
+  --border-radius: 18px;
   --max-width: 560px;
-  --box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  --box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
+}
+/* Match the in-app message banners (NotificationBanners.vue): a translucent green card with
+   white text, so a status notice ("Someone left the call", "Invite cancelled") reads as the
+   same surface instead of a stray dark box. ONLY the neutral toasts get this — Ionic adds an
+   `.ion-color` class when a colour variant is set, so error (danger) / success toasts keep
+   their semantic colour. Built from the existing primary token (no new colours). */
+ion-toast.app-toast:not(.ion-color) {
+  --background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.92);
+  --color: #fff;
+  --button-color: #fff;
+}
+@media (prefers-color-scheme: dark) {
+  ion-toast.app-toast:not(.ion-color) {
+    --background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.95);
+  }
 }
 /* Offset the visible box (the `container` part) below the header so a functional toast
-   lines up with the in-app banners instead of overlapping the status bar / header. */
+   lines up with the in-app banners instead of overlapping the status bar / header, and give
+   it the banners' frosted blur. */
 ion-toast.app-toast::part(container) {
   margin-top: calc(env(safe-area-inset-top, 0px) + 56px);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
 }
 /* Defensive: never let a long unbreakable token wrap one character per line. */
 ion-toast.app-toast::part(message) {
