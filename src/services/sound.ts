@@ -37,7 +37,9 @@ export type ToneName =
   | 'cameraon'
   | 'cameraoff'
   | 'callfull'
-  | 'incallmsg';
+  | 'incallmsg'
+  // Classic "busy" signal played on the caller's screen when the callee is on another call.
+  | 'busy';
 
 interface Note {
   freq: number;
@@ -135,6 +137,11 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
     { freq: 220, start: 0.18, dur: 0.12, type: 'square', gain: 0.16 },
   ],
   incallmsg: [{ freq: A5, start: 0, dur: 0.1, type: 'sine', gain: 0.12 }],
+  // A recognizable two-beep busy signal (low, repeated), like a phone busy tone.
+  busy: [
+    { freq: 480, start: 0, dur: 0.26, type: 'sine', gain: 0.2 },
+    { freq: 480, start: 0.38, dur: 0.26, type: 'sine', gain: 0.2 },
+  ],
 };
 
 /** All defined recipe names (for tests / completeness checks). */

@@ -770,7 +770,16 @@ const statusText = computed(() => {
       return `${m}:${String(s % 60).padStart(2, '0')}`;
     }
     case 'ended':
-      return 'Call ended';
+      switch (callMeta.value?.endedReason) {
+        case 'busy':
+          return 'Busy on another call';
+        case 'unavailable':
+          return 'Unavailable';
+        case 'declined':
+          return 'Call declined';
+        default:
+          return 'Call ended';
+      }
     default:
       return '';
   }

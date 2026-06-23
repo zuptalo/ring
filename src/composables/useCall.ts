@@ -767,9 +767,15 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
   connectionWarning.value = null;
 
+  // Reaching a busy peer holds the full-screen "Busy on another call" (with its own cue)
+  // briefly before returning to where the call was placed from, instead of vanishing
+  // instantly (spec 0004 US2). Other endings settle quickly as before.
+  const busy = reason === 'busy';
+  const dwellMs = busy ? 2000 : 400;
+
   // Tell the surviving party why the call ended, when it wasn't a clean hangup.
   if (!opts?.silent) {
-    callCue('callended'); // audio cue for the call ending (spec 0004 US5)
+    callCue(busy ? 'busy' : 'callended'); // audio cue for the ending (spec 0004 US5)
     if (reason === 'failed') {
       void toast(wasConnected ? 'Call ended, connection lost' : "Couldn't connect the call");
     } else if (reason === 'unavailable') {
@@ -778,16 +784,24 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   }
 
   if (!opts?.silent && router.currentRoute.value.fullPath === '/call-active') {
-    void router.replace(returnPath);
+    // Busy: keep the "Busy on another call" screen up for the dwell, then return.
+    if (busy) {
+      setTimeout(() => {
+        if (router.currentRoute.value.fullPath === '/call-active') void router.replace(returnPath);
+      }, dwellMs);
+    } else {
+      void router.replace(returnPath);
+    }
   }
 
-  // Settle back to idle so the next call can start.
+  // Settle back to idle so the next call can start (after the dwell, so the busy screen's
+  // endedReason survives long enough to show).
   setTimeout(() => {
     if (callState.value === 'ended') {
       setState('idle');
       callMeta.value = null;
     }
-  }, 400);
+  }, dwellMs);
 }
 
 /* ---- outgoing (1:1) ---- */
