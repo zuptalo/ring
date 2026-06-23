@@ -182,10 +182,12 @@ const (
 	callRingInterval = 5 * time.Second
 )
 
-const (
-	// A group-call invitee who hasn't joined is reminded this many times, this far apart
-	// (≈30s total), and stops the moment they join. Less pushy than the 1:1 cadence; after
-	// these run out the caller's UI offers a recall (re-ring) or remove for that member.
+// A group-call invitee who hasn't joined is reminded this many times, this far apart
+// (≈30s total), and stops the moment they join OR explicitly decline/leave. Less pushy
+// than the 1:1 cadence; after these run out the caller's UI offers a recall (re-ring) or
+// remove for that member. var (not const) so tests can shrink the cadence — production
+// values are unchanged.
+var (
 	groupRingCount    = 4
 	groupRingInterval = 7 * time.Second
 )
@@ -1256,6 +1258,11 @@ func (c *Client) handleFrame(data []byte) {
 		if f.RoomID == "" {
 			return
 		}
+		// Stop reminding THIS member: a call-leave is sent both when leaving a joined call
+		// and when declining/dismissing an invite they never accepted. Without this, a
+		// declined group invitee keeps getting re-rung every groupRingInterval until the
+		// reminder rounds run out — the "called back in automatically" bug (spec 0004 US1).
+		c.hub.stopGroupMemberRing(f.RoomID, c.userID)
 		roster, empty := c.hub.rooms.Leave(f.RoomID, c.userID)
 		c.hub.broadcastRoster(f.RoomID, roster)
 		if empty {

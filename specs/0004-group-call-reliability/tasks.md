@@ -22,6 +22,23 @@ Web app monorepo: client at repo root (`src/`, `e2e/`), server under `server/`.
 
 ---
 
+## GitHub issues (for PR `Closes #N`)
+
+| Issue | Scope | Tasks |
+|---|---|---|
+| #397 | Setup & foundational | T001–T004 |
+| #398 | US1 — leaving means leaving | T005–T010 |
+| #399 | US2 — busy / no dead-end | T011–T019 |
+| #400 | US3 — participant caps | T020–T028 |
+| #401 | US6 — SFU teardown + docs | T029–T038 |
+| #402 | US4 — adaptive quality + relay creds | T039–T044, T054–T055 |
+| #403 | US5 — audio cues | T045–T049 |
+| #404 | Polish & cross-cutting | T050–T053 |
+
+The feature→`develop` PR MUST list `Closes #397`…`#404`.
+
+---
+
 ## Phase 1: Setup (Shared Infrastructure)
 
 **Purpose**: Shared constants the cap + quality work reference.
@@ -51,19 +68,23 @@ Web app monorepo: client at repo root (`src/`, `e2e/`), server under `server/`.
 **Independent Test**: member joins then leaves; force a socket reconnect within 60s → not
 rung/rejoined; a never-joined offline invitee still rings on reconnect.
 
+> **Root cause corrected during TDD** — the buffer hypothesis was disproven (buffer is consumed
+> on first reconnect, before any join). Real cause: the server re-ring **reminder loop** is only
+> cancelled by join/room-empty/caller-remove, and a declining group invitee never told the server
+> to stop (`rejectCall` was silent for group). See research §1.
+
 ### Tests for User Story 1 ⚠️ (write first, must FAIL)
 
-- [ ] T005 [US1] Failing regression test in `server/internal/ws/call_test.go`: a buffered `call-group-invite` for a member is cleared on `call-join` and NOT redelivered by `flushBufferedCalls` after the member leaves and reconnects
-- [ ] T006 [P] [US1] Failing test in `server/internal/ws/call_test.go`: a never-joined offline invitee STILL receives the buffered invite on reconnect (legitimate background ring preserved)
-- [ ] T007 [P] [US1] e2e regression `e2e/call-reinvite.spec.ts`: join→leave→reconnect does not re-ring or rejoin the leaver
+- [x] T005 [US1] Failing regression test `server/internal/ws/groupring_test.go`: a declining invitee (`call-leave`) stops the re-ring reminders; positive control proves a silent invitee IS re-rung. Adds the `SetGroupRingCadenceForTest` seam (`groupRingInterval`/`groupRingCount` → `var`) in `internal/ws/testhooks.go`
+- [ ] T008 [P] [US1] e2e regression `e2e/call-reinvite.spec.ts`: dismissing a group invite → no re-ring after the reminder interval; a deliberate caller **recall** after decline still rings (FR-004)
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Add `Hub.clearBufferedCalls(userID)` (deletes `callBuf[userID]`) in `server/internal/ws/hub.go`
-- [ ] T009 [US1] Call `clearBufferedCalls` from the `call-join` handler and on room departure (`call-leave` + `cleanup`) in `server/internal/ws/hub.go`
-- [ ] T010 [US1] Do NOT add a broad room-suppression guard — a TTL guard would also drop a legitimate recall (FR-004 / US1 scenario 4). Instead rely on the authoritative server-side `clearBufferedCalls` (T008/T009) plus the EXISTING in-room dedup (`callMeta.value?.roomId === roomId`) in `handleGroupInvite` (`src/composables/useCall.ts`); confirm `teardown` clears `callMeta` so a post-leave recall rings. Extend the T007 e2e to assert a deliberate recall after leave still rings.
+- [x] T006 [US1] `call-leave` handler calls `stopGroupMemberRing(roomID, c.userID)` so a decline/leave cancels that member's reminder loop, in `server/internal/ws/hub.go`
+- [x] T007 [US1] Client: `rejectCall()` (group branch) and the unanswered-invite timeout send `call-leave {roomId}` via new `sendGroupLeave` (`src/services/call/signalling.ts` + `src/composables/useCall.ts`); a joined call already leaves via mesh teardown
+- [x] T009 [US1] Recall safety (FR-004): no client suppression guard added; `teardown` clears `callMeta` and `handleGroupInvite` only ignores invites for a room we're currently in, so a recall still rings — verified, no code change needed
 
-**Checkpoint**: US1 verifiable — leaver stays out; legitimate ringing intact.
+**Checkpoint**: US1 server + client done and unit-tested (server suite green, client typechecks). Remaining: the e2e regression (T008).
 
 ---
 

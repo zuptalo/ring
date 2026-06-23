@@ -6,28 +6,39 @@ approach grounded in the existing code (`src/services/call/mesh.ts`,
 
 ## 1. Re-invite-after-leaving (US1)
 
-**Decision**: Clear a member's buffered call invites the moment they join a room and
-when they leave / the room empties, on the server; add a client-side "recently left"
-guard as defence-in-depth.
+**Decision**: A declining/dismissing (or unanswered) group invitee must tell the server to
+stop its re-ring reminder loop; `call-leave` must cancel the leaver's own reminder.
 
-- **Server** (`hub.go`): add `Hub.clearBufferedCalls(userID)` that deletes `callBuf[userID]`.
-  Call it in the `call-join` handler (the joiner is now present, any held invite for this
-  room is stale) and in `call-leave` / `cleanup` room departure. The existing reminder
-  loop already stops on join via `stopGroupMemberRing`; the gap was purely the 60s
-  `callBuf` flushed on the next reconnect.
-- **Client** (`useCall.ts`): rely on the authoritative server clear plus the EXISTING
-  in-room dedup (`handleGroupInvite` already returns early when `callMeta.value?.roomId ===
-  roomId`). **Do not** add a broad "recently-left" room-suppression guard: a TTL guard that
-  drops invites for rooms we left would also drop a legitimate caller **recall** (FR-004 /
-  US1 scenario 4), since a recall arrives as an ordinary `call-group-invite` for the same
-  room. After leaving, `teardown` clears `callMeta`, so a recall correctly rings.
-- **Rationale**: the buffer is per-recipient and not keyed by room, so clearing it on join
-  (and on leave) is the minimal authoritative fix; adding a client suppression window would
-  trade one bug for a recall regression, so it is explicitly rejected.
-- **Alternatives rejected**: stamping invites with a monotonic generation and rejecting
-  old ones (more wire state, more complexity than clearing the buffer); shortening
-  `callBufferTTL` (would weaken legitimate background ringing — US1 scenario 3); a
-  client-side recently-left suppression guard (breaks recall — see above).
+> **Root cause corrected during implementation (TDD).** The originally-hypothesised cause —
+> "the 60s `callBuf` isn't cleared on join, so a reconnect replays the invite" — was
+> **disproven by a reproduction test**: `takeBufferedCalls` deletes the buffer on the *first*
+> reconnect, and a member must be connected before they can join, so the buffer is always
+> empty before a join could occur. Clearing it on join is a no-op. The real cause is the
+> **server reminder loop** (`startGroupMemberRing`): it re-sends the invite every
+> `groupRingInterval` for `groupRingCount` rounds and is cancelled ONLY by joining, the room
+> emptying, or a caller-side remove. A group invitee who **declines/dismisses** never told
+> the server to stop — and `rejectCall()` was silent for group calls (`useCall.ts`: it only
+> sent `call-reject` when `!isGroup`). So a dismissed group ring kept coming back every
+> reminder round: the "called back in automatically" report.
+
+- **Server** (`hub.go`): the `call-leave` handler now calls `stopGroupMemberRing(roomID,
+  c.userID)` (it previously only handled roster/`stopRoomRings`). This stops reminders both
+  when a joined member leaves AND when an invitee declines (they send the same `call-leave`).
+- **Client** (`useCall.ts` + `signalling.ts`): `rejectCall()` now sends `call-leave {roomId}`
+  for a group invite (via new `sendGroupLeave`), and the unanswered-invite timeout does the
+  same. A *joined* call already sends `call-leave` through the mesh teardown, so the server
+  fix also covers a normal leave.
+- **Recall safety (FR-004)**: no client suppression guard is added. After declining/leaving,
+  `teardown` clears `callMeta`, and `handleGroupInvite` only ignores an invite for a room we
+  are *currently* in — so a deliberate caller recall (a fresh `call-group-invite`) still rings.
+- **Testability**: `groupRingInterval`/`groupRingCount` changed from `const` to `var` so a
+  test can shrink the cadence (`SetGroupRingCadenceForTest`) and assert, in <1s, that a
+  declining invitee stops being re-rung (regression) while a silent one keeps being reminded
+  (positive control). Production defaults (7s / 4) are unchanged.
+- **Alternatives rejected**: clearing `callBuf` on join/leave (fixes nothing — buffer already
+  empty by then); a client-side recently-left room-suppression guard (would also drop a
+  legitimate recall — FR-004); shortening `callBufferTTL` (unrelated; weakens background
+  ringing).
 
 ## 2. Busy for all incoming, incl. group (US2)
 

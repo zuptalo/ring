@@ -34,6 +34,7 @@ import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
+  sendGroupLeave,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
 import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
@@ -951,7 +952,12 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
   setState('incoming');
   startLoopTone('beacon', 2000);
   clearRingTimeout();
-  noAnswerTimer = setTimeout(() => void teardown('timeout'), RING_TIMEOUT_MS);
+  noAnswerTimer = setTimeout(() => {
+    // Letting an unanswered group invite lapse also tells the server to stop re-ringing us
+    // (spec 0004 US1), the same as an explicit decline.
+    void sendGroupLeave(roomId);
+    void teardown('timeout');
+  }, RING_TIMEOUT_MS);
 }
 
 /** Accept the current incoming GROUP call → join the room (no members → no re-ring). */
@@ -1192,6 +1198,11 @@ export async function rejectCall(): Promise<void> {
   if (!meta) return;
   if (!meta.isGroup && meta.peerUserId) {
     void sendControl('call-reject', meta.peerUserId, meta.callId, { reason: 'declined' });
+  } else if (meta.isGroup && meta.roomId) {
+    // Dismissing a group invite we never accepted: tell the server so it stops re-ringing
+    // us (otherwise the reminder rounds keep bringing the ring back — spec 0004 US1). A
+    // joined call instead sends call-leave through the mesh teardown.
+    void sendGroupLeave(meta.roomId);
   }
   await teardown('declined', { silent: meta.isGroup });
 }

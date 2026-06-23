@@ -36,31 +36,31 @@ its dead predecessor (the SFU) is removed. Each story is independently shippable
 
 ### User Story 1 - Leaving a call means leaving it (Priority: P1)
 
-A participant who hangs up or leaves a group call must stay out. Today, if they leave
-and their device's connection re-establishes shortly afterwards (a routine event on
-mobile), a still-valid buffered invite can be re-delivered and silently pull them back
-into the call — they start ringing again, or rejoin, for a call they deliberately left.
+A participant who declines, dismisses, or leaves a group call must stay out. Today the
+server's group-ring reminder loop keeps re-sending the invite every reminder round, and a
+declining/dismissing invitee never tells the server to stop (the client's decline was silent
+for group calls). So a dismissed group ring keeps coming back, pulling the user toward a call
+they deliberately turned down.
 
 **Why this priority**: It directly contradicts user intent, is disorienting and
 privacy-relevant (you can be pulled back into a live call you left), and has a clean,
 confirmed root cause. Small fix, high trust impact.
 
-**Independent Test**: Start a group call, have a member join then leave, force their
-device to reconnect within the invite-hold window, and confirm they are NOT rung or
-rejoined; confirm a genuinely-missed invite (never joined) still rings normally.
+**Independent Test**: Ring a group member; have them decline/dismiss (or join then leave);
+confirm the reminder rounds do NOT bring the ring back; confirm a member who simply hasn't
+responded yet is still reminded, and a deliberate caller recall still rings.
 
 **Acceptance Scenarios**:
 
-1. **Given** a member who joined a group call and then left, **When** their device
-   reconnects within the invite-hold window, **Then** they are not rung again and do
-   not rejoin the call.
-2. **Given** a member who left a call, **When** the call is still ongoing and the
-   caller takes no recall action, **Then** the member's device stays idle.
-3. **Given** an invitee who was offline when first rung and never joined, **When** their
-   device comes online within the hold window, **Then** they still ring for the call
-   (the legitimate background-ringing path is preserved).
-4. **Given** a member who left, **When** the caller explicitly recalls them, **Then**
-   they ring again (deliberate recall still works).
+1. **Given** a group invitee who declined or dismissed the invite, **When** subsequent
+   reminder rounds would fire, **Then** they are not re-rung.
+2. **Given** a member who joined a group call and then left, **When** the call is still
+   ongoing and the caller takes no recall action, **Then** they are not re-rung or rejoined.
+3. **Given** an invitee who has neither joined nor declined, **When** a reminder round fires,
+   **Then** they may still be reminded (the legitimate ring-reminder path is preserved) until
+   they respond.
+4. **Given** a member who declined or left, **When** the caller explicitly recalls them,
+   **Then** they ring again (deliberate recall still works).
 
 ---
 
@@ -269,8 +269,9 @@ calling, and that the migration's temporary diagnostics are gone.
 
 - **FR-001**: The system MUST NOT re-ring or rejoin a participant into a group call they
   have left, as a result of buffered/held invite delivery.
-- **FR-002**: A member's held/buffered call invites MUST be cleared when they join the
-  corresponding room and when they leave or the room ends.
+- **FR-002**: When a group invitee declines, dismisses, or lets an invite lapse, the system
+  MUST stop the server's re-ring reminders for that member (the decline/leave notifies the
+  server, which cancels that member's reminder loop).
 - **FR-003**: The system MUST continue to ring a legitimately-missed invitee (one who was
   offline at ring time and has not joined) when their device next becomes reachable
   within the hold window.

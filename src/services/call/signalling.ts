@@ -148,6 +148,14 @@ export function sendGroupInviteeCancel(memberId: string, roomId: string): Promis
   return sendLive({ t: 'call-cancel', to: memberId, roomId, reason: 'declined' });
 }
 
+/** Invitee → server: decline/dismiss a group invite (or leave the room) so the server stops
+ *  re-ringing us. Without this a dismissed group ring keeps coming back every reminder round
+ *  until the rounds run out (spec 0004 US1). Sent on decline of an invite we never accepted;
+ *  a joined call already sends call-leave via the mesh teardown. */
+export function sendGroupLeave(roomId: string): Promise<boolean> {
+  return sendLive({ t: 'call-leave', roomId });
+}
+
 /** Send a payload-free 1:1 control frame (ringing/accept/reject/cancel/busy/end, and
  *  the consent-gated audio<->video upgrade request/accept/reject). */
 export function sendControl(
