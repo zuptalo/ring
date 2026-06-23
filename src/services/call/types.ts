@@ -3,6 +3,13 @@ import type { CallKind } from '@/services/transport';
 
 export type { CallKind };
 
+// Participant caps (spec 0004 US3), mirrored on the server (call.VideoMax/AudioMax). A video
+// group call holds at most VIDEO_MAX, an audio one at most AUDIO_MAX; the audio→video upgrade
+// is blocked once a call has more than VIDEO_MAX participants. The client enforces these
+// pre-emptively (picker + upgrade gate); the server enforces them authoritatively at join.
+export const VIDEO_MAX = 4;
+export const AUDIO_MAX = 8;
+
 /**
  * Call lifecycle:
  *   outgoing: idle → dialing → remote-ringing → connecting → connected → ended

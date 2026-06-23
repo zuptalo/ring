@@ -984,6 +984,7 @@ import { peerPresence, presenceLabel } from '@/composables/usePresence';
 import { activityFor, activityKindLabel, coalescedActivityLabel } from '@/composables/useTyping';
 import { ACTIVITY, type ActivityKind, type ActivityState } from '@/services/transport';
 import { startDirectCall, startGroupCall } from '@/composables/useCall';
+import { VIDEO_MAX, AUDIO_MAX } from '@/services/call/types';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { setActiveChat } from '@/services/notify';
 import { formatClock, dayLabel, formatStamp, formatFull } from '@/utils/time';
@@ -1041,6 +1042,13 @@ async function startCall(kind: 'Voice' | 'Video') {
   if (!c) return;
   const k = kind === 'Video' ? 'video' : 'audio';
   if (c.isGroup) {
+    // Participant cap (spec 0004 US3): the call includes us, so members + 1 must fit the
+    // kind's cap (4 video / 8 audio). The server enforces this authoritatively at join too.
+    const cap = k === 'video' ? VIDEO_MAX : AUDIO_MAX;
+    if (c.participantIds.length + 1 > cap) {
+      await appToast({ message: `A ${k} call is limited to ${cap} people`, duration: 2200 });
+      return;
+    }
     // Pass the members so the server rings the rest of the group (it has no group object).
     await startGroupCall(c.id, k, c.name, c.avatar, c.participantIds);
     return;

@@ -43,8 +43,8 @@ The feature→`develop` PR MUST list `Closes #397`…`#404`.
 
 **Purpose**: Shared constants the cap + quality work reference.
 
-- [ ] T001 [P] Add client call caps + tier constants (`VIDEO_MAX = 4`, `AUDIO_MAX = 8`, tier ladder `off/low/medium/high/hd`) in `src/services/call/types.ts`
-- [ ] T002 [P] Add server call caps constants (`VideoMax = 4`, `AudioMax = 8`) in `server/internal/call/registry.go`
+- [x] T001 [P] Added client call caps `VIDEO_MAX = 4`, `AUDIO_MAX = 8` in `src/services/call/types.ts` (tier ladder lands with US4)
+- [x] T002 [P] Added server call caps `VideoMax = 4`, `AudioMax = 8` (var, test-overridable) in `server/internal/call/registry.go`
 
 ---
 
@@ -123,20 +123,20 @@ client that bypasses the UI; camera upgrade blocked when roster > 4.
 
 ### Tests for User Story 3 ⚠️ (write first, must FAIL)
 
-- [ ] T020 [US3] Failing test in `server/internal/call/registry_test.go`: `JoinIfRoom` admits up to `max`, refuses the over-cap join, and always re-admits an already-present user (idempotent recovery)
-- [ ] T021 [P] [US3] Failing test in `server/internal/ws/call_test.go`: an over-cap `call-join` triggers a `call-full` to the joiner and NO roster broadcast
-- [ ] T022 [P] [US3] e2e `e2e/call-caps.spec.ts`: 5th video joiner refused (existing call undisturbed), 9th audio joiner refused, camera-on blocked when roster > 4, and a raw over-cap `call-join` is refused by the server
+- [x] T020 [US3] `server/internal/call/registry_test.go` (`TestJoinIfRoom`): `JoinIfRoom` admits up to `max`, refuses the over-cap join without mutating, and always re-admits an already-present user
+- [x] T021 [P] [US3] `server/internal/ws/groupring_test.go` (`TestVideoCallCapRefusesOverCapJoin`): an over-cap `call-join` → `call-full` to the joiner and NO roster broadcast (uses `SetVideoMaxForTest`; added `tokC`/`user-c`)
+- [ ] T022 [P] [US3] e2e `e2e/call-caps.spec.ts`: 5th video joiner refused, 9th audio refused, camera-on blocked when participants > 4, raw over-cap join refused by server — DEFERRED (e2e)
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Add `Registry.JoinIfRoom(roomID, userID, max) (roster []string, ok bool)` in `server/internal/call/registry.go`
-- [ ] T024 [US3] `call-join` handler derives `max` from `kind` (video→4 else 8), uses `JoinIfRoom`; on refusal emit `call-full` and skip the roster broadcast, in `server/internal/ws/hub.go`
-- [ ] T025 [P] [US3] Add the `call-full` frame `{ t, roomId, kind }` to `src/services/transport.ts`
-- [ ] T026 [US3] Handle inbound `call-full` in `src/composables/useCall.ts`: tear down the local join attempt, show "call is full", trigger the call-full cue (wired in US5)
-- [ ] T027 [P] [US3] Cap participant selection by call kind in the start/ad-hoc picker `src/views/detail/NewGroupCallPage.vue` (and the call-start path in `ChatDetailPage.vue`)
-- [ ] T028 [US3] Gate the audio→video upgrade on `roster.length <= 4` in `toggleCamera`/`addLocalVideo` (`src/composables/useCall.ts`) with an explanatory message
+- [x] T023 [US3] `Registry.JoinIfRoom(roomID, userID, max)` in `server/internal/call/registry.go` (idempotent re-admit; no mutation on refusal)
+- [x] T024 [US3] `call-join` derives `max` from `kind` (video→`VideoMax` else `AudioMax`), uses `JoinIfRoom`; on refusal sends `call-full` to the joiner and skips the roster broadcast, in `server/internal/ws/hub.go`
+- [x] T025 [P] [US3] Added the `call-full` frame `{ t, roomId, kind }` to `src/services/transport.ts` (`CallFullFrame` + union)
+- [x] T026 [US3] Handle inbound `call-full` in `src/composables/useCall.ts`: tears down the local join attempt + "This call is full" toast (cue wired in US5)
+- [x] T027 [P] [US3] Cap selection by kind in `NewGroupCallPage.vue` (ad-hoc) and the group call-start in `ChatDetailPage.vue` (selected + self vs cap)
+- [x] T028 [US3] Gate the audio→video upgrade in `toggleVideoMode` on `roster.length <= VIDEO_MAX` with an explanatory toast
 
-**Checkpoint**: caps hold at start, at join (server-authoritative), and on upgrade.
+**Checkpoint**: caps hold at start (picker), at join (server-authoritative `call-full`), and on upgrade. Remaining: e2e (T022).
 
 ---
 

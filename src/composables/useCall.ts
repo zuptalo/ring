@@ -39,6 +39,7 @@ import {
 import { MeshSession } from '@/services/call/mesh';
 import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
+import { VIDEO_MAX } from '@/services/call/types';
 import type { CallFrame } from '@/services/transport';
 
 /* ---- reactive state (read by the call UI) ---- */
@@ -1654,7 +1655,13 @@ export async function toggleVideoMode(): Promise<void> {
       await requestVideoUpgrade(); // 1:1 needs both parties' consent
       return;
     }
-    // Group: turn on my own video immediately (the SFU forwards it).
+    // Group video is capped (spec 0004 US3): once a call has more than VIDEO_MAX participants
+    // it can't become a video call (the roster includes self).
+    if ((meta.roster?.length ?? 0) > VIDEO_MAX) {
+      await toast(`Video is limited to ${VIDEO_MAX} people`);
+      return;
+    }
+    // Group: turn on my own video immediately (each peer renegotiates to receive it).
     let s: MediaStream;
     try {
       s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
@@ -1959,6 +1966,17 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // Server fan-out of an incoming group call → ring locally so we can join.
       await handleGroupInvite(frame);
       return;
+
+    case 'call-full': {
+      // The server refused our join: the room is at its participant cap (spec 0004 US3).
+      // Abandon our local attempt and tell the user; the existing call is undisturbed.
+      const meta = callMeta.value;
+      if (meta?.isGroup && meta.roomId === frame.roomId) {
+        await toast('This call is full');
+        await teardown('unavailable', { silent: true });
+      }
+      return;
+    }
 
     // SFU-era frames, dormant under the mesh: the server no longer drives an SFU and
     // mesh never sends keys/stream-ids (each leg is a known peer over native DTLS-SRTP).

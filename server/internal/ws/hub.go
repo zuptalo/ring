@@ -1249,7 +1249,19 @@ func (c *Client) handleFrame(data []byte) {
 		if f.RoomID == "" {
 			return
 		}
-		roster := c.hub.rooms.Join(f.RoomID, c.userID)
+		// Authoritative participant cap (spec 0004 US3): a video call holds at most VideoMax,
+		// an audio one at most AudioMax. The cap follows the join's kind. A user already in the
+		// room is always re-admitted (idempotent recovery). On refusal, tell only the joiner
+		// (call-full) and broadcast no roster change, so the existing call is undisturbed.
+		max := call.AudioMax
+		if f.Kind == "video" {
+			max = call.VideoMax
+		}
+		roster, admitted := c.hub.rooms.JoinIfRoom(f.RoomID, c.userID, max)
+		if !admitted {
+			c.send1(frame{T: "call-full", RoomID: f.RoomID, Kind: f.Kind})
+			return
+		}
 		c.hub.broadcastRoster(f.RoomID, roster)
 		c.hub.stopGroupMemberRing(f.RoomID, c.userID) // they're in now → stop reminding them
 		// The initiator (first into the room) supplies the group member list → ring

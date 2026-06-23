@@ -166,6 +166,13 @@ export interface CallGroupInviteFrame {
   kind?: CallKind;
   members?: string[]; // everyone being rung (for a participant count in the UI)
 }
+/** Server → a joiner whose call-join was refused because the room is at its participant cap
+ *  (4 video / 8 audio). The client abandons the join attempt and shows "call is full". */
+export interface CallFullFrame {
+  t: 'call-full';
+  roomId: string;
+  kind?: CallKind;
+}
 /** A member → the key master: please (re)send the current group media key. Live
  *  recovery path for a dropped call-key (which is never durably queued). */
 export interface CallKeyRequestFrame {
@@ -250,6 +257,7 @@ export type CallFrame =
   | CallKeyFrame
   | CallStreamIdFrame
   | CallGroupInviteFrame
+  | CallFullFrame
   | CallKeyRequestFrame
   | CallRingFrame
   | SfuOfferFrame

@@ -72,6 +72,8 @@ import type { Contact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useRouter } from 'vue-router';
 import { startAdHocGroupCall } from '@/composables/useCall';
+import { VIDEO_MAX, AUDIO_MAX } from '@/services/call/types';
+import { appToast } from '@/services/toast';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { capitalizeFirst } from '@/utils/text';
 
@@ -107,6 +109,13 @@ const selectedNames = computed(() => {
 
 async function start(kind: 'audio' | 'video'): Promise<void> {
   if (!canStart.value) return;
+  // Participant cap (spec 0004 US3): the call includes us, so selected + 1 must fit the
+  // kind's cap (4 video / 8 audio). The server enforces this authoritatively too.
+  const cap = kind === 'video' ? VIDEO_MAX : AUDIO_MAX;
+  if (selected.value.size + 1 > cap) {
+    await appToast({ message: `A ${kind} call is limited to ${cap} people`, duration: 2200 });
+    return;
+  }
   if (!(await ensureProfile())) return; // a group call sends your card; require name + photo
   const members = [...selected.value];
   const name = selectedNames.value || 'Group call';
