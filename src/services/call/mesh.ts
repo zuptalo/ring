@@ -17,17 +17,17 @@
  */
 import { sendLive } from '@/composables/useSync';
 import { getSelfUserId } from '@/services/auth';
-import { getTurnConfig, rtcConfig, type TurnConfig } from '@/services/call/turn';
+import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import { sendSealedSignal, meshSessionChatId, clearCallSession } from '@/services/call/signalling';
 import { pushDiag, setDiagSnapshot } from '@/services/call/diag';
 import {
   type Tier,
   type ControllerState,
-  type StatsSnapshot,
   TIERS,
   TIER_ENCODING,
   initialController,
   nextTier,
+  snapshotFromReport,
 } from '@/services/call/quality';
 import type { CallKind } from '@/services/call/types';
 import type { CallSignal } from '@/services/crypto/message';
@@ -51,30 +51,6 @@ export interface VideoEncoding {
   maxBitrate?: number;
   scaleResolutionDownBy: number;
   maxFramerate?: number;
-}
-
-/** Reduce a leg's getStats report to the adaptive controller's input signals. Missing
- *  fields (Safari doesn't expose them all) are left undefined; the controller copes. */
-function snapshotFromReport(report: RTCStatsReport): StatsSnapshot {
-  let qualityLimited = false;
-  let availableOutgoingBitrate: number | undefined;
-  let fractionLost = 0;
-  let rtt: number | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  report.forEach((st: any) => {
-    if (st.type === 'outbound-rtp' && st.kind === 'video') {
-      if (st.qualityLimitationReason === 'bandwidth') qualityLimited = true;
-    } else if (st.type === 'candidate-pair' && typeof st.availableOutgoingBitrate === 'number') {
-      // Prefer the nominated/selected pair's estimate when present.
-      if (st.nominated || st.selected || availableOutgoingBitrate == null) {
-        availableOutgoingBitrate = st.availableOutgoingBitrate;
-      }
-    } else if (st.type === 'remote-inbound-rtp' && st.kind === 'video') {
-      if (typeof st.fractionLost === 'number') fractionLost = Math.max(fractionLost, st.fractionLost);
-      if (typeof st.roundTripTime === 'number') rtt = st.roundTripTime;
-    }
-  });
-  return { qualityLimited, availableOutgoingBitrate, fractionLost, rtt };
 }
 
 // Tile key for our own outgoing feed — must match the self tile's key in
@@ -108,7 +84,6 @@ export class MeshSession {
   private cb: MeshCallbacks;
   private members: string[]; // initiator-only: members to ring on the first join
   private local: MediaStream | null = null;
-  private turn: TurnConfig | null = null;
   private legs = new Map<string, PeerLeg>(); // peerUserId → leg
   private remote = new Map<string, MediaStream>(); // peerUserId → their stream
   // Roster updates apply one at a time (see onRoster): a burst of joins must not interleave.
@@ -153,7 +128,7 @@ export class MeshSession {
       video: this.kind === 'video' ? { facingMode: { ideal: 'user' } } : false,
     });
     this.cb.onLocalStream(this.local);
-    this.turn = await getTurnConfig();
+    await getTurnConfig(); // warm the (refresh-aware) TURN-cred cache before legs build
     this.syncAudioMonitors();
     this.startDiag();
     // Initiator sends the member list so the server rings the group exactly once;
@@ -249,13 +224,24 @@ export class MeshSession {
   /** Per-leg ICE recovery: re-gather on any leg that isn't healthy. */
   async recover(): Promise<void> {
     for (const leg of this.legs.values()) {
-      if (leg.pc.connectionState !== 'connected') {
-        try {
-          leg.pc.restartIce();
-        } catch {
-          /* not supported / already restarting */
-        }
-      }
+      if (leg.pc.connectionState !== 'connected') await this.restartLegIce(leg);
+    }
+  }
+
+  /** Restart a leg's ICE with FRESH TURN credentials (spec 0004 FR-034): on a long call the
+   *  creds the PC was built with may have expired, so re-fetch (getTurnConfig refreshes) and
+   *  setConfiguration before re-gathering — otherwise the restart re-gathers with dead creds. */
+  private async restartLegIce(leg: PeerLeg): Promise<void> {
+    try {
+      const turn = await getTurnConfig();
+      leg.pc.setConfiguration(rtcConfig(turn));
+    } catch {
+      /* couldn't refresh creds — fall through and restart with what we have */
+    }
+    try {
+      leg.pc.restartIce();
+    } catch {
+      /* not supported / already restarting */
     }
   }
 
@@ -450,11 +436,14 @@ export class MeshSession {
   private async buildLeg(peerId: string): Promise<PeerLeg> {
     const existing = this.legs.get(peerId);
     if (existing) return existing;
-    // Fetching the TURN config is the only await before the leg is reserved below, so two
-    // roster updates racing to open the SAME leg could both get past the check above. Once
-    // the config is in hand, re-check and hand back the winner — building two peer
-    // connections to one peer would glare against itself and wedge the leg.
-    const turn = this.turn ?? (this.turn = await getTurnConfig());
+    // Fetch fresh TURN credentials for THIS leg (spec 0004 FR-034): getTurnConfig caches and
+    // refreshes ~30s before expiry, so a leg built late in a long call still gets valid,
+    // non-expired relay creds — a once-cached per-session snapshot would go stale and the
+    // late joiner's relay-only ICE would never gather. This await is also the only one before
+    // the leg is reserved below, so two roster updates racing to open the SAME leg could both
+    // get past the check above; re-check and hand back the winner (two PCs to one peer would
+    // glare against itself and wedge the leg).
+    const turn = await getTurnConfig();
     const raced = this.legs.get(peerId);
     if (raced) return raced;
     const pc = new RTCPeerConnection(rtcConfig(turn));
@@ -593,14 +582,8 @@ export class MeshSession {
   }
 
   private onLegState(leg: PeerLeg): void {
-    // Per-leg recovery: a single failed leg re-gathers, it doesn't end the call.
-    if (leg.pc.connectionState === 'failed') {
-      try {
-        leg.pc.restartIce();
-      } catch {
-        /* unsupported */
-      }
-    }
+    // Per-leg recovery: a single failed leg re-gathers (with refreshed creds), not ending the call.
+    if (leg.pc.connectionState === 'failed') void this.restartLegIce(leg);
     const states = [...this.legs.values()].map((l) => l.pc.connectionState);
     const anyConnected = states.some((s) => s === 'connected');
     const allDead = states.length > 0 && states.every((s) => s === 'failed' || s === 'closed');

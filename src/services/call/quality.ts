@@ -108,6 +108,30 @@ export function nextTier(state: ControllerState, snap: StatsSnapshot, clamp: Tie
   return { tier: state.tier, healthyStreak: streak };
 }
 
+/** Reduce a getStats report to the controller's input signals. Missing fields (Safari doesn't
+ *  expose them all) are left undefined; nextTier copes. Shared by the mesh (per-leg) and the
+ *  1:1 path. */
+export function snapshotFromReport(report: RTCStatsReport): StatsSnapshot {
+  let qualityLimited = false;
+  let availableOutgoingBitrate: number | undefined;
+  let fractionLost = 0;
+  let rtt: number | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  report.forEach((st: any) => {
+    if (st.type === 'outbound-rtp' && st.kind === 'video') {
+      if (st.qualityLimitationReason === 'bandwidth') qualityLimited = true;
+    } else if (st.type === 'candidate-pair' && typeof st.availableOutgoingBitrate === 'number') {
+      if (st.nominated || st.selected || availableOutgoingBitrate == null) {
+        availableOutgoingBitrate = st.availableOutgoingBitrate;
+      }
+    } else if (st.type === 'remote-inbound-rtp' && st.kind === 'video') {
+      if (typeof st.fractionLost === 'number') fractionLost = Math.max(fractionLost, st.fractionLost);
+      if (typeof st.roundTripTime === 'number') rtt = st.roundTripTime;
+    }
+  });
+  return { qualityLimited, availableOutgoingBitrate, fractionLost, rtt };
+}
+
 /** Map the manual pin ('auto'|'medium'|'low') + data-saver to the controller's clamp tier.
  *  'auto' allows up to HD (bandwidth-gated); data-saver caps at medium; an explicit pin caps
  *  at that tier. The clamp is an upper bound only. */

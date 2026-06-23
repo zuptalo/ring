@@ -40,7 +40,16 @@ import { MeshSession } from '@/services/call/mesh';
 import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
 import { VIDEO_MAX } from '@/services/call/types';
-import { clampForPin } from '@/services/call/quality';
+import {
+  type Tier,
+  type ControllerState,
+  TIERS,
+  TIER_ENCODING,
+  initialController,
+  nextTier,
+  snapshotFromReport,
+  clampForPin,
+} from '@/services/call/quality';
 import type { CallFrame } from '@/services/transport';
 
 /* ---- reactive state (read by the call UI) ---- */
@@ -547,6 +556,9 @@ async function pollStats(): Promise<void> {
         if (typeof s.packetsReceived === 'number') recv += s.packetsReceived;
       }
     });
+    // 1:1 adaptive outgoing quality (spec 0004 US4): the group path adapts per-leg inside
+    // MeshSession; the 1:1 PC adapts here off the same sample.
+    if (pc) await adaptOneToOne(report);
   } catch {
     return;
   }
@@ -648,6 +660,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   hasMultipleCameras.value = false;
   videoQuality.value = 'auto';
   lessDataCalls = false;
+  oneToOneQc = initialController(); // next call starts low again
   upgradePending.value = false;
   upgradeRequest.value = false;
   activeScreenTrack?.stop();
@@ -772,6 +785,7 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
     avatar: contact.avatar,
   };
   await createCall({ callId, contactId, direction: 'outgoing', video: kind === 'video' });
+  lessDataCalls = await getSetting<boolean>('storage.lessDataCalls', false); // 1:1 quality clamp floor
 
   let stream: MediaStream;
   try {
@@ -1185,6 +1199,7 @@ export async function acceptCall(): Promise<void> {
   if (callState.value !== 'incoming' || !meta?.chatId || !meta.peerUserId || !pendingOffer) return;
   clearRingTimeout();
   stopLoopTone();
+  lessDataCalls = await getSetting<boolean>('storage.lessDataCalls', false); // 1:1 quality clamp floor
 
   let stream: MediaStream;
   try {
@@ -1319,69 +1334,60 @@ function videoSender(): RTCRtpSender | null {
   return tx?.sender ?? null;
 }
 
-/* ---- outgoing-video quality tiers ----
- * The user can trade picture quality for data use mid-call. 'auto' removes any cap and
- * lets the browser's bandwidth estimator pick; the lower tiers clamp the first encoding's
- * bitrate (and scale resolution/framerate down) so the camera sends less. Applied via
- * RTCRtpSender.setParameters, which leaves the track (and its E2EE transform) in place. */
-const QUALITY_ENCODING: Record<VideoQuality, { maxBitrate?: number; scaleResolutionDownBy: number; maxFramerate?: number }> = {
-  auto: { maxBitrate: undefined, scaleResolutionDownBy: 1 },
-  medium: { maxBitrate: 600_000, scaleResolutionDownBy: 1.5, maxFramerate: 24 },
-  low: { maxBitrate: 150_000, scaleResolutionDownBy: 3, maxFramerate: 15 },
-};
-
-// Adaptive outbound quality (group/mesh): as more participants publish video, step the
-// tier DOWN so the O(N) mesh uplink doesn't overwhelm the connection. A manual pick
-// (anything but 'auto') always wins. `lessDataCalls` (the "Use less data for calls"
-// setting, read once at group-call start) is a floor: never full 'auto'.
+/* ---- outgoing-video quality (adaptive, spec 0004 US4) ----
+ * Both 1:1 and group video START LOW and adapt: each connection runs the pure controller in
+ * services/call/quality (AIMD over getStats — climb only with headroom, back off on local or
+ * remote-reported congestion). The manual quality pin + "use less data" are an UPPER-BOUND
+ * clamp (the controller may still drop below to keep the call alive). Group adaptation is
+ * per-receiver inside MeshSession; 1:1 runs here against the single PC's video sender. */
 let lessDataCalls = false;
 
-/** How many remote participants are currently publishing video. */
-function videoPublisherCount(): number {
-  return remoteStreams.value.filter((s) => s.getVideoTracks().some((t) => t.readyState === 'live')).length;
+// 1:1 adaptive state, sampled in pollStats; reset per call.
+let oneToOneQc: ControllerState = initialController();
+
+/** The current upper-bound tier from the manual pin + data-saver. */
+function qualityClamp(): Tier {
+  return clampForPin(videoQuality.value, lessDataCalls);
 }
 
-/** The tier to actually apply: a manual pin wins; otherwise scale by publisher count. */
-function effectiveTier(): VideoQuality {
-  if (videoQuality.value !== 'auto') return videoQuality.value;
-  const n = videoPublisherCount();
-  let tier: VideoQuality = n <= 1 ? 'auto' : n <= 3 ? 'medium' : 'low';
-  if (lessDataCalls && tier === 'auto') tier = 'medium';
-  return tier;
-}
-
-/** The outgoing video sender on the 1:1 PC (group fan-out goes through MeshSession). */
-function activeVideoSender(): RTCRtpSender | null {
-  return groupSession ? groupSession.videoSender() : videoSender();
-}
-
-/** Push the effective quality tier onto a 1:1 video sender's first encoding (best-effort:
- *  not every browser honors every field, and there may be no sender yet on audio). */
-async function applyVideoQuality(sender: RTCRtpSender | null): Promise<void> {
+/** Apply a tier's encoding to a single (1:1) sender. Best-effort: not every browser honors
+ *  every field, and there may be no sender yet on an audio call. */
+async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise<void> {
   if (!sender) return;
   const params = sender.getParameters();
   if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-  const tier = QUALITY_ENCODING[effectiveTier()];
-  const enc = params.encodings[0];
-  if (tier.maxBitrate == null) delete enc.maxBitrate;
-  else enc.maxBitrate = tier.maxBitrate;
-  enc.scaleResolutionDownBy = tier.scaleResolutionDownBy;
-  if (tier.maxFramerate == null) delete enc.maxFramerate;
-  else enc.maxFramerate = tier.maxFramerate;
+  const enc = TIER_ENCODING[tier];
+  const e = params.encodings[0];
+  e.maxBitrate = enc.maxBitrate;
+  e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
+  if (enc.maxFramerate == null) delete e.maxFramerate;
+  else e.maxFramerate = enc.maxFramerate;
   try {
     await sender.setParameters(params);
-  } catch (e) {
-    console.warn('[call] could not apply video quality', e);
+  } catch (e2) {
+    console.warn('[call] could not apply video quality', e2);
   }
 }
 
-/** Re-evaluate outgoing quality. Group: push the upper-bound clamp (from the manual pin +
- *  data-saver) to the mesh, where each leg runs its own adaptive controller toward it
- *  (spec 0004 US4 — per-receiver). 1:1: apply the manual tier to the single sender (a 1:1
- *  adaptive controller is tracked separately as T044). */
+/** One 1:1 adaptive step from a fresh getStats report: step the controller toward the clamp
+ *  and apply if the tier changed. Called from pollStats (~1s). */
+async function adaptOneToOne(report: RTCStatsReport): Promise<void> {
+  const before = oneToOneQc.tier;
+  oneToOneQc = nextTier(oneToOneQc, snapshotFromReport(report), qualityClamp());
+  if (oneToOneQc.tier !== before) await applySenderTier(videoSender(), oneToOneQc.tier);
+}
+
+/** Re-evaluate outgoing quality after a manual change. Group: push the clamp to the mesh
+ *  (per-leg controllers adapt toward it). 1:1: bring the controller down to the clamp if the
+ *  pin was lowered, and apply the current tier now (the controller keeps adapting in pollStats). */
 async function applyOutgoingQuality(): Promise<void> {
-  if (groupSession) groupSession.setQualityClamp(clampForPin(videoQuality.value, lessDataCalls));
-  else await applyVideoQuality(videoSender());
+  if (groupSession) {
+    groupSession.setQualityClamp(qualityClamp());
+    return;
+  }
+  const clampIdx = TIERS.indexOf(qualityClamp());
+  if (TIERS.indexOf(oneToOneQc.tier) > clampIdx) oneToOneQc = { tier: qualityClamp(), healthyStreak: 0 };
+  await applySenderTier(videoSender(), oneToOneQc.tier);
 }
 
 /** Change the outgoing-video quality tier and apply it immediately. */
@@ -1459,7 +1465,7 @@ async function replaceOutgoingVideo(track: MediaStreamTrack): Promise<boolean> {
   const sender = videoSender();
   if (!sender) return false;
   await sender.replaceTrack(track);
-  await applyVideoQuality(sender);
+  await applySenderTier(sender, oneToOneQc.tier);
   return true;
 }
 
@@ -1594,7 +1600,7 @@ async function addLocalVideo(renegotiateAfter: boolean): Promise<boolean> {
   setLocalVideoTrack(track, true);
   meta.kind = 'video';
   cameraOff.value = false;
-  await applyVideoQuality(activeVideoSender());
+  await applySenderTier(videoSender(), oneToOneQc.tier);
   // The camera wasn't enumerated on an audio-only call, so re-check now that video is
   // on - this is what makes the flip-camera button appear after an audio->video switch.
   void refreshCameraCount();
