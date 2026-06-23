@@ -20,6 +20,15 @@ import { getSelfUserId } from '@/services/auth';
 import { getTurnConfig, rtcConfig, type TurnConfig } from '@/services/call/turn';
 import { sendSealedSignal, meshSessionChatId, clearCallSession } from '@/services/call/signalling';
 import { pushDiag, setDiagSnapshot } from '@/services/call/diag';
+import {
+  type Tier,
+  type ControllerState,
+  type StatsSnapshot,
+  TIERS,
+  TIER_ENCODING,
+  initialController,
+  nextTier,
+} from '@/services/call/quality';
 import type { CallKind } from '@/services/call/types';
 import type { CallSignal } from '@/services/crypto/message';
 
@@ -44,6 +53,30 @@ export interface VideoEncoding {
   maxFramerate?: number;
 }
 
+/** Reduce a leg's getStats report to the adaptive controller's input signals. Missing
+ *  fields (Safari doesn't expose them all) are left undefined; the controller copes. */
+function snapshotFromReport(report: RTCStatsReport): StatsSnapshot {
+  let qualityLimited = false;
+  let availableOutgoingBitrate: number | undefined;
+  let fractionLost = 0;
+  let rtt: number | undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  report.forEach((st: any) => {
+    if (st.type === 'outbound-rtp' && st.kind === 'video') {
+      if (st.qualityLimitationReason === 'bandwidth') qualityLimited = true;
+    } else if (st.type === 'candidate-pair' && typeof st.availableOutgoingBitrate === 'number') {
+      // Prefer the nominated/selected pair's estimate when present.
+      if (st.nominated || st.selected || availableOutgoingBitrate == null) {
+        availableOutgoingBitrate = st.availableOutgoingBitrate;
+      }
+    } else if (st.type === 'remote-inbound-rtp' && st.kind === 'video') {
+      if (typeof st.fractionLost === 'number') fractionLost = Math.max(fractionLost, st.fractionLost);
+      if (typeof st.roundTripTime === 'number') rtt = st.roundTripTime;
+    }
+  });
+  return { qualityLimited, availableOutgoingBitrate, fractionLost, rtt };
+}
+
 // Tile key for our own outgoing feed — must match the self tile's key in
 // CallActivePage so the speaking highlight lines up.
 const SELF_KEY = '__self__';
@@ -62,6 +95,10 @@ interface PeerLeg {
   // Has this leg exchanged its first offer/answer yet? Until it has, only ONE side
   // (the impolite peer) sends the initial offer — see the negotiation guard in buildLeg.
   negotiated: boolean;
+  // Per-receiver adaptive-quality state (spec 0004 US4): each leg adapts its OUTGOING video
+  // independently from this leg's own getStats, so one call can send different qualities to
+  // different peers based on each link. Starts low; climbs/backs off via quality.nextTier.
+  qc: ControllerState;
 }
 
 export class MeshSession {
@@ -76,9 +113,12 @@ export class MeshSession {
   private remote = new Map<string, MediaStream>(); // peerUserId → their stream
   // Roster updates apply one at a time (see onRoster): a burst of joins must not interleave.
   private rosterChain: Promise<void> = Promise.resolve();
-  // Video-quality changes apply one at a time too (see applyVideoQuality).
+  // Per-sender setParameters is serialized (interleaving getParameters/setParameters on the
+  // SAME sender trips "getParameters() has never been called").
   private qualityChain: Promise<void> = Promise.resolve();
-  private currentEnc: VideoEncoding | null = null; // applied to every leg's video sender
+  // Upper-bound tier from the manual quality pin + "use less data" (spec 0004 US4). The
+  // adaptive controller may go BELOW this to keep a call alive, but never above it.
+  private clampTier: Tier = 'hd';
   // Aggregate connection-state tracking (so a single leg blip doesn't end the call).
   private everConnected = false;
   private lastEmittedState: RTCPeerConnectionState | null = null;
@@ -250,7 +290,7 @@ export class MeshSession {
         any = true;
       }
     }
-    if (any && this.currentEnc) await this.applyVideoQuality(this.currentEnc);
+    if (any) for (const leg of this.legs.values()) void this.applyLegEncoding(leg);
     return any;
   }
 
@@ -262,7 +302,7 @@ export class MeshSession {
       if (existing) await existing.replaceTrack(track);
       else leg.pc.addTrack(track, this.local ?? new MediaStream([track]));
     }
-    if (this.currentEnc) await this.applyVideoQuality(this.currentEnc);
+    for (const leg of this.legs.values()) void this.applyLegEncoding(leg);
   }
 
   /** Remove our video from every leg (video→audio). removeTrack + renegotiation so
@@ -290,37 +330,49 @@ export class MeshSession {
     return null;
   }
 
-  /** Apply an encoding tier to EVERY leg's video sender (the adaptive/manual path).
-   *  Serialized: the adaptive tier, a remote camera toggle and a manual change can all fire
-   *  at once, and interleaving getParameters/setParameters on the SAME sender trips
-   *  "getParameters() has never been called" (the per-sender params slot is shared). */
-  applyVideoQuality(enc: VideoEncoding): Promise<void> {
-    this.currentEnc = enc;
-    this.qualityChain = this.qualityChain.then(() => this.applyVideoQualityNow(enc)).catch(() => {});
+  /** Set the upper-bound quality tier (from the manual pin + data-saver). Immediately brings
+   *  any leg currently above the new clamp down to it; climbing back up (when allowed) is the
+   *  adaptive controller's job. */
+  setQualityClamp(clamp: Tier): void {
+    this.clampTier = clamp;
+    const clampIdx = TIERS.indexOf(clamp);
+    for (const leg of this.legs.values()) {
+      if (TIERS.indexOf(leg.qc.tier) > clampIdx) {
+        leg.qc = { tier: clamp, healthyStreak: 0 };
+        void this.applyLegEncoding(leg);
+      }
+    }
+  }
+
+  /** Apply a leg's current controller tier to its video sender (serialized per the
+   *  getParameters/setParameters caveat). No-op until the leg has a negotiated video sender. */
+  private applyLegEncoding(leg: PeerLeg): Promise<void> {
+    this.qualityChain = this.qualityChain
+      .then(async () => {
+        const sender = this.videoSenderOf(leg);
+        if (!sender) return;
+        const params = sender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) return;
+        const enc = TIER_ENCODING[leg.qc.tier];
+        const e = params.encodings[0];
+        e.maxBitrate = enc.maxBitrate;
+        e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
+        if (enc.maxFramerate == null) delete e.maxFramerate;
+        else e.maxFramerate = enc.maxFramerate;
+        await sender.setParameters(params);
+      })
+      .catch((err) => console.warn('[mesh] could not apply video quality', err));
     return this.qualityChain;
   }
 
-  private async applyVideoQualityNow(enc: VideoEncoding): Promise<void> {
-    for (const leg of this.legs.values()) {
-      const sender = this.videoSenderOf(leg);
-      if (!sender) continue;
-      const params = sender.getParameters();
-      // A sender whose transceiver hasn't negotiated yet reports no encodings, and
-      // setParameters can't add them — skip it; the apply that runs after the offer/answer
-      // (onRemoteStreams → applyOutgoingQuality, or buildLeg's own re-apply) catches it.
-      if (!params.encodings || params.encodings.length === 0) continue;
-      const e = params.encodings[0];
-      if (enc.maxBitrate == null) delete e.maxBitrate;
-      else e.maxBitrate = enc.maxBitrate;
-      e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
-      if (enc.maxFramerate == null) delete e.maxFramerate;
-      else e.maxFramerate = enc.maxFramerate;
-      try {
-        await sender.setParameters(params);
-      } catch (err) {
-        console.warn('[mesh] could not apply video quality', err);
-      }
-    }
+  /** One adaptive step for a leg from a fresh getStats report: update the controller state
+   *  toward the clamp and apply the resulting tier. Per-receiver — driven by THIS leg's link. */
+  private adaptLeg(leg: PeerLeg, report: RTCStatsReport): void {
+    if (!this.videoSenderOf(leg)) return; // audio-only leg → nothing to tier
+    const snap = snapshotFromReport(report);
+    const before = leg.qc.tier;
+    leg.qc = nextTier(leg.qc, snap, this.clampTier);
+    if (leg.qc.tier !== before) void this.applyLegEncoding(leg);
   }
 
   /** Stats from a representative connected leg (for the bitrate readout). */
@@ -346,6 +398,7 @@ export class MeshSession {
           const short = leg.peerId.slice(0, 8);
           try {
             const report = await leg.pc.getStats();
+            this.adaptLeg(leg, report); // per-receiver adaptive quality (spec 0004 US4)
             const codecs = new Map<string, string>();
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             report.forEach((st: any) => {
@@ -414,6 +467,7 @@ export class MeshSession {
       pendingIce: [],
       pendingLocalIce: [],
       negotiated: false,
+      qc: initialController(), // starts sending low; the controller climbs from there
     };
     this.legs.set(peerId, leg);
 
@@ -480,8 +534,9 @@ export class MeshSession {
     };
     pc.onconnectionstatechange = () => this.onLegState(leg);
 
-    // A new leg that joins while we're already sending video inherits the current tier.
-    if (this.currentEnc) void this.applyVideoQuality(this.currentEnc);
+    // A new leg starts at its own low tier and adapts independently; apply it once a video
+    // sender exists (no-op until then).
+    void this.applyLegEncoding(leg);
     this.emitStreamMap();
     return leg;
   }

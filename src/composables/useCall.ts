@@ -40,6 +40,7 @@ import { MeshSession } from '@/services/call/mesh';
 import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
 import { VIDEO_MAX } from '@/services/call/types';
+import { clampForPin } from '@/services/call/quality';
 import type { CallFrame } from '@/services/transport';
 
 /* ---- reactive state (read by the call UI) ---- */
@@ -1366,10 +1367,12 @@ async function applyVideoQuality(sender: RTCRtpSender | null): Promise<void> {
   }
 }
 
-/** Apply the effective tier to the active outgoing video — fanned across every mesh leg
- *  for a group call, or the single sender for 1:1. */
+/** Re-evaluate outgoing quality. Group: push the upper-bound clamp (from the manual pin +
+ *  data-saver) to the mesh, where each leg runs its own adaptive controller toward it
+ *  (spec 0004 US4 — per-receiver). 1:1: apply the manual tier to the single sender (a 1:1
+ *  adaptive controller is tracked separately as T044). */
 async function applyOutgoingQuality(): Promise<void> {
-  if (groupSession) await groupSession.applyVideoQuality(QUALITY_ENCODING[effectiveTier()]);
+  if (groupSession) groupSession.setQualityClamp(clampForPin(videoQuality.value, lessDataCalls));
   else await applyVideoQuality(videoSender());
 }
 

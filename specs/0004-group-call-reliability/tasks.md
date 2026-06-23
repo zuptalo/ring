@@ -178,15 +178,15 @@ audio survives); a 3-peer mesh with one throttled peer differentiates tiers per 
 
 ### Tests for User Story 4 ⚠️ (write first, must FAIL)
 
-- [ ] T039 [US4] Failing unit tests `src/services/call/quality.test.ts`: `nextTier(current, snapshot, clamp)` — climb one step only after K=3 consecutive healthy samples; drop on `qualityLimitationReason==='bandwidth'`, `fractionLost > 0.05`, or `availableOutgoingBitrate` below the current tier target; clamp respected as upper bound (and adaptation may go below a high pin); floor→`off`; Safari-style snapshot (missing `qualityLimitationReason`/`availableOutgoingBitrate`)→cautious climb on loss/RTT alone
-- [ ] T040 [P] [US4] e2e `e2e/call-adaptive.spec.ts` (uses T004 throttling): asserts start at low (never hd), climb with headroom, drop+video-suspend on throttle while audio continues, and per-leg differentiation in a 3-peer call
+- [x] T039 [US4] `src/services/call/quality.test.ts` (12 tests): `nextTier` — K=3 healthy→climb; drop on bandwidth-limit / loss>5% / avail<target; clamp = upper bound; below-pin on congestion; floor→`off`; Safari (missing fields) caps climb at `high`. + `clampForPin`
+- [ ] T040 [P] [US4] e2e `e2e/call-adaptive.spec.ts` (throttling): start low (never hd), climb with headroom, drop+video-suspend on throttle while audio continues, per-leg differentiation — DEFERRED (e2e)
 
 ### Implementation for User Story 4
 
-- [ ] T041 [US4] Create pure controller `src/services/call/quality.ts`: tier ladder → encoding map with concrete targets (`off`=no video; `low`≈150 kbps; `medium`≈500 kbps; `high`≈1.2 Mbps; `hd`≈2.5 Mbps), `StatsSnapshot` extraction shape, and `nextTier()` (AIMD: additive climb one step after K=3 healthy samples; fast multiplicative back-off; default ceiling `high` unless `availableOutgoingBitrate` sustains `hd`; `off` floor). Constants exported for the unit test
-- [ ] T042 [US4] Per-leg controller in `src/services/call/mesh.ts`: sample each leg's `getStats()` (~2s), build a `StatsSnapshot`, apply the chosen tier via the existing `setParameters` path; suspend the video track at `off`; start every leg at `low`
-- [ ] T043 [US4] Replace the publisher-count `effectiveTier` heuristic wiring while keeping the manual `videoQuality` pin + `storage.lessDataCalls` as the clamp (upper bound) in `src/composables/useCall.ts`
-- [ ] T044 [US4] Add the same controller to the 1:1 PC's video sender in `src/composables/useCall.ts` (start low, adapt, protect audio)
+- [x] T041 [US4] Pure controller `src/services/call/quality.ts`: `Tier` ladder + `TIER_ENCODING` (low≈150k/medium≈500k/high≈1.2M/hd≈2.5M), `StatsSnapshot`, `nextTier` (AIMD; HD only with demonstrated headroom; never blind-climbs past `high` without a known bitrate), `clampForPin`
+- [x] T042 [US4] Per-leg controller in `src/services/call/mesh.ts`: each leg has its own `ControllerState`, sampled from that leg's `getStats()` in the 2s stats tick (`adaptLeg`/`snapshotFromReport`) and applied via `applyLegEncoding`; starts low — true per-receiver adaptation
+- [x] T043 [US4] Replaced the publisher-count heuristic: `applyOutgoingQuality` pushes `setQualityClamp(clampForPin(pin, lessData))` to the mesh; the per-leg controllers adapt toward that upper bound
+- [ ] T044 [US4] Add the same controller to the 1:1 PC's video sender in `src/composables/useCall.ts` (host in the existing 1s `pollStats`) — PENDING (group path shipped first; 1:1 still uses the manual pin)
 - [ ] T054 [US4] (FR-034) Failing test: a mesh leg built after the cached TURN credentials' TTL must use refreshed creds, not the once-cached `this.turn` — unit/integration around `mesh.buildLeg` cred sourcing (or an e2e late-joiner on a long-running call) in `src/services/call/`
 - [ ] T055 [US4] (FR-034) Refresh TURN credentials for late-built legs and on ICE restart in `src/services/call/mesh.ts`: re-fetch via `getTurnConfig()` (which already refreshes ~30s before expiry) in `buildLeg`/`recover` instead of reusing the once-cached `this.turn`, so a participant joining a long call gathers valid relay candidates
 
