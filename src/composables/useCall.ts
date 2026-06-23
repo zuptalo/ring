@@ -2057,7 +2057,15 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         markMemberBusy(id, false); // a free device joined → no longer "unavailable" (US2)
       }
       const afterSet = new Set(after);
-      const someoneLeft = [...before].some((id) => !afterSet.has(id));
+      const left = [...before].filter((id) => !afterSet.has(id));
+      const someoneLeft = left.length > 0;
+      // Someone who WAS in the room and is now gone has left → drop them from the invited set
+      // too, so their tile disappears (after the goodbye wave) instead of reverting to a
+      // "Ringing…" placeholder as if we were still calling them. (A genuine no-show who never
+      // joined stays in `invited` and keeps its ringing/recall tile.)
+      if (left.length && callMeta.value?.invited) {
+        callMeta.value.invited = callMeta.value.invited.filter((id) => !left.includes(id));
+      }
       if (callMeta.value) callMeta.value.roster = frame.members;
       await gs.onRoster(frame.members);
 
