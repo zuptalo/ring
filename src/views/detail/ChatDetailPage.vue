@@ -957,9 +957,9 @@ import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import { segmentEmoji, emojiOnlyCount } from '@/utils/emoji';
 import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
-import { type Quality } from '@/services/media-encode';
+import { type Quality, availableQualities, qualityLabel } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
-import { resolutionLabel, fileSizeLabel, generateVideoPoster, generateImageThumb } from '@/utils/media-meta';
+import { resolutionLabel, fileSizeLabel, generateVideoPoster, generateImageThumb, readImageMeta, readVideoMeta } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing, capitalizeFirst } from '@/utils/text';
@@ -1104,11 +1104,10 @@ async function downloadVideo(id: string): Promise<void> {
 }
 
 // Badge on a photo/video bubble (same facts both sides), e.g. for a video
-// "HD · 720p · 0:34 · 4.2 MB", for a photo "HD · 1.2 MB".
-const QUALITY_LABEL: Record<string, string> = { sd: 'SD', hd: 'HD', original: 'Original' };
+// "HD · 720p · 0:34 · 4.2 MB", for a photo "Full HD · 1.2 MB".
 function mediaMetaLabel(m: Message): string {
   const parts: string[] = [];
-  if (m.mediaQuality) parts.push(QUALITY_LABEL[m.mediaQuality] ?? '');
+  if (m.mediaQuality) parts.push(qualityLabel(m.mediaQuality));
   if (m.kind === 'video') {
     const res = resolutionLabel(m.mediaWidth, m.mediaHeight);
     if (res) parts.push(res);
@@ -2958,7 +2957,10 @@ async function send() {
   // Pasted images go out with the typed text as the caption (on the first image
   // when several were pasted — they share an album grid like the picker flow).
   if (pendingImages.value.length) {
-    const quality = await pickQuality();
+    const longEdge = await maxSourceLongEdge(
+      pendingImages.value.map((p) => ({ blob: p.blob, kind: 'image' as const })),
+    );
+    const quality = await pickQuality(longEdge);
     if (quality === null) return; // cancelled: keep the images and the draft
     const images = pendingImages.value.slice();
     pendingImages.value = [];
@@ -3109,20 +3111,45 @@ function promptAlbumName(suggestedDate?: string): Promise<string | null> {
   });
 }
 
-// Ask the send quality for photos/videos (WhatsApp-style). Returns null if the
-// user cancels.
-function pickQuality(): Promise<Quality | null> {
+// The longest pixel edge across the chosen photos/videos (the largest source in the
+// batch), used to decide which quality tiers are worth offering. Best-effort + bounded
+// by the meta readers; a 'file' or an unreadable item contributes nothing.
+async function maxSourceLongEdge(
+  items: { blob: Blob; kind: 'image' | 'video' | 'file' }[],
+): Promise<number | undefined> {
+  let max = 0;
+  for (const it of items) {
+    if (it.kind === 'image') {
+      const m = await readImageMeta(it.blob).catch(() => ({}) as { width?: number; height?: number });
+      if (m.width && m.height) max = Math.max(max, m.width, m.height);
+    } else if (it.kind === 'video') {
+      const m = await readVideoMeta(it.blob).catch(() => ({}) as { width?: number; height?: number });
+      if (m.width && m.height) max = Math.max(max, m.width, m.height);
+    }
+  }
+  return max || undefined;
+}
+
+// Ask the send quality for photos/videos (WhatsApp-style), offering ONLY the tiers a
+// source of this resolution can actually produce — no upscaling, no "4K" on a 720p clip
+// (spec 2007). `longEdge` is the largest source's longest pixel edge. The sheet always
+// appears for photos/videos (predictable, and the existing flows depend on it); when the
+// source is below the smallest tier it simply lists Original alone. Returns null on cancel.
+function pickQuality(longEdge?: number): Promise<Quality | null> {
+  const opts = availableQualities(longEdge);
+  // Highest fidelity first (Original, then Full HD → SD), mirroring WhatsApp's ordering.
+  const tiers = opts.filter((q) => q !== 'original').reverse();
   return new Promise((resolve) => {
+    const buttons: import('@ionic/vue').ActionSheetButton[] = [
+      { text: 'Original quality', handler: () => resolve('original') },
+      ...tiers.map((q) => ({
+        text: q === 'sd' ? 'SD quality (smaller)' : `${qualityLabel(q)} quality`,
+        handler: () => resolve(q),
+      })),
+      { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
+    ];
     void actionSheetController
-      .create({
-        header: 'Send quality',
-        buttons: [
-          { text: 'HD quality', handler: () => resolve('hd') },
-          { text: 'SD quality (smaller)', handler: () => resolve('sd') },
-          { text: 'Original quality', handler: () => resolve('original') },
-          { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
-        ],
-      })
+      .create({ header: 'Send quality', buttons })
       .then((s) => {
         // Tapping the backdrop also dismisses → treat as cancel.
         s.onDidDismiss().then((d) => {
@@ -3163,7 +3190,10 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
     const hasMedia = otherFiles.some((f) => kindOf(f) === 'image' || kindOf(f) === 'video');
     let quality: Quality = 'original';
     if (hasMedia) {
-      const q = await pickQuality();
+      const longEdge = await maxSourceLongEdge(
+        otherFiles.map((f) => ({ blob: f, kind: kindOf(f) as 'image' | 'video' | 'file' })),
+      );
+      const q = await pickQuality(longEdge);
       if (q === null) return; // cancelled
       quality = q;
     }

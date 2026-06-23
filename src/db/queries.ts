@@ -19,7 +19,7 @@ import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive } from '@/services/notify';
-import { compressImage, compressVideo } from '@/services/media-encode';
+import { compressImage, compressVideo, achievedQuality } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
 import { THUMB_TIERS } from '@/utils/thumbs';
@@ -989,7 +989,12 @@ export async function listChatMedia(chatId: string): Promise<Message[]> {
   // Round video NOTES are conversational/ephemeral (like voice messages, which are already
   // excluded here) and play inline only — keep them OUT of the "Media, links & docs" gallery
   // and its fullscreen viewer. Regular videos still appear.
-  return all.filter((m) => m.kind === 'image' || (m.kind === 'video' && !m.videoNote)).reverse();
+  // Media DELETED to free space (mediaCleared: record removed, mediaId gone) has nothing to
+  // show, so it's dropped from the gallery — otherwise it leaves an empty placeholder tile
+  // (spec 2007). "Freed keeping previews" is NOT cleared, so its preview still shows.
+  return all
+    .filter((m) => (m.kind === 'image' || (m.kind === 'video' && !m.videoNote)) && !m.mediaCleared)
+    .reverse();
 }
 /** All blob-backed media messages in a chat (image/video/voice/audio), oldest→newest.
  *  The chat list is windowed (useChatHistory) but the media viewer + audio playlist span
@@ -997,15 +1002,21 @@ export async function listChatMedia(chatId: string): Promise<Message[]> {
  *  far smaller than every message, and not the scroll hot path. */
 export async function listChatMediaAll(chatId: string): Promise<Message[]> {
   const all = await listMessages(chatId);
+  // Exclude media deleted to free space (mediaCleared) — there's nothing to view/play, so it
+  // must not produce a blank page in the fullscreen viewer or audio playlist (spec 2007).
   return all.filter(
-    (m) => m.kind === 'image' || m.kind === 'video' || m.kind === 'voice' || m.kind === 'audio',
+    (m) =>
+      (m.kind === 'image' || m.kind === 'video' || m.kind === 'voice' || m.kind === 'audio') &&
+      !m.mediaCleared,
   );
 }
-/** All file (document) messages in a chat, newest-first. */
+/** All file (document) messages in a chat, newest-first. Excludes docs deleted to free
+ *  space (mediaCleared) so they don't leave an empty row (spec 2007). */
 export async function listChatDocs(chatId: string): Promise<Message[]> {
-  return (await listMessages(chatId)).filter((m) => m.kind === 'file').reverse();
+  return (await listMessages(chatId)).filter((m) => m.kind === 'file' && !m.mediaCleared).reverse();
 }
-/** All text messages containing a link, newest-first. */
+/** All text messages containing a link, newest-first. (Links live in text bodies, not
+ *  blob media, so storage cleanup never clears them.) */
 export async function listChatLinks(chatId: string): Promise<Message[]> {
   return (await listMessages(chatId)).filter((m) => m.kind === 'text' && URL_RE.test(m.body)).reverse();
 }
@@ -1366,7 +1377,7 @@ export async function sendMediaMessage(
     albumName?: string;
     videoNote?: boolean;
     audio?: AudioMeta;
-    quality?: 'sd' | 'hd' | 'original';
+    quality?: 'sd' | 'hd' | 'fhd' | 'original';
     /** A ready-made thumbnail (data URL) to embed, e.g. a frame captured live by the
      *  video-note recorder — more reliable than decoding the recorded blob. */
     poster?: string;
@@ -1374,12 +1385,14 @@ export async function sendMediaMessage(
      *  under the photo/video. Clamped to CAPTION_MAX. */
     caption?: string;
   },
-): Promise<void> {
+): Promise<string> {
   const ts = now();
   const caption = (opts?.caption ?? '').slice(0, CAPTION_MAX);
   await guardOutbound(await getChat(chatId)); // reject before storing media for a ghosted/blocked peer
   const mediaId = uid();
-  // The original blob is stored; the (possibly compressed) blob is uploaded.
+  // The original blob is stored first so the background job can (re-)encode + retry
+  // from it; runMediaJob swaps in the actually-sent (compressed) blob once the upload
+  // succeeds, so the on-device copy and storage footprint match what was sent.
   await put<Media>('media', {
     id: mediaId,
     kind,
@@ -1408,7 +1421,7 @@ export async function sendMediaMessage(
     // All media goes through the background job (compress if needed → upload),
     // so every attachment gets uniform progress + retry/failed handling.
     status: 'compressing',
-    compressQuality: compressible ? (opts!.quality as 'sd' | 'hd') : undefined,
+    compressQuality: compressible ? (opts!.quality as 'sd' | 'hd' | 'fhd') : undefined,
     // The HD/SD/Original badge shown on photo/video bubbles (both sides).
     mediaQuality: kind === 'image' || kind === 'video' ? (opts?.quality ?? 'original') : undefined,
     jobAttempts: 0,
@@ -1444,6 +1457,7 @@ export async function sendMediaMessage(
 
   resetJobProgress(message.id);
   void processMediaJob(message.id); // background: (compress →) upload → pending / failed
+  return message.id;
 }
 
 /** Encrypt + upload the media ciphertext, then seal a MediaRef into the payload
@@ -1539,7 +1553,21 @@ async function runMediaJob(messageId: string): Promise<void> {
         }
       }
       setCompressProgress(messageId, 1); // encoding done
-      console.info('[media-job] encoded', { id: messageId, kind: message.kind, bytes: uploadBlob.size });
+      // Honest badge (spec 2007): label by what we actually sent, never by what was
+      // requested. If the transcode couldn't shrink the clip it returns the original
+      // blob, and this becomes 'original' so we never claim an HD/SD we didn't achieve.
+      // sealMediaAndEnqueue copies message.mediaQuality onto the recipient's MediaRef,
+      // so correcting it here fixes the badge on BOTH sides.
+      if (message.kind === 'image' || message.kind === 'video') {
+        message.mediaQuality = achievedQuality(message.compressQuality, media.blob.size, uploadBlob);
+      }
+      console.info('[media-job] encoded', {
+        id: messageId,
+        kind: message.kind,
+        bytes: uploadBlob.size,
+        requested: message.compressQuality ?? 'original',
+        achieved: message.mediaQuality,
+      });
       // Tag the bubble with resolution / length / size (persisted FIRST so the badge
       // shows even if the thumbnail step is slow), then best-effort thumbnail.
       if (message.kind === 'video') {
@@ -1598,6 +1626,25 @@ async function runMediaJob(messageId: string): Promise<void> {
       console.info('[media-job] uploading', { id: messageId, bytes: uploadBlob.size });
       await sealMediaAndEnqueue(message, uploadBlob, (p) => setUploadProgress(messageId, p));
       console.info('[media-job] uploaded', { id: messageId });
+      // Replace the sender's local copy with what was ACTUALLY sent (spec 2007): we
+      // keep the original blob during the encode/upload so a retry can re-encode it,
+      // but once the send succeeds, storing the full original wastes space and
+      // overstates the storage footprint (storageByType sums Media.size) while the
+      // bubble badge shows the smaller sent size. The user's true original still lives
+      // in their photo library — Ring only ever held a copy. Only swap when a genuinely
+      // smaller blob was produced (`uploadBlob !== media.blob`; compress* returns the
+      // original ref otherwise), so 'original' sends are untouched. Done AFTER upload so
+      // a failed/retried send still re-encodes from the original.
+      if (uploadBlob !== media.blob && message.mediaId) {
+        const m = await get<Media>('media', message.mediaId);
+        if (m?.blob) {
+          m.blob = uploadBlob;
+          m.size = uploadBlob.size;
+          m.mime = uploadBlob.type || m.mime;
+          m.updatedAt = now();
+          await put('media', m);
+        }
+      }
       // Success → pending (the server 'sent' receipt will advance it further).
       const fresh = await getMessage(messageId);
       if (fresh && fresh.status === 'compressing') {
@@ -2069,10 +2116,15 @@ export async function createPost(opts: {
         : opts.media.kind === 'video'
           ? await compressVideo(opts.media.blob, q)
           : opts.media.blob;
+    // Honest badge (spec 2007): label posts by the quality actually achieved. When a
+    // transcode can't shrink the clip it returns the original, so we don't claim an
+    // SD/HD the feed item isn't. (Voice isn't transcoded — keep its requested value.)
+    const achieved =
+      opts.media.kind === 'voice' ? q : achievedQuality(q, opts.media.blob.size, toUpload);
     // Dimensions → reserve an aspect-ratio box in the feed (no layout jump).
     if (opts.media.kind === 'image') ({ width: mediaW, height: mediaH } = await readImageMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
     else if (opts.media.kind === 'video') ({ width: mediaW, height: mediaH } = await readVideoMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
-    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { width: mediaW, height: mediaH, quality: q });
+    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { width: mediaW, height: mediaH, quality: achieved });
     payload.media = ref;
     mediaId = uid();
     await put<Media>('media', {

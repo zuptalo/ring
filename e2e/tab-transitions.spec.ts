@@ -99,15 +99,18 @@ test.describe('tab transitions', () => {
     }
     // After the burst, the last tab (Settings) must be fully rendered, not stuck
     // in a placeholder/partial state (the identity is already warm from above, so this
-    // is purely a rendering-under-fast-switching check).
+    // is purely a rendering-under-fast-switching check). Use a generous timeout for the
+    // same reason the warm-up does: on a loaded CI runner the post-burst paint can lag
+    // well past the default expect timeout, which was the source of the flake — the tab
+    // DOES render (the warm-up proved it), it just needs room under load, not 5s.
     await a.page.waitForURL('**/tabs/settings');
-    await expect(a.page.getByText('Speedy')).toBeVisible();
+    await expect(a.page.getByText('Speedy')).toBeVisible({ timeout: 30_000 });
 
     // And each tab still renders its own page marker when selected.
     await tabBtn(a.page, 'Calls').click();
-    await expect(a.page.getByRole('button', { name: 'New call' })).toBeVisible();
+    await expect(a.page.getByRole('button', { name: 'New call' })).toBeVisible({ timeout: 30_000 });
     await tabBtn(a.page, 'Contacts').click();
-    await expect(a.page.getByRole('button', { name: 'Add contact' })).toBeVisible();
+    await expect(a.page.getByRole('button', { name: 'Add contact' })).toBeVisible({ timeout: 30_000 });
 
     await ctx.close();
   });

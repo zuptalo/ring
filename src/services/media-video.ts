@@ -15,9 +15,15 @@ export interface VideoPreset {
   maxEdge: number; // longest side, px
   bitrate: number; // target video bitrate, bits/s
 }
-export const VIDEO_PRESETS: Record<'sd' | 'hd', VideoPreset> = {
+// Target resolution + bitrate per tier. maxEdge mirrors QUALITY_TIERS in media-encode.ts
+// (the picker's suitability threshold). Full HD (1080p) is the top tier — a 4K re-encode
+// was dropped because 2160p H.264 encoding is unreliable/very slow on-device (esp. the
+// iOS hardware encoder). Honest labeling demotes any tier that can't actually shrink the
+// clip to 'original' (spec 2007).
+export const VIDEO_PRESETS: Record<'sd' | 'hd' | 'fhd', VideoPreset> = {
   sd: { maxEdge: 640, bitrate: 1_000_000 },
   hd: { maxEdge: 1280, bitrate: 2_500_000 },
+  fhd: { maxEdge: 1920, bitrate: 5_000_000 },
 };
 
 // WebCodecs is the fast path; flip to false to force the ffmpeg path everywhere
@@ -26,7 +32,7 @@ const WEBCODECS_ENABLED = true;
 
 export async function compressVideoAdaptive(
   blob: Blob,
-  quality: 'sd' | 'hd',
+  quality: 'sd' | 'hd' | 'fhd',
   onProgress?: (p: number) => void,
 ): Promise<Blob> {
   const preset = VIDEO_PRESETS[quality];
