@@ -1,6 +1,36 @@
 <template>
   <ion-page>
     <ion-content :fullscreen="true" class="call">
+      <!-- Full-screen incoming-call answer view: shown when the call is why you're opening the
+           app (backgrounded → foreground, or a cold start / notification tap). When you're
+           already using the app, the non-intrusive banner handles it instead and this route
+           is never pushed. -->
+      <div v-if="callState === 'incoming' && callMeta" class="incoming-fs">
+        <div class="incoming-info">
+          <ion-avatar class="incoming-avatar"><img :src="callMeta.avatar" :alt="callMeta.name" /></ion-avatar>
+          <h2 class="incoming-name">{{ callMeta.name }}</h2>
+          <p class="incoming-kind">
+            {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
+          </p>
+          <p v-if="participantsLine" class="incoming-with">{{ participantsLine }}</p>
+        </div>
+        <div class="incoming-actions">
+          <button class="ans-btn decline" aria-label="Decline" @click="rejectCall">
+            <ion-icon :icon="callOutline" />
+          </button>
+          <button
+            v-if="!callMeta.isGroup"
+            class="ans-btn message"
+            aria-label="Decline with message"
+            @click="incomingDeclineMenu"
+          >
+            <ion-icon :icon="chatbubbleEllipsesOutline" />
+          </button>
+          <button class="ans-btn accept" aria-label="Accept" @click="acceptCall">
+            <ion-icon :icon="callMeta.kind === 'video' ? videocamOutline : callOutline" />
+          </button>
+        </div>
+      </div>
       <div ref="stageEl" class="stage" :class="{ 'chrome-hidden': chromeHidden }" @click="onStageClick">
         <!-- Group call: every participant - each incoming feed AND our own outgoing
              feed - is an equally-sized floating tile. Tiles are centred and wrap;
@@ -280,6 +310,7 @@ import {
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
   recordingOutline, cellularOutline, informationCircleOutline, personOutline, refreshOutline,
+  chatbubbleEllipsesOutline,
 } from 'ionicons/icons';
 import { getSelfUserId } from '@/services/auth';
 import {
@@ -291,8 +322,11 @@ import {
   audioOutputId, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite,
+  acceptCall, rejectCall, declineWithMessage,
   type AudioRoute,
 } from '@/composables/useCall';
+import { useCallParticipants } from '@/composables/useCallParticipants';
+import { getQuickDeclines } from '@/services/quick-declines';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { callDiagLines, callDiagSnapshot, callDiagOpen, clearDiag } from '@/services/call/diag';
 import { listContacts } from '@/db/queries';
@@ -303,6 +337,21 @@ import type { Contact } from '@/db/types';
 const mainVideo = ref<HTMLVideoElement | null>(null);
 const pipVideo = ref<HTMLVideoElement | null>(null);
 const stageEl = ref<HTMLElement | null>(null);
+
+// Full-screen incoming-call answer view (the consent line is shared with the banner).
+const { participantsLine } = useCallParticipants();
+async function incomingDeclineMenu(): Promise<void> {
+  const replies = await getQuickDeclines();
+  const sheet = await actionSheetController.create({
+    header: 'Decline with a message',
+    buttons: [
+      ...replies.map((text) => ({ text, handler: () => void declineWithMessage(text) })),
+      { text: 'Decline without message', role: 'destructive', handler: () => void rejectCall() },
+      { text: 'Cancel', role: 'cancel' },
+    ],
+  });
+  await sheet.present();
+}
 
 /* ---- 1:1 stage: which stream is fullscreen, and where the PiP sits ---- */
 // mainIsLocal=false → remote is fullscreen, local is the PiP (the usual layout);
@@ -1361,5 +1410,96 @@ const diag = computed(() => {
 .up-btn.accept {
   background: var(--ion-color-primary, #10b981);
   color: #fff;
+}
+
+/* ---- full-screen incoming-call answer view ---- */
+.incoming-fs {
+  position: absolute;
+  inset: 0;
+  z-index: 30; /* above the (empty) stage, below modals */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(env(safe-area-inset-top) + 8vh) 24px calc(env(safe-area-inset-bottom) + 6vh);
+  background: radial-gradient(120% 120% at 50% 0%, #0e8a63 0%, #06402f 70%);
+  color: #fff;
+  text-align: center;
+}
+.incoming-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6vh;
+}
+.incoming-avatar {
+  width: 128px;
+  height: 128px;
+  border: 3px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+.incoming-name {
+  margin: 6px 0 0;
+  font-size: 28px;
+  font-weight: 700;
+}
+.incoming-kind {
+  margin: 0;
+  font-size: 15px;
+  opacity: 0.9;
+}
+.incoming-with {
+  margin: 2px 0 0;
+  font-size: 13px;
+  opacity: 0.82;
+  max-width: 80vw;
+}
+.incoming-actions {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.ans-btn {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 30px;
+  cursor: pointer;
+}
+.ans-btn ion-icon {
+  font-size: 30px;
+}
+.ans-btn.decline {
+  background: var(--ion-color-danger, #eb445a);
+  transform: rotate(135deg);
+}
+.ans-btn.message {
+  width: 54px;
+  height: 54px;
+  font-size: 24px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.ans-btn.message ion-icon {
+  font-size: 24px;
+}
+.ans-btn.accept {
+  background: #fff;
+  color: #0a7d5c;
+  animation: ans-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ans-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
 }
 </style>

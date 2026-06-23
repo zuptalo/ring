@@ -634,6 +634,41 @@ function navigateToCall(): void {
   }
 }
 
+// How recently the app must have started for an incoming call to count as "opened for this
+// call" (a cold start / notification tap), vs. one arriving while you've been using the app.
+const APP_OPENED_FOR_CALL_MS = 8000;
+const appStartedAt = Date.now();
+let pendingIncomingForeground = false;
+
+/** Decide how an incoming call is presented (spec 0004 call UX): full-screen when the call is
+ *  *why* you're opening the app — backgrounded (show it the moment you foreground) or a cold
+ *  start / notification tap (show it now). When you're already actively in the app, leave the
+ *  non-intrusive banner (IncomingCallOverlay) to handle it. */
+function presentIncoming(): void {
+  const hidden = typeof document !== 'undefined' && document.visibilityState !== 'visible';
+  if (hidden) {
+    // Arrived while backgrounded → open the full-screen view as soon as the app comes forward.
+    pendingIncomingForeground = true;
+    armIncomingForegroundNav();
+  } else if (Date.now() - appStartedAt < APP_OPENED_FOR_CALL_MS) {
+    // App was just opened (cold start / tapped the call notification) → straight to full screen.
+    navigateToCall();
+  }
+  // else: actively in the app → the banner handles it (less intrusive), unchanged.
+}
+
+function armIncomingForegroundNav(): void {
+  if (typeof document === 'undefined') return;
+  const onVisible = (): void => {
+    if (document.visibilityState !== 'visible') return;
+    document.removeEventListener('visibilitychange', onVisible);
+    // Only if still ringing for the same call (the caller may have given up while we were away).
+    if (pendingIncomingForeground && callState.value === 'incoming') navigateToCall();
+    pendingIncomingForeground = false;
+  };
+  document.addEventListener('visibilitychange', onVisible);
+}
+
 /** Tear everything down and reset to idle. Logs the call result locally. */
 export async function teardown(reason: EndReason, opts?: { silent?: boolean }): Promise<void> {
   // Idempotency: tear down + log each call exactly once even if several end-signals
@@ -690,6 +725,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   videoQuality.value = 'auto';
   lessDataCalls = false;
   oneToOneQc = initialController(); // next call starts low again
+  pendingIncomingForeground = false;
   upgradePending.value = false;
   upgradeRequest.value = false;
   activeScreenTrack?.stop();
@@ -1037,6 +1073,7 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
     avatar: chat?.avatar || groupAvatar(roomId),
   };
   setState('incoming');
+  presentIncoming(); // full-screen if the app is being opened for this call; else the banner
   startLoopTone('beacon', 2000);
   clearRingTimeout();
   noAnswerTimer = setTimeout(() => {
@@ -1223,6 +1260,7 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
   await createCall({ callId: frame.callId, contactId: from, direction: 'incoming', video: kind === 'video' });
 
   setState('incoming');
+  presentIncoming(); // full-screen if the app is being opened for this call; else the banner
   startLoopTone('beacon', 2000);
   void sendControl('call-ringing', from, frame.callId);
 
