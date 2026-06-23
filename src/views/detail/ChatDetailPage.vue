@@ -48,10 +48,20 @@
           </span>
         </button>
         <ion-buttons slot="end">
-          <ion-button v-if="!peerGhosted && !peerBlocked" aria-label="Video call" @click="startCall('Video')">
+          <!-- Group size gates the call type (spec 0004 US3): no video past 4 participants,
+               no group call at all past 8. 1:1 chats always show both. -->
+          <ion-button
+            v-if="!peerGhosted && !peerBlocked && canVideoCall"
+            aria-label="Video call"
+            @click="startCall('Video')"
+          >
             <ion-icon slot="icon-only" :icon="videocamOutline" />
           </ion-button>
-          <ion-button v-if="!peerGhosted && !peerBlocked" aria-label="Voice call" @click="startCall('Voice')">
+          <ion-button
+            v-if="!peerGhosted && !peerBlocked && canAudioCall"
+            aria-label="Voice call"
+            @click="startCall('Voice')"
+          >
             <ion-icon slot="icon-only" :icon="callOutline" />
           </ion-button>
         </ion-buttons>
@@ -2139,6 +2149,13 @@ const peerGhosted = computed(
   () => peerContact.value?.ghosted === true || chat.value?.ghosted === true,
 );
 const peerBlocked = computed(() => peerContact.value?.blocked === true);
+
+// Call-type availability by group size (spec 0004 US3): the call includes us, so total =
+// other participants + 1. No video past VIDEO_MAX, no group call at all past AUDIO_MAX.
+// 1:1 chats (1 other) always allow both.
+const callMemberCount = computed(() => (chat.value?.participantIds.length ?? 0) + 1);
+const canVideoCall = computed(() => callMemberCount.value <= VIDEO_MAX);
+const canAudioCall = computed(() => callMemberCount.value <= AUDIO_MAX);
 
 // Opening the conversation clears its unread count (and the Chats badge) and
 // sends 'seen' receipts to the sender (the blue "seen" checks on their side).

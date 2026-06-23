@@ -21,7 +21,16 @@
         <ion-list-header>
           <ion-label>Participants ({{ selected.size }})</ion-label>
         </ion-list-header>
-        <ion-item v-for="c in contacts" :key="c.id" button :detail="false" @click="toggle(c.id)">
+        <!-- Once the selection hits the audio cap, unselected rows are disabled (you can't
+             add a 9th person to any group call). Already-picked rows stay tappable to deselect. -->
+        <ion-item
+          v-for="c in contacts"
+          :key="c.id"
+          button
+          :detail="false"
+          :disabled="selectionFull && !selected.has(c.id)"
+          @click="toggle(c.id)"
+        >
           <ion-avatar slot="start">
             <img :src="c.avatar" :alt="c.name" />
           </ion-avatar>
@@ -39,6 +48,10 @@
       <p v-if="selected.size > 0" class="hint">
         Calls {{ selectedNames }}. They’ll be able to see and hear each other for this call.
       </p>
+      <!-- Why video is unavailable once the group is too big for a video call. -->
+      <p v-if="canStart && !videoAllowed" class="hint">
+        Video calls are limited to {{ VIDEO_MAX }} people — pick {{ VIDEO_MAX - 1 }} or fewer for video, or start a voice call.
+      </p>
     </ion-content>
 
     <!-- Pick the participants above, then choose voice or video to ring them. -->
@@ -49,7 +62,8 @@
             <ion-icon slot="start" :icon="callOutline" />
             Voice
           </ion-button>
-          <ion-button @click="start('video')">
+          <!-- Disabled past the video cap (the group is too big for a video call). -->
+          <ion-button :disabled="!videoAllowed" @click="start('video')">
             <ion-icon slot="start" :icon="videocamOutline" />
             Video
           </ion-button>
@@ -89,11 +103,24 @@ const contacts = useLiveQuery(
 );
 
 const canStart = computed(() => selected.value.size > 0);
+// Caps include US, so the picker selects at most cap-1 others (spec 0004 US3): up to
+// AUDIO_MAX-1 in total, and a video call needs the count within VIDEO_MAX-1.
+const maxSelectable = AUDIO_MAX - 1;
+const selectionFull = computed(() => selected.value.size >= maxSelectable);
+const videoAllowed = computed(() => selected.value.size <= VIDEO_MAX - 1);
 
 function toggle(id: string): void {
   const next = new Set(selected.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
+  if (next.has(id)) {
+    next.delete(id);
+  } else {
+    // Don't let the selection exceed the largest call we can place (audio cap).
+    if (selectionFull.value) {
+      void appToast({ message: `A group call is limited to ${AUDIO_MAX} people`, duration: 2000 });
+      return;
+    }
+    next.add(id);
+  }
   selected.value = next;
 }
 
