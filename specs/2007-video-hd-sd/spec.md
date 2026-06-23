@@ -11,6 +11,11 @@
      are derived from the directory number (0001+ planned, 1001+ ad-hoc,
      2001+ hotfix), so do not restate them by hand. -->
 
+**Issues**: #388 (US1 — genuine transcode), #389 (US2 — honest badge), #390 (US3 — original
+untouched), #391 (Full HD tier + suitability, 4K dropped), #392 (sender stores the sent copy),
+#393 (gallery cleanup for deleted media), #394 (ffmpeg.wasm ESM core), #395 (iPhone HEVC
+transcode + playback). All delivered in #387 (commit 3e05a3e).
+
 **Input**: User description: "When a user shares a video and picks HD or SD send quality, the video must actually be transcoded to that quality on-device before sending — downscaled resolution and reduced file size. Today, only the metadata label changes (\"HD\"/\"SD\") while the original full-quality bytes are sent unchanged: a 2160p / 66.8 MB clip is sent identically for Original, HD, and SD. \"Original\" must continue to send the file exactly as-is. For HD/SD the transcode must reliably happen on real devices, especially iOS with large 4K .mov clips. A clip must never be labeled a quality it did not actually achieve."
 
 ## Context
