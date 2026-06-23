@@ -147,6 +147,10 @@ export interface CallLog {
   direction: 'incoming' | 'outgoing';
   video: boolean;
   missed: boolean; // unanswered / declined / nobody joined
+  // Why an unanswered outgoing call ended, when it wasn't a plain no-answer: the callee was
+  // in another call (busy), couldn't be reached (unavailable), or actively declined. Drives a
+  // clearer label than "No answer" (spec 0004 US2/FR-031).
+  outcome?: 'busy' | 'unavailable' | 'declined';
   durationSec?: number; // connected calls only
   isGroup?: boolean;
   participants?: string[]; // group: display names of who actually joined (excl. self)
@@ -302,6 +306,9 @@ export interface Call {
   avatar: string;
   direction: 'incoming' | 'outgoing';
   missed: boolean;
+  // Outgoing call we couldn't complete: busy / unavailable / declined (spec 0004 US2).
+  // Distinguishes a "Busy" row from a plain unanswered outgoing call in the Calls tab.
+  outcome?: 'busy' | 'unavailable' | 'declined';
   video: boolean;
   durationSec?: number; // call length (0/undefined for missed)
   bytes?: number; // total data sent + received over the call (0 for missed)

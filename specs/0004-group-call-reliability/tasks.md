@@ -108,7 +108,7 @@ busy on B within ~5s; 1:1 decline-with-message still posts; both sides get a his
 - [x] T016 [US2] Server: `call-busy` with a `roomId` is relayed to `to` and calls `stopGroupMemberRing(roomId, c.userID)` (the busy sender) in `server/internal/ws/hub.go`
 - [x] T017 [US2] Caller side: `call-busy` with a matching `roomId` → `markMemberBusy(from, true)` + clear that member's ring timer, WITHOUT ending the call; non-overriding — the `call-roster` join path clears busy (FR-008). New `busyMembers` ref in `src/composables/useCall.ts`
 - [x] T018 [US2] Render the per-invitee "busy"/"Unavailable" tile state (new `'busy'` Tile state + recall menu, stock markup + `--ring-*` tokens) in `src/views/detail/CallActivePage.vue`
-- [ ] T019 [US2] Both-sided call history: caller logs `unavailable`/`declined`, callee logs `missed` (reuse the `'calls'` store; no `DB_VERSION` bump) in `src/composables/useCall.ts` / `src/db/queries.ts` — DEFERRED (meatier; teardown-time logging path)
+- [x] T019 [US2] Call history now distinguishes the outcome: a `Call`/`CallLog` gains `outcome: 'busy'|'unavailable'|'declined'` (no `DB_VERSION` bump — schemaless), `markCallMissed` records it, and the Calls-tab subtitle + chat call-row read "Busy"/"Unavailable"/"Declined" instead of "No answer". `callLogPreview` extracted to a pure `src/db/calllog.ts` and unit-tested (`calllog.test.ts`). (Fixes the reported "busy call logs No answer" bug; callee still logs the incoming as missed.)
 
 **Checkpoint**: US2 core (busy signalling + caller-side tile resolution) done and unit-tested; server suite + client build green. Remaining: e2e (T012/T013) and two-sided history (T019).
 

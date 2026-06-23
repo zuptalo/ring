@@ -201,7 +201,17 @@ function loadMore(ev: InfiniteScrollCustomEvent) {
 const directionIcon = (c: Call) =>
   c.direction === 'outgoing' ? arrowUpOutline : arrowDownOutline;
 const typeLabel = (c: Call) =>
-  c.missed ? 'Missed' : c.direction === 'outgoing' ? 'Outgoing' : 'Incoming';
+  c.outcome === 'busy'
+    ? 'Busy'
+    : c.outcome === 'unavailable'
+      ? 'Unavailable'
+      : c.outcome === 'declined'
+        ? 'Declined'
+        : c.missed
+          ? 'Missed'
+          : c.direction === 'outgoing'
+            ? 'Outgoing'
+            : 'Incoming';
 
 const removeGroup = (group: CallGroup) => deleteCalls(group.ids);
 

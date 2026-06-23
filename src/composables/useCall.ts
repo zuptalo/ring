@@ -666,10 +666,17 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
       ? Math.max(0, Math.floor((Date.now() - (meta.startedAt ?? Date.now())) / 1000))
       : 0;
     const video = meta.kind === 'video';
-    // 1:1 Calls-tab record (unchanged behaviour).
+    // Why an unanswered call ended, for a clearer log than "No answer": the peer was busy in
+    // another call, unreachable, or declined (spec 0004 US2/FR-031). Only for calls that
+    // never connected.
+    const callOutcome: 'busy' | 'unavailable' | 'declined' | undefined =
+      !wasConnected && (reason === 'busy' || reason === 'unavailable' || reason === 'declined')
+        ? reason
+        : undefined;
+    // 1:1 Calls-tab record.
     if (!meta.isGroup) {
       if (wasConnected) await finishCall(meta.callId, durationSec, totalBytes);
-      else await markCallMissed(meta.callId);
+      else await markCallMissed(meta.callId, callOutcome);
     }
     if (!opts?.silent) {
       if (meta.isGroup) {
@@ -704,6 +711,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
           direction: meta.direction,
           video,
           missed: !wasConnected, // unanswered either way (text differs by direction)
+          outcome: callOutcome, // busy/unavailable/declined → clearer than "No answer"
           durationSec: wasConnected ? durationSec : undefined,
         });
       }
