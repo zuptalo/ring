@@ -162,21 +162,21 @@ type callRing struct {
 }
 
 const (
-	// A backgrounded callee is re-pushed this many times, this far apart, to feel
-	// like ringing (distinct visible notifications, not one tickle). The window
-	// (count*interval) sits within the dial timeout.
-	callRingCount    = 5
-	callRingInterval = 5 * time.Second
+	// A backgrounded callee is re-pushed this many times, this far apart, to feel like
+	// ringing (distinct visible notifications, not one tickle). The window (count*interval)
+	// spans ~60s so the callee has a full minute to react, and a push is SKIPPED for any
+	// round where they're already foregrounded (they see the in-app ring) — see startCallRing.
+	callRingCount    = 6
+	callRingInterval = 10 * time.Second
 )
 
 // A group-call invitee who hasn't joined is reminded this many times, this far apart
-// (≈30s total), and stops the moment they join OR explicitly decline/leave. Less pushy
-// than the 1:1 cadence; after these run out the caller's UI offers a recall (re-ring) or
-// remove for that member. var (not const) so tests can shrink the cadence — production
-// values are unchanged.
+// (~60s total), and stops the moment they join OR explicitly decline/leave. Pushes are
+// skipped once the member is foregrounded (the in-app ring re-shows live regardless). var
+// (not const) so tests can shrink the cadence — production values are unchanged.
 var (
-	groupRingCount    = 4
-	groupRingInterval = 7 * time.Second
+	groupRingCount    = 6
+	groupRingInterval = 10 * time.Second
 )
 
 const (
@@ -246,11 +246,16 @@ func (h *Hub) startCallRing(notifier Notifier, caller, callee, callID string) {
 			if ctx.Err() != nil {
 				return
 			}
-			func() {
-				nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer ncancel()
-				notifier.NotifyCall(nctx, callee)
-			}()
+			// Skip the OS push once the callee is foregrounded + responsive: they can see the
+			// in-app ring, so further pushes are just noise (the loop keeps running in case
+			// they background again before answering).
+			if !h.isActiveFresh(callee) {
+				func() {
+					nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer ncancel()
+					notifier.NotifyCall(nctx, callee)
+				}()
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -347,11 +352,15 @@ func (h *Hub) startGroupMemberRing(notifier Notifier, roomID, member string, inv
 				return // cancelled, or they joined → stop reminding them
 			}
 			h.Send(member, invite) // a live socket re-rings; a dismissed one re-shows
-			func() {
-				nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer ncancel()
-				notifier.NotifyCall(nctx, member)
-			}()
+			// Skip the OS push once they're foregrounded + responsive — they already see the
+			// live in-app ring above; a backgrounded member still gets pushed (the point).
+			if !h.isActiveFresh(member) {
+				func() {
+					nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer ncancel()
+					notifier.NotifyCall(nctx, member)
+				}()
+			}
 		}
 	}()
 }

@@ -162,3 +162,52 @@ func TestVideoCallCapRefusesOverCapJoin(t *testing.T) {
 		t.Fatalf("A should see no roster change for a refused join, got %s", data)
 	}
 }
+
+// Regression (spec 0004): once a group invitee is FOREGROUNDED (presence-self active), the
+// reminder loop keeps re-ringing them live but stops sending OS pushes — they can already
+// see the in-app ring, so further pushes are just noise.
+func TestGroupRingSkipsPushWhenActive(t *testing.T) {
+	defer ws.SetGroupRingCadenceForTest(120*time.Millisecond, 5)()
+	notif := &fakeNotifier{ch: make(chan string, 64)}
+	srv := httptest.NewServer(ws.Handler(ws.NewHub(), newMemRelay(), notif, testAuth, nil))
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	defer b.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// B foregrounds, then A rings the group.
+	if err := b.WriteJSON(map[string]any{"t": "presence-self", "active": true}); err != nil {
+		t.Fatalf("B presence-self: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-join", "roomId": "g1", "kind": "audio", "members": []string{"user-b"},
+	}); err != nil {
+		t.Fatalf("A call-join: %v", err)
+	}
+	if got := readFrame(t, a); got["t"] != "call-roster" {
+		t.Fatalf("A expected roster, got %v", got)
+	}
+	// B still gets the live invite + at least one reminder re-ring...
+	if got := readFrame(t, b); got["t"] != "call-group-invite" {
+		t.Fatalf("B expected initial invite, got %v", got)
+	}
+	if got := readFrame(t, b); got["t"] != "call-group-invite" {
+		t.Fatalf("B expected a live reminder re-ring, got %v", got)
+	}
+	// ...but NO OS push is sent for the active member across that window.
+	deadline := time.After(400 * time.Millisecond)
+	for {
+		select {
+		case uid := <-notif.ch:
+			if uid == "user-b" {
+				t.Fatal("a foregrounded member must not be OS-pushed")
+			}
+		case <-deadline:
+			return
+		}
+	}
+}

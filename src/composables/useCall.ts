@@ -273,8 +273,8 @@ let lastBytes = { up: 0, down: 0, ts: 0 };
 let lastLoss = { lost: 0, recv: 0 };
 let returnPath = '/tabs/calls';
 
-const RING_TIMEOUT_MS = 35_000; // callee: auto-decline if unanswered
-const DIAL_TIMEOUT_MS = 30_000; // caller: give up if NO sign of reachability (30s)
+const RING_TIMEOUT_MS = 60_000; // callee: auto-decline if unanswered (matches the ~60s push window)
+const DIAL_TIMEOUT_MS = 60_000; // caller: give up if NO sign of reachability (~60s push window)
 // Once the callee is confirmed reachable (call-ringing, e.g. its push was acked), give
 // it a longer answer window so the caller doesn't hang up while the callee is still
 // cold-starting the app from the push (which cancelled the ring the instant it opened).
@@ -295,7 +295,7 @@ export const notJoining = ref<Set<string>>(new Set());
 // they later join (a free device picks up). Spec 0004 US2.
 export const busyMembers = ref<Set<string>>(new Set());
 const memberRingTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const MEMBER_RING_WINDOW_MS = 30_000; // matches the server's reminder window (groupRing*)
+const MEMBER_RING_WINDOW_MS = 60_000; // matches the server's reminder window (groupRing*)
 
 function markNotJoining(memberId: string, on: boolean): void {
   if (on === notJoining.value.has(memberId)) return;
@@ -968,9 +968,11 @@ async function enterGroupCall(
     avatar,
   };
   setState('connecting');
-  // Caller side: start the per-invitee give-up timers so a member who never joins flips to
-  // the recall/remove tile after the reminder window. Callees ring no one.
-  if (direction === 'outgoing') for (const m of members) armMemberRingTimer(m);
+  // Start the per-invitee give-up timers so a member who never joins flips to the
+  // recall/remove tile after the reminder window. EVERY participant arms these (not just the
+  // initiator) so anyone in the call can ring a no-show again or remove them (spec 0004): a
+  // joiner inherits the invited set via callMeta.invited, so it knows who's still expected.
+  for (const m of callMeta.value?.invited ?? []) armMemberRingTimer(m);
   // Read the per-call audio prefs once (data-saver floor for the adaptive tier + call-sounds).
   await loadCallPrefs();
 

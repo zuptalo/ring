@@ -559,9 +559,11 @@ const tiles = computed<Tile[]>(() => {
   for (const id of callMeta.value?.invited ?? []) {
     if (!id || id === self || streamed.has(id) || roster.has(id)) continue;
     const { name, avatar } = identity(id);
+    // Any participant (not just the initiator) can ring a no-show again or remove them, so the
+    // not-joining tile shows for everyone (spec 0004).
     const state: Tile['state'] = busyMembers.value.has(id)
       ? 'busy'
-      : isInitiator.value && notJoining.value.has(id)
+      : notJoining.value.has(id)
         ? 'not-joining'
         : 'ringing';
     list.push({ key: id, stream: null, isSelf: false, leaving: false, state, name, avatar });
@@ -594,10 +596,7 @@ function tileLabel(t: Tile): string {
   return t.name;
 }
 
-// Only the caller can recall/remove a non-joiner.
-const isInitiator = computed(() => callMeta.value?.direction === 'outgoing');
-
-// Recall/remove menu for a non-joining invitee's tile (caller-only).
+// Recall/remove menu for a non-joining invitee's tile (any participant).
 async function openRecall(t: Tile): Promise<void> {
   const sheet = await actionSheetController.create({
     header: t.name || 'Not joined yet',
@@ -1201,7 +1200,7 @@ const diag = computed(() => {
   height: 30px;
   font-size: 16px;
 }
-/* Recall/remove control on a non-joiner's tile (caller only): centred over the avatar. */
+/* Recall/remove control on a non-joiner's tile (any participant): centred over the avatar. */
 .recall-btn {
   position: absolute;
   left: 50%;
