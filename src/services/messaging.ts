@@ -29,6 +29,7 @@ import {
   type PreKeyBundlePub,
 } from './crypto/ratchet';
 import { sealMessage, openMessage, type MessagePayload, type WireMessage } from './crypto/message';
+import { KeyedMutex } from './keyed-mutex';
 import {
   getIdentityKeys,
   getSignedPreKey,
@@ -56,6 +57,21 @@ interface SessionMeta {
   sendPreamble: boolean; // initiator: keep prepending the preamble until peer replies
   preamble?: PreKeyPreamble;
 }
+
+/* ---- per-session serialization ----
+ *
+ * The Double Ratchet is a stateful, strictly-ordered protocol, and every (de)cryption is a
+ * read-modify-write: loadSession → advance the ratchet → saveSession. Those three steps MUST
+ * be atomic per chat. They weren't, and concurrency exposed it: a group-call mesh leg seals
+ * an offer/answer and then trickles a burst of ICE candidates over the SAME pairwise ratchet,
+ * so several seal/open calls for one chatId run at once. Each loads the same state, advances
+ * independently, and the last saveSession wins — silently corrupting the ratchet, which only
+ * surfaces messages later as "ciphertext cannot be decrypted". (Interleaved chat messages and
+ * call signals on the same session hit the same race.) Running each chat's critical section
+ * through this mutex forces them to take turns, in arrival order; out-of-order delivery is
+ * still handled by the ratchet's own skipped-key mechanism. Same-process only, which is all we
+ * need: the SW preview path is read-only and never persists. */
+const sessionMutex = new KeyedMutex();
 
 /* ---- session metadata (settings store; separate from the ratchet state) ---- */
 
@@ -96,7 +112,9 @@ export async function sealForChat(
   payload: MessagePayload,
 ): Promise<{ to: string; packet: WirePacket } | null> {
   if (isGroup) return null; // group messaging (sender keys) is not relay-wired yet
-
+  // Serialize the whole load→advance→save (incl. first-use X3DH bootstrap) per chat so
+  // concurrent seals/opens can't corrupt the ratchet — see sessionMutex.
+  return sessionMutex.run(chatId, async () => {
   let session = await loadSession(chatId);
   let meta = await getSessionMeta(chatId);
 
@@ -141,6 +159,7 @@ export async function sealForChat(
       ? { v: 1, type: 'prekey', ...meta.preamble, msg: wire }
       : { v: 1, type: 'normal', msg: wire };
   return { to: peerUserId, packet };
+  });
 }
 
 /* ---- incoming ---- */
@@ -174,7 +193,8 @@ export async function openPacket(chatId: string, raw: unknown): Promise<MessageP
   if (!packet || (packet.type !== 'prekey' && packet.type !== 'normal')) {
     throw new Error('malformed wire packet');
   }
-
+  // Serialize per chat with the matching seals — see sessionMutex.
+  return sessionMutex.run(chatId, async () => {
   let session = await loadSession(chatId);
   const hadExistingSession = !!session;
   if (!session) {
@@ -213,6 +233,7 @@ export async function openPacket(chatId: string, raw: unknown): Promise<MessageP
   }
 
   return payload;
+  });
 }
 
 /**
