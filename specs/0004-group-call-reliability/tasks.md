@@ -1,0 +1,260 @@
+---
+description: "Task list for spec 0004 — group call reliability, adaptive quality, caps, cues & busy"
+---
+
+# Tasks: Group call reliability, adaptive quality, caps, audio cues & busy signalling
+
+**Input**: Design documents from `specs/0004-group-call-reliability/`
+**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/ws-call-frames.md, quickstart.md
+
+**Tests**: INCLUDED — the constitution mandates TDD (Principle III), and US1/US2 are
+bug-class fixes that MUST begin with a failing regression test.
+
+**Organization**: by user story (priority order). Delivery sequence from plan.md:
+US1 → US2 → US3 → US6 → US4 → US5. Each story is an independently testable increment.
+
+## Format: `[ID] [P?] [Story] Description`
+- **[P]** = parallelizable (different files, no incomplete dependency)
+- **[Story]** = US1..US6 (Setup/Foundational/Polish carry no story label)
+
+## Path Conventions
+Web app monorepo: client at repo root (`src/`, `e2e/`), server under `server/`.
+
+---
+
+## Phase 1: Setup (Shared Infrastructure)
+
+**Purpose**: Shared constants the cap + quality work reference.
+
+- [ ] T001 [P] Add client call caps + tier constants (`VIDEO_MAX = 4`, `AUDIO_MAX = 8`, tier ladder `off/low/medium/high/hd`) in `src/services/call/types.ts`
+- [ ] T002 [P] Add server call caps constants (`VideoMax = 4`, `AudioMax = 8`) in `server/internal/call/registry.go`
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Purpose**: Shared test scaffolding reused by multiple stories. No app logic here.
+
+**⚠️ CRITICAL**: complete before the story phases that rely on these helpers.
+
+- [ ] T003 Add an e2e helper for a multi-account group call (join/leave/reconnect a member) in `e2e/support/` reused by US1/US2/US3 specs
+- [ ] T004 [P] Add an e2e network-throttling helper (per-context bandwidth/loss) in `e2e/support/` reused by US4
+
+**Checkpoint**: shared helpers ready — story phases can begin.
+
+---
+
+## Phase 3: User Story 1 — Leaving a call means leaving it (Priority: P1) 🎯 MVP
+
+**Goal**: A member who leaves a group call is never auto-re-rung/rejoined by a buffered invite.
+
+**Independent Test**: member joins then leaves; force a socket reconnect within 60s → not
+rung/rejoined; a never-joined offline invitee still rings on reconnect.
+
+### Tests for User Story 1 ⚠️ (write first, must FAIL)
+
+- [ ] T005 [US1] Failing regression test in `server/internal/ws/call_test.go`: a buffered `call-group-invite` for a member is cleared on `call-join` and NOT redelivered by `flushBufferedCalls` after the member leaves and reconnects
+- [ ] T006 [P] [US1] Failing test in `server/internal/ws/call_test.go`: a never-joined offline invitee STILL receives the buffered invite on reconnect (legitimate background ring preserved)
+- [ ] T007 [P] [US1] e2e regression `e2e/call-reinvite.spec.ts`: join→leave→reconnect does not re-ring or rejoin the leaver
+
+### Implementation for User Story 1
+
+- [ ] T008 [US1] Add `Hub.clearBufferedCalls(userID)` (deletes `callBuf[userID]`) in `server/internal/ws/hub.go`
+- [ ] T009 [US1] Call `clearBufferedCalls` from the `call-join` handler and on room departure (`call-leave` + `cleanup`) in `server/internal/ws/hub.go`
+- [ ] T010 [US1] Do NOT add a broad room-suppression guard — a TTL guard would also drop a legitimate recall (FR-004 / US1 scenario 4). Instead rely on the authoritative server-side `clearBufferedCalls` (T008/T009) plus the EXISTING in-room dedup (`callMeta.value?.roomId === roomId`) in `handleGroupInvite` (`src/composables/useCall.ts`); confirm `teardown` clears `callMeta` so a post-leave recall rings. Extend the T007 e2e to assert a deliberate recall after leave still rings.
+
+**Checkpoint**: US1 verifiable — leaver stays out; legitimate ringing intact.
+
+---
+
+## Phase 4: User Story 2 — No incoming call is a silent dead-end (Priority: P1)
+
+**Goal**: Every un-takeable incoming call (1:1 or group) returns busy/unavailable; both sides logged.
+
+**Independent Test**: A in a call; B's 1:1 audio, 1:1 video, and group invite each resolve to
+busy on B within ~5s; 1:1 decline-with-message still posts; both sides get a history entry.
+
+### Tests for User Story 2 ⚠️ (write first, must FAIL)
+
+- [ ] T011 [US2] Failing test in `server/internal/ws/call_test.go`: a `call-busy` carrying `roomId`+`to` is relayed to the caller AND stops that member's group-ring reminders
+- [ ] T012 [P] [US2] e2e `e2e/call-busy.spec.ts`: while A is in a call, a group invite to A resolves A's tile to "busy/unavailable" on the caller within ~5s; other invitees unaffected; 1:1 busy + decline-with-message still work; **multi-device (FR-008)**: when A is busy on one device but idle on another, the idle device rings (NOT busy), and busy is reported only when A has no free device
+- [ ] T013 [P] [US2] e2e assertion: a refused/declined/missed call writes a history entry on BOTH caller and callee
+
+### Implementation for User Story 2
+
+- [ ] T014 [US2] Extend `call-busy` frame with optional `roomId` in `src/services/transport.ts` (and the server frame struct in `server/internal/ws/hub.go` already carries `RoomID`)
+- [ ] T015 [US2] In `handleGroupInvite` (`src/composables/useCall.ts`), when `callState !== 'idle'` send `call-busy` `{ to: frame.from, roomId }` instead of silently returning
+- [ ] T016 [US2] Server: relay `call-busy` with `roomId`+`to` and call `stopGroupMemberRing(roomId, to)` (mirror the existing `call-cancel`+roomId branch) in `server/internal/ws/hub.go`
+- [ ] T017 [US2] Caller side: handle `call-busy` carrying `roomId` for the active group call → `markNotJoining(from, true)` with a "busy" reason, stop ringing that member, leave others untouched, in `src/composables/useCall.ts`; add a `busy` tile reason to `CallMeta`. The busy reason MUST be non-overriding: a subsequent `call-roster` join for the same member (existing `markNotJoining(false)` path) clears busy, so a user busy on one device but answering on another still goes live (FR-008)
+- [ ] T018 [US2] Render the per-invitee "busy/unavailable" tile state (stock Ionic + `--ring-*` tokens) in `src/views/detail/CallActivePage.vue`
+- [ ] T019 [US2] Both-sided call history: caller logs `unavailable`/`declined`, callee logs `missed` (reuse the `'calls'` store; no `DB_VERSION` bump) in `src/composables/useCall.ts` / `src/db/queries.ts`
+
+**Checkpoint**: US1+US2 close both correctness bugs; calls never ring into a void.
+
+---
+
+## Phase 5: User Story 3 — Participant caps (Priority: P1)
+
+**Goal**: 4-video / 8-audio caps enforced client + server; audio→video upgrade blocked above 4.
+
+**Independent Test**: start/join video@5 and audio@9 refused with message+cue; server refuses a
+client that bypasses the UI; camera upgrade blocked when roster > 4.
+
+### Tests for User Story 3 ⚠️ (write first, must FAIL)
+
+- [ ] T020 [US3] Failing test in `server/internal/call/registry_test.go`: `JoinIfRoom` admits up to `max`, refuses the over-cap join, and always re-admits an already-present user (idempotent recovery)
+- [ ] T021 [P] [US3] Failing test in `server/internal/ws/call_test.go`: an over-cap `call-join` triggers a `call-full` to the joiner and NO roster broadcast
+- [ ] T022 [P] [US3] e2e `e2e/call-caps.spec.ts`: 5th video joiner refused (existing call undisturbed), 9th audio joiner refused, camera-on blocked when roster > 4, and a raw over-cap `call-join` is refused by the server
+
+### Implementation for User Story 3
+
+- [ ] T023 [US3] Add `Registry.JoinIfRoom(roomID, userID, max) (roster []string, ok bool)` in `server/internal/call/registry.go`
+- [ ] T024 [US3] `call-join` handler derives `max` from `kind` (video→4 else 8), uses `JoinIfRoom`; on refusal emit `call-full` and skip the roster broadcast, in `server/internal/ws/hub.go`
+- [ ] T025 [P] [US3] Add the `call-full` frame `{ t, roomId, kind }` to `src/services/transport.ts`
+- [ ] T026 [US3] Handle inbound `call-full` in `src/composables/useCall.ts`: tear down the local join attempt, show "call is full", trigger the call-full cue (wired in US5)
+- [ ] T027 [P] [US3] Cap participant selection by call kind in the start/ad-hoc picker `src/views/detail/NewGroupCallPage.vue` (and the call-start path in `ChatDetailPage.vue`)
+- [ ] T028 [US3] Gate the audio→video upgrade on `roster.length <= 4` in `toggleCamera`/`addLocalVideo` (`src/composables/useCall.ts`) with an explanatory message
+
+**Checkpoint**: caps hold at start, at join (server-authoritative), and on upgrade.
+
+---
+
+## Phase 6: User Story 6 — One coherent calling architecture (Priority: P3, low-risk)
+
+**Goal**: Delete the dead SFU stack, rewrite CALLING.md, strip migration diagnostics.
+(Sequenced before US4 so frame-type edits churn once.)
+
+**Independent Test**: build/vet/test pass with SFU gone; a real group call connects on
+iOS/Safari + Chromium; no "group-call SFU ready" boot log; CALLING.md describes the mesh.
+
+### Tests for User Story 6 ⚠️
+
+- [ ] T029 [US6] Update/trim `server/internal/ws/call_test.go` and remove SFU-specific tests; ensure `go test ./...` covers that `sfu-*`/`call-key*`/`call-streamid` frames are no longer handled
+- [ ] T030 [P] [US6] Ensure the existing group-call e2e runs under the WebKit (Safari) project to prove no regression in `e2e/` config
+
+### Implementation for User Story 6
+
+- [ ] T031 [US6] Delete `server/internal/sfu/` (package + tests)
+- [ ] T032 [US6] Remove SFU construction/wiring + the "group-call SFU ready" log in `server/cmd/ringd/main.go`
+- [ ] T033 [US6] Remove `sfu-answer`/`sfu-ice`/`sfu-renegotiate` handlers, the `call-key`/`call-key-request`/`call-streamid` relay cases, and `SetSFU`/`SendCallSignal`/`CallSFU` from `server/internal/ws/hub.go`
+- [ ] T034 [P] [US6] Delete client `src/services/call/sfu.ts`, `e2ee.ts`, `e2ee-worker.ts`, `e2ee-format.ts`
+- [ ] T035 [US6] Remove the dead `sfu-*`/`call-key*`/`call-streamid` cases in `handleCallFrame` and the corresponding frame types in `src/services/transport.ts`
+- [ ] T036 [US6] Strip `DIAG(call-video)` instrumentation from `src/services/call/mesh.ts` and trim the SFU decrypt-tally code from `src/services/call/diag.ts`, keeping a slimmed mesh stats source for the ⓘ panel
+- [ ] T037 [P] [US6] Keep the on-screen ⓘ stats panel as an intentional, permanent feature: de-"DIAG" its comments and feed it from the slimmed mesh stats source (per-leg connection state + codec + in/out bitrate), in `src/views/detail/CallActivePage.vue`
+- [ ] T038 [P] [US6] Rewrite `server/docs/CALLING.md` for the mesh (native DTLS-SRTP per leg, all browsers incl. iOS/Safari, no SFU/VP8/insertable-streams/Chromium-only); keep the TURN-over-TLS-on-443 deployment recipe
+
+**Checkpoint**: one architecture, accurate docs, no dead code or false boot log.
+
+---
+
+## Phase 7: User Story 4 — Adaptive per-receiver quality (Priority: P2, largest)
+
+**Goal**: Start low, climb only with headroom, back off on local + remote-reported congestion,
+protect audio (suspend video at the floor), independently per mesh leg and for 1:1.
+
+**Independent Test**: throttled link connects at `low`, climbs, drops mid-call (video suspends,
+audio survives); a 3-peer mesh with one throttled peer differentiates tiers per leg.
+
+### Tests for User Story 4 ⚠️ (write first, must FAIL)
+
+- [ ] T039 [US4] Failing unit tests `src/services/call/quality.test.ts`: `nextTier(current, snapshot, clamp)` — climb one step only after K=3 consecutive healthy samples; drop on `qualityLimitationReason==='bandwidth'`, `fractionLost > 0.05`, or `availableOutgoingBitrate` below the current tier target; clamp respected as upper bound (and adaptation may go below a high pin); floor→`off`; Safari-style snapshot (missing `qualityLimitationReason`/`availableOutgoingBitrate`)→cautious climb on loss/RTT alone
+- [ ] T040 [P] [US4] e2e `e2e/call-adaptive.spec.ts` (uses T004 throttling): asserts start at low (never hd), climb with headroom, drop+video-suspend on throttle while audio continues, and per-leg differentiation in a 3-peer call
+
+### Implementation for User Story 4
+
+- [ ] T041 [US4] Create pure controller `src/services/call/quality.ts`: tier ladder → encoding map with concrete targets (`off`=no video; `low`≈150 kbps; `medium`≈500 kbps; `high`≈1.2 Mbps; `hd`≈2.5 Mbps), `StatsSnapshot` extraction shape, and `nextTier()` (AIMD: additive climb one step after K=3 healthy samples; fast multiplicative back-off; default ceiling `high` unless `availableOutgoingBitrate` sustains `hd`; `off` floor). Constants exported for the unit test
+- [ ] T042 [US4] Per-leg controller in `src/services/call/mesh.ts`: sample each leg's `getStats()` (~2s), build a `StatsSnapshot`, apply the chosen tier via the existing `setParameters` path; suspend the video track at `off`; start every leg at `low`
+- [ ] T043 [US4] Replace the publisher-count `effectiveTier` heuristic wiring while keeping the manual `videoQuality` pin + `storage.lessDataCalls` as the clamp (upper bound) in `src/composables/useCall.ts`
+- [ ] T044 [US4] Add the same controller to the 1:1 PC's video sender in `src/composables/useCall.ts` (start low, adapt, protect audio)
+- [ ] T054 [US4] (FR-034) Failing test: a mesh leg built after the cached TURN credentials' TTL must use refreshed creds, not the once-cached `this.turn` — unit/integration around `mesh.buildLeg` cred sourcing (or an e2e late-joiner on a long-running call) in `src/services/call/`
+- [ ] T055 [US4] (FR-034) Refresh TURN credentials for late-built legs and on ICE restart in `src/services/call/mesh.ts`: re-fetch via `getTurnConfig()` (which already refreshes ~30s before expiry) in `buildLeg`/`recover` instead of reusing the once-cached `this.turn`, so a participant joining a long call gathers valid relay candidates
+
+**Checkpoint**: calls survive real networks; quality differs per receiver; audio protected; late joiners connect with valid relay creds (FR-034).
+
+---
+
+## Phase 8: User Story 5 — Audio cues for call states (Priority: P3)
+
+**Goal**: Distinct, subtle, rate-limited cues for every call state/toggle + in-call message.
+
+**Independent Test**: each event emits its distinct cue; rapid toggles don't storm; tones-off silences all.
+
+### Tests for User Story 5 ⚠️ (write first, must FAIL)
+
+- [ ] T045 [US5] Failing unit tests `src/services/sound.test.ts`: `cue()` suppresses a repeat of the same cue within the de-dup window, and every new `ToneName` has a recipe
+- [ ] T046 [P] [US5] e2e `e2e/call-cues.spec.ts`: cues fire across state transitions/toggles/call-full/in-call-message, and are silenced when tones are disabled
+
+### Implementation for User Story 5
+
+- [ ] T047 [US5] Add cue recipes (`connecting/connected/reconnecting/callended/mute/unmute/cameraon/cameraoff/callfull/incallmsg`) and a rate-limited `cue(name)` helper in `src/services/sound.ts`
+- [ ] T048 [US5] Trigger state cues from `setState()` transitions and the mute/camera toggle paths (and the call-full path from T026) in `src/composables/useCall.ts`
+- [ ] T049 [US5] Play the `incallmsg` cue when a message arrives while `callState !== 'idle'` in `src/composables/useSync.ts` `transport.onMessage` (distinct from the normal notification tone)
+
+**Checkpoint**: the call is legible by ear; settings respected.
+
+---
+
+## Phase 9: Polish & Cross-Cutting
+
+- [ ] T050 Run the full gate: `npm run build`, `cd server && go build ./... && go vet ./... && go test ./...`, `npm run test:e2e`
+- [ ] T051 Walk `specs/0004-group-call-reliability/quickstart.md` end-to-end (all 6 stories incl. iOS/Safari group call + ZK spot check)
+- [ ] T052 [P] Zero-knowledge review: confirm server logs/metrics never print SDP/ICE/media and that `call-full`/group `call-busy` carry only routing fields
+- [ ] T053 Flip spec `Status:` to `in-progress` (then `in-review` at PR) and run `make roadmap`
+
+---
+
+## Dependencies & Execution Order
+
+### Phase dependencies
+- Setup (P1) → Foundational (P2, e2e helpers) → story phases.
+- Delivery order (plan.md): **US1 → US2 → US3 → US6 → US4 → US5** → Polish.
+- US1 is server-only and the smallest → true MVP.
+
+### Cross-story notes
+- US2 T017/T018 reuse the `markNotJoining`/tile machinery US3 also touches in `useCall.ts` /
+  `CallActivePage.vue` — sequence US2 before US3 (same files) rather than parallel.
+- US3 `call-full` handling (T026) shows a message now; its **cue** is wired in US5 (T047/T048) —
+  US3 ships with a visible message; the cue lands with US5.
+- US6 edits `transport.ts` and `useCall.ts` frame handling; do it before US4/US5 to avoid
+  re-touching those files. US2/US3 also edit `transport.ts` (additive) — land those first.
+- US4 is self-contained in `quality.ts` + `mesh.ts` + the `useCall` wiring it replaces.
+- T054/T055 (FR-034, TURN-cred refresh for late joiners) live in the US4 phase by theme but
+  are independent of the adaptive controller; they only touch `mesh.ts buildLeg`/`recover`
+  and can land any time after US6's `mesh.ts` DIAG strip (T036) to avoid re-touching the file.
+- T010 deliberately adds NO client suppression guard (would break recall, FR-004); US1 leans
+  on the server-side buffer clear (T008/T009) + the existing in-room dedup.
+
+### Within each story
+- Tests first (must fail) → implementation → checkpoint.
+
+### Parallel opportunities
+- T001/T002 (client vs server constants) in parallel.
+- Within a story, `[P]` tasks touch different files (e.g. US6 T034 client deletes ∥ T031 server delete ∥ T038 docs).
+- US4 and US5 are largely independent (`quality.ts`/`mesh.ts` vs `sound.ts`) and could be staffed in parallel after US6.
+
+---
+
+## Parallel Example: User Story 6
+
+```bash
+# Independent deletions/rewrites (different files):
+Task: "Delete client SFU modules src/services/call/{sfu,e2ee,e2ee-worker,e2ee-format}.ts"   # T034
+Task: "Delete server/internal/sfu/ package"                                                  # T031
+Task: "Rewrite server/docs/CALLING.md for the mesh"                                          # T038
+```
+
+---
+
+## Implementation Strategy
+
+### MVP (US1 only)
+Setup → Foundational → US1 → validate (a leaver stays out). Smallest, server-only, highest trust.
+
+### Incremental delivery
+US1 → US2 → US3 (the three P1 correctness/safety fixes) → US6 (dead-code removal) →
+US4 (adaptive, the headline quality win) → US5 (cues). Each ships and demos independently.
+
+### Notes
+- `/speckit-checklist` is REQUIRED before `/speckit-implement` (Principle I touched).
+- `/speckit-analyze` must be clean (or findings waived) before implementing.
+- Commit per task/group; commit subjects are plain-language release-note copy for `feat`/`fix`.

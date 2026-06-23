@@ -16,6 +16,7 @@ Specs are grouped by category band; status moves
 | [0001](specs/0001-show-what-changed/spec.md) | Show what changed in the update toast (release-note delta) | 🟢 shipped |
 | [0002](specs/0002-connections-and-friendship/spec.md) | Connections & Friendship | 🟢 shipped |
 | [0003](specs/0003-zero-knowledge-social/spec.md) | Zero-Knowledge Social Wall | 🟢 shipped |
+| [0004](specs/0004-group-call-reliability/spec.md) | Group call reliability, adaptive quality, caps, audio cues & busy signalling | ⚪ planned |
 
 ## ⚡ Ad-hoc (1001–1999)
 
