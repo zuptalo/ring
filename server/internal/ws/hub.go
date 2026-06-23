@@ -253,6 +253,11 @@ func (h *Hub) scheduleEviction(roomID, userID string) {
 		if h.isOnline(userID) || h.hasAnyConn(userID) {
 			return
 		}
+		// They didn't come back in time → the call is dropped for them. Remove them and tell
+		// the others, but do NOT auto-recall: stop any reminder and clear any held invite so
+		// nothing rings them back automatically. Only an explicit recall returns them.
+		h.stopGroupMemberRing(roomID, userID)
+		h.clearBufferedCalls(userID)
 		roster, empty := h.rooms.Leave(roomID, userID)
 		h.broadcastRoster(roomID, roster)
 		if empty {
@@ -519,6 +524,15 @@ func (h *Hub) takeBufferedCalls(userID string) [][]byte {
 		}
 	}
 	return out
+}
+
+// clearBufferedCalls drops any held call offers for a user. Called the moment they join,
+// leave, or are evicted from a call so a stale buffered invite can never re-ring them on a
+// later reconnect — only a fresh, explicit recall (ringMember) re-rings someone who's out.
+func (h *Hub) clearBufferedCalls(userID string) {
+	h.mu.Lock()
+	delete(h.callBuf, userID)
+	h.mu.Unlock()
 }
 
 // SharesCallRoom reports whether a and b are currently in a common call room. Used by the
@@ -1277,6 +1291,9 @@ func (c *Client) handleFrame(data []byte) {
 		// A re-join (reconnect after a network blip) cancels any pending grace eviction so the
 		// participant keeps their place and others smoothly re-establish (spec 0004).
 		c.hub.cancelEviction(f.RoomID, c.userID)
+		// They're in now → drop any held invite so a later reconnect's flush can't re-ring them
+		// back into a call they're already in (reconnecting must never look like a new call).
+		c.hub.clearBufferedCalls(c.userID)
 		// Authoritative participant cap (spec 0004 US3): a video call holds at most VideoMax,
 		// an audio one at most AudioMax. The cap follows the join's kind. A user already in the
 		// room is always re-admitted (idempotent recovery). On refusal, tell only the joiner
@@ -1305,6 +1322,7 @@ func (c *Client) handleFrame(data []byte) {
 			return
 		}
 		c.hub.cancelEviction(f.RoomID, c.userID) // explicit leave supersedes any pending grace timer
+		c.hub.clearBufferedCalls(c.userID)       // and drop any held invite so they aren't re-rung on reconnect
 		// Stop reminding THIS member: a call-leave is sent both when leaving a joined call
 		// and when declining/dismissing an invite they never accepted. Without this, a
 		// declined group invitee keeps getting re-rung every groupRingInterval until the
