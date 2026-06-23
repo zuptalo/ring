@@ -551,6 +551,13 @@ export const SETTINGS: Record<string, SettingNode> = {
         footer: 'Get notified when a friend shares a new post on their Wall.',
       },
       {
+        header: 'Calls',
+        items: [
+          { type: 'toggle', title: 'In-call sounds', key: 'notifications.callSounds', default: true },
+        ],
+        footer: 'Subtle cues during a call — connecting, reconnecting, mute/unmute, camera on/off, and a quiet tone for a message that arrives while you’re on a call.',
+      },
+      {
         items: [{ type: 'toggle', title: 'Reminders', key: 'notifications.reminders', default: true }],
         footer: 'Get occasional reminders about messages, calls or status updates you haven’t seen.',
       },

@@ -37,7 +37,7 @@ import {
   sendGroupLeave, sendGroupBusy,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
-import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
+import { startLoopTone, stopLoopTone, playTone, cue, type ToneName } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
 import { VIDEO_MAX } from '@/services/call/types';
 import {
@@ -343,8 +343,37 @@ function clearAllMemberRingTimers(): void {
 /* ---- helpers ---- */
 
 function setState(s: CallState): void {
+  const prev = callState.value;
   callState.value = s;
+  // Audio cues for the meaningful state transitions (spec 0004 US5). 'ended' is cued from
+  // teardown instead (so a silent/internal teardown stays silent).
+  if (s !== prev) {
+    if (s === 'connecting') callCue('connecting');
+    else if (s === 'connected') callCue('connected');
+  }
 }
+
+// In-call audio cues honour the "In-app sounds" / "Call sounds" preference, read once per
+// call (default on). callCue is the gated, rate-limited entry the call flow uses.
+let callSoundsOn = true;
+export function callCue(name: ToneName): void {
+  if (callSoundsOn) cue(name);
+}
+/** Read the per-call audio preferences (data-saver floor + call-sounds) once at call start. */
+async function loadCallPrefs(): Promise<void> {
+  const [lessData, sounds] = await Promise.all([
+    getSetting<boolean>('storage.lessDataCalls', false),
+    getSetting<boolean>('notifications.callSounds', true),
+  ]);
+  lessDataCalls = lessData;
+  callSoundsOn = sounds;
+}
+// Cue "reconnecting" whenever the call enters the reconnecting state, from any of the
+// several places that set the warning (1:1 ICE blip, group leg failure). The cue's own
+// rate-limiter de-dupes if more than one fires at once.
+watch(connectionWarning, (w, prev) => {
+  if (w === 'Reconnecting…' && prev !== 'Reconnecting…') callCue('reconnecting');
+});
 
 async function toast(message: string): Promise<void> {
   await appToast({ message, duration: 1800 });
@@ -740,6 +769,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
 
   // Tell the surviving party why the call ended, when it wasn't a clean hangup.
   if (!opts?.silent) {
+    callCue('callended'); // audio cue for the call ending (spec 0004 US5)
     if (reason === 'failed') {
       void toast(wasConnected ? 'Call ended, connection lost' : "Couldn't connect the call");
     } else if (reason === 'unavailable') {
@@ -785,7 +815,7 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
     avatar: contact.avatar,
   };
   await createCall({ callId, contactId, direction: 'outgoing', video: kind === 'video' });
-  lessDataCalls = await getSetting<boolean>('storage.lessDataCalls', false); // 1:1 quality clamp floor
+  await loadCallPrefs(); // data-saver floor + call-sounds pref, read once for this call
 
   let stream: MediaStream;
   try {
@@ -891,8 +921,8 @@ async function enterGroupCall(
   // Caller side: start the per-invitee give-up timers so a member who never joins flips to
   // the recall/remove tile after the reminder window. Callees ring no one.
   if (direction === 'outgoing') for (const m of members) armMemberRingTimer(m);
-  // Read the "use less data" floor once for this call (used by the adaptive tier).
-  lessDataCalls = await getSetting<boolean>('storage.lessDataCalls', false);
+  // Read the per-call audio prefs once (data-saver floor for the adaptive tier + call-sounds).
+  await loadCallPrefs();
 
   groupSession = new MeshSession(
     roomId,
@@ -1199,7 +1229,7 @@ export async function acceptCall(): Promise<void> {
   if (callState.value !== 'incoming' || !meta?.chatId || !meta.peerUserId || !pendingOffer) return;
   clearRingTimeout();
   stopLoopTone();
-  lessDataCalls = await getSetting<boolean>('storage.lessDataCalls', false); // 1:1 quality clamp floor
+  await loadCallPrefs(); // data-saver floor + call-sounds pref, read once for this call
 
   let stream: MediaStream;
   try {
@@ -1300,10 +1330,12 @@ export async function hangupCall(): Promise<void> {
 export function toggleMute(): void {
   muted.value = !muted.value;
   localStream.value?.getAudioTracks().forEach((t) => (t.enabled = !muted.value));
+  callCue(muted.value ? 'mute' : 'unmute');
 }
 
 export function toggleCamera(): void {
   cameraOff.value = !cameraOff.value;
+  callCue(cameraOff.value ? 'cameraoff' : 'cameraon');
   // Acts on whichever video track is live (camera, or the screen while sharing), so
   // the user can blank/resume the outgoing video without ending the call.
   localStream.value?.getVideoTracks().forEach((t) => (t.enabled = !cameraOff.value));
@@ -1989,6 +2021,7 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // Abandon our local attempt and tell the user; the existing call is undisturbed.
       const meta = callMeta.value;
       if (meta?.isGroup && meta.roomId === frame.roomId) {
+        callCue('callfull');
         await toast('This call is full');
         await teardown('unavailable', { silent: true });
       }

@@ -24,7 +24,20 @@ export type ToneName =
   // device acknowledges (ringing), and a one-shot when nobody answers.
   | 'calling'
   | 'ringing'
-  | 'noanswer';
+  | 'noanswer'
+  // In-call state + control cues (spec 0004 US5): one-shots fired on call-state transitions
+  // and on the user's mute/camera toggles, plus a "call is full" refusal and a quiet cue for
+  // a chat message arriving during a call.
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'callended'
+  | 'mute'
+  | 'unmute'
+  | 'cameraon'
+  | 'cameraoff'
+  | 'callfull'
+  | 'incallmsg';
 
 interface Note {
   freq: number;
@@ -93,7 +106,39 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
     { freq: Bb4, start: 0.22, dur: 0.2, type: 'sine', gain: 0.22 },
     { freq: F4, start: 0.44, dur: 0.34, type: 'sine', gain: 0.2 },
   ],
+  // In-call cues — deliberately short + quiet so they inform without nagging.
+  connecting: [{ freq: A4, start: 0, dur: 0.13, type: 'sine', gain: 0.16 }],
+  connected: [
+    { freq: E5, start: 0, dur: 0.1, type: 'sine', gain: 0.2 },
+    { freq: A5, start: 0.1, dur: 0.16, type: 'sine', gain: 0.2 },
+  ],
+  reconnecting: [
+    { freq: F4, start: 0, dur: 0.12, type: 'sine', gain: 0.16 },
+    { freq: F4, start: 0.18, dur: 0.14, type: 'sine', gain: 0.14 },
+  ],
+  callended: [
+    { freq: A4, start: 0, dur: 0.14, type: 'sine', gain: 0.18 },
+    { freq: F4, start: 0.15, dur: 0.22, type: 'sine', gain: 0.16 },
+  ],
+  mute: [{ freq: 320, start: 0, dur: 0.09, type: 'sine', gain: 0.18 }],
+  unmute: [{ freq: 520, start: 0, dur: 0.09, type: 'sine', gain: 0.18 }],
+  cameraon: [
+    { freq: C5, start: 0, dur: 0.08, type: 'triangle', gain: 0.18 },
+    { freq: E5, start: 0.08, dur: 0.12, type: 'triangle', gain: 0.18 },
+  ],
+  cameraoff: [
+    { freq: E5, start: 0, dur: 0.08, type: 'triangle', gain: 0.18 },
+    { freq: C5, start: 0.08, dur: 0.12, type: 'triangle', gain: 0.16 },
+  ],
+  callfull: [
+    { freq: 220, start: 0, dur: 0.12, type: 'square', gain: 0.16 },
+    { freq: 220, start: 0.18, dur: 0.12, type: 'square', gain: 0.16 },
+  ],
+  incallmsg: [{ freq: A5, start: 0, dur: 0.1, type: 'sine', gain: 0.12 }],
 };
+
+/** All defined recipe names (for tests / completeness checks). */
+export const RECIPE_NAMES: string[] = Object.keys(RECIPES);
 
 let ctx: AudioContext | null = null;
 
@@ -161,4 +206,27 @@ export function stopLoopTone(): void {
     clearInterval(loopTimer);
     loopTimer = null;
   }
+}
+
+/* ---- one-shot call cues (rate-limited) ---- */
+
+// Suppress a repeat of the SAME cue within this window so rapid mute/unmute or reconnect
+// flapping can't produce a storm of beeps (spec 0004 US5).
+const CUE_DEDUP_MS = 400;
+const lastCueAt = new Map<string, number>();
+
+/** Pure rate-limit decision: returns whether `name` may play now, recording the time if so.
+ *  Exposed (and `now` injectable) for unit testing without the Web Audio layer. */
+export function claimCue(name: string, now: number = Date.now()): boolean {
+  const prev = lastCueAt.get(name) ?? -Infinity;
+  if (now - prev < CUE_DEDUP_MS) return false;
+  lastCueAt.set(name, now);
+  return true;
+}
+
+/** Play a one-shot call cue, rate-limited per cue name. No-op for blocked/absent audio
+ *  (playTone handles that). Caller decides whether cues are enabled (the "Call sounds"
+ *  setting); this only de-dupes and plays. */
+export function cue(name: ToneName): void {
+  if (claimCue(name)) playTone(name);
 }

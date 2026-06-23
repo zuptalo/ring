@@ -202,16 +202,16 @@ audio survives); a 3-peer mesh with one throttled peer differentiates tiers per 
 
 ### Tests for User Story 5 ⚠️ (write first, must FAIL)
 
-- [ ] T045 [US5] Failing unit tests `src/services/sound.test.ts`: `cue()` suppresses a repeat of the same cue within the de-dup window, and every new `ToneName` has a recipe
-- [ ] T046 [P] [US5] e2e `e2e/call-cues.spec.ts`: cues fire across state transitions/toggles/call-full/in-call-message, and are silenced when tones are disabled
+- [x] T045 [US5] `src/services/sound.test.ts` (3 tests): `claimCue` allows-then-suppresses a same-cue repeat within the de-dup window, rate-limits each cue independently, and every call cue has a recipe (`RECIPE_NAMES`)
+- [ ] T046 [P] [US5] e2e `e2e/call-cues.spec.ts`: cues fire across state transitions/toggles/call-full/in-call-message, and are silenced when "Call sounds" is off — DEFERRED (e2e)
 
 ### Implementation for User Story 5
 
-- [ ] T047 [US5] Add cue recipes (`connecting/connected/reconnecting/callended/mute/unmute/cameraon/cameraoff/callfull/incallmsg`) and a rate-limited `cue(name)` helper in `src/services/sound.ts`
-- [ ] T048 [US5] Trigger state cues from `setState()` transitions and the mute/camera toggle paths (and the call-full path from T026) in `src/composables/useCall.ts`
-- [ ] T049 [US5] Play the `incallmsg` cue when a message arrives while `callState !== 'idle'` in `src/composables/useSync.ts` `transport.onMessage` (distinct from the normal notification tone)
+- [x] T047 [US5] Added cue recipes (connecting/connected/reconnecting/callended/mute/unmute/cameraon/cameraoff/callfull/incallmsg) + a rate-limited `cue(name)` and pure `claimCue` in `src/services/sound.ts`
+- [x] T048 [US5] Triggers in `src/composables/useCall.ts`: `setState` (connecting/connected), a `connectionWarning` watcher (reconnecting), `teardown` (callended, non-silent), mute/unmute + camera toggles, and call-full. Gated by a new **"In-app call sounds"** toggle (`notifications.callSounds`, default on, added to `settings/schema.ts`), read once per call via `loadCallPrefs`
+- [x] T049 [US5] `incallmsg` cue when a message arrives while `callState !== 'idle'` in `src/composables/useSync.ts` (lazy import to avoid the useCall↔useSync cycle)
 
-**Checkpoint**: the call is legible by ear; settings respected.
+**Checkpoint**: the call is legible by ear; cues honour the "Call sounds" setting and are rate-limited. Remaining: e2e (T046).
 
 ---
 

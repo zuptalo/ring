@@ -370,6 +370,14 @@ function start(): void {
           } catch {
             /* will be redelivered on reconnect */
           }
+          // A message arriving DURING a call gets a quiet, distinct cue (spec 0004 US5).
+          // Lazy import avoids a static cycle (useCall imports sendLive from this module).
+          try {
+            const { callState, callCue } = await import('@/composables/useCall');
+            if (callState.value !== 'idle') callCue('incallmsg');
+          } catch {
+            /* cue is best-effort */
+          }
         }
       })
       .catch(() => {
