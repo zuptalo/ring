@@ -37,6 +37,7 @@ import {
   sendGroupLeave, sendGroupBusy,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
+import { syncState } from '@/composables/useSync';
 import { startLoopTone, stopLoopTone, playTone, cue, type ToneName } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
 import { VIDEO_MAX } from '@/services/call/types';
@@ -279,7 +280,7 @@ const DIAL_TIMEOUT_MS = 60_000; // caller: give up if NO sign of reachability (~
 // it a longer answer window so the caller doesn't hang up while the callee is still
 // cold-starting the app from the push (which cancelled the ring the instant it opened).
 const ANSWER_TIMEOUT_MS = 60_000;
-const GRACE_MS = 12_000; // mid-call: tolerate a blip before ending
+const GRACE_MS = 18_000; // mid-call: tolerate a blip/handoff before ending (matches the server grace)
 
 // Group calls: the set of OTHER participants that actually joined during the call
 // (accumulated from call-roster frames), for the call log + Calls-tab record.
@@ -373,6 +374,18 @@ async function loadCallPrefs(): Promise<void> {
 // rate-limiter de-dupes if more than one fires at once.
 watch(connectionWarning, (w, prev) => {
   if (w === 'Reconnecting…' && prev !== 'Reconnecting…') callCue('reconnecting');
+});
+
+// The WebSocket came back (network restored, Wi-Fi↔cellular handoff). If we're in a live
+// call, re-communicate with the backend right away so it cancels its grace eviction and the
+// others reconnect smoothly: a group call re-affirms its room membership + re-gathers ICE; a
+// 1:1 caller fires an ICE-restart offer. If the outage outlasted the grace window the call
+// has already ended (server-side eviction + client grace), and we do NOT auto-redial.
+watch(syncState, (s, prev) => {
+  if (s !== 'online' || prev === 'online') return;
+  if (callState.value !== 'connected' && callState.value !== 'connecting') return;
+  if (groupSession) void groupSession.rejoin();
+  else if (pc) void onIceFailed();
 });
 
 async function toast(message: string): Promise<void> {

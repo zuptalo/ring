@@ -153,7 +153,18 @@ type Hub struct {
 	// answered keeps getting reminders regardless of who else joined. Keyed roomID → member.
 	groupRingMu sync.Mutex
 	groupRings  map[string]map[string]context.CancelFunc
+	// Per (room, user): a grace timer started when their last connection drops, so a brief
+	// network blip (e.g. Wi-Fi↔cellular handoff) doesn't instantly evict them from a live
+	// call. Cancelled if they reconnect and re-join within the window; on expiry they're
+	// removed and the roster re-broadcast (call dropped, no auto-recall). Keyed "room\x00user".
+	evictMu     sync.Mutex
+	evictTimers map[string]*time.Timer
 }
+
+// callRecoveryGrace is how long a disconnected participant is held in a call room before
+// being evicted, giving them ~a network-handoff's worth of time to reconnect and re-join.
+// var (not const) so tests can shrink it; production value is unchanged.
+var callRecoveryGrace = 18 * time.Second
 
 type callRing struct {
 	caller string
@@ -213,10 +224,60 @@ func NewHub() *Hub {
 		watchers: make(map[string]map[*Client]struct{}),
 		rooms:    call.NewRegistry(),
 		callBuf:   make(map[string][]bufferedCall),
-		ringHist:   make(map[string][]time.Time),
-		callRings:  make(map[string]*callRing),
-		groupRings: make(map[string]map[string]context.CancelFunc),
+		ringHist:    make(map[string][]time.Time),
+		callRings:   make(map[string]*callRing),
+		groupRings:  make(map[string]map[string]context.CancelFunc),
+		evictTimers: make(map[string]*time.Timer),
 	}
+}
+
+// evictKey namespaces an eviction timer by room + user.
+func evictKey(roomID, userID string) string { return roomID + "\x00" + userID }
+
+// scheduleEviction holds a disconnected participant in roomID for callRecoveryGrace, then —
+// if they haven't reconnected and re-joined (which cancels this) and still have no live
+// connection — removes them and re-broadcasts the roster. No auto-recall: a dropped member
+// is simply gone until someone explicitly rings them again.
+func (h *Hub) scheduleEviction(roomID, userID string) {
+	key := evictKey(roomID, userID)
+	h.evictMu.Lock()
+	if old := h.evictTimers[key]; old != nil {
+		old.Stop()
+	}
+	h.evictTimers[key] = time.AfterFunc(callRecoveryGrace, func() {
+		h.evictMu.Lock()
+		delete(h.evictTimers, key)
+		h.evictMu.Unlock()
+		// Reconnected meanwhile? Then they're back online — leave them in the room; their
+		// re-join already refreshed the roster.
+		if h.isOnline(userID) || h.hasAnyConn(userID) {
+			return
+		}
+		roster, empty := h.rooms.Leave(roomID, userID)
+		h.broadcastRoster(roomID, roster)
+		if empty {
+			h.stopRoomRings(roomID)
+		}
+	})
+	h.evictMu.Unlock()
+}
+
+// cancelEviction stops a pending eviction (the participant reconnected and re-joined).
+func (h *Hub) cancelEviction(roomID, userID string) {
+	key := evictKey(roomID, userID)
+	h.evictMu.Lock()
+	if t := h.evictTimers[key]; t != nil {
+		t.Stop()
+		delete(h.evictTimers, key)
+	}
+	h.evictMu.Unlock()
+}
+
+// hasAnyConn reports whether userID has any live connection (foregrounded or not).
+func (h *Hub) hasAnyConn(userID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.conns[userID]) > 0
 }
 
 // startCallRing re-pushes a call tickle to `callee` every few seconds (up to
@@ -761,15 +822,14 @@ func (c *Client) cleanup() {
 	c.hub.remove(c)
 	c.hub.removeWatches(c)
 	c.hub.forgetRingIfGone(c.userID) // bound ringHist to connected users
-	// Leave any group calls this connection was in (best-effort; a user with
-	// other live devices stays in the room via those).
-	if c.hub.rooms != nil {
+	// Group calls: don't evict on a socket drop. A short interruption (network blip, a
+	// Wi-Fi↔cellular handoff) would otherwise instantly remove the participant and tell
+	// everyone they left. Instead, if this was their LAST connection, hold their place for
+	// callRecoveryGrace; they're evicted only if they don't reconnect and re-join in time
+	// (a re-join cancels it). A user with another live device stays put — no timer.
+	if c.hub.rooms != nil && !c.hub.hasAnyConn(c.userID) {
 		for _, roomID := range c.hub.rooms.RoomsForUser(c.userID) {
-			roster, empty := c.hub.rooms.Leave(roomID, c.userID)
-			c.hub.broadcastRoster(roomID, roster)
-			if empty {
-				c.hub.stopRoomRings(roomID) // last one out → stop reminding any non-joiners
-			}
+			c.hub.scheduleEviction(roomID, c.userID)
 		}
 	}
 	_ = c.conn.Close()
@@ -1214,6 +1274,9 @@ func (c *Client) handleFrame(data []byte) {
 		if f.RoomID == "" {
 			return
 		}
+		// A re-join (reconnect after a network blip) cancels any pending grace eviction so the
+		// participant keeps their place and others smoothly re-establish (spec 0004).
+		c.hub.cancelEviction(f.RoomID, c.userID)
 		// Authoritative participant cap (spec 0004 US3): a video call holds at most VideoMax,
 		// an audio one at most AudioMax. The cap follows the join's kind. A user already in the
 		// room is always re-admitted (idempotent recovery). On refusal, tell only the joiner
@@ -1241,6 +1304,7 @@ func (c *Client) handleFrame(data []byte) {
 		if f.RoomID == "" {
 			return
 		}
+		c.hub.cancelEviction(f.RoomID, c.userID) // explicit leave supersedes any pending grace timer
 		// Stop reminding THIS member: a call-leave is sent both when leaving a joined call
 		// and when declining/dismissing an invite they never accepted. Without this, a
 		// declined group invitee keeps getting re-rung every groupRingInterval until the

@@ -2,6 +2,7 @@ package ws_test
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,4 +211,96 @@ func TestGroupRingSkipsPushWhenActive(t *testing.T) {
 			return
 		}
 	}
+}
+
+// Regression (spec 0004): a participant whose socket drops is NOT evicted immediately — the
+// others keep seeing them through a grace window. If they don't reconnect+rejoin, they're
+// evicted after the window and the roster re-broadcasts (no auto-recall).
+func TestCallRecoveryGraceEvictsAfterWindow(t *testing.T) {
+	defer ws.SetCallRecoveryGraceForTest(250 * time.Millisecond)()
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	time.Sleep(50 * time.Millisecond)
+
+	// A and B are both in room g1.
+	if err := a.WriteJSON(map[string]any{"t": "call-join", "roomId": "g1", "kind": "audio"}); err != nil {
+		t.Fatalf("A join: %v", err)
+	}
+	readFrame(t, a) // roster [a]
+	if err := b.WriteJSON(map[string]any{"t": "call-join", "roomId": "g1", "kind": "audio"}); err != nil {
+		t.Fatalf("B join: %v", err)
+	}
+	readFrame(t, a) // roster [a,b]
+	readFrame(t, b) // roster [a,b]
+
+	// B's connection drops. A is told B left only AFTER the grace window, not immediately.
+	// (Asserted via timing, not a negative read: a timed-out gorilla read breaks the conn.)
+	t0 := time.Now()
+	b.Close()
+	got := readFrame(t, a)
+	elapsed := time.Since(t0)
+	if got["t"] != "call-roster" {
+		t.Fatalf("A expected an eviction roster, got %v", got)
+	}
+	if elapsed < 150*time.Millisecond {
+		t.Fatalf("B evicted too fast (%v) — the grace window didn't hold", elapsed)
+	}
+	members, _ := got["members"].([]any)
+	for _, m := range members {
+		if m == "user-b" {
+			t.Fatalf("B should have been evicted after the grace window, got %v", got["members"])
+		}
+	}
+}
+
+// A reconnect + re-join within the grace window cancels the eviction (the participant keeps
+// their place; the others smoothly see them stay).
+func TestCallRecoveryRejoinCancelsEviction(t *testing.T) {
+	defer ws.SetCallRecoveryGraceForTest(400 * time.Millisecond)()
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	time.Sleep(50 * time.Millisecond)
+
+	if err := a.WriteJSON(map[string]any{"t": "call-join", "roomId": "g1", "kind": "audio"}); err != nil {
+		t.Fatalf("A join: %v", err)
+	}
+	readFrame(t, a)
+	if err := b.WriteJSON(map[string]any{"t": "call-join", "roomId": "g1", "kind": "audio"}); err != nil {
+		t.Fatalf("B join: %v", err)
+	}
+	readFrame(t, a)
+	readFrame(t, b)
+
+	// B drops, then reconnects and re-joins well within the grace window.
+	b.Close()
+	time.Sleep(80 * time.Millisecond)
+	b2 := dial(t, srv, "tokB")
+	defer b2.Close()
+	if err := b2.WriteJSON(map[string]any{"t": "call-join", "roomId": "g1", "kind": "audio"}); err != nil {
+		t.Fatalf("B re-join: %v", err)
+	}
+	// A sees B still present (the re-join roster), and NO later eviction removes B.
+	got := readFrame(t, a)
+	if got["t"] != "call-roster" {
+		t.Fatalf("A expected a re-join roster, got %v", got)
+	}
+	_ = a.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if _, data, err := a.ReadMessage(); err == nil {
+		// Any further roster must still contain B (no eviction).
+		if !containsUser(data, "user-b") {
+			t.Fatalf("B was evicted despite re-joining within grace: %s", data)
+		}
+	}
+}
+
+func containsUser(frameJSON []byte, user string) bool {
+	return strings.Contains(string(frameJSON), `"`+user+`"`)
 }

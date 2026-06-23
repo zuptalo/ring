@@ -44,7 +44,9 @@ import { sealActivity, openActivity, clearActivityKeys } from '@/services/crypto
 import type { Envelope } from '@/services/crypto/envelope';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
 
-const syncState = ref<TransportState>('offline');
+// Exported so other composables (e.g. useCall) can react to reconnects — a call needs to
+// re-affirm its room membership + recover ICE the moment the socket comes back.
+export const syncState = ref<TransportState>('offline');
 let transport: Transport | null = null;
 let started = false;
 

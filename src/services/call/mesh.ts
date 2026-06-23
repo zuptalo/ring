@@ -221,6 +221,15 @@ export class MeshSession {
     }
   }
 
+  /** Reconnect after the WebSocket came back (e.g. a Wi-Fi↔cellular handoff): re-affirm our
+   *  room membership so the server cancels its grace eviction and re-broadcasts the roster to
+   *  the others, then re-gather ICE on every leg. No members → no re-ring. */
+  async rejoin(): Promise<void> {
+    if (!this.local) return; // already torn down
+    await sendLive({ t: 'call-join', roomId: this.roomId, kind: this.kind });
+    await this.recover();
+  }
+
   /** Per-leg ICE recovery: re-gather on any leg that isn't healthy. */
   async recover(): Promise<void> {
     for (const leg of this.legs.values()) {

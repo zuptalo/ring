@@ -21,3 +21,11 @@ func SetVideoMaxForTest(n int) func() {
 	call.VideoMax = n
 	return func() { call.VideoMax = prev }
 }
+
+// SetCallRecoveryGraceForTest shrinks the disconnect-eviction grace so tests don't wait the
+// production window; returns a restore func.
+func SetCallRecoveryGraceForTest(d time.Duration) func() {
+	prev := callRecoveryGrace
+	callRecoveryGrace = d
+	return func() { callRecoveryGrace = prev }
+}
