@@ -149,6 +149,7 @@ import {
   remoteStreams,
   groupStreamOwners,
   groupAudioLevels,
+  groupCallDiag,
   activeSpeakers,
   localStream,
   callStats,
@@ -885,6 +886,9 @@ export function installTestHook(): void {
     /** Group calls: latest per-tile audio RMS (proves the active-speaker metering
      *  reads decoded audio, incl. E2EE remote feeds), and the speaking tile keys. */
     groupAudioLevels: () => groupAudioLevels(),
+    /** Group calls: total inbound video frames decoded across ALL mesh legs + each leg's
+     *  adaptive tier. inboundVideoFrames() is 1:1-only (reads `pc`); this sees the mesh. */
+    groupCallDiag: () => groupCallDiag(),
     activeSpeakers: () => [...activeSpeakers.value],
     remoteVideoTracks: () =>
       (remoteStream.value?.getVideoTracks().length ?? 0) +

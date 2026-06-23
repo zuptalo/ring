@@ -394,6 +394,27 @@ export class MeshSession {
     return first ? first.pc.getStats() : null;
   }
 
+  /** Test/diagnostic introspection: total inbound video frames decoded across ALL legs, and
+   *  each leg's current adaptive tier. The mesh has one PeerConnection per peer, so the 1:1
+   *  `inboundVideoFrames()` (which reads a single `pc`) can't see group video — this sums
+   *  every leg. Tiers let a test confirm the per-receiver controller climbs/backs off. */
+  async meshDiag(): Promise<{ inboundVideoFrames: number; tiers: Record<string, Tier> }> {
+    let inboundVideoFrames = 0;
+    const tiers: Record<string, Tier> = {};
+    for (const leg of this.legs.values()) {
+      tiers[leg.peerId.slice(0, 8)] = leg.qc.tier;
+      try {
+        (await leg.pc.getStats()).forEach((r) => {
+          const s = r as { type: string; kind?: string; framesDecoded?: number };
+          if (s.type === 'inbound-rtp' && s.kind === 'video') inboundVideoFrames += s.framesDecoded ?? 0;
+        });
+      } catch {
+        /* a leg mid-teardown can't report; skip it */
+      }
+    }
+    return { inboundVideoFrames, tiers };
+  }
+
   /** Every 2s, snapshot each leg's video RTP for the on-screen ⓘ call-stats panel: the
    *  negotiated codec and, per peer, the in/out bitrate + frames decoded. Mesh media is
    *  native DTLS-SRTP, so there is no per-frame E2EE transform / decrypt tally to report. */

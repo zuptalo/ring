@@ -263,6 +263,12 @@ export function groupAudioLevels(): Record<string, number> {
   return groupSession?.audioLevels() ?? {};
 }
 
+/** Test/diagnostic: group-call video flow + per-leg tiers across the whole mesh (the 1:1
+ *  inboundVideoFrames() can't see a mesh's per-peer connections). Empty when not in a group. */
+export function groupCallDiag(): Promise<{ inboundVideoFrames: number; tiers: Record<string, string> }> {
+  return groupSession?.meshDiag() ?? Promise.resolve({ inboundVideoFrames: 0, tiers: {} });
+}
+
 let pendingOffer: { sdp: string; sdpType: RTCSdpType } | null = null;
 const pendingIce: RTCIceCandidateInit[] = [];
 let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -352,6 +358,19 @@ function setState(s: CallState): void {
     if (s === 'connecting') callCue('connecting');
     else if (s === 'connected') callCue('connected');
   }
+}
+
+// After a call ends, the state lingers on 'ended' for a short display dwell (400ms, or 2s
+// for the "Busy on another call" screen) before settling to 'idle'. That dwell is NOT being
+// busy — so a user who hangs up and immediately places another call shouldn't be told
+// "You're already in a call". Pre-empt the dwell here so starting a call from 'ended' just
+// works. Returns true if there's a genuinely active call in the way (caller should bail).
+function callBusyForNewOutgoing(): boolean {
+  if (callState.value === 'ended') {
+    setState('idle');
+    callMeta.value = null;
+  }
+  return callState.value !== 'idle';
 }
 
 // In-call audio cues honour the "In-app sounds" / "Call sounds" preference, read once per
@@ -860,7 +879,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
 
 /** Place a 1:1 call to a contact (peer user id). */
 export async function startDirectCall(contactId: string, kind: CallKind): Promise<void> {
-  if (callState.value !== 'idle') {
+  if (callBusyForNewOutgoing()) {
     await toast('You’re already in a call');
     return;
   }
@@ -937,7 +956,7 @@ export async function startGroupCall(
   avatar: string,
   members: string[] = [],
 ): Promise<void> {
-  if (callState.value !== 'idle') {
+  if (callBusyForNewOutgoing()) {
     await toast('You’re already in a call');
     return;
   }
