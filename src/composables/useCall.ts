@@ -389,7 +389,10 @@ watch(syncState, (s, prev) => {
 });
 
 async function toast(message: string): Promise<void> {
-  await appToast({ message, duration: 1800 });
+  // Call-state notices ("Alice left the call", "This call is full", …) report something
+  // that just happened and may name a person, so give them a little longer on screen than
+  // a bare confirmation toast.
+  await appToast({ message, duration: 3500 });
 }
 
 function gumConstraints(kind: CallKind): MediaStreamConstraints {
@@ -1049,6 +1052,33 @@ async function deriveGroupCallTitle(ids: string[]): Promise<string> {
   if (parts.length === 1) return parts[0];
   if (parts.length === 2) return `${parts[0]} & ${parts[1]}`;
   return `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`;
+}
+
+/** A "<who> left the call" notice, naming the people we recognise as contacts (an ad-hoc
+ *  call may include non-contacts, and the server never reveals names — we resolve locally
+ *  from ids, so nothing leaks). One known name → "Alice left the call"; two → "Alice and Bob
+ *  left the call"; more → "Alice and 2 others left the call"; nobody recognised → "Someone
+ *  left the call" (or "N people left the call"). */
+async function describeLeft(ids: string[]): Promise<string> {
+  const names: string[] = [];
+  for (const id of ids) {
+    const c = await getContact(id);
+    if (c?.name) names.push(capitalizeFirst(c.name));
+  }
+  const unknown = ids.length - names.length;
+  let subject: string;
+  if (names.length === 0) {
+    subject = ids.length === 1 ? 'Someone' : `${ids.length} people`;
+  } else {
+    const parts = [...names];
+    if (unknown === 1) parts.push('1 other');
+    else if (unknown > 1) parts.push(`${unknown} others`);
+    subject =
+      parts.length === 1
+        ? parts[0]
+        : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  }
+  return `${subject} left the call`;
 }
 
 /** An incoming group-call invite (server fan-out) → ring locally so the user can join. */
@@ -2071,8 +2101,8 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
 
       if (after.length === 0) {
         if (before.size > 0) {
-          // We had company and now we're alone → end the call.
-          void toast('Everyone left the call');
+          // We had company and now we're alone → name who left, then end the call.
+          void toast(await describeLeft(left));
           await teardown('remote');
           return;
         }
@@ -2081,7 +2111,7 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         armGroupIdleTimeout();
       } else {
         clearGroupIdleTimeout(); // someone is here
-        if (someoneLeft) void toast('Someone left the call');
+        if (someoneLeft) void toast(await describeLeft(left));
       }
       return;
     }
