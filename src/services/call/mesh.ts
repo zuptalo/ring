@@ -61,6 +61,10 @@ const SELF_KEY = '__self__';
 const SPEAK_THRESH = 0.05;
 const SPEAK_HOLD_MS = 700;
 const SAMPLE_MS = 120;
+// Initial-negotiation watchdog: re-send the first offer if unanswered within this window,
+// up to this many times (≈5s × 3 = 15s, inside the call's connection-grace window).
+const NEGOTIATE_TIMEOUT_MS = 5000;
+const NEGOTIATE_MAX_ATTEMPTS = 3;
 
 interface PeerLeg {
   pc: RTCPeerConnection;
@@ -73,6 +77,13 @@ interface PeerLeg {
   // Has this leg exchanged its first offer/answer yet? Until it has, only ONE side
   // (the impolite peer) sends the initial offer — see the negotiation guard in buildLeg.
   negotiated: boolean;
+  // Initial-negotiation watchdog (impolite peer only): the first offer is sent exactly once
+  // via onnegotiationneeded, so if that single sealed frame is lost during a chaotic join
+  // (several people accepting at once on a flaky link) the leg would deadlock — the polite
+  // peer can't safely offer (X3DH race). The watchdog retransmits the offer until the leg
+  // negotiates, bounded by offerAttempts.
+  negotiateTimer?: ReturnType<typeof setTimeout>;
+  offerAttempts: number;
   // Per-receiver adaptive-quality state (spec 0004 US4): each leg adapts its OUTGOING video
   // independently from this leg's own getStats, so one call can send different qualities to
   // different peers based on each link. Starts low; climbs/backs off via quality.nextTier.
@@ -176,6 +187,7 @@ export class MeshSession {
       // Modern browsers implicitly roll back the polite peer on collision here.
       await leg.pc.setRemoteDescription(desc);
       leg.negotiated = true; // a paired session now exists; this side may renegotiate too
+      this.clearNegotiationWatchdog(leg); // negotiating now — stop any pending retransmit
       await this.drainIce(leg);
       await leg.pc.setLocalDescription(); // implicit answer
       await this.send('call-answer', from, {
@@ -198,10 +210,67 @@ export class MeshSession {
     try {
       await leg.pc.setRemoteDescription({ type: signal.sdpType ?? 'answer', sdp: signal.sdp });
       leg.negotiated = true; // first offer/answer done; renegotiation glare is now safe
+      this.clearNegotiationWatchdog(leg); // the offer landed — stop retransmitting
       await this.drainIce(leg);
       this.flushLocalIce(leg); // release the candidates buffered while the offer was in flight
     } catch (e) {
       console.warn('[mesh] answer handling failed', e);
+    }
+  }
+
+  /** Send (or, from the watchdog, re-send) this leg's offer, sealed over the pair's ratchet. */
+  private async sendOffer(leg: PeerLeg): Promise<void> {
+    try {
+      leg.makingOffer = true;
+      await leg.pc.setLocalDescription(); // implicit offer
+      await this.send('call-offer', leg.peerId, {
+        callId: this.roomId,
+        type: 'offer',
+        kind: this.kind,
+        sdp: leg.pc.localDescription?.sdp,
+        sdpType: leg.pc.localDescription?.type,
+        roomId: this.roomId,
+      });
+    } catch (e) {
+      console.warn('[mesh] negotiation failed', e);
+    } finally {
+      leg.makingOffer = false;
+    }
+  }
+
+  /** Retransmit the initial offer if it hasn't been answered within the window — covers a
+   *  first-offer frame lost during a chaotic simultaneous join. Retransmits the EXISTING
+   *  offer SDP (no fresh setLocalDescription → no glare); bounded by offerAttempts, after
+   *  which the call-level connection grace takes over. Impolite peer only (it owns the first
+   *  offer); the polite peer must not offer first (X3DH race — see buildLeg). */
+  private armNegotiationWatchdog(leg: PeerLeg): void {
+    if (leg.polite) return;
+    this.clearNegotiationWatchdog(leg);
+    leg.negotiateTimer = setTimeout(() => {
+      if (leg.negotiated || leg.pc.connectionState === 'connected') return;
+      if (leg.offerAttempts >= NEGOTIATE_MAX_ATTEMPTS) return; // give up; grace handles it
+      leg.offerAttempts++;
+      const ld = leg.pc.localDescription;
+      if (ld?.type === 'offer') {
+        void this.send('call-offer', leg.peerId, {
+          callId: this.roomId,
+          type: 'offer',
+          kind: this.kind,
+          sdp: ld.sdp,
+          sdpType: ld.type,
+          roomId: this.roomId,
+        });
+      } else {
+        void this.sendOffer(leg); // no offer yet (negotiationneeded never fired) → make one
+      }
+      this.armNegotiationWatchdog(leg); // keep watching until negotiated or attempts exhausted
+    }, NEGOTIATE_TIMEOUT_MS);
+  }
+
+  private clearNegotiationWatchdog(leg: PeerLeg): void {
+    if (leg.negotiateTimer != null) {
+      clearTimeout(leg.negotiateTimer);
+      leg.negotiateTimer = undefined;
     }
   }
 
@@ -501,6 +570,7 @@ export class MeshSession {
       pendingIce: [],
       pendingLocalIce: [],
       negotiated: false,
+      offerAttempts: 0,
       qc: initialController(), // starts sending low; the controller climbs from there
     };
     this.legs.set(peerId, leg);
@@ -520,22 +590,9 @@ export class MeshSession {
       // negotiated once, both sides may renegotiate freely (camera toggle) — a session now
       // exists, so there's no X3DH race and ordinary perfect negotiation applies.
       if (!leg.negotiated && leg.polite) return;
-      try {
-        leg.makingOffer = true;
-        await pc.setLocalDescription(); // implicit offer
-        await this.send('call-offer', peerId, {
-          callId: this.roomId,
-          type: 'offer',
-          kind: this.kind,
-          sdp: pc.localDescription?.sdp,
-          sdpType: pc.localDescription?.type,
-          roomId: this.roomId,
-        });
-      } catch (e) {
-        console.warn('[mesh] negotiation failed', e);
-      } finally {
-        leg.makingOffer = false;
-      }
+      await this.sendOffer(leg);
+      // After the impolite peer's first offer, guard against it being lost in transit.
+      if (!leg.negotiated) this.armNegotiationWatchdog(leg);
     };
     pc.onicecandidate = (e) => {
       if (!e.candidate) return;
@@ -578,6 +635,7 @@ export class MeshSession {
   private closeLeg(peerId: string): void {
     const leg = this.legs.get(peerId);
     if (leg) {
+      this.clearNegotiationWatchdog(leg);
       leg.pc.onicecandidate = null;
       leg.pc.ontrack = null;
       leg.pc.onconnectionstatechange = null;
