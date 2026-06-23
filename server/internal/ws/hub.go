@@ -1221,6 +1221,12 @@ func (c *Client) handleFrame(data []byte) {
 		if f.T == "call-cancel" && f.RoomID != "" && f.To != "" {
 			c.hub.stopGroupMemberRing(f.RoomID, f.To)
 		}
+		// A busy invitee replying to a group invite (call-busy carrying a roomId) won't join →
+		// stop re-ringing the SENDER; the relay above tells the caller to mark them unavailable
+		// (spec 0004 US2).
+		if f.T == "call-busy" && f.RoomID != "" {
+			c.hub.stopGroupMemberRing(f.RoomID, c.userID)
+		}
 
 	case "call-key":
 		// Group media key, sealed peer-to-peer; relayed live, never inspected.

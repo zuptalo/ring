@@ -156,6 +156,13 @@ export function sendGroupLeave(roomId: string): Promise<boolean> {
   return sendLive({ t: 'call-leave', roomId });
 }
 
+/** Busy invitee → caller: we can't take this group call (already in another call). The server
+ *  relays it so the caller resolves our tile to "unavailable" instead of ringing us forever,
+ *  and stops re-ringing us (spec 0004 US2). No callId — group busy is keyed by roomId. */
+export function sendGroupBusy(to: string, roomId: string): Promise<boolean> {
+  return sendLive({ t: 'call-busy', to, roomId });
+}
+
 /** Send a payload-free 1:1 control frame (ringing/accept/reject/cancel/busy/end, and
  *  the consent-gated audio<->video upgrade request/accept/reject). */
 export function sendControl(

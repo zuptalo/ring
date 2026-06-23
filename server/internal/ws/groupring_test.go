@@ -79,3 +79,43 @@ func TestGroupDeclineStopsRering(t *testing.T) {
 		t.Fatalf("REGRESSION: B re-rung after declining: %s", data)
 	}
 }
+
+// Regression (spec 0004 US2): a busy invitee replying to a group invite with a roomId-scoped
+// call-busy is relayed to the caller AND stops the server re-ringing the busy member.
+func TestGroupBusyRelayedAndStopsRering(t *testing.T) {
+	defer ws.SetGroupRingCadenceForTest(120*time.Millisecond, 5)()
+	srv := callServer(t)
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	defer b.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-join", "roomId": "g1", "kind": "audio", "members": []string{"user-b"},
+	}); err != nil {
+		t.Fatalf("A call-join: %v", err)
+	}
+	if got := readFrame(t, a); got["t"] != "call-roster" {
+		t.Fatalf("A expected roster, got %v", got)
+	}
+	if got := readFrame(t, b); got["t"] != "call-group-invite" {
+		t.Fatalf("B expected initial invite, got %v", got)
+	}
+	// B is busy → replies busy to the caller, scoped by roomId.
+	if err := b.WriteJSON(map[string]any{"t": "call-busy", "to": "user-a", "roomId": "g1"}); err != nil {
+		t.Fatalf("B call-busy: %v", err)
+	}
+	// A learns B is unavailable (busy relayed with the authoritative sender stamped).
+	got := readFrame(t, a)
+	if got["t"] != "call-busy" || got["from"] != "user-b" || got["roomId"] != "g1" {
+		t.Fatalf("A expected call-busy from user-b for g1, got %v", got)
+	}
+	// B is not re-rung after replying busy.
+	_ = b.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if _, data, err := b.ReadMessage(); err == nil {
+		t.Fatalf("REGRESSION: B re-rung after replying busy: %s", data)
+	}
+}

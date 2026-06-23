@@ -50,9 +50,9 @@
                     class="tile-spinner"
                   />
                 </div>
-                <!-- Non-joiner (caller only): tap to ring again or remove from the call. -->
+                <!-- Non-joiner / busy (caller only): tap to ring again or remove from the call. -->
                 <button
-                  v-if="t.state === 'not-joining'"
+                  v-if="t.state === 'not-joining' || t.state === 'busy'"
                   class="recall-btn"
                   aria-label="Ring again or remove"
                   @click.stop="openRecall(t)"
@@ -290,7 +290,7 @@ import {
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   iosSpeaker, setIosSpeakerphone,
-  notJoining, recallMember, cancelInvite,
+  notJoining, busyMembers, recallMember, cancelInvite,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useLiveQuery } from '@/composables/useLiveQuery';
@@ -455,9 +455,10 @@ interface Tile {
   leaving: boolean;
   // 'live' = a present participant (their video, or their avatar when camera-off); 'ringing'
   // = invited, not yet in the room; 'connecting' = joined but their media hasn't landed yet;
-  // 'not-joining' = rang out the reminder window without joining (caller sees recall/remove).
-  // ringing/connecting render an avatar card with a spinner; not-joining a recall button.
-  state: 'live' | 'ringing' | 'connecting' | 'not-joining';
+  // 'not-joining' = rang out the reminder window without joining (caller sees recall/remove);
+  // 'busy' = replied unavailable (in another call). ringing/connecting render an avatar card
+  // with a spinner; not-joining/busy a recall button.
+  state: 'live' | 'ringing' | 'connecting' | 'not-joining' | 'busy';
   name: string; // '' → no name label (an as-yet-unidentified participant)
   avatar: string; // '' → fall back to a person icon
 }
@@ -509,7 +510,11 @@ const tiles = computed<Tile[]>(() => {
   for (const id of callMeta.value?.invited ?? []) {
     if (!id || id === self || streamed.has(id) || roster.has(id)) continue;
     const { name, avatar } = identity(id);
-    const state = isInitiator.value && notJoining.value.has(id) ? 'not-joining' : 'ringing';
+    const state: Tile['state'] = busyMembers.value.has(id)
+      ? 'busy'
+      : isInitiator.value && notJoining.value.has(id)
+        ? 'not-joining'
+        : 'ringing';
     list.push({ key: id, stream: null, isSelf: false, leaving: false, state, name, avatar });
   }
   if (localStream.value) {
@@ -535,6 +540,7 @@ function tileLabel(t: Tile): string {
   if (t.leaving) return '';
   if (t.state === 'ringing') return 'Ringing…';
   if (t.state === 'connecting') return 'Connecting…';
+  if (t.state === 'busy') return t.name ? `${t.name} · Unavailable` : 'Unavailable';
   if (t.state === 'not-joining') return t.name || 'Not joined';
   return t.name;
 }

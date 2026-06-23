@@ -34,7 +34,7 @@ import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
-  sendGroupLeave,
+  sendGroupLeave, sendGroupBusy,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
 import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
@@ -279,6 +279,10 @@ const groupJoined = new Set<string>();
 // per-member timer arms when we start ringing them and re-arms on a recall; it's cleared
 // the moment they join. Caller-only (callees don't ring anyone).
 export const notJoining = ref<Set<string>>(new Set());
+// Group calls (caller side): invitees who replied "busy" — they're in another call and can't
+// take ours. Their tile shows "Unavailable" (distinct from a silent non-joiner). Cleared if
+// they later join (a free device picks up). Spec 0004 US2.
+export const busyMembers = ref<Set<string>>(new Set());
 const memberRingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const MEMBER_RING_WINDOW_MS = 30_000; // matches the server's reminder window (groupRing*)
 
@@ -288,6 +292,15 @@ function markNotJoining(memberId: string, on: boolean): void {
   if (on) next.add(memberId);
   else next.delete(memberId);
   notJoining.value = next;
+}
+// Mark/unmark a member "busy" (non-overriding: cleared the moment they actually join, so a
+// user busy on one device but answering on another still goes live).
+function markMemberBusy(memberId: string, on: boolean): void {
+  if (on === busyMembers.value.has(memberId)) return;
+  const next = new Set(busyMembers.value);
+  if (on) next.add(memberId);
+  else next.delete(memberId);
+  busyMembers.value = next;
 }
 function armMemberRingTimer(memberId: string): void {
   clearMemberRingTimer(memberId);
@@ -312,6 +325,7 @@ function clearAllMemberRingTimers(): void {
   for (const t of memberRingTimers.values()) clearTimeout(t);
   memberRingTimers.clear();
   if (notJoining.value.size) notJoining.value = new Set();
+  if (busyMembers.value.size) busyMembers.value = new Set();
 }
 
 
@@ -924,7 +938,12 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
   if (!roomId || !frame.from) return;
   // Already ringing/connected for this room → ignore duplicate invites.
   if (callMeta.value?.roomId === roomId) return;
-  if (callState.value !== 'idle') return; // busy with another call, can't join two
+  if (callState.value !== 'idle') {
+    // Busy in another call → tell the caller we're unavailable instead of letting their tile
+    // for us ring forever, and stop their server-side re-ring of us (spec 0004 US2).
+    void sendGroupBusy(frame.from, roomId);
+    return;
+  }
   if (!isUnlockedNow()) return; // locked → can't decrypt the sealed signalling; skip the ring
 
   // Everyone we were told about: the initiator plus their named members (which already
@@ -1858,6 +1877,15 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
     case 'call-reject':
     case 'call-busy': {
       const meta = callMeta.value;
+      // Group busy (roomId, no callId): ONE invitee can't take it → mark their tile
+      // "unavailable" and stop ringing them, but DON'T end the group call for everyone else
+      // (spec 0004 US2). The busy mark is non-overriding — if a free device of theirs joins,
+      // the roster handler clears it.
+      if (frame.t === 'call-busy' && frame.roomId && frame.from && meta?.isGroup && meta.roomId === frame.roomId) {
+        clearMemberRingTimer(frame.from);
+        markMemberBusy(frame.from, true);
+        return;
+      }
       if (meta && meta.callId === frame.callId) {
         await teardown(frame.t === 'call-busy' ? 'busy' : 'declined');
       }
@@ -1903,6 +1931,7 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       for (const id of after) {
         clearMemberRingTimer(id);
         markNotJoining(id, false);
+        markMemberBusy(id, false); // a free device joined → no longer "unavailable" (US2)
       }
       const afterSet = new Set(after);
       const someoneLeft = [...before].some((id) => !afterSet.has(id));

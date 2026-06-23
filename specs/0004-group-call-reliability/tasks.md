@@ -97,20 +97,20 @@ busy on B within ~5s; 1:1 decline-with-message still posts; both sides get a his
 
 ### Tests for User Story 2 ⚠️ (write first, must FAIL)
 
-- [ ] T011 [US2] Failing test in `server/internal/ws/call_test.go`: a `call-busy` carrying `roomId`+`to` is relayed to the caller AND stops that member's group-ring reminders
-- [ ] T012 [P] [US2] e2e `e2e/call-busy.spec.ts`: while A is in a call, a group invite to A resolves A's tile to "busy/unavailable" on the caller within ~5s; other invitees unaffected; 1:1 busy + decline-with-message still work; **multi-device (FR-008)**: when A is busy on one device but idle on another, the idle device rings (NOT busy), and busy is reported only when A has no free device
+- [x] T011 [US2] Regression test `server/internal/ws/groupring_test.go` (`TestGroupBusyRelayedAndStopsRering`): a `call-busy` carrying `roomId` is relayed to the caller (sender stamped) AND stops re-ringing the busy member
+- [ ] T012 [P] [US2] e2e `e2e/call-busy.spec.ts`: while A is in a call, a group invite to A resolves A's tile to "busy/unavailable" on the caller within ~5s; other invitees unaffected; 1:1 busy + decline-with-message still work; **multi-device (FR-008)**: when A is busy on one device but idle on another, the idle device rings (NOT busy)
 - [ ] T013 [P] [US2] e2e assertion: a refused/declined/missed call writes a history entry on BOTH caller and callee
 
 ### Implementation for User Story 2
 
-- [ ] T014 [US2] Extend `call-busy` frame with optional `roomId` in `src/services/transport.ts` (and the server frame struct in `server/internal/ws/hub.go` already carries `RoomID`)
-- [ ] T015 [US2] In `handleGroupInvite` (`src/composables/useCall.ts`), when `callState !== 'idle'` send `call-busy` `{ to: frame.from, roomId }` instead of silently returning
-- [ ] T016 [US2] Server: relay `call-busy` with `roomId`+`to` and call `stopGroupMemberRing(roomId, to)` (mirror the existing `call-cancel`+roomId branch) in `server/internal/ws/hub.go`
-- [ ] T017 [US2] Caller side: handle `call-busy` carrying `roomId` for the active group call → `markNotJoining(from, true)` with a "busy" reason, stop ringing that member, leave others untouched, in `src/composables/useCall.ts`; add a `busy` tile reason to `CallMeta`. The busy reason MUST be non-overriding: a subsequent `call-roster` join for the same member (existing `markNotJoining(false)` path) clears busy, so a user busy on one device but answering on another still goes live (FR-008)
-- [ ] T018 [US2] Render the per-invitee "busy/unavailable" tile state (stock Ionic + `--ring-*` tokens) in `src/views/detail/CallActivePage.vue`
-- [ ] T019 [US2] Both-sided call history: caller logs `unavailable`/`declined`, callee logs `missed` (reuse the `'calls'` store; no `DB_VERSION` bump) in `src/composables/useCall.ts` / `src/db/queries.ts`
+- [x] T014 [US2] `call-busy` already carries optional `roomId`/`from` (`CallControlFrame` in `src/services/transport.ts`) and the server frame struct carries `RoomID` — no shape change needed
+- [x] T015 [US2] `handleGroupInvite` (`src/composables/useCall.ts`): when `callState !== 'idle'` sends `call-busy {to: frame.from, roomId}` via new `sendGroupBusy` instead of silently returning
+- [x] T016 [US2] Server: `call-busy` with a `roomId` is relayed to `to` and calls `stopGroupMemberRing(roomId, c.userID)` (the busy sender) in `server/internal/ws/hub.go`
+- [x] T017 [US2] Caller side: `call-busy` with a matching `roomId` → `markMemberBusy(from, true)` + clear that member's ring timer, WITHOUT ending the call; non-overriding — the `call-roster` join path clears busy (FR-008). New `busyMembers` ref in `src/composables/useCall.ts`
+- [x] T018 [US2] Render the per-invitee "busy"/"Unavailable" tile state (new `'busy'` Tile state + recall menu, stock markup + `--ring-*` tokens) in `src/views/detail/CallActivePage.vue`
+- [ ] T019 [US2] Both-sided call history: caller logs `unavailable`/`declined`, callee logs `missed` (reuse the `'calls'` store; no `DB_VERSION` bump) in `src/composables/useCall.ts` / `src/db/queries.ts` — DEFERRED (meatier; teardown-time logging path)
 
-**Checkpoint**: US1+US2 close both correctness bugs; calls never ring into a void.
+**Checkpoint**: US2 core (busy signalling + caller-side tile resolution) done and unit-tested; server suite + client build green. Remaining: e2e (T012/T013) and two-sided history (T019).
 
 ---
 
