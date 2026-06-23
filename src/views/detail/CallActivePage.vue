@@ -723,6 +723,14 @@ watch([pipVideo, pipStream, pipHasVideo], () =>
 watch(audioOutputId, applySinkAll);
 watch(remoteStreams, (streams) => {
   const ids = streams.map((s) => s.id);
+  // The waving "bye" is for when SOMEONE ELSE leaves while we stay. When WE'RE the one leaving
+  // (teardown closes every peer connection at once, emptying remoteStreams), don't wave goodbye
+  // to everybody — we're exiting. `tornDown` is set synchronously at the start of teardown,
+  // before the streams clear, so it's the reliable "we initiated the leave" signal.
+  if (callMeta.value?.tornDown) {
+    prevStreamIds = ids;
+    return;
+  }
   // A participant whose stream just disappeared left → show a brief waving-hand
   // placeholder that fades out before the grid reflows (the rest then grow).
   for (const gone of prevStreamIds) {
