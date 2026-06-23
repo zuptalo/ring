@@ -48,13 +48,19 @@ const TIER_TARGET: Record<Tier, number> = {
 
 const CLIMB_AFTER = 3; // consecutive healthy samples before a one-step climb
 const LOSS_HIGH = 0.05; // 5% receiver-reported packet loss → back off
+// Only back off on the bandwidth estimate when it's WELL below what the current tier wants
+// (a margin), since each mesh leg estimates bandwidth independently and the numbers are noisy.
+const BW_BACKOFF_MARGIN = 0.7;
 
 /** A single getStats sample, reduced to the signals the controller needs. Fields are
  *  optional because Safari/WebKit doesn't expose them all (the controller degrades to the
  *  cross-browser receiver-loss/RTT signal when bitrate/limitation info is missing). */
 export interface StatsSnapshot {
-  qualityLimited: boolean; // outbound-rtp.qualityLimitationReason === 'bandwidth'
-  availableOutgoingBitrate?: number; // candidate-pair (often absent on Safari)
+  // The browser is limited by bandwidth OR cpu (qualityLimitationReason). CPU matters a lot in
+  // a mesh: each peer is a separate encoder, so N peers = N parallel encodes — a phone/iPad
+  // saturates and silently degrades unless we back off, which is why we treat cpu as congestion.
+  qualityLimited: boolean;
+  availableOutgoingBitrate?: number; // candidate-pair (often absent on Safari; noisy in a mesh)
   fractionLost: number; // remote-inbound-rtp.fractionLost, 0..1 (the receiver's downlink view)
   rtt?: number; // remote-inbound-rtp.roundTripTime, seconds
 }
@@ -71,39 +77,60 @@ export function initialController(): ControllerState {
 
 const idxOf = (t: Tier): number => TIERS.indexOf(t);
 
+/** The lower (more conservative) of two tiers. */
+export function tierMin(a: Tier, b: Tier): Tier {
+  return idxOf(a) <= idxOf(b) ? a : b;
+}
+
+/** Ceiling tier for a mesh by how many peers we're encoding to. Each peer is an independent
+ *  encoder + uplink share, so the ceiling drops as peers are added to keep total CPU/uplink
+ *  sane — but it stays at full resolution (`high`) for small groups so capable devices look
+ *  sharp; only HD (a costly single big encode) is reserved for 1:1 / 2-person. The per-device
+ *  `cpu` and bandwidth back-offs then trim weaker hardware/links below this on their own.
+ *  1 peer (2-person) → HD; 2–3 peers (3–4-person, up to the video cap) → high; more → medium. */
+export function clampForPeers(peers: number): Tier {
+  if (peers <= 1) return 'hd';
+  if (peers <= 3) return 'high';
+  return 'medium';
+}
+
 /**
  * Decide the next controller state from the current one, a fresh stats sample, and the
- * upper-bound clamp (from the manual pin / data-saver). Pure: same inputs → same output.
+ * upper-bound clamp (manual pin / data-saver, already combined with the peer-count ceiling).
+ * Pure: same inputs → same output.
+ *
+ * Climbs on sustained health up to the ceiling (it does NOT hard-gate the climb on the
+ * per-leg bandwidth estimate — that number is unreliable in a mesh and was stranding video at
+ * the lowest tier). The per-tier maxBitrate plus the browser's own pacing prevent overshoot,
+ * and we back off promptly on a real congestion signal (bandwidth/cpu limitation, packet loss,
+ * or the estimate collapsing well under the current tier).
  */
 export function nextTier(state: ControllerState, snap: StatsSnapshot, clamp: Tier): ControllerState {
   const idx = idxOf(state.tier);
   const clampIdx = idxOf(clamp);
   const knownBw = typeof snap.availableOutgoingBitrate === 'number';
 
-  // Congestion → back off one step immediately (floor at `off`). This wins over the clamp:
-  // call survival beats a high manual pin.
+  // Congestion → back off one step immediately (floor at `off`). Wins over the clamp: call
+  // survival beats any pin.
   const congested =
     snap.qualityLimited ||
     snap.fractionLost > LOSS_HIGH ||
-    (knownBw && (snap.availableOutgoingBitrate as number) < TIER_TARGET[state.tier]);
+    (knownBw && (snap.availableOutgoingBitrate as number) < TIER_TARGET[state.tier] * BW_BACKOFF_MARGIN);
   if (congested) {
     return { tier: TIERS[Math.max(0, idx - 1)], healthyStreak: 0 };
   }
 
-  // Healthy. If we're somehow above the clamp (pin lowered mid-call), come down to it.
+  // Above the clamp (e.g. pin lowered, or more peers joined and dropped the ceiling) → come down.
   if (idx > clampIdx) {
     return { tier: clamp, healthyStreak: 0 };
   }
 
-  const streak = state.healthyStreak + 1;
-  // Without a known available bitrate (Safari) never blind-climb past `high` — HD must be
-  // earned with demonstrated headroom, never assumed.
+  // Healthy and below the ceiling → climb one step after K consecutive healthy samples. Without
+  // a known bandwidth estimate (Safari) never blind-climb past `high`; HD needs a real estimate.
   const ceilingIdx = knownBw ? clampIdx : Math.min(clampIdx, idxOf('high'));
+  const streak = state.healthyStreak + 1;
   if (streak >= CLIMB_AFTER && idx < ceilingIdx) {
-    const nextIdx = idx + 1;
-    if (!knownBw || (snap.availableOutgoingBitrate as number) >= TIER_TARGET[TIERS[nextIdx]]) {
-      return { tier: TIERS[nextIdx], healthyStreak: 0 };
-    }
+    return { tier: TIERS[idx + 1], healthyStreak: 0 };
   }
   return { tier: state.tier, healthyStreak: streak };
 }
@@ -119,7 +146,11 @@ export function snapshotFromReport(report: RTCStatsReport): StatsSnapshot {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   report.forEach((st: any) => {
     if (st.type === 'outbound-rtp' && st.kind === 'video') {
-      if (st.qualityLimitationReason === 'bandwidth') qualityLimited = true;
+      // bandwidth OR cpu: in a mesh, N peers = N parallel encoders, so cpu limitation is common
+      // on phones/tablets and must trigger a back-off just like bandwidth does.
+      if (st.qualityLimitationReason === 'bandwidth' || st.qualityLimitationReason === 'cpu') {
+        qualityLimited = true;
+      }
     } else if (st.type === 'candidate-pair' && typeof st.availableOutgoingBitrate === 'number') {
       if (st.nominated || st.selected || availableOutgoingBitrate == null) {
         availableOutgoingBitrate = st.availableOutgoingBitrate;

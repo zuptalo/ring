@@ -28,6 +28,8 @@ import {
   initialController,
   nextTier,
   snapshotFromReport,
+  clampForPeers,
+  tierMin,
 } from '@/services/call/quality';
 import type { CallKind } from '@/services/call/types';
 import type { CallSignal } from '@/services/crypto/message';
@@ -325,15 +327,21 @@ export class MeshSession {
     return null;
   }
 
+  /** The effective per-leg quality ceiling: the manual pin / data-saver clamp, lowered by the
+   *  per-peer mesh ceiling (more peers ⇒ N parallel encodes ⇒ a lower cap to keep CPU/uplink
+   *  sane). The adaptive controller climbs toward this and backs off below it on congestion. */
+  private effectiveCeiling(): Tier {
+    return tierMin(this.clampTier, clampForPeers(this.legs.size));
+  }
+
   /** Set the upper-bound quality tier (from the manual pin + data-saver). Immediately brings
-   *  any leg currently above the new clamp down to it; climbing back up (when allowed) is the
-   *  adaptive controller's job. */
+   *  any leg currently above the new ceiling down to it; climbing back up is the controller's job. */
   setQualityClamp(clamp: Tier): void {
     this.clampTier = clamp;
-    const clampIdx = TIERS.indexOf(clamp);
+    const ceilingIdx = TIERS.indexOf(this.effectiveCeiling());
     for (const leg of this.legs.values()) {
-      if (TIERS.indexOf(leg.qc.tier) > clampIdx) {
-        leg.qc = { tier: clamp, healthyStreak: 0 };
+      if (TIERS.indexOf(leg.qc.tier) > ceilingIdx) {
+        leg.qc = { tier: TIERS[ceilingIdx], healthyStreak: 0 };
         void this.applyLegEncoding(leg);
       }
     }
@@ -366,7 +374,7 @@ export class MeshSession {
     if (!this.videoSenderOf(leg)) return; // audio-only leg → nothing to tier
     const snap = snapshotFromReport(report);
     const before = leg.qc.tier;
-    leg.qc = nextTier(leg.qc, snap, this.clampTier);
+    leg.qc = nextTier(leg.qc, snap, this.effectiveCeiling());
     if (leg.qc.tier !== before) void this.applyLegEncoding(leg);
   }
 
