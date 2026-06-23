@@ -1,20 +1,14 @@
 /**
- * DIAG(call-video): an ON-SCREEN diagnostics panel for the active call, built so
- * a single screenshot carries everything needed to find why group video doesn't
- * show on iPhone/Safari while audio is fine.
+ * On-screen call stats panel (the ⓘ button on the active call). In a production
+ * deploy the server logs are unreachable and a phone's browser console isn't
+ * readable without tethering, so per-leg connection stats are printed right in the
+ * call UI for self-diagnosis on a bad network. Two parts:
+ *   - a SNAPSHOT block (refreshed every couple of seconds by MeshSession): per-leg
+ *     connection state, negotiated codec, and in/out video bitrate + frame counters.
+ *   - a short EVENT log (e.g. a remote track arriving).
  *
- * In a production-mode deploy the server's slog output is filtered/unreachable and
- * an iPhone's Safari console isn't readable without a tethered Mac, so the stats
- * are printed right in the call UI. The panel has two parts:
- *   - a SNAPSHOT block (refreshed every few seconds): the negotiated codec, the
- *     outbound/inbound video RTP counters, and - the decisive bit - per-frame
- *     decrypt OK/FAIL counts split by audio vs video. If video decrypt FAILs climb
- *     while audio decrypt is clean, the encrypted video payload is being corrupted
- *     in packetization (not a key problem - audio shares the key).
- *   - a short EVENT log (ontrack, missing-key, etc.).
- *
- * Temporary; remove with the rest of the call-diag instrumentation once the root
- * cause is confirmed.
+ * (Formerly the SFU-era "call-video" diagnostics; the per-frame E2EE decrypt tallies
+ * were dropped with the SFU/insertable-streams path — mesh media is native DTLS-SRTP.)
  */
 import { ref } from 'vue';
 
@@ -40,34 +34,4 @@ export function clearDiag(): void {
 function stamp(): string {
   const d = new Date();
   return `${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
-}
-
-// --- per-frame decrypt counters (split by media kind) -----------------------
-// Plain numbers (not reactive): updated per frame at media rate, then sampled
-// into the snapshot by the periodic stats timer. The MAIN-THREAD insertable path
-// calls noteDecrypt directly; the WORKER path keeps its own counters and posts
-// them to the main thread, which feeds them in via setWorkerDecrypt.
-const dec = { audOk: 0, audFail: 0, vidOk: 0, vidFail: 0 };
-const workerDec = { audOk: 0, audFail: 0, vidOk: 0, vidFail: 0 };
-
-export function noteDecrypt(kind: string, ok: boolean): void {
-  if (kind === 'video') ok ? dec.vidOk++ : dec.vidFail++;
-  else ok ? dec.audOk++ : dec.audFail++;
-}
-
-export function setWorkerDecrypt(s: { audOk: number; audFail: number; vidOk: number; vidFail: number }): void {
-  workerDec.audOk = s.audOk;
-  workerDec.audFail = s.audFail;
-  workerDec.vidOk = s.vidOk;
-  workerDec.vidFail = s.vidFail;
-}
-
-/** Combined decrypt tallies (main-thread + worker) for the snapshot. */
-export function decryptTotals(): { audOk: number; audFail: number; vidOk: number; vidFail: number } {
-  return {
-    audOk: dec.audOk + workerDec.audOk,
-    audFail: dec.audFail + workerDec.audFail,
-    vidOk: dec.vidOk + workerDec.vidOk,
-    vidFail: dec.vidFail + workerDec.vidFail,
-  };
 }

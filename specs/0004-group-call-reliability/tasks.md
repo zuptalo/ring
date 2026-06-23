@@ -150,21 +150,21 @@ iOS/Safari + Chromium; no "group-call SFU ready" boot log; CALLING.md describes 
 
 ### Tests for User Story 6 ⚠️
 
-- [ ] T029 [US6] Update/trim `server/internal/ws/call_test.go` and remove SFU-specific tests; ensure `go test ./...` covers that `sfu-*`/`call-key*`/`call-streamid` frames are no longer handled
-- [ ] T030 [P] [US6] Ensure the existing group-call e2e runs under the WebKit (Safari) project to prove no regression in `e2e/` config
+- [x] T029 [US6] Removed the SFU-specific relay tests (`TestGroupCallKeyRequestRelayed`/`TestGroupCallStreamIdRelayed`) from `server/internal/ws/call_test.go`; `go test ./...` green with those frames no longer handled
+- [ ] T030 [P] [US6] Ensure the existing group-call e2e runs under the WebKit (Safari) project to prove no regression in `e2e/` config — DEFERRED (e2e)
 
 ### Implementation for User Story 6
 
-- [ ] T031 [US6] Delete `server/internal/sfu/` (package + tests)
-- [ ] T032 [US6] Remove SFU construction/wiring + the "group-call SFU ready" log in `server/cmd/ringd/main.go`
-- [ ] T033 [US6] Remove `sfu-answer`/`sfu-ice`/`sfu-renegotiate` handlers, the `call-key`/`call-key-request`/`call-streamid` relay cases, and `SetSFU`/`SendCallSignal`/`CallSFU` from `server/internal/ws/hub.go`
-- [ ] T034 [P] [US6] Delete client `src/services/call/sfu.ts`, `e2ee.ts`, `e2ee-worker.ts`, `e2ee-format.ts`
-- [ ] T035 [US6] Remove the dead `sfu-*`/`call-key*`/`call-streamid` cases in `handleCallFrame` and the corresponding frame types in `src/services/transport.ts`
-- [ ] T036 [US6] Strip `DIAG(call-video)` instrumentation from `src/services/call/mesh.ts` and trim the SFU decrypt-tally code from `src/services/call/diag.ts`, keeping a slimmed mesh stats source for the ⓘ panel
-- [ ] T037 [P] [US6] Keep the on-screen ⓘ stats panel as an intentional, permanent feature: de-"DIAG" its comments and feed it from the slimmed mesh stats source (per-leg connection state + codec + in/out bitrate), in `src/views/detail/CallActivePage.vue`
-- [ ] T038 [P] [US6] Rewrite `server/docs/CALLING.md` for the mesh (native DTLS-SRTP per leg, all browsers incl. iOS/Safari, no SFU/VP8/insertable-streams/Chromium-only); keep the TURN-over-TLS-on-443 deployment recipe
+- [x] T031 [US6] Deleted `server/internal/sfu/`; ran `go mod tidy` (dropped pion/webrtc, interceptor, rtp, rtcp)
+- [x] T032 [US6] Removed SFU construction/wiring + the "group-call SFU ready" log in `server/cmd/ringd/main.go`; cleaned the now-unused `webrtc`/`sfupkg` imports; the TURN loopback (SFU-only) removed and `turn.Start` returns `(*Server, error)`
+- [x] T033 [US6] Removed `sfu-*` handlers, the `call-key`/`call-key-request`/`call-streamid` relay cases, and `SetSFU`/`SendCallSignal`/`CallSFU`/`sfu` field from `server/internal/ws/hub.go`; removed the `sfu` hint from `turn_handlers.go`
+- [x] T034 [P] [US6] Deleted client `src/services/call/{sfu,e2ee,e2ee-worker,e2ee-format}.ts`
+- [x] T035 [US6] Removed the dead `sfu-*`/`call-key*`/`call-streamid` cases in `handleCallFrame` + `services/sync.ts`, the dead senders in `signalling.ts`, and the frame types in `src/services/transport.ts` (added `call-full` routing in sync.ts)
+- [x] T036 [US6] Removed the SFU decrypt-tally code from `src/services/call/diag.ts` and de-"DIAG"'d `mesh.ts`'s stats timer comments
+- [x] T037 [P] [US6] Kept the ⓘ stats panel as a permanent feature (diag.ts header rewritten; fed by the mesh per-leg stats timer) in `src/views/detail/CallActivePage.vue`
+- [x] T038 [P] [US6] Rewrote the relevant `server/docs/CALLING.md` sections for the mesh (no SFU/VP8/insertable-streams/Chromium-only); kept the TURN-over-TLS-on-443 deployment recipe
 
-**Checkpoint**: one architecture, accurate docs, no dead code or false boot log.
+**Checkpoint**: one architecture, accurate docs, no dead code or false boot log. Remaining: WebKit e2e (T030).
 
 ---
 

@@ -7,8 +7,8 @@
  * relayed through the server's TURN only when a direct path is blocked
  * (iceTransportPolicy 'relay', forced by the 443-only deployment).
  *
- * Group calls (SFU) are layered on separately (services/call/sfu.ts); this file
- * owns the 1:1 path and the shared reactive state/UI surface.
+ * Group calls are a peer-to-peer mesh layered on separately (services/call/mesh.ts);
+ * this file owns the 1:1 path and the shared reactive state/UI surface.
  */
 import { ref, computed, watch } from 'vue';
 import { appToast } from '@/services/toast';
@@ -1978,18 +1978,9 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       return;
     }
 
-    // SFU-era frames, dormant under the mesh: the server no longer drives an SFU and
-    // mesh never sends keys/stream-ids (each leg is a known peer over native DTLS-SRTP).
-    // Left as no-ops so an in-flight frame from a mid-deploy peer is harmlessly ignored.
-    case 'call-key':
-    case 'call-key-request':
-    case 'call-streamid':
-    case 'sfu-offer':
-    case 'sfu-ice':
-    // The client never receives call-join/leave or sfu-answer (server-bound).
+    // call-join/call-leave are client→server only (we send, never receive them).
     case 'call-join':
     case 'call-leave':
-    case 'sfu-answer':
       return;
   }
 }

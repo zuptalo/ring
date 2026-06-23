@@ -274,52 +274,5 @@ func TestGroupCallSecondJoinDoesNotRering(t *testing.T) {
 	}
 }
 
-// A member missing the group key asks the master to resend it; the request is
-// relayed live to the addressed master (stamped with the requester as sender).
-func TestGroupCallKeyRequestRelayed(t *testing.T) {
-	srv, _ := newRelayServer()
-	defer srv.Close()
-
-	a := dial(t, srv, "tokA")
-	defer a.Close()
-	b := dial(t, srv, "tokB")
-	defer b.Close()
-	time.Sleep(50 * time.Millisecond)
-
-	// B (missing the key) asks the master A to resend.
-	if err := b.WriteJSON(map[string]any{
-		"t": "call-key-request", "to": "user-a", "roomId": "g3",
-	}); err != nil {
-		t.Fatalf("B call-key-request: %v", err)
-	}
-	got := readFrame(t, a)
-	if got["t"] != "call-key-request" || got["from"] != "user-b" || got["roomId"] != "g3" {
-		t.Fatalf("A expected call-key-request from user-b for g3, got: %v", got)
-	}
-}
-
-func TestGroupCallStreamIdRelayed(t *testing.T) {
-	srv, _ := newRelayServer()
-	defer srv.Close()
-
-	a := dial(t, srv, "tokA")
-	defer a.Close()
-	b := dial(t, srv, "tokB")
-	defer b.Close()
-	time.Sleep(50 * time.Millisecond)
-
-	// B announces (sealed) which stream id is theirs to A; the server relays it live,
-	// stamping the sender, without inspecting the opaque ciphertext.
-	if err := b.WriteJSON(map[string]any{
-		"t": "call-streamid", "to": "user-a", "roomId": "g4", "ciphertext": map[string]any{"v": 1},
-	}); err != nil {
-		t.Fatalf("B call-streamid: %v", err)
-	}
-	got := readFrame(t, a)
-	if got["t"] != "call-streamid" || got["from"] != "user-b" || got["roomId"] != "g4" {
-		t.Fatalf("A expected call-streamid from user-b for g4, got: %v", got)
-	}
-	if got["ciphertext"] == nil {
-		t.Fatalf("A expected the sealed ciphertext to be relayed, got: %v", got)
-	}
-}
+// NOTE: the SFU-era call-key-request / call-streamid relays were removed with the SFU
+// (spec 0004 US6) — the mesh distributes nothing of the sort, so those tests are gone.

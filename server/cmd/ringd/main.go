@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pion/webrtc/v4"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 
@@ -28,7 +27,6 @@ import (
 	"ring/server/internal/db"
 	"ring/server/internal/push"
 	"ring/server/internal/secrets"
-	sfupkg "ring/server/internal/sfu"
 	"ring/server/internal/store"
 	turnpkg "ring/server/internal/turn"
 	"ring/server/internal/ws"
@@ -346,7 +344,7 @@ func run() error {
 				MinVersion:     tls.VersionTLS12,
 			}
 		}
-		turnSrv, sfuTurnAddr, err := turnpkg.Start(turnCfg)
+		turnSrv, err := turnpkg.Start(turnCfg)
 		if err != nil {
 			return fmt.Errorf("start TURN relay: %w", err)
 		}
@@ -374,28 +372,8 @@ func run() error {
 		}
 		slog.Info("TURN relay ready", "listen", cfg.TurnListen, "realm", cfg.TurnRealm,
 			"urls", turnURLs, "tls", turnCfg.TLSConfig != nil)
-
-		// Group-call SFU. It forwards RTP it cannot decrypt (clients E2EE the
-		// payload via insertable streams). The send callback delivers the SFU's
-		// offers/candidates to a participant over the WS signalling channel. The
-		// ICE func mints fresh ephemeral credentials per PeerConnection so the SFU
-		// gathers relay candidates at the public RelayIP via the co-located TURN's
-		// loopback endpoint - reachable by relay-only clients under the 443
-		// constraint.
-		sfuTurnURL := "turn:" + sfuTurnAddr + "?transport=udp"
-		sfuICE := func() []webrtc.ICEServer {
-			user, pass, err := turnpkg.MintCredentials(secs.TurnSharedSecret, "sfu", time.Hour)
-			if err != nil {
-				slog.Error("sfu mint turn creds", "err", err)
-				return nil
-			}
-			return []webrtc.ICEServer{{URLs: []string{sfuTurnURL}, Username: user, Credential: pass}}
-		}
-		sfuInst := sfupkg.New(func(sig sfupkg.Signal) {
-			hub.SendCallSignal(sig.UserID, sig.T, sig.RoomID, sig.Data)
-		}, sfuICE)
-		hub.SetSFU(sfuInst)
-		slog.Info("group-call SFU ready", "relayVia", sfuTurnURL)
+		// Group calls are peer-to-peer mesh (native DTLS-SRTP per leg) and ride this same
+		// TURN; there is no server-side SFU. See server/docs/CALLING.md.
 	}
 
 	handler := api.NewRouter(&api.Handlers{

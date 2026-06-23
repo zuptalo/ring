@@ -145,13 +145,8 @@ export async function handleIncomingFrame(frame: Frame): Promise<void> {
     case 'call-join':
     case 'call-leave':
     case 'call-roster':
-    case 'call-key':
-    case 'call-key-request':
-    case 'call-streamid':
     case 'call-group-invite':
-    case 'sfu-offer':
-    case 'sfu-answer':
-    case 'sfu-ice': {
+    case 'call-full': {
       // Live-only call signalling → hand to the call controller. Lazily imported
       // to avoid pulling the WebRTC engine into the sync module's load path.
       const { handleCallFrame } = await import('@/composables/useCall');

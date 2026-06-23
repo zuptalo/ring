@@ -20,18 +20,6 @@ import (
 	"ring/server/internal/store"
 )
 
-// CallSFU is the embedded group-call SFU the hub drives. *sfu.SFU satisfies it;
-// kept as an interface so the ws package needn't import pion/webrtc.
-type CallSFU interface {
-	Join(roomID, userID string) error
-	Answer(roomID, userID string, sdp json.RawMessage) error
-	ICE(roomID, userID string, cand json.RawMessage) error
-	Leave(roomID, userID string)
-	// Renegotiate re-offers to a room's peers after a client changed its tracks
-	// mid-call (e.g. a group member toggled their camera on or off).
-	Renegotiate(roomID string)
-}
-
 const (
 	writeWait = 10 * time.Second
 	// pongWait bounds how long a sudden, silent disconnect (network drop, frozen
@@ -150,7 +138,6 @@ type Hub struct {
 	conns    map[string]map[*Client]struct{}
 	watchers map[string]map[*Client]struct{} // targetUserID → clients watching it
 	rooms    *call.Registry
-	sfu      CallSFU                   // nil when calling is disabled
 	callBuf  map[string][]bufferedCall // recipient → briefly-held call offers
 	ringMu   sync.Mutex
 	ringHist map[string][]time.Time // userID → recent group-ring timestamps (rate limit)
@@ -464,28 +451,11 @@ func (h *Hub) takeBufferedCalls(userID string) [][]byte {
 	return out
 }
 
-// SetSFU wires the embedded SFU (called once at startup when calls are enabled).
-func (h *Hub) SetSFU(s CallSFU) { h.sfu = s }
-
 // SharesCallRoom reports whether a and b are currently in a common call room. Used by the
 // key-bundle handler to let co-participants of a live call fetch each other's bundles
 // (so an ad-hoc group call can mesh between members who aren't contacts) for the duration
 // of the call only — no persistent connection is created.
 func (h *Hub) SharesCallRoom(a, b string) bool { return h.rooms.SharesRoom(a, b) }
-
-// SendCallSignal delivers an SFU→client signalling frame (sfu-offer/sfu-ice).
-// The SFU invokes this via a callback so it needn't know the frame shape.
-func (h *Hub) SendCallSignal(userID, t, roomID string, data json.RawMessage) {
-	f := frame{T: t, RoomID: roomID}
-	if t == "sfu-offer" {
-		f.SDP = data
-	} else { // sfu-ice
-		f.Ciphertext = data
-	}
-	if payload, err := json.Marshal(f); err == nil {
-		h.Send(userID, payload)
-	}
-}
 
 // broadcastRoster sends the current room roster to every member.
 func (h *Hub) broadcastRoster(roomID string, roster []string) {
@@ -1228,20 +1198,6 @@ func (c *Client) handleFrame(data []byte) {
 			c.hub.stopGroupMemberRing(f.RoomID, c.userID)
 		}
 
-	case "call-key":
-		// Group media key, sealed peer-to-peer; relayed live, never inspected.
-		c.relayCall(f)
-
-	case "call-streamid":
-		// A member's "this stream is mine" announcement, sealed peer-to-peer (lets
-		// peers label tiles with names/avatars); relayed live, never inspected.
-		c.relayCall(f)
-
-	case "call-key-request":
-		// A member missing the current group key asks the master (f.To) to resend it.
-		// Live relay only (like call-key); the master re-seals and sends.
-		c.relayCall(f)
-
 	case "call-join":
 		// Join a group-call room: update membership and tell everyone the roster. The
 		// roster broadcast is what drives mesh: each member opens a direct peer connection
@@ -1303,29 +1259,5 @@ func (c *Client) handleFrame(data []byte) {
 		if payload, err := json.Marshal(invite); err == nil {
 			c.ringMember(f.RoomID, f.To, payload)
 		}
-
-	case "sfu-answer":
-		if c.hub.sfu == nil || f.RoomID == "" || len(f.SDP) == 0 {
-			return
-		}
-		if err := c.hub.sfu.Answer(f.RoomID, c.userID, f.SDP); err != nil {
-			slog.Error("sfu answer", "err", err)
-		}
-
-	case "sfu-ice":
-		if c.hub.sfu == nil || f.RoomID == "" || len(f.Ciphertext) == 0 {
-			return
-		}
-		if err := c.hub.sfu.ICE(f.RoomID, c.userID, f.Ciphertext); err != nil {
-			slog.Error("sfu ice", "err", err)
-		}
-
-	case "sfu-renegotiate":
-		// A participant added/removed a track mid-call (camera on/off) → have the SFU
-		// re-offer so the new track set is negotiated and forwarded.
-		if c.hub.sfu == nil || f.RoomID == "" {
-			return
-		}
-		c.hub.sfu.Renegotiate(f.RoomID)
 	}
 }

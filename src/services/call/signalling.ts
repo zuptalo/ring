@@ -44,51 +44,10 @@ export async function clearCallSession(peerUserId: string): Promise<void> {
   await clearSession(CALL_SESSION_PREFIX + peerUserId);
 }
 
-/**
- * Seal the group media key for one member and send it as a live `call-key`
- * frame. Distributed peer-to-peer over the member's 1:1 ratchet, so the server
- * never sees the key. Returns false if no 1:1 session exists with the member.
- */
-export async function sendSealedKey(
-  peerUserId: string,
-  roomId: string,
-  epoch: number,
-  keyB64: string,
-): Promise<boolean> {
-  const chatId = await chatIdForPeer(peerUserId);
-  if (!chatId) return false;
-  const sealed = await sealForChat(chatId, peerUserId, false, {
-    body: '',
-    kind: 'call',
-    timestamp: Date.now(),
-    call: { callId: roomId, type: 'key', roomId, epoch, key: keyB64 },
-  });
-  if (!sealed) return false;
-  return sendLive({ t: 'call-key', to: sealed.to, roomId, ciphertext: sealed.packet });
-}
-
-/**
- * Seal our outgoing stream id for one member and send it as a live `call-streamid`
- * frame. Distributed peer-to-peer over the member's 1:1 ratchet, so the server never
- * learns the stream↔member binding (it can derive it at the SFU, but we don't hand it
- * over on the wire). Returns false if no 1:1 session exists with the member.
- */
-export async function sendSealedStreamId(
-  peerUserId: string,
-  roomId: string,
-  streamId: string,
-): Promise<boolean> {
-  const chatId = await chatIdForPeer(peerUserId);
-  if (!chatId) return false;
-  const sealed = await sealForChat(chatId, peerUserId, false, {
-    body: '',
-    kind: 'call',
-    timestamp: Date.now(),
-    call: { callId: roomId, type: 'streamid', roomId, streamId },
-  });
-  if (!sealed) return false;
-  return sendLive({ t: 'call-streamid', to: sealed.to, roomId, ciphertext: sealed.packet });
-}
+// NOTE: the SFU-era sealed group-key (call-key) and stream-id (call-streamid) senders were
+// removed with the SFU (spec 0004 US6). The mesh needs neither: each leg is a known peer over
+// native DTLS-SRTP, so there is no per-frame media key to distribute and the stream↔member
+// binding is local (one PeerConnection per peer).
 
 /**
  * Seal a CallSignal for the peer and send it as the given 1:1 call frame.

@@ -93,8 +93,7 @@ export class MeshSession {
   private speaking = new Set<string>();
   private lastLoud = new Map<string, number>();
   private levelTimer: ReturnType<typeof setInterval> | null = null;
-  // DIAG(call-video): per-leg RTP snapshot, so the on-screen ⓘ panel works for mesh calls
-  // (it used to read only the SFU path). Temporary, paired with diag.ts.
+  // Per-leg RTP snapshot feeding the on-screen ⓘ call-stats panel (see diag.ts).
   private diagTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(roomId: string, kind: CallKind, cb: MeshCallbacks, members: string[] = []) {
@@ -333,12 +332,9 @@ export class MeshSession {
     return first ? first.pc.getStats() : null;
   }
 
-  /** DIAG(call-video): every 2s, snapshot each leg's video RTP so the on-screen ⓘ panel
-   *  works for mesh calls. The decisive figures are the negotiated codec and, per peer,
-   *  `dec=` (frames decoded): on iOS this should be H264 with dec climbing — proof the
-   *  hardware decoder accepts the feed (which the SFU+VP8 path could not). Mesh media is
-   *  native DTLS-SRTP, so there is no per-frame E2EE xform / decrypt tally to report.
-   *  Temporary; paired with diag.ts, remove once confirmed on-device. */
+  /** Every 2s, snapshot each leg's video RTP for the on-screen ⓘ call-stats panel: the
+   *  negotiated codec and, per peer, the in/out bitrate + frames decoded. Mesh media is
+   *  native DTLS-SRTP, so there is no per-frame E2EE transform / decrypt tally to report. */
   private startDiag(): void {
     if (this.diagTimer != null) return;
     const fmt = (n: number): string =>

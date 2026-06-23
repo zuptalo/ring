@@ -146,7 +146,7 @@ export interface CallRingFrame {
   members?: string[]; // the full invited set (for the invite's participant list)
 }
 
-/* ---- group calls (SFU) ---- */
+/* ---- group calls (peer-to-peer mesh) ---- */
 
 /** Join/leave a group call room (roomId == group chat id). */
 export interface CallJoinFrame {
@@ -173,14 +173,6 @@ export interface CallFullFrame {
   roomId: string;
   kind?: CallKind;
 }
-/** A member → the key master: please (re)send the current group media key. Live
- *  recovery path for a dropped call-key (which is never durably queued). */
-export interface CallKeyRequestFrame {
-  t: 'call-key-request';
-  to?: string; // the key master (smallest roster id)
-  from?: string;
-  roomId: string;
-}
 export interface CallLeaveFrame {
   t: 'call-leave';
   roomId: string;
@@ -191,50 +183,6 @@ export interface CallRosterFrame {
   roomId: string;
   members: string[];
   from?: string;
-}
-/** Peer-to-peer delivery of the group media key (sealed; never seen by server). */
-export interface CallKeyFrame {
-  t: 'call-key';
-  to?: string;
-  from?: string;
-  roomId: string;
-  ciphertext?: unknown; // sealed { epoch, key }
-}
-/** Peer-to-peer announcement of "my outgoing stream id is X" (sealed; never seen by
- *  the server). Lets each member label an incoming stream with its owner's name. */
-export interface CallStreamIdFrame {
-  t: 'call-streamid';
-  to?: string;
-  from?: string;
-  roomId: string;
-  ciphertext?: unknown; // sealed { streamId }
-}
-/** Client↔SFU negotiation (plain, the SFU is the endpoint, carries no keys). */
-export interface SfuOfferFrame {
-  t: 'sfu-offer';
-  to?: string;
-  from?: string;
-  roomId: string;
-  sdp?: unknown;
-}
-export interface SfuAnswerFrame {
-  t: 'sfu-answer';
-  to?: string;
-  from?: string;
-  roomId: string;
-  sdp?: unknown;
-}
-export interface SfuIceFrame {
-  t: 'sfu-ice';
-  to?: string;
-  from?: string;
-  roomId: string;
-  ciphertext?: unknown; // ICE candidate JSON (reuses the ciphertext slot as opaque carrier)
-}
-/** Client → SFU: my tracks changed mid-call (camera on/off) — please re-offer. */
-export interface SfuRenegotiateFrame {
-  t: 'sfu-renegotiate';
-  roomId: string;
 }
 /** 1:1 audio<->video upgrade consent (no SDP; relayed like the other call control
  *  frames): the requester asks, the other party accepts or rejects, and only then do
@@ -254,16 +202,9 @@ export type CallFrame =
   | CallJoinFrame
   | CallLeaveFrame
   | CallRosterFrame
-  | CallKeyFrame
-  | CallStreamIdFrame
   | CallGroupInviteFrame
   | CallFullFrame
-  | CallKeyRequestFrame
   | CallRingFrame
-  | SfuOfferFrame
-  | SfuAnswerFrame
-  | SfuIceFrame
-  | SfuRenegotiateFrame
   | CallUpgradeFrame;
 
 /** Connect-request notifications (server -> client): an incoming request, or an
