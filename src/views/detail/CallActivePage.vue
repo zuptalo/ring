@@ -396,7 +396,7 @@ import {
 import { useCallParticipants } from '@/composables/useCallParticipants';
 import { getQuickDeclines } from '@/services/quick-declines';
 import { useLiveQuery } from '@/composables/useLiveQuery';
-import { callDiagLines, callDiagSnapshot, callDiagOpen, clearDiag } from '@/services/call/diag';
+import { callDiagLines, callDiagSnapshot, callDiagOpen, clearDiag, pushDiag } from '@/services/call/diag';
 import { listContacts } from '@/db/queries';
 import { useSelfProfile } from '@/composables/useSelfProfile';
 import { initialsAvatar } from '@/db/avatars';
@@ -708,6 +708,7 @@ function isSpeaking(t: Tile): boolean {
 // element (orientation flips, split-screen, the keyboard) and not just window size.
 const stageSize = ref({ w: 0, h: 0 });
 let stageRO: ResizeObserver | null = null;
+let frameProbe: number | null = null; // debug: periodic self-preview frame probe
 function measureStage(): void {
   const el = stageEl.value;
   if (el) stageSize.value = { w: el.clientWidth, h: el.clientHeight };
@@ -853,10 +854,20 @@ onMounted(() => {
   }
   attach(mainVideo.value, mainHasVideo.value ? mainStream.value : null);
   attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null);
+  // Debug frame probe: every 3s, report the LOCAL self-preview <video>'s decoded size + clock.
+  // videoWidth>0 and currentTime advancing ⇒ the camera IS delivering frames (so a black tile is a
+  // render/encode issue); 0×0 ⇒ no frames reach the element (a capture issue). Removed before merge.
+  frameProbe = window.setInterval(() => {
+    const el = mainIsLocal.value ? mainVideo.value : pipVideo.value;
+    if (!el) return;
+    pushDiag(`selfvid: ${el.videoWidth}x${el.videoHeight} t=${el.currentTime.toFixed(1)} paused=${el.paused}`);
+  }, 3000);
 });
 onUnmounted(() => {
   stageRO?.disconnect();
   stageRO = null;
+  if (frameProbe) window.clearInterval(frameProbe);
+  frameProbe = null;
   window.removeEventListener('resize', measureStage);
 });
 

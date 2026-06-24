@@ -597,7 +597,9 @@ async function recoverStuckCamera(): Promise<void> {
   camRecoverAttempts++;
   pushDiag(`cam recover: re-acquiring camera (attempt ${camRecoverAttempts})`);
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: cameraFacing.value }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+    });
     const track = stream.getVideoTracks()[0];
     if (!track) {
       camRecovering = false;
@@ -710,7 +712,11 @@ function gumConstraints(kind: CallKind): MediaStreamConstraints {
   // (the default for video calls), where open-air feedback would otherwise howl.
   return {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    video: kind === 'video',
+    // Ask for an explicit, standard front-camera mode rather than bare `video: true`. On iOS
+    // (notably iPhone 8) a bare request can hand back a "live" track that delivers NO frames; a
+    // concrete 1280×720 ideal nudges WebKit to a known-good capture format. `ideal` is non-binding,
+    // so devices that can't do 720p fall back gracefully.
+    video: kind === 'video' ? { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } : false,
   };
 }
 
