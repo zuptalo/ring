@@ -35,7 +35,7 @@ import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
 import { pushDiag } from '@/services/call/diag';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
-  sendGroupLeave, sendGroupBusy, sendHoldResume,
+  sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
 import { syncState } from '@/composables/useSync';
@@ -51,6 +51,8 @@ import {
   nextTier,
   snapshotFromReport,
   clampForPin,
+  downlinkClassFrom,
+  requestedTierOf,
 } from '@/services/call/quality';
 import { activeDurationSec, bankActive, startActive } from '@/services/call/duration';
 import type { CallFrame } from '@/services/transport';
@@ -1045,6 +1047,16 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   videoQuality.value = 'auto';
   lessDataCalls = false;
   oneToOneQc = initialController(); // next call starts low again
+  // spec 0007: reset 1:1 connection-health state so the next call starts clean.
+  oneToOneDownlink = 'hd';
+  oneToOneHealthSeq = 0;
+  oneToOneLastSentTier = null;
+  oneToOneLastSentAt = 0;
+  oneToOnePeerReq = null;
+  inPrevLost = 0;
+  inPrevRecv = 0;
+  inPrevFramesDropped = 0;
+  inPrevFramesReceived = 0;
   pendingIncomingForeground = false;
   upgradePending.value = false;
   upgradeRequest.value = false;
@@ -2128,6 +2140,30 @@ let lessDataCalls = false;
 // 1:1 adaptive state, sampled in pollStats; reset per call.
 let oneToOneQc: ControllerState = initialController();
 
+// 1:1 connection-health (spec 0007 US2). We periodically tell the peer the max quality we want from
+// THEM (`requestedTier`, from our downlink + manual pin + view size), and apply the peer's report to
+// cap what WE send to them. All sealed `qos` over the existing call-ice frame; no server change.
+const HEALTH_INTERVAL_MS = 2000; // resend our report at least this often (FR: ~2s)
+const HEALTH_STALE_MS = 6000; // ignore a peer report older than this; fall back to send-side (FR-004)
+let oneToOneDownlink: Tier = 'hd'; // our self-assessed downlink class (hysteresis state)
+let oneToOneHealthSeq = 0; // monotonic seq for OUR outgoing reports
+let oneToOneLastSentTier: Tier | null = null; // last requestedTier we sent (to detect change)
+let oneToOneLastSentAt = 0; // when we last sent (to honor the ~2s cadence)
+let oneToOnePeerReq: { tier: Tier; seq: number; at: number } | null = null; // latest report FROM the peer
+// inbound deltas for downlink self-assessment (cumulative counters → per-interval rates)
+let inPrevLost = 0;
+let inPrevRecv = 0;
+let inPrevFramesDropped = 0;
+let inPrevFramesReceived = 0;
+
+/** The peer's fresh requested ceiling, or undefined if there's no report or it's stale (→ send-side
+ *  fallback, never a hang). `now` lets callers reuse one timestamp. */
+function oneToOnePeerCeiling(now: number): Tier | undefined {
+  if (!oneToOnePeerReq) return undefined;
+  if (now - oneToOnePeerReq.at > HEALTH_STALE_MS) return undefined;
+  return oneToOnePeerReq.tier;
+}
+
 /** The current upper-bound tier from the manual pin + data-saver. */
 function qualityClamp(): Tier {
   return clampForPin(videoQuality.value, lessDataCalls);
@@ -2157,12 +2193,59 @@ async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise
   }
 }
 
-/** One 1:1 adaptive step from a fresh getStats report: step the controller toward the clamp
- *  and apply if the tier changed. Called from pollStats (~1s). */
+/** One 1:1 adaptive step from a fresh getStats report: step the controller toward the clamp —
+ *  bounded by the peer's fresh requested ceiling (spec 0007 US2) — and apply if the tier changed.
+ *  Also assess our own downlink from inbound stats and (rate-limited) report it to the peer. */
 async function adaptOneToOne(report: RTCStatsReport): Promise<void> {
+  const now = Date.now();
   const before = oneToOneQc.tier;
-  oneToOneQc = nextTier(oneToOneQc, snapshotFromReport(report), qualityClamp());
+  oneToOneQc = nextTier(oneToOneQc, snapshotFromReport(report), qualityClamp(), oneToOnePeerCeiling(now));
   if (oneToOneQc.tier !== before) await applySenderTier(videoSender(), oneToOneQc.tier);
+  await reportHealthToPeer(report, now);
+}
+
+/** Assess our own downlink for the 1:1 peer from this inbound sample and send a sealed `qos` report
+ *  when our requested ceiling changed, or at least every ~2s (spec 0007 US2). Coarse enums only. */
+async function reportHealthToPeer(report: RTCStatsReport, now: number): Promise<void> {
+  const meta = callMeta.value;
+  if (!meta?.chatId || !meta.peerUserId || meta.isGroup) return;
+  // Per-interval inbound video loss + frame drops → coarse downlink class (hysteretic).
+  let lost = 0;
+  let recv = 0;
+  let framesDropped = 0;
+  let framesReceived = 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  report.forEach((s: any) => {
+    if (s.type === 'inbound-rtp' && s.kind === 'video') {
+      lost += s.packetsLost ?? 0;
+      recv += s.packetsReceived ?? 0;
+      framesDropped += s.framesDropped ?? 0;
+      framesReceived += s.framesReceived ?? s.framesDecoded ?? 0;
+    }
+  });
+  const dLost = Math.max(0, lost - inPrevLost);
+  const dRecv = Math.max(0, recv - inPrevRecv);
+  const dDrop = Math.max(0, framesDropped - inPrevFramesDropped);
+  const dFrames = Math.max(0, framesReceived - inPrevFramesReceived);
+  inPrevLost = lost;
+  inPrevRecv = recv;
+  inPrevFramesDropped = framesDropped;
+  inPrevFramesReceived = framesReceived;
+  const fractionLost = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
+  oneToOneDownlink = downlinkClassFrom({ fractionLost, framesDropped: dDrop, framesReceived: dFrames }, oneToOneDownlink);
+  // requestedTier = min(downlink, manual pin/data-saver, view size). The 1:1 remote is shown
+  // (near-)fullscreen, so the tile target is HD here; US4 refines this with the real rendered size.
+  const requested = requestedTierOf(oneToOneDownlink, qualityClamp(), 'hd');
+  const changed = requested !== oneToOneLastSentTier;
+  if (!changed && now - oneToOneLastSentAt < HEALTH_INTERVAL_MS) return;
+  oneToOneLastSentTier = requested;
+  oneToOneLastSentAt = now;
+  oneToOneHealthSeq += 1;
+  void sendHealth(meta.chatId, meta.peerUserId, meta.callId, {
+    requestedTier: requested,
+    downlinkClass: oneToOneDownlink,
+    seq: oneToOneHealthSeq,
+  });
 }
 
 /** Re-evaluate outgoing quality after a manual change. Group: push the clamp to the mesh
@@ -2496,6 +2579,7 @@ async function handleMeshSignal(
   // the offer/answer/ice handling — a peer paused/resumed their leg to us.
   if (signal.type === 'hold') await gs.onPeerHold(frame.from);
   else if (signal.type === 'resume') await gs.onPeerResume(frame.from);
+  else if (signal.type === 'qos' && signal.qos) gs.onPeerHealth(frame.from, signal.qos); // spec 0007 US2
   else if (type === 'offer') await gs.onPeerOffer(frame.from, signal);
   else if (type === 'answer') await gs.onPeerAnswer(frame.from, signal);
   else await gs.onPeerIce(frame.from, signal);
@@ -2674,6 +2758,15 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       if (signal.type === 'resume' && pc) {
         remoteHeld.value = false; // their video unfreezes immediately
         beginResumeCountdown(pc); // 5s heads-up + cue before WE become visible/audible again
+        return;
+      }
+      // Connection-health report (spec 0007 US2): the peer is telling us the max quality it wants
+      // from us. Keep only the newest (by seq) and apply it as a ceiling in adaptOneToOne.
+      if (signal.type === 'qos' && signal.qos) {
+        const q = signal.qos;
+        if (!oneToOnePeerReq || q.seq > oneToOnePeerReq.seq) {
+          oneToOnePeerReq = { tier: q.requestedTier, seq: q.seq, at: Date.now() };
+        }
         return;
       }
       if (signal.type !== 'ice' || !signal.candidate) return;

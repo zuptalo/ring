@@ -30,6 +30,8 @@ import {
   snapshotFromReport,
   clampForPeers,
   tierMin,
+  downlinkClassFrom,
+  requestedTierOf,
 } from '@/services/call/quality';
 import type { CallKind } from '@/services/call/types';
 import type { CallSignal } from '@/services/crypto/message';
@@ -100,7 +102,32 @@ interface PeerLeg {
   // independently from this leg's own getStats, so one call can send different qualities to
   // different peers based on each link. Starts low; climbs/backs off via quality.nextTier.
   qc: ControllerState;
+  // Per-receiver connection health (spec 0007 US2).
+  health: LegHealth;
 }
+
+/** Spec 0007 US2 per-leg health state. `peerReq` is the latest sealed report FROM this peer (caps
+ *  what WE send them); the rest is OUR outgoing-report bookkeeping for this peer — the self-assessed
+ *  downlink class, a monotonic seq, change/cadence tracking, and the previous inbound counters used
+ *  to turn cumulative getStats totals into per-interval rates. */
+interface LegHealth {
+  peerReq?: { tier: Tier; seq: number; at: number };
+  downlink: Tier;
+  seq: number;
+  lastSentTier: Tier | null;
+  lastSentAt: number;
+  inPrevLost: number;
+  inPrevRecv: number;
+  inPrevDrop: number;
+  inPrevFrames: number;
+}
+
+function freshLegHealth(): LegHealth {
+  return { downlink: 'hd', seq: 0, lastSentTier: null, lastSentAt: 0, inPrevLost: 0, inPrevRecv: 0, inPrevDrop: 0, inPrevFrames: 0 };
+}
+
+const MESH_HEALTH_INTERVAL_MS = 2000; // resend each leg's report at least this often (~2s)
+const MESH_HEALTH_STALE_MS = 6000; // ignore a peer report older than this → send-side fallback
 
 export class MeshSession {
   readonly roomId: string;
@@ -119,6 +146,9 @@ export class MeshSession {
   // Upper-bound tier from the manual quality pin + "use less data" (spec 0004 US4). The
   // adaptive controller may go BELOW this to keep a call alive, but never above it.
   private clampTier: Tier = 'hd';
+  // Spec 0007 US4: per-peer rendered tile-size ceiling (set by the view); folds into the health
+  // report we send that peer. Absent → treated as HD (fullscreen).
+  private tileTargets = new Map<string, Tier>();
   // Aggregate connection-state tracking (so a single leg blip doesn't end the call).
   private everConnected = false;
   private lastEmittedState: RTCPeerConnectionState | null = null;
@@ -490,14 +520,86 @@ export class MeshSession {
     }
   }
 
-  /** One adaptive step for a leg from a fresh getStats report: update the controller state
-   *  toward the clamp and apply the resulting tier. Per-receiver — driven by THIS leg's link. */
+  /** One adaptive step for a leg from a fresh getStats report: update the controller state toward
+   *  the clamp — bounded by what this receiver asked for (spec 0007 US2) — and apply the resulting
+   *  tier. Per-receiver — driven by THIS leg's link AND this receiver's reported downlink. */
   private adaptLeg(leg: PeerLeg, report: RTCStatsReport): void {
     if (!this.videoSenderOf(leg)) return; // audio-only leg → nothing to tier
     const snap = snapshotFromReport(report);
     const before = leg.qc.tier;
-    leg.qc = nextTier(leg.qc, snap, this.effectiveCeiling());
+    leg.qc = nextTier(leg.qc, snap, this.effectiveCeiling(), this.legPeerCeiling(leg, Date.now()));
     if (leg.qc.tier !== before) void this.applyLegEncoding(leg);
+  }
+
+  /** This receiver's fresh requested ceiling for the leg, or undefined if absent/stale (→ send-side
+   *  fallback, FR-004). */
+  private legPeerCeiling(leg: PeerLeg, now: number): Tier | undefined {
+    const pr = leg.health.peerReq;
+    if (!pr || now - pr.at > MESH_HEALTH_STALE_MS) return undefined;
+    return pr.tier;
+  }
+
+  /** Assess OUR downlink for this leg from its inbound video and (rate-limited) send a sealed `qos`
+   *  report to the peer: requestedTier = min(downlink, manual clamp, tile target). Coarse enums only,
+   *  carried over the existing call-ice frame (spec 0007 US2). */
+  private reportLegHealth(leg: PeerLeg, report: RTCStatsReport, now: number): void {
+    let lost = 0;
+    let recv = 0;
+    let drop = 0;
+    let frames = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    report.forEach((st: any) => {
+      if (st.type === 'inbound-rtp' && st.kind === 'video') {
+        lost += st.packetsLost ?? 0;
+        recv += st.packetsReceived ?? 0;
+        drop += st.framesDropped ?? 0;
+        frames += st.framesReceived ?? st.framesDecoded ?? 0;
+      }
+    });
+    const h = leg.health;
+    const dLost = Math.max(0, lost - h.inPrevLost);
+    const dRecv = Math.max(0, recv - h.inPrevRecv);
+    const dDrop = Math.max(0, drop - h.inPrevDrop);
+    const dFrames = Math.max(0, frames - h.inPrevFrames);
+    h.inPrevLost = lost;
+    h.inPrevRecv = recv;
+    h.inPrevDrop = drop;
+    h.inPrevFrames = frames;
+    const fractionLost = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
+    h.downlink = downlinkClassFrom({ fractionLost, framesDropped: dDrop, framesReceived: dFrames }, h.downlink);
+    // The manual clamp folds in so a manual low/medium pin caps INCOMING too (US3). The tile target
+    // is HD until US4 threads each tile's rendered size in via setTileTarget().
+    const tile = this.tileTargets.get(leg.peerId) ?? 'hd';
+    const requested = requestedTierOf(h.downlink, this.clampTier, tile);
+    const changed = requested !== h.lastSentTier;
+    if (!changed && now - h.lastSentAt < MESH_HEALTH_INTERVAL_MS) return;
+    h.lastSentTier = requested;
+    h.lastSentAt = now;
+    h.seq += 1;
+    void this.send('call-ice', leg.peerId, {
+      callId: this.roomId,
+      type: 'qos',
+      qos: { requestedTier: requested, downlinkClass: h.downlink, seq: h.seq },
+      roomId: this.roomId,
+    });
+  }
+
+  /** A peer's sealed health report arrived (spec 0007 US2): keep the newest (by seq) for that leg;
+   *  adaptLeg applies it as a ceiling on what we send them. */
+  onPeerHealth(from: string, qos: { requestedTier: Tier; downlinkClass: Tier; seq: number }): void {
+    const leg = this.legs.get(from);
+    if (!leg) return;
+    const pr = leg.health.peerReq;
+    if (!pr || qos.seq > pr.seq) {
+      leg.health.peerReq = { tier: qos.requestedTier, seq: qos.seq, at: Date.now() };
+    }
+  }
+
+  /** Spec 0007 US4: set the rendered tile size (CSS px, larger dimension) for a peer's video, so our
+   *  requested ceiling to them reflects how big we're actually showing them. Rate-limited by the
+   *  ~2s report cadence; an immediate change is picked up on the next tick. */
+  setTileTarget(peerId: string, tile: Tier): void {
+    this.tileTargets.set(peerId, tile);
   }
 
   /** Stats from a representative connected leg (for the bitrate readout). */
@@ -545,6 +647,7 @@ export class MeshSession {
           try {
             const report = await leg.pc.getStats();
             this.adaptLeg(leg, report); // per-receiver adaptive quality (spec 0004 US4)
+            this.reportLegHealth(leg, report, Date.now()); // tell this peer our downlink (spec 0007 US2)
             const codecs = new Map<string, string>();
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             report.forEach((st: any) => {
@@ -618,6 +721,7 @@ export class MeshSession {
       negotiated: false,
       offerAttempts: 0,
       qc: initialController(), // starts sending low; the controller climbs from there
+      health: freshLegHealth(), // spec 0007 US2
     };
     this.legs.set(peerId, leg);
 
