@@ -14,17 +14,21 @@ type PushSubscription struct {
 	TZOffsetMinutes  int
 }
 
-// SaveSubscription upserts a push subscription for a user (idempotent on the endpoint,
-// refreshing its keys). installedVersion / tzOffsetMinutes are the client's reported app
-// version + local UTC offset (minutes); each is updated ONLY when provided (non-nil), so a
-// version-less re-subscribe (e.g. the service-worker resubscribe path) preserves the
-// values the page reported (COALESCE). last_announced_version is never written here — only
+// SaveSubscription stores the user's ONE push subscription, overwriting any previous one
+// (single active device by design — see migration 0026). The table is keyed on user_id, so a
+// new or rotated endpoint replaces the old row rather than adding another, which is also how a
+// login from a second device revokes the first's push: registering the new subscription drops
+// the old endpoint. The keys are always refreshed; installedVersion / tzOffsetMinutes (the
+// client's reported app version + coarse local UTC offset) are updated ONLY when provided
+// (non-nil), so a version-less re-subscribe (the service-worker resubscribe path) preserves
+// the values the page reported (COALESCE). last_announced_version is never written here — only
 // the version scheduler sets it.
 func (s *Store) SaveSubscription(ctx context.Context, userID string, sub PushSubscription, installedVersion *string, tzOffsetMinutes *int) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, installed_version, tz_offset_minutes)
 		 VALUES ($1, $2, $3, $4, $5, $6)
-		 ON CONFLICT (user_id, endpoint) DO UPDATE SET
+		 ON CONFLICT (user_id) DO UPDATE SET
+		     endpoint = EXCLUDED.endpoint,
 		     p256dh = EXCLUDED.p256dh,
 		     auth = EXCLUDED.auth,
 		     installed_version = COALESCE(EXCLUDED.installed_version, push_subscriptions.installed_version),
