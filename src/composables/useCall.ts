@@ -543,25 +543,11 @@ async function loadCallPrefs(): Promise<void> {
 // the orientation has settled, so the fresh capture comes up stable) and swap it into the sender(s)
 // + self-preview. State + decisions are also surfaced to the ⓘ panel for diagnosis.
 let instrumentedCamTrack: MediaStreamTrack | null = null;
-let camMuteTimer: ReturnType<typeof setTimeout> | null = null;
-let camRecovering = false;
-let camRecoverAttempts = 0;
 let diagTick = 0; // debug: throttles the 1:1 outbound-video readout in pollStats
-const CAM_RECOVER_MAX = 2;
-// iOS often mutes the camera transiently on the first orientation/format reconfiguration and
-// unmutes ON ITS OWN ~1s later. Wait that out (don't race it with a second getUserMedia — iOS
-// allows one capture at a time, so two fighting captures leave BOTH black). Only re-acquire if it
-// stays muted well past the natural recovery.
-const CAM_MUTE_GRACE_MS = 3500;
-
-function clearCamMuteTimer(): void {
-  if (camMuteTimer) clearTimeout(camMuteTimer);
-  camMuteTimer = null;
-}
 
 /** Hand the self-preview a FRESH MediaStream object so its <video> re-attaches + re-plays. iOS
- *  Safari doesn't reliably render a track that resumed after a mute (or was swapped in place), so
- *  reassigning the ref is the reliable kick. */
+ *  Safari doesn't reliably render a track that resumed after a mute, so reassigning the ref is the
+ *  reliable kick. */
 function forceSelfPreviewReattach(): void {
   const ls = localStream.value;
   if (ls) localStream.value = new MediaStream(ls.getTracks());
@@ -574,53 +560,14 @@ async function reassertOutgoingVideo(): Promise<void> {
   if (v && v.readyState === 'live' && !v.muted) await replaceOutgoingVideo(v).catch(() => {});
 }
 
-/** Reset the camera watchdog for a fresh call (called from teardown). */
+/** Reset the camera instrumentation for a fresh call (called from teardown). */
 function resetCameraWatchdog(): void {
-  clearCamMuteTimer();
-  camRecovering = false;
-  camRecoverAttempts = 0;
   instrumentedCamTrack = null;
 }
 
-/** Re-acquire the camera after it got stuck muted, and swap the fresh track into the outgoing
- *  sender(s) + the local self-preview. Bounded retries so a genuinely-unavailable camera (or a
- *  backgrounded app) can't loop. */
-async function recoverStuckCamera(): Promise<void> {
-  const meta = callMeta.value;
-  if (camRecovering || !meta || meta.kind !== 'video' || cameraOff.value || screenSharing.value) return;
-  if (typeof document !== 'undefined' && document.hidden) return; // don't fight a backgrounded mute
-  if (camRecoverAttempts >= CAM_RECOVER_MAX) {
-    pushDiag('cam recover: gave up (max attempts)');
-    return;
-  }
-  camRecovering = true;
-  camRecoverAttempts++;
-  pushDiag(`cam recover: re-acquiring camera (attempt ${camRecoverAttempts})`);
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: cameraFacing.value }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-    });
-    const track = stream.getVideoTracks()[0];
-    if (!track) {
-      camRecovering = false;
-      return;
-    }
-    if (await replaceOutgoingVideo(track)) {
-      setLocalVideoTrack(track, true); // swap the video track in localStream
-      forceSelfPreviewReattach(); // hand the self-preview a fresh stream so iOS actually re-renders
-      instrumentCamTrack(track); // watch the FRESH track
-    } else {
-      track.stop();
-    }
-  } catch (e) {
-    pushDiag(`cam recover: failed ${String(e)}`);
-  } finally {
-    camRecovering = false;
-  }
-}
-
-/** Instrument one local camera track: report its state to the ⓘ panel and arm the stuck-mute
- *  watchdog. Idempotent per track. */
+/** Instrument one local camera track: report its state to the ⓘ panel; on unmute, kick the
+ *  self-preview + sender so iOS resumes frames (NO re-acquire — that steals the one camera and
+ *  ENDs the live track, which made things worse). Idempotent per track. */
 function instrumentCamTrack(v: MediaStreamTrack): void {
   if (v === instrumentedCamTrack) return;
   instrumentedCamTrack = v;
@@ -633,30 +580,17 @@ function instrumentCamTrack(v: MediaStreamTrack): void {
     }
     pushDiag(`cam ${ev}: muted=${v.muted} ready=${v.readyState} ${st.width ?? '?'}x${st.height ?? '?'}@${Math.round(st.frameRate ?? 0)}`);
   };
-  const armRecovery = (): void => {
-    clearCamMuteTimer();
-    camMuteTimer = setTimeout(() => {
-      if (v === instrumentedCamTrack && v.muted) void recoverStuckCamera();
-    }, CAM_MUTE_GRACE_MS);
-  };
   report('init');
   v.addEventListener('unmute', () => {
-    clearCamMuteTimer(); // the transient mute recovered on its own — no re-acquire needed
     report('unmuted');
     // iOS resumed the track but the self-preview + encoder may not pick the frames back up — kick
-    // both (re-attach the preview, re-assert the sender). No second getUserMedia.
+    // both (re-attach the preview, re-assert the sender). NO second getUserMedia: re-acquiring
+    // steals the one camera and ENDs the live track, which made things worse.
     forceSelfPreviewReattach();
     void reassertOutgoingVideo();
   });
-  v.addEventListener('mute', () => {
-    report('MUTED');
-    armRecovery();
-  });
-  v.addEventListener('ended', () => {
-    clearCamMuteTimer();
-    report('ENDED');
-  });
-  if (v.muted) armRecovery(); // already muted at capture → give it the grace window, then recover
+  v.addEventListener('mute', () => report('MUTED'));
+  v.addEventListener('ended', () => report('ENDED'));
 }
 
 watch(localStream, (s) => {
@@ -716,7 +650,7 @@ function gumConstraints(kind: CallKind): MediaStreamConstraints {
     // (notably iPhone 8) a bare request can hand back a "live" track that delivers NO frames; a
     // concrete 1280×720 ideal nudges WebKit to a known-good capture format. `ideal` is non-binding,
     // so devices that can't do 720p fall back gracefully.
-    video: kind === 'video' ? { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } : false,
+    video: kind === 'video' ? { facingMode: { ideal: 'user' }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false,
   };
 }
 
