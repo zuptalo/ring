@@ -535,14 +535,71 @@ async function loadCallPrefs(): Promise<void> {
   lessDataCalls = lessData;
   callSoundsOn = sounds;
 }
-// Camera-capture diagnostics (debug): surface the LOCAL camera track's live state to the on-call
-// ⓘ panel for whichever stream becomes the active local stream, on every capture path. Lets a
-// black self-view / no-outgoing-video be pinned to a CAPTURE failure (a muted/ended track, or
-// 0×0 frames) vs an encode problem — the iPhone-8 case we're chasing. Cheap and read-only.
+// Camera-capture watchdog (iOS, esp. iPhone 8). On iOS the camera track can come up fine and then
+// MUTE on the first orientation/format reconfiguration (e.g. 640×480 → 480×640) and never unmute —
+// it gets stuck delivering NO frames, so the self-view is black AND nothing is encoded/sent (the
+// confirmed iPhone-8 bug; the 0005 onunmute fix can't help because unmute never fires). The fix:
+// if a camera track mutes and doesn't recover within a short grace window, RE-ACQUIRE it (by then
+// the orientation has settled, so the fresh capture comes up stable) and swap it into the sender(s)
+// + self-preview. State + decisions are also surfaced to the ⓘ panel for diagnosis.
 let instrumentedCamTrack: MediaStreamTrack | null = null;
-watch(localStream, (s) => {
-  const v = s?.getVideoTracks()[0] ?? null;
-  if (!v || v === instrumentedCamTrack) return;
+let camMuteTimer: ReturnType<typeof setTimeout> | null = null;
+let camRecovering = false;
+let camRecoverAttempts = 0;
+const CAM_RECOVER_MAX = 3;
+const CAM_MUTE_GRACE_MS = 1200;
+
+function clearCamMuteTimer(): void {
+  if (camMuteTimer) clearTimeout(camMuteTimer);
+  camMuteTimer = null;
+}
+
+/** Reset the camera watchdog for a fresh call (called from teardown). */
+function resetCameraWatchdog(): void {
+  clearCamMuteTimer();
+  camRecovering = false;
+  camRecoverAttempts = 0;
+  instrumentedCamTrack = null;
+}
+
+/** Re-acquire the camera after it got stuck muted, and swap the fresh track into the outgoing
+ *  sender(s) + the local self-preview. Bounded retries so a genuinely-unavailable camera (or a
+ *  backgrounded app) can't loop. */
+async function recoverStuckCamera(): Promise<void> {
+  const meta = callMeta.value;
+  if (camRecovering || !meta || meta.kind !== 'video' || cameraOff.value || screenSharing.value) return;
+  if (typeof document !== 'undefined' && document.hidden) return; // don't fight a backgrounded mute
+  if (camRecoverAttempts >= CAM_RECOVER_MAX) {
+    pushDiag('cam recover: gave up (max attempts)');
+    return;
+  }
+  camRecovering = true;
+  camRecoverAttempts++;
+  pushDiag(`cam recover: re-acquiring camera (attempt ${camRecoverAttempts})`);
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      camRecovering = false;
+      return;
+    }
+    if (await replaceOutgoingVideo(track)) {
+      setLocalVideoTrack(track, true); // swap the video track in localStream → self-preview rebinds
+      instrumentCamTrack(track); // watch the FRESH track (setLocalVideoTrack mutates in place, no ref change)
+    } else {
+      track.stop();
+    }
+  } catch (e) {
+    pushDiag(`cam recover: failed ${String(e)}`);
+  } finally {
+    camRecovering = false;
+  }
+}
+
+/** Instrument one local camera track: report its state to the ⓘ panel and arm the stuck-mute
+ *  watchdog. Idempotent per track. */
+function instrumentCamTrack(v: MediaStreamTrack): void {
+  if (v === instrumentedCamTrack) return;
   instrumentedCamTrack = v;
   const report = (ev: string): void => {
     let st: MediaTrackSettings = {};
@@ -553,10 +610,31 @@ watch(localStream, (s) => {
     }
     pushDiag(`cam ${ev}: muted=${v.muted} ready=${v.readyState} ${st.width ?? '?'}x${st.height ?? '?'}@${Math.round(st.frameRate ?? 0)}`);
   };
+  const armRecovery = (): void => {
+    clearCamMuteTimer();
+    camMuteTimer = setTimeout(() => {
+      if (v === instrumentedCamTrack && v.muted) void recoverStuckCamera();
+    }, CAM_MUTE_GRACE_MS);
+  };
   report('init');
-  v.addEventListener('mute', () => report('MUTED'));
-  v.addEventListener('unmute', () => report('unmuted'));
-  v.addEventListener('ended', () => report('ENDED'));
+  v.addEventListener('unmute', () => {
+    clearCamMuteTimer(); // a transient mute recovered on its own
+    report('unmuted');
+  });
+  v.addEventListener('mute', () => {
+    report('MUTED');
+    armRecovery();
+  });
+  v.addEventListener('ended', () => {
+    clearCamMuteTimer();
+    report('ENDED');
+  });
+  if (v.muted) armRecovery(); // already muted at capture → give it the grace window, then recover
+}
+
+watch(localStream, (s) => {
+  const v = s?.getVideoTracks()[0] ?? null;
+  if (v) instrumentCamTrack(v);
 });
 
 // Cue "reconnecting" whenever the call enters the reconnecting state, from any of the
@@ -1064,6 +1142,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
 
   setState('ended');
   cancelResumeCountdown();
+  resetCameraWatchdog();
   // Clear ALL call-waiting display state so a hung-up call can't leak its "on hold" UI into the
   // next call (the reported bug: a device that was on hold kept remoteHeld=true after the call
   // dropped, so the next call opened showing the hold overlay).
