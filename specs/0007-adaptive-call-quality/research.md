@@ -35,9 +35,9 @@ These are **reproduced as failing unit tests first** (TDD), then fixed.
 
 ## Decision 1 — Unify the receiver's wishes into a single "requested max tier"
 
-**Decision**: Each receiver computes ONE `requestedMaxTier` = `min(` downlink-derived capacity class,
+**Decision**: Each receiver computes ONE `requestedTier` = `min(` downlink-derived capacity class,
 manual pin/cap, tile-size target `)` and reports it to each sender. A sender's per-leg tier becomes
-`min(` own send-side adaptive tier, peer's `requestedMaxTier` `)`. Sender-side congestion may still
+`min(` own send-side adaptive tier, peer's `requestedTier` `)`. Sender-side congestion may still
 push **below** that; the receiver's request is a hard **ceiling**, never a floor.
 
 **Rationale**: This folds US2 (downlink), US3 (manual hard cap), and US4 (screen/tile size) into one
