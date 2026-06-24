@@ -546,12 +546,32 @@ let instrumentedCamTrack: MediaStreamTrack | null = null;
 let camMuteTimer: ReturnType<typeof setTimeout> | null = null;
 let camRecovering = false;
 let camRecoverAttempts = 0;
-const CAM_RECOVER_MAX = 3;
-const CAM_MUTE_GRACE_MS = 1200;
+let diagTick = 0; // debug: throttles the 1:1 outbound-video readout in pollStats
+const CAM_RECOVER_MAX = 2;
+// iOS often mutes the camera transiently on the first orientation/format reconfiguration and
+// unmutes ON ITS OWN ~1s later. Wait that out (don't race it with a second getUserMedia — iOS
+// allows one capture at a time, so two fighting captures leave BOTH black). Only re-acquire if it
+// stays muted well past the natural recovery.
+const CAM_MUTE_GRACE_MS = 3500;
 
 function clearCamMuteTimer(): void {
   if (camMuteTimer) clearTimeout(camMuteTimer);
   camMuteTimer = null;
+}
+
+/** Hand the self-preview a FRESH MediaStream object so its <video> re-attaches + re-plays. iOS
+ *  Safari doesn't reliably render a track that resumed after a mute (or was swapped in place), so
+ *  reassigning the ref is the reliable kick. */
+function forceSelfPreviewReattach(): void {
+  const ls = localStream.value;
+  if (ls) localStream.value = new MediaStream(ls.getTracks());
+}
+
+/** After a camera mute resolves, the iOS sender can stay idle — re-assert the (live) video track on
+ *  the outgoing sender(s) to restart the encoder, without a second getUserMedia. */
+async function reassertOutgoingVideo(): Promise<void> {
+  const v = localStream.value?.getVideoTracks()[0];
+  if (v && v.readyState === 'live' && !v.muted) await replaceOutgoingVideo(v).catch(() => {});
 }
 
 /** Reset the camera watchdog for a fresh call (called from teardown). */
@@ -584,8 +604,9 @@ async function recoverStuckCamera(): Promise<void> {
       return;
     }
     if (await replaceOutgoingVideo(track)) {
-      setLocalVideoTrack(track, true); // swap the video track in localStream → self-preview rebinds
-      instrumentCamTrack(track); // watch the FRESH track (setLocalVideoTrack mutates in place, no ref change)
+      setLocalVideoTrack(track, true); // swap the video track in localStream
+      forceSelfPreviewReattach(); // hand the self-preview a fresh stream so iOS actually re-renders
+      instrumentCamTrack(track); // watch the FRESH track
     } else {
       track.stop();
     }
@@ -618,8 +639,12 @@ function instrumentCamTrack(v: MediaStreamTrack): void {
   };
   report('init');
   v.addEventListener('unmute', () => {
-    clearCamMuteTimer(); // a transient mute recovered on its own
+    clearCamMuteTimer(); // the transient mute recovered on its own — no re-acquire needed
     report('unmuted');
+    // iOS resumed the track but the self-preview + encoder may not pick the frames back up — kick
+    // both (re-attach the preview, re-assert the sender). No second getUserMedia.
+    forceSelfPreviewReattach();
+    void reassertOutgoingVideo();
   });
   v.addEventListener('mute', () => {
     report('MUTED');
@@ -898,10 +923,20 @@ async function pollStats(): Promise<void> {
   let down = 0;
   let lost = 0;
   let recv = 0;
+  let outVidFrames = -1;
+  let outVidBytes = 0;
   try {
     const report = await getStats;
     report.forEach((s) => {
-      if (s.type === 'outbound-rtp' && typeof s.bytesSent === 'number') up += s.bytesSent;
+      if (s.type === 'outbound-rtp' && typeof s.bytesSent === 'number') {
+        up += s.bytesSent;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const o = s as any;
+        if (o.kind === 'video') {
+          outVidFrames = o.framesEncoded ?? 0;
+          outVidBytes = o.bytesSent ?? 0;
+        }
+      }
       if (s.type === 'inbound-rtp') {
         if (typeof s.bytesReceived === 'number') down += s.bytesReceived;
         if (typeof s.packetsLost === 'number') lost += s.packetsLost;
@@ -913,6 +948,12 @@ async function pollStats(): Promise<void> {
     if (pc) await adaptOneToOne(report);
   } catch {
     return;
+  }
+  // Debug: surface the 1:1 outbound VIDEO frames-encoded to the ⓘ panel every few seconds, so a
+  // stuck-black camera (enc not advancing) is visible on a 1:1 call (the mesh path already shows
+  // per-leg out/in; the 1:1 pc path showed nothing). Cheap; removed before this branch merges.
+  if (pc && outVidFrames >= 0 && ++diagTick % 3 === 0) {
+    pushDiag(`out1to1 video: enc=${outVidFrames} b=${outVidBytes >= 1e3 ? Math.round(outVidBytes / 1e3) + 'k' : outVidBytes}`);
   }
   const now = Date.now();
   // First sample after a swap/resume: the active PC (and its cumulative counters) just changed,
