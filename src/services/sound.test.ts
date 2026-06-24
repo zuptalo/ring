@@ -32,7 +32,7 @@ describe('claimCue — call-cue rate limiter (spec 0004 US5)', () => {
   });
 
   it('has a recipe for every call-waiting cue (spec 0005 US5)', () => {
-    for (const name of ['callwaiting', 'hold', 'resume', 'swap']) {
+    for (const name of ['callwaiting', 'hold', 'resume', 'swap', 'resuming']) {
       expect(RECIPE_NAMES).toContain(name);
     }
   });

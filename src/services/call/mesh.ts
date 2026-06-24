@@ -24,7 +24,7 @@ import {
   type Tier,
   type ControllerState,
   TIERS,
-  TIER_ENCODING,
+  tierEncoding,
   initialController,
   nextTier,
   snapshotFromReport,
@@ -33,6 +33,15 @@ import {
 } from '@/services/call/quality';
 import type { CallKind } from '@/services/call/types';
 import type { CallSignal } from '@/services/crypto/message';
+
+// WebKit/iOS encoders (notably older devices like the iPhone 8) stall when scaleResolutionDownBy
+// / maxFramerate are pushed via setParameters — they can stop producing frames entirely, so the
+// peer receives no video. There we tier by maxBitrate only. Detected once from the UA (duplicated
+// from useCall's isIOS rather than imported, to keep mesh free of a useCall → mesh import cycle).
+const isWebKitVideo =
+  typeof navigator !== 'undefined' &&
+  (/iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (/Macintosh/.test(navigator.userAgent) && typeof document !== 'undefined' && 'ontouchend' in document));
 
 export interface MeshCallbacks {
   /** The set of remote streams changed (one per connected peer). */
@@ -456,7 +465,7 @@ export class MeshSession {
     if (!sender) return;
     const params = sender.getParameters();
     if (!params.encodings || params.encodings.length === 0) return;
-    const enc = TIER_ENCODING[leg.qc.tier];
+    const enc = tierEncoding(leg.qc.tier, isWebKitVideo);
     const e = params.encodings[0];
     e.maxBitrate = enc.maxBitrate;
     e.scaleResolutionDownBy = enc.scaleResolutionDownBy;

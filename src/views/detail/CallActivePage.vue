@@ -32,6 +32,12 @@
         </div>
       </div>
       <div ref="stageEl" class="stage" :class="{ 'chrome-hidden': chromeHidden }" @click="onStageClick">
+        <!-- Coming off hold (spec 0005): the other side resumed, so we get a 5s heads-up + cue
+             before our camera/mic go live again, so we're not caught by surprise. -->
+        <div v-if="resumeCountdown !== null" class="resume-countdown" role="status" @click.stop>
+          <div class="rc-num">{{ resumeCountdown }}</div>
+          <div class="rc-text">You're back on camera in {{ resumeCountdown }}…</div>
+        </div>
         <!-- Call waiting (spec 0005): a second call arriving over the active one offers
              Accept & hold / Decline; the call you already have on hold shows a bar; and when
              the other side has put US on hold a badge shows. -->
@@ -107,7 +113,7 @@
                 <video
                   :ref="(el) => attach(el as HTMLVideoElement | null, t.stream)"
                   class="tile-video"
-                  :class="{ mirror: t.isSelf && localMirror }"
+                  :class="{ mirror: t.isSelf && localMirror, 'held-frozen': groupHeldPeers.includes(t.key) }"
                   muted
                   autoplay
                   playsinline
@@ -160,11 +166,17 @@
             v-show="mainHasVideo"
             ref="mainVideo"
             class="main-video"
-            :class="{ mirror: mainIsLocal && localMirror }"
+            :class="{ mirror: mainIsLocal && localMirror, 'held-frozen': remoteHeld && !mainIsLocal }"
             muted
             autoplay
             playsinline
           />
+          <!-- The other side put us on hold (spec 0005): their last frame is frozen, so blur it
+               (class above) and overlay a clear pause badge so it's obvious the call is paused. -->
+          <div v-if="remoteHeld && mainHasVideo && !mainIsLocal" class="held-overlay">
+            <ion-icon :icon="pauseOutline" />
+            <span>On hold</span>
+          </div>
           <!-- Flip button when our own camera fills the screen (local is the stage). -->
           <button
             v-if="mainIsLocal && mainHasVideo && canFlip"
@@ -373,7 +385,7 @@ import {
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite,
   acceptCall, rejectCall, declineWithMessage,
-  heldCall, remoteHeld, groupHeldPeers, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
+  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useCallParticipants } from '@/composables/useCallParticipants';
@@ -761,6 +773,18 @@ function attach(el: HTMLVideoElement | null, stream: MediaStream | null): void {
     // on older iOS (e.g. iPhone 8). Nudge again shortly after, once it's laid out.
     void el.play?.().catch(() => {});
     setTimeout(() => void el.play?.().catch(() => {}), 150);
+    // Older iOS (iPhone 8) frequently hands us a camera/remote track that starts `muted`
+    // (delivers NO frames) and unmutes a beat later — and re-mutes when the app briefly
+    // backgrounds. Without this, the <video> stays black until the next attach. Re-play the
+    // moment the track produces frames again. Assigning onunmute (not addEventListener) keeps
+    // it idempotent and always pointed at the element the track is currently shown in.
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+      track.onunmute = () => {
+        void el.play?.().catch(() => {});
+        setTimeout(() => void el.play?.().catch(() => {}), 150);
+      };
+    }
   }
   applySinkTo(el);
 }
@@ -1276,6 +1300,66 @@ const diag = computed(() => {
      don't overlap (both are bottom-anchored). */
   bottom: calc(env(safe-area-inset-bottom, 0px) + 152px);
   background: rgba(120, 120, 128, 0.85);
+}
+/* On hold (spec 0005): the held peer's last frame is frozen, so blur it and dim it slightly —
+   paired with the .held-overlay / .tile-onhold pause badge so it reads as paused, not broken. */
+.held-frozen {
+  filter: blur(16px) brightness(0.7);
+}
+/* Centered pause badge over the blurred 1:1 main video while the other side has us on hold. */
+.held-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  pointer-events: none;
+}
+.held-overlay ion-icon {
+  font-size: 56px;
+  opacity: 0.95;
+}
+.held-overlay span {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* Resume countdown (spec 0005): a prominent, unmissable heads-up shown to the person coming off
+   hold for the few seconds before their camera/mic go live again. */
+.resume-countdown {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+}
+.rc-num {
+  font-size: 72px;
+  font-weight: 700;
+  line-height: 1;
+  width: 110px;
+  height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.85);
+}
+.rc-text {
+  font-size: 16px;
+  font-weight: 600;
+  opacity: 0.92;
 }
 /* A departed participant's placeholder: a waving hand that lingers, then fades out.
    Duration must match LEAVE_MS in the script. */

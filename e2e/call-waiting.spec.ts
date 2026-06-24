@@ -3,7 +3,7 @@ import {
   createAccount, pair, startCall, startGroup, accept, hangup, waitCallState, waitRemotes,
   remoteTracks, callState, acceptAndHold, hasSecondIncoming, canHoldIncoming, heldCallId,
   isRemoteHeld, groupHeldPeers, swapCalls, endHeld, rejectSecond, recordCues, cuesFired,
-  setGlobalSetting, type RingClient, resetCallConfig, callLogCount, waitCallLog,
+  setGlobalSetting, type RingClient, resetCallConfig, callLogCount, waitCallLog, resumeCountdown,
 } from './helpers';
 
 /** Set up the common state: A↔B connected (1:1), then C calls A and A accepts-and-holds, so
@@ -343,6 +343,67 @@ test('FR-010: a held-then-resumed call logs as ONE history entry (hold/swap/resu
   expect(await callLogCount(a, b.id)).toBe(1);
   expect(await callLogCount(a, c.id)).toBe(1);
 
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});
+
+test('the party coming off hold gets a resume countdown before going live again', async ({ browser }) => {
+  // A↔B connected; A takes a 2nd call from C (B held); A drops C → returns to B, which RESUMES B.
+  // B (the held party) should see a countdown before its camera/mic go live, then it clears.
+  const { a, b, c, close } = await twoCalls(browser, 'CWRC');
+  // While A is on C, B is held: B's outgoing is paused and B is not yet counting down.
+  expect(await resumeCountdown(b)).toBeNull();
+  expect(await isRemoteHeld(b)).toBe(true);
+
+  await hangup(a); // drop the active call (C) → A returns to the held call (B), resuming it
+  await waitCallState(c, ['idle', 'ended']);
+
+  // B is told it resumed → B runs a heads-up countdown before becoming visible again.
+  await b.page.waitForFunction(() => (window as any).__ringTest.resumeCountdown() !== null, null, { timeout: 10_000 });
+  expect(await isRemoteHeld(b)).toBe(false); // the freeze/blur clears immediately
+  const n = await resumeCountdown(b);
+  expect(typeof n).toBe('number');
+  expect(n as number).toBeGreaterThan(0);
+  expect(n as number).toBeLessThanOrEqual(5);
+
+  // After the countdown elapses it clears and the call carries on connected.
+  await b.page.waitForFunction(() => (window as any).__ringTest.resumeCountdown() === null, null, { timeout: 10_000 });
+  expect(await callState(b)).toBe('connected');
+  expect(await callState(a)).toBe('connected');
+
+  await hangup(a);
+  await close();
+});
+
+test('on a video call, the held party sees the frozen frame blurred with a pause overlay', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'CWBLA');
+  const b = await createAccount(ctxB, 'CWBLB');
+  const c = await createAccount(ctxC, 'CWBLC');
+  await pair(a, b);
+  await pair(a, c);
+
+  // A↔B on a VIDEO call.
+  await startCall(a, b.id, 'video');
+  await waitCallState(b, ['incoming']);
+  await accept(b);
+  await waitCallState(a, ['connected']);
+  await waitCallState(b, ['connected']);
+
+  // C calls A; A accepts-and-holds → B is put on hold (A stops sending; B's frame freezes).
+  await startCall(c, a.id, 'audio');
+  await a.page.waitForFunction(() => (window as any).__ringTest.hasSecondIncoming() === true, null, { timeout: 15_000 });
+  await acceptAndHold(a);
+  await b.page.waitForFunction(() => (window as any).__ringTest.isRemoteHeld() === true, null, { timeout: 10_000 });
+
+  // B's screen shows the pause overlay and the main video is blurred (held-frozen).
+  await expect(b.page.locator('.held-overlay')).toBeVisible();
+  await expect(b.page.locator('.main-video.held-frozen')).toHaveCount(1);
+
+  await hangup(a);
   await ctxA.close();
   await ctxB.close();
   await ctxC.close();

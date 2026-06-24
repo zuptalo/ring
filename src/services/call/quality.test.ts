@@ -5,6 +5,7 @@ import {
   clampForPin,
   clampForPeers,
   tierMin,
+  tierEncoding,
   type StatsSnapshot,
   type ControllerState,
   type Tier,
@@ -125,5 +126,24 @@ describe('tierMin', () => {
     expect(tierMin('hd', 'medium')).toBe('medium');
     expect(tierMin('low', 'high')).toBe('low');
     expect(tierMin('high', 'high')).toBe('high');
+  });
+});
+
+describe('tierEncoding (iOS-safe encoder params)', () => {
+  it('passes the full per-tier encoding through on non-WebKit', () => {
+    const low = tierEncoding('low', false);
+    expect(low.scaleResolutionDownBy).toBe(4);
+    expect(low.maxFramerate).toBe(15);
+    expect(low.maxBitrate).toBe(150_000);
+  });
+
+  it('drops scaleResolutionDownBy/maxFramerate on WebKit/iOS but keeps the bitrate cap', () => {
+    // These stall the iPhone 8 H.264 encoder (no frames out) — tier by bitrate only there.
+    for (const tier of ['low', 'medium', 'high'] as Tier[]) {
+      const enc = tierEncoding(tier, true);
+      expect(enc.scaleResolutionDownBy).toBe(1);
+      expect(enc.maxFramerate).toBeUndefined();
+      expect(enc.maxBitrate).toBe(tierEncoding(tier, false).maxBitrate);
+    }
   });
 });

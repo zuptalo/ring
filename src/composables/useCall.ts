@@ -45,12 +45,13 @@ import {
   type Tier,
   type ControllerState,
   TIERS,
-  TIER_ENCODING,
+  tierEncoding,
   initialController,
   nextTier,
   snapshotFromReport,
   clampForPin,
 } from '@/services/call/quality';
+import { activeDurationSec, bankActive, startActive } from '@/services/call/duration';
 import type { CallFrame } from '@/services/transport';
 
 /* ---- reactive state (read by the call UI) ---- */
@@ -101,6 +102,10 @@ export const heldCall = ref<CallMeta | null>(null);
 export const remoteHeld = ref(false);
 // Group calls: peers who have put us on hold, so their tile shows "on hold" (mesh-reported).
 export const groupHeldPeers = ref<string[]>([]);
+// When the other side resumes a call they'd put us on hold, we don't snap our camera/mic back
+// on instantly — we count down (5→1) with a cue first, so the person isn't caught off-guard
+// becoming visible/audible again. null = not counting down (spec 0005).
+export const resumeCountdown = ref<number | null>(null);
 // A second incoming call arriving while we're in one (and a held slot is free): shown over
 // the active call as an Accept-&-hold / Decline prompt, separate from the active call's state.
 export const incomingSecond = ref<{
@@ -311,6 +316,38 @@ async function set1to1Senders(target: RTCPeerConnection, stream: MediaStream | n
   }
 }
 
+const RESUME_COUNTDOWN_SEC = 5;
+
+/** Cancel any in-flight resume countdown (call ended, re-held, or swapped away). */
+function cancelResumeCountdown(): void {
+  if (resumeCountdownTimer) clearInterval(resumeCountdownTimer);
+  resumeCountdownTimer = null;
+  resumeCountdown.value = null;
+}
+
+/** The far side resumed a call they'd put us on hold. Their media unfreezes right away, but give
+ *  US a 5s heads-up (visible countdown + a cue) before our camera/mic go live again, so we're not
+ *  caught by surprise. Restores outgoing on `target` when the countdown hits zero — unless the
+ *  call moved on (torn down, re-held, or swapped) in the meantime. */
+function beginResumeCountdown(target: RTCPeerConnection): void {
+  cancelResumeCountdown();
+  let n = RESUME_COUNTDOWN_SEC;
+  resumeCountdown.value = n;
+  callCue('resuming'); // audible "you're about to be back" notification
+  resumeCountdownTimer = setInterval(() => {
+    n -= 1;
+    if (n > 0) {
+      resumeCountdown.value = n;
+      return;
+    }
+    cancelResumeCountdown();
+    // Only actually go live if this is still the active, not-held call.
+    if (pc === target && !remoteHeld.value && localStream.value) {
+      void set1to1Senders(target, localStream.value);
+    }
+  }, 1000);
+}
+
 /** Whether a second incoming call can be taken with Accept & hold: we're in exactly one call
  *  (active, no held slot yet) so a slot is free (two-call cap, spec 0005). */
 export function canHoldIncoming(): boolean {
@@ -336,8 +373,13 @@ let dialTimer: ReturnType<typeof setTimeout> | null = null;
 let graceTimer: ReturnType<typeof setTimeout> | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let durationTimer: ReturnType<typeof setInterval> | null = null;
+let resumeCountdownTimer: ReturnType<typeof setInterval> | null = null;
 let lastBytes = { up: 0, down: 0, ts: 0 };
 let lastLoss = { lost: 0, recv: 0 };
+// After a swap/resume the active connection changes, so the cumulative byte counters jump to a
+// different PC's totals. Re-baseline on the next poll (emit no rate that tick) so we don't report
+// the whole-call total as one second's "usage" (the spike the user saw after a resume).
+let reprimeBytes = false;
 let returnPath = '/tabs/calls';
 
 const RING_TIMEOUT_MS = 60_000; // callee: auto-decline if unanswered (matches the ~60s push window)
@@ -645,13 +687,33 @@ function armDialTimeout(peerUserId: string, callId: string, ms: number): void {
   }, ms);
 }
 
+/** Active (talk) time of a call in seconds, EXCLUDING any time it spent on hold (call waiting).
+ *  Delegates to the pure `duration` module; each call carries its own counters on its CallMeta,
+ *  so two concurrent calls report distinct durations. */
+function callDurationSec(meta: CallMeta | null): number {
+  return activeDurationSec(meta, Date.now());
+}
+
+/** Bank the current active stint and stop the clock — called when a call goes on hold so held
+ *  time isn't counted as call duration. */
+function bankActiveTime(meta: CallMeta | null): void {
+  if (meta) bankActive(meta, Date.now());
+}
+
+/** (Re)start the active clock for a call becoming active (connect or resume). */
+function resumeActiveTime(meta: CallMeta | null): void {
+  if (meta) startActive(meta, Date.now());
+}
+
 function startTimers(): void {
   stopTimers();
-  const started = callMeta.value?.startedAt ?? Date.now();
   durationTimer = setInterval(() => {
-    callStats.value = { ...callStats.value, durationSec: Math.floor((Date.now() - started) / 1000) };
+    // Read the CURRENT active call's meta each tick (not a captured start) so after a swap the
+    // duration reflects the now-active call, and held time is excluded.
+    callStats.value = { ...callStats.value, durationSec: callDurationSec(callMeta.value) };
   }, 1000);
   lastBytes = { up: 0, down: 0, ts: Date.now() };
+  reprimeBytes = false;
   lastLoss = { lost: 0, recv: 0 };
   statsTimer = setInterval(() => void pollStats(), 1000);
 }
@@ -687,6 +749,16 @@ async function pollStats(): Promise<void> {
     return;
   }
   const now = Date.now();
+  // First sample after a swap/resume: the active PC (and its cumulative counters) just changed,
+  // so re-baseline against this PC's totals and report no rate this tick — otherwise the delta is
+  // "all bytes this PC ever sent" reported as one second of usage.
+  if (reprimeBytes) {
+    reprimeBytes = false;
+    lastBytes = { up, down, ts: now };
+    lastLoss = { lost, recv }; // re-baseline loss too, else the new PC's totals read as a loss spike
+    callStats.value = { ...callStats.value, kbpsUp: 0, kbpsDown: 0 };
+    return;
+  }
   const dt = (now - lastBytes.ts) / 1000 || 1;
   const kbpsUp = Math.max(0, Math.round(((up - lastBytes.up) * 8) / 1000 / dt));
   const kbpsDown = Math.max(0, Math.round(((down - lastBytes.down) * 8) / 1000 / dt));
@@ -835,9 +907,8 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   // informational row in the chat (1:1 or group). Each side logs its own. Internal
   // teardowns (answered-elsewhere, glare) pass silent → no user-facing log.
   if (meta) {
-    const durationSec = wasConnected
-      ? Math.max(0, Math.floor((Date.now() - (meta.startedAt ?? Date.now())) / 1000))
-      : 0;
+    // Talk time only — banked active stints + the current one, excluding any time on hold.
+    const durationSec = wasConnected ? callDurationSec(meta) : 0;
     const video = meta.kind === 'video';
     // Why an unanswered call ended, for a clearer log than "No answer": the peer was busy in
     // another call, unreachable, or declined (spec 0004 US2/FR-031). Only for calls that
@@ -904,6 +975,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   }
 
   setState('ended');
+  cancelResumeCountdown();
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
   connectionWarning.value = null;
 
@@ -1440,6 +1512,7 @@ export async function acceptCall(): Promise<void> {
 async function parkActiveAsHeld(): Promise<void> {
   const meta = callMeta.value;
   if (!meta) return;
+  bankActiveTime(meta); // freeze the parked call's duration clock — held time isn't talk time
   if (meta.isGroup && groupSession) {
     await groupSession.pause();
   } else if (pc) {
@@ -1480,6 +1553,8 @@ async function restoreHeldCall(): Promise<void> {
   pc = slot.pc;
   groupSession = slot.groupSession;
   callMeta.value = slot.meta;
+  resumeActiveTime(slot.meta); // restart this call's duration clock from now
+  reprimeBytes = true; // re-baseline byte counters against the resumed PC (no usage spike)
   remoteStream.value = slot.remoteStream;
   remoteStreams.value = slot.remoteStreams;
   groupStreamOwners.value = slot.owners;
@@ -1514,6 +1589,7 @@ export async function swapCalls(): Promise<void> {
   if (!slot || !activeMeta) return;
   const stream = localStream.value; // the one live camera/mic — moves to the resumed call
   // 1) Pause the current ACTIVE call (it becomes the new held).
+  bankActiveTime(activeMeta); // freeze its clock; the resumed call's clock restarts below
   if (activeMeta.isGroup && groupSession) {
     await groupSession.pause();
   } else if (pc) {
@@ -1532,6 +1608,8 @@ export async function swapCalls(): Promise<void> {
   pc = slot.pc;
   groupSession = slot.groupSession;
   callMeta.value = slot.meta;
+  resumeActiveTime(slot.meta); // restart the resumed call's duration clock
+  reprimeBytes = true; // re-baseline byte counters against the resumed PC (no usage spike)
   remoteStream.value = slot.remoteStream;
   remoteStreams.value = slot.remoteStreams;
   groupStreamOwners.value = slot.owners;
@@ -1778,7 +1856,7 @@ export function expandCall(): void {
 export async function hangupCall(): Promise<void> {
   const meta = callMeta.value;
   if (!meta) return;
-  const duration = meta.startedAt ? Math.floor((Date.now() - meta.startedAt) / 1000) : 0;
+  const duration = callDurationSec(meta); // talk time, excluding any on-hold interval
   if (meta.peerUserId) {
     void sendControl('call-end', meta.peerUserId, meta.callId, { reason: 'hangup', duration });
   }
@@ -1848,7 +1926,7 @@ async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise
   if (!sender) return;
   const params = sender.getParameters();
   if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-  const enc = TIER_ENCODING[tier];
+  const enc = tierEncoding(tier, isIOS());
   const e = params.encodings[0];
   e.maxBitrate = enc.maxBitrate;
   e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
@@ -2364,13 +2442,14 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // Pause/restore our outgoing to them and flag the call "on hold" — media stops/returns
       // both ways. (Applies to the ACTIVE 1:1 call; a held-call hold is an US2/US3 edge.)
       if (signal.type === 'hold' && pc) {
+        cancelResumeCountdown(); // re-held mid-countdown → abort the pending go-live
         remoteHeld.value = true;
-        await set1to1Senders(pc, null);
+        await set1to1Senders(pc, null); // pause OUR outgoing too — no data while held
         return;
       }
       if (signal.type === 'resume' && pc) {
-        remoteHeld.value = false;
-        if (localStream.value) await set1to1Senders(pc, localStream.value);
+        remoteHeld.value = false; // their video unfreezes immediately
+        beginResumeCountdown(pc); // 5s heads-up + cue before WE become visible/audible again
         return;
       }
       if (signal.type !== 'ice' || !signal.candidate) return;
