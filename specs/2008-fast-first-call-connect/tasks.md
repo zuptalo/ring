@@ -67,9 +67,12 @@ margin of the second-call path.
   a first 1:1 audio call A→B, B answers; assert the **caller overlap invariant** from data-model.md
   — `turnWarmStart <= gumStart` (TURN warming is not serialized after `getUserMedia`). This FAILS on
   current code (TURN is fetched inside `newPeerConnection`, strictly after gUM).
-- [ ] T006 [US1] Extend the same spec: assert first-call caller **time-to-first-media** (caller
-  receives the callee's decoded audio/video) is within a generous margin of the second/call-waiting
-  path (SC-001/SC-002). Also add the video variant.
+- [ ] T006 [US1] Extend the same spec: measure first-call caller **time-to-first-media** (caller
+  receives the callee's decoded audio/video) and the second/call-waiting path's TTFM under the same
+  setup, and assert the concrete margin — first-call median TTFM ≤ second-call median TTFM **+ 1000
+  ms** over ≥ 5 runs (SC-001), and caller receives media within **2000 ms** of answer on the LAN-
+  equivalent harness (SC-002). Add the video variant. (The T005 ordering invariant is the gate;
+  this margin is generous validation.)
 - [ ] T007 [US1] Implement the caller fast path in `startDirectCall` (`src/composables/useCall.ts`):
   call `warmTurnConfig()` at call intent, run `getUserMedia` and TURN warming **concurrently**
   (e.g. `Promise.all`), then build the PC from the already-resolved TURN config, add tracks, create
@@ -94,13 +97,15 @@ margin after accept.
   assert the **callee overlap invariant** — `remoteDescriptionSet`/`pcCreated` is reached without
   first awaiting `gumResolved` (capture overlaps SDP/PC setup). FAILS on current code (serial gUM →
   PC → setRemote in `acceptCall`).
-- [ ] T010 [US2] Extend the spec: assert accept→media time-to-first-media for BOTH directions
-  (callee receives caller media AND caller receives callee media) is within the parity margin
-  (SC-002), audio and video.
-- [ ] T011 [US2] Warm TURN on incoming ring: in the 1:1 offer-receipt path of
-  `src/composables/useCall.ts` (where the incoming call is presented / starts ringing), call
-  `warmTurnConfig()` so the cache is warm before the callee accepts. MUST NOT capture camera/mic
-  before accept (privacy, Principle IX) — network/SDP prep only.
+- [ ] T010 [US2] Extend the spec: measure accept→media time-to-first-media for BOTH directions
+  (callee receives caller media AND caller receives callee media) and assert each within **2000 ms**
+  of accept (SC-002) and within **+1000 ms** of the second-call path median (SC-001), audio and
+  video. (The T009 ordering invariant is the gate; this margin is generous validation.)
+- [ ] T011 [US2] Warm TURN on incoming ring: in the 1:1 incoming-offer handler of
+  `src/composables/useCall.ts` (the `presentIncoming` / offer-receipt path that sets state to
+  `incoming` and acks `call-ringing`, near where `pendingOffer` is stored), call `warmTurnConfig()`
+  so the cache is warm before the callee accepts. MUST NOT capture camera/mic before accept
+  (privacy, Principle IX) — network/SDP prep only.
 - [ ] T012 [US2] Implement the callee fast path in `acceptCall` (`src/composables/useCall.ts`): start
   `getUserMedia` **concurrently** with creating the PC + `setRemoteDescription(offer)` + draining
   buffered ICE (these don't need the stream); once the stream resolves, add tracks, `createAnswer`,
@@ -124,10 +129,13 @@ media against the second-call path.
 - [ ] T014 [US3] Investigate `src/services/call/mesh.ts` `start()`/`buildLeg()` for the same serial
   `getUserMedia` → TURN/leg pattern (note: `start()` already warms TURN before legs build). Record
   the finding in `research.md` (confirmed asymmetry, or no-op).
-- [ ] T015 [US3] IF an asymmetry is confirmed: overlap the initial `getUserMedia` in `mesh.start()`
-  with TURN warming (mirror US1), leaving leg-building unchanged. IF not: add an e2e assertion in
-  `e2e/call-connect-speed.spec.ts` that a group first leg already meets the parity margin (verify
-  no regression) and close the story.
+- [ ] T015 [US3] IF T014 confirms an asymmetry: FIRST add the FAILING group-leg overlap assertion to
+  `e2e/call-connect-speed.spec.ts` (group `start()`'s first leg reaches TURN-ready / leg setup
+  without serializing behind the initial `getUserMedia` — fails on current code), THEN overlap the
+  initial `getUserMedia` in `mesh.start()` with TURN warming (mirror US1, leaving leg-building
+  unchanged) to make it green — keeping strict TDD (constitution III). IF T014 finds no asymmetry:
+  add an e2e assertion in `e2e/call-connect-speed.spec.ts` that a group first leg already meets the
+  parity margin (verify no regression) and close the story.
 
 **Checkpoint**: group first-leg connect is at parity (fixed or verified).
 

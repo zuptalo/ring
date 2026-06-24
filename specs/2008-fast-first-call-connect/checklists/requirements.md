@@ -35,8 +35,9 @@
   *context for why the second call is fast*; the spec body itself stays behavioral (early
   candidates, capturing camera/mic, relay credentials) so it remains technology-agnostic. The
   concrete levers are deferred to `/speckit-plan`.
-- "Within a small margin" / "~1 second" in SC-001/SC-002 is intentionally a parity target against
-  the second-call path; `/speckit-plan` will pin the exact harness measurement method.
-- Touches calling but does **not** change the zero-knowledge boundary (FR-009) — `/speckit-plan`'s
-  constitution check will confirm whether the ZK checklist is required (expected: a brief
-  confirmation that timing-only changes add no server-visible metadata).
+- (Resolved by `/speckit-analyze` remediation M1) The parity margin is now pinned: SC-001 = first-
+  call median TTFM ≤ second-call median + **1000 ms** (≥5 runs); SC-002 = media within **2000 ms**
+  of answer. SC-005 makes the deterministic ordering/overlap invariant the real (non-flaky) gate.
+- Touches calling but does **not** change the zero-knowledge boundary (FR-009). `/speckit-plan`'s
+  constitution check confirmed the zero-knowledge checklist is run as a required confirmation that
+  the timing-only changes add no server-visible metadata.

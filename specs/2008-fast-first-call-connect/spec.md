@@ -169,16 +169,23 @@ time-to-first-media on each freshly opened leg; compare against the second-call 
 ### Measurable Outcomes
 
 - **SC-001**: Under the end-to-end test harness on equivalent conditions, the **median**
-  first-call time-to-first-media is no more than ~1 second slower than the second-call path (and
-  ideally indistinguishable), for both audio and video and for both directions.
+  first-call time-to-first-media is **no more than 1000 ms slower than the second-call path**
+  (median over at least 5 runs), for both audio and video and for both directions. (This is the
+  concrete margin the e2e asserts; the deterministic ordering/overlap invariant in SC-005 is the
+  real gate, with this margin as generous validation against CI hardware variance.)
 - **SC-002**: After the callee answers a first 1:1 call, both parties receive decoded remote
-  media within ~2 seconds on a local/LAN-equivalent connection (down from the current noticeably
+  media within **2000 ms** on a local/LAN-equivalent connection (down from the current noticeably
   longer pause).
 - **SC-003**: First-call connection succeeds on the first attempt in at least 99% of harness
   runs, with no early connectivity candidates dropped.
 - **SC-004**: The existing call and call-waiting end-to-end suites, and the calling unit tests,
   all remain green — no regression in connection reliability, call semantics, or the
   zero-knowledge boundary.
+- **SC-005**: The first-call connection-setup ordering invariants hold deterministically (the
+  primary, non-flaky gate): on the caller, relay-credential preparation is not serialized behind
+  media capture; on the callee, connection/SDP setup is not serialized behind media capture. These
+  are boolean orderings observed via the connect milestones (false on today's code, true after the
+  fix), not wall-clock thresholds.
 
 ## Assumptions
 
