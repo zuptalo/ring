@@ -1354,8 +1354,16 @@ func (c *Client) handleFrame(data []byte) {
 		// declined group invitee keeps getting re-rung every groupRingInterval until the
 		// reminder rounds run out — the "called back in automatically" bug (spec 0004 US1).
 		c.hub.stopGroupMemberRing(f.RoomID, c.userID)
+		// A leave from someone NOT in the room is a DECLINE of an invite they never accepted.
+		// The roster doesn't change (they were never in it), so the caller's tile would keep
+		// ringing until its local timeout — tell the room they're not coming so every tile
+		// flips to recall/remove together now (any participant can then recall them).
+		declined := !c.hub.rooms.InRoom(f.RoomID, c.userID)
 		roster, empty := c.hub.rooms.Leave(f.RoomID, c.userID)
 		c.hub.broadcastRoster(f.RoomID, roster)
+		if declined && !empty {
+			c.hub.broadcastMemberState(f.RoomID, c.userID, "noanswer")
+		}
 		if empty {
 			c.hub.stopRoomRings(f.RoomID) // call's over → stop reminding any non-joiners
 		}

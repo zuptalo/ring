@@ -115,6 +115,7 @@ import {
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
 import { notifyBanners, showActionBanner } from '@/services/notify';
+import { recordCues, recordedCues } from '@/services/sound';
 import { syncContactEdges } from '@/services/directory';
 import {
   requestConnect as storeRequestConnect, acceptConnect as storeAcceptConnect,
@@ -138,6 +139,7 @@ import {
   acceptCall,
   rejectCall,
   hangupCall,
+  toggleMute,
   toggleVideoMode,
   setVideoQuality,
   type VideoQuality,
@@ -866,6 +868,8 @@ export function installTestHook(): void {
     accept: () => acceptCall(),
     reject: () => rejectCall(),
     hangup: () => hangupCall(),
+    /** Toggle the mic (drives the mute/unmute cues). */
+    toggleMute: () => toggleMute(),
     /** Toggle video: 1:1 audio->video sends a consent request; group is immediate. */
     toggleVideo: () => toggleVideoMode(),
     /** Set the outgoing-video quality tier (auto/medium/low). */
@@ -895,6 +899,11 @@ export function installTestHook(): void {
     /** Group calls: total inbound video frames decoded across ALL mesh legs + each leg's
      *  adaptive tier. inboundVideoFrames() is 1:1-only (reads `pc`); this sees the mesh. */
     groupCallDiag: () => groupCallDiag(),
+    /** Call-cue recording (spec 0004 US5): start/stop capturing which audio cues fire, and
+     *  read them back, so a test can assert cues across state transitions + the "Call sounds"
+     *  silence gate. A recorded cue means it passed the gate + de-dup and would have played. */
+    recordCues: (on: boolean) => recordCues(on),
+    cuesFired: () => recordedCues(),
     /** Group calls (caller side): re-ring / remove a not-yet-joined invitee, and read the
      *  per-invitee tile state (no-answer set + busy set) for asserting recall behaviour. */
     recall: (memberId: string) => recallMember(memberId),

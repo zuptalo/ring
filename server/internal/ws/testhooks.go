@@ -29,3 +29,22 @@ func SetCallRecoveryGraceForTest(d time.Duration) func() {
 	callRecoveryGrace = d
 	return func() { callRecoveryGrace = prev }
 }
+
+// SetAudioMaxForTest overrides the audio participant cap, mirroring SetVideoMaxForTest.
+func SetAudioMaxForTest(n int) func() {
+	prev := call.AudioMax
+	call.AudioMax = n
+	return func() { call.AudioMax = prev }
+}
+
+// ApplyTestCallConfig sets every call tunable at once. It backs the dev/e2e-only
+// POST /v1/dev/call-config endpoint so a Playwright test can shrink the participant caps and
+// the ring/recovery windows — instead of spinning many browser contexts or waiting the full
+// production cadence. Absolute values (not deltas): pass the production defaults to reset.
+func ApplyTestCallConfig(videoMax, audioMax, ringCount int, ringInterval, recoveryGrace time.Duration) {
+	call.VideoMax = videoMax
+	call.AudioMax = audioMax
+	groupRingCount = ringCount
+	groupRingInterval = ringInterval
+	callRecoveryGrace = recoveryGrace
+}

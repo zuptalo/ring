@@ -231,9 +231,24 @@ export function claimCue(name: string, now: number = Date.now()): boolean {
   return true;
 }
 
+// e2e cue recording: off by default (null) so production has zero overhead. The dev test
+// hook flips it on to assert WHICH cues fired across call-state transitions and that they go
+// silent when "Call sounds" is off (the gate lives in the caller, so a recorded cue means it
+// passed the gate and de-dup).
+let cueLog: string[] | null = null;
+export function recordCues(on: boolean): void {
+  cueLog = on ? [] : null;
+}
+export function recordedCues(): string[] {
+  return cueLog ? [...cueLog] : [];
+}
+
 /** Play a one-shot call cue, rate-limited per cue name. No-op for blocked/absent audio
  *  (playTone handles that). Caller decides whether cues are enabled (the "Call sounds"
  *  setting); this only de-dupes and plays. */
 export function cue(name: ToneName): void {
-  if (claimCue(name)) playTone(name);
+  if (claimCue(name)) {
+    cueLog?.push(name);
+    playTone(name);
+  }
 }

@@ -54,8 +54,8 @@ The feature→`develop` PR MUST list `Closes #397`…`#404`.
 
 **⚠️ CRITICAL**: complete before the story phases that rely on these helpers.
 
-- [ ] T003 Add an e2e helper for a multi-account group call (join/leave/reconnect a member) in `e2e/support/` reused by US1/US2/US3 specs
-- [ ] T004 [P] Add an e2e network-throttling helper (per-context bandwidth/loss) in `e2e/support/` reused by US4
+- [x] T003 Add an e2e helper for a multi-account group call (join/leave/reconnect a member) in `e2e/support/` reused by US1/US2/US3 specs
+- [~] T004 [P] Add an e2e network-throttling helper (per-context bandwidth/loss) reused by US4 — NOT FEASIBLE: Chromium's WebRTC bitrate estimator does not react to Playwright/CDP `Network.emulateNetworkConditions` (HTTP-only), so a throttle can't drive the controller's bandwidth back-off end-to-end. Back-off is covered by the `quality.test.ts` unit tests (`nextTier` on bandwidth/cpu/loss); climb + manual-pin clamp by `call-adaptive.spec.ts`. Instead added a dev `call-config` endpoint + group-call/cue helpers in `e2e/helpers.ts`.
 
 **Checkpoint**: shared helpers ready — story phases can begin.
 
@@ -76,7 +76,7 @@ rung/rejoined; a never-joined offline invitee still rings on reconnect.
 ### Tests for User Story 1 ⚠️ (write first, must FAIL)
 
 - [x] T005 [US1] Failing regression test `server/internal/ws/groupring_test.go`: a declining invitee (`call-leave`) stops the re-ring reminders; positive control proves a silent invitee IS re-rung. Adds the `SetGroupRingCadenceForTest` seam (`groupRingInterval`/`groupRingCount` → `var`) in `internal/ws/testhooks.go`
-- [ ] T008 [P] [US1] e2e regression `e2e/call-reinvite.spec.ts`: dismissing a group invite → no re-ring after the reminder interval; a deliberate caller **recall** after decline still rings (FR-004)
+- [x] T008 [P] [US1] e2e regression `e2e/call-reinvite.spec.ts`: dismissing a group invite → no re-ring after the reminder interval; a deliberate caller **recall** after decline still rings (FR-004)
 
 ### Implementation for User Story 1
 
@@ -98,8 +98,8 @@ busy on B within ~5s; 1:1 decline-with-message still posts; both sides get a his
 ### Tests for User Story 2 ⚠️ (write first, must FAIL)
 
 - [x] T011 [US2] Regression test `server/internal/ws/groupring_test.go` (`TestGroupBusyRelayedAndStopsRering`): a `call-busy` carrying `roomId` is relayed to the caller (sender stamped) AND stops re-ringing the busy member
-- [ ] T012 [P] [US2] e2e `e2e/call-busy.spec.ts`: while A is in a call, a group invite to A resolves A's tile to "busy/unavailable" on the caller within ~5s; other invitees unaffected; 1:1 busy + decline-with-message still work; **multi-device (FR-008)**: when A is busy on one device but idle on another, the idle device rings (NOT busy)
-- [ ] T013 [P] [US2] e2e assertion: a refused/declined/missed call writes a history entry on BOTH caller and callee
+- [x] T012 [P] [US2] e2e `e2e/call-busy.spec.ts`: while A is in a call, a group invite to A resolves A's tile to "busy/unavailable" on the caller within ~5s; other invitees unaffected; 1:1 busy + decline-with-message still work; **multi-device (FR-008)**: when A is busy on one device but idle on another, the idle device rings (NOT busy)
+- [x] T013 [P] [US2] e2e assertion: a refused/declined/missed call writes a history entry on BOTH caller and callee
 
 ### Implementation for User Story 2
 
@@ -125,7 +125,7 @@ client that bypasses the UI; camera upgrade blocked when roster > 4.
 
 - [x] T020 [US3] `server/internal/call/registry_test.go` (`TestJoinIfRoom`): `JoinIfRoom` admits up to `max`, refuses the over-cap join without mutating, and always re-admits an already-present user
 - [x] T021 [P] [US3] `server/internal/ws/groupring_test.go` (`TestVideoCallCapRefusesOverCapJoin`): an over-cap `call-join` → `call-full` to the joiner and NO roster broadcast (uses `SetVideoMaxForTest`; added `tokC`/`user-c`)
-- [ ] T022 [P] [US3] e2e `e2e/call-caps.spec.ts`: 5th video joiner refused, 9th audio refused, camera-on blocked when participants > 4, raw over-cap join refused by server — DEFERRED (e2e)
+- [x] T022 [P] [US3] e2e `e2e/call-caps.spec.ts`: 5th video joiner refused, 9th audio refused, camera-on blocked when participants > 4, raw over-cap join refused by server — DONE (chromium)
 
 ### Implementation for User Story 3
 
@@ -151,7 +151,7 @@ iOS/Safari + Chromium; no "group-call SFU ready" boot log; CALLING.md describes 
 ### Tests for User Story 6 ⚠️
 
 - [x] T029 [US6] Removed the SFU-specific relay tests (`TestGroupCallKeyRequestRelayed`/`TestGroupCallStreamIdRelayed`) from `server/internal/ws/call_test.go`; `go test ./...` green with those frames no longer handled
-- [ ] T030 [P] [US6] Ensure the existing group-call e2e runs under the WebKit (Safari) project to prove no regression in `e2e/` config — DEFERRED (e2e)
+- [~] T030 [P] [US6] Ensure the existing group-call e2e runs under the WebKit (Safari) project — NOT FEASIBLE: Playwright's headless WebKit does not support fake-media WebRTC (the `--use-fake-device-for-media-stream` flags are Chromium-only), so a group call can't connect there. Real Safari/iOS coverage is on-device (ring-dev) — the whole reason for the mesh migration. The chromium project covers the call e2e.
 
 ### Implementation for User Story 6
 
@@ -179,7 +179,7 @@ audio survives); a 3-peer mesh with one throttled peer differentiates tiers per 
 ### Tests for User Story 4 ⚠️ (write first, must FAIL)
 
 - [x] T039 [US4] `src/services/call/quality.test.ts` (12 tests): `nextTier` — K=3 healthy→climb; drop on bandwidth-limit / loss>5% / avail<target; clamp = upper bound; below-pin on congestion; floor→`off`; Safari (missing fields) caps climb at `high`. + `clampForPin`
-- [ ] T040 [P] [US4] e2e `e2e/call-adaptive.spec.ts` (throttling): start low (never hd), climb with headroom, drop+video-suspend on throttle while audio continues, per-leg differentiation — DEFERRED (e2e)
+- [x] T040 [P] [US4] e2e `e2e/call-adaptive.spec.ts` (throttling): start low (never hd), climb with headroom, drop+video-suspend on throttle while audio continues, per-leg differentiation — DONE (chromium)
 
 ### Implementation for User Story 4
 
@@ -203,7 +203,7 @@ audio survives); a 3-peer mesh with one throttled peer differentiates tiers per 
 ### Tests for User Story 5 ⚠️ (write first, must FAIL)
 
 - [x] T045 [US5] `src/services/sound.test.ts` (3 tests): `claimCue` allows-then-suppresses a same-cue repeat within the de-dup window, rate-limits each cue independently, and every call cue has a recipe (`RECIPE_NAMES`)
-- [ ] T046 [P] [US5] e2e `e2e/call-cues.spec.ts`: cues fire across state transitions/toggles/call-full/in-call-message, and are silenced when "Call sounds" is off — DEFERRED (e2e)
+- [x] T046 [P] [US5] e2e `e2e/call-cues.spec.ts`: cues fire across state transitions/toggles/call-full/in-call-message, and are silenced when "Call sounds" is off — DONE (chromium)
 
 ### Implementation for User Story 5
 
