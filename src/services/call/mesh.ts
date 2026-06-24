@@ -467,6 +467,10 @@ export class MeshSession {
   private async setLegTier(leg: PeerLeg, retry = true): Promise<void> {
     const sender = this.videoSenderOf(leg);
     if (!sender) return;
+    // iOS/WebKit: skip encoder reconfiguration — setParameters stalls the iPhone 8 H.264 encoder
+    // (it can't downscale, so it chokes encoding full-res at a capped bitrate, freezing capture).
+    // Let WebKit's native adaptive encoding run instead.
+    if (isWebKitVideo) return;
     const params = sender.getParameters();
     if (!params.encodings || params.encodings.length === 0) return;
     const enc = tierEncoding(leg.qc.tier, isWebKitVideo);

@@ -2197,6 +2197,12 @@ function qualityClamp(): Tier {
  *  every field, and there may be no sender yet on an audio call. */
 async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise<void> {
   if (!sender) return;
+  // iOS/WebKit: do NOT reconfigure the encoder via setParameters. On the iPhone 8 the hardware
+  // H.264 encoder stalls after a few frames when we cap it (it can't downscale per 0005, so it
+  // encodes full-res at our low maxBitrate and chokes — which also freezes the capture, blacking
+  // the self-view). Let WebKit run its own native adaptive encoding instead (spec 0007 will tier
+  // iOS by other means if needed). Non-iOS keeps the per-tier sender encoding.
+  if (isIOS()) return;
   const params = sender.getParameters();
   if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
   const enc = tierEncoding(tier, isIOS());
