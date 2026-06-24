@@ -353,10 +353,20 @@ function beginResumeCountdown(target: RTCPeerConnection): void {
   }, 1000);
 }
 
-/** Whether a second incoming call can be taken with Accept & hold: we're in exactly one call
- *  (active, no held slot yet) so a slot is free (two-call cap, spec 0005). */
+/** Whether the active call can be put on hold to take another (we're in a call and nothing is
+ *  parked yet). NOTE: this is also `acceptAndHold`'s guard, so it MUST stay true while a second
+ *  call is *being accepted* (incomingSecond set) — the "only one waiter" cap (spec 2009) is
+ *  enforced at the prompt-raising site (`canRaiseSecondIncoming`), not here. */
 export function canHoldIncoming(): boolean {
   return callState.value !== 'idle' && callState.value !== 'ended' && heldSlot === null;
+}
+
+/** Whether a NEW incoming call may be raised as the call-waiting prompt: there's room to hold the
+ *  active call AND no other caller is already occupying the waiting slot. Once a second call is
+ *  ringing/waiting (prompt shown, not yet accepted), a further caller falls through to the busy
+ *  reply instead of stealing the pending prompt — at most one waiter at a time (spec 2009). */
+function canRaiseSecondIncoming(): boolean {
+  return canHoldIncoming() && incomingSecond.value === null;
 }
 
 /** Latest per-tile audio RMS for the active group call (tile key → level). Empty when
@@ -1467,8 +1477,10 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
       const self = getSelfUserId() ?? '';
       if (self < from) return; // we win, keep our outgoing offer, ignore theirs
       await teardown('answered-elsewhere', { silent: true }); // we yield, accept theirs
-    } else if (canHoldIncoming()) {
-      // Call waiting (spec 0005): a held slot is free → offer Accept & hold instead of busy.
+    } else if (canRaiseSecondIncoming()) {
+      // Call waiting (spec 0005): a held slot is free AND no one is already waiting → offer
+      // Accept & hold instead of busy. The waiting-slot check (spec 2009) stops a later caller
+      // from stealing the place of one already in the prompt.
       await presentSecondDirect(frame, from);
       return;
     } else {
