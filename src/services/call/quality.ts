@@ -57,8 +57,14 @@ const TIER_TARGET: Record<Tier, number> = {
   hd: 2_500_000,
 };
 
-const CLIMB_AFTER = 3; // consecutive healthy samples before a one-step climb
-const LOSS_HIGH = 0.05; // 5% receiver-reported packet loss → back off
+// Spec 0007: converge fast but stay stable. Climb one step after a SHORT healthy streak (≈ a
+// couple of 2s samples → a good tier within ~5s, vs. the old slow one-step-every-3-samples crawl).
+const CLIMB_AFTER = 2; // consecutive healthy samples before a one-step climb
+// Back off only on SUSTAINED mild congestion (a single noisy sample must not drop a tier and cause
+// flapping); a SEVERE loss spike backs off immediately.
+const CONGEST_AFTER = 2; // consecutive congested samples before a one-step back-off
+const LOSS_HIGH = 0.05; // 5% receiver-reported packet loss → mild congestion (needs to be sustained)
+const LOSS_SEVERE = 0.15; // a big loss spike → back off immediately, don't wait for sustained
 // Only back off on the bandwidth estimate when it's WELL below what the current tier wants
 // (a margin), since each mesh leg estimates bandwidth independently and the numbers are noisy.
 const BW_BACKOFF_MARGIN = 0.7;
@@ -79,11 +85,14 @@ export interface StatsSnapshot {
 export interface ControllerState {
   tier: Tier;
   healthyStreak: number;
+  unhealthyStreak: number; // consecutive congested samples (sustained-congestion back-off, spec 0007)
 }
 
-/** Initial state: every connection starts sending LOW (never the maximum). */
+/** Initial state: start at a sensible MID tier (spec 0007) so a good picture appears fast, then
+ *  climb to the ceiling on sustained health (or back off if the link can't sustain it) — instead
+ *  of starting at the bottom and crawling up, which left calls looking low for many seconds. */
 export function initialController(): ControllerState {
-  return { tier: 'low', healthyStreak: 0 };
+  return { tier: 'medium', healthyStreak: 0, unhealthyStreak: 0 };
 }
 
 const idxOf = (t: Tier): number => TIERS.indexOf(t);
@@ -120,30 +129,40 @@ export function nextTier(state: ControllerState, snap: StatsSnapshot, clamp: Tie
   const idx = idxOf(state.tier);
   const clampIdx = idxOf(clamp);
   const knownBw = typeof snap.availableOutgoingBitrate === 'number';
+  const down = (): ControllerState => ({ tier: TIERS[Math.max(0, idx - 1)], healthyStreak: 0, unhealthyStreak: 0 });
 
-  // Congestion → back off one step immediately (floor at `off`). Wins over the clamp: call
-  // survival beats any pin.
+  // A SEVERE loss spike backs off one step immediately — don't wait for a sustained streak (call
+  // survival beats any pin/clamp).
+  if (snap.fractionLost > LOSS_SEVERE) return down();
+
+  // Mild congestion (browser bandwidth/cpu limitation, >5% loss, or the send estimate collapsing
+  // well below the current tier) must be SUSTAINED before we drop a tier — one noisy sample must
+  // not cause a flap.
   const congested =
     snap.qualityLimited ||
     snap.fractionLost > LOSS_HIGH ||
     (knownBw && (snap.availableOutgoingBitrate as number) < TIER_TARGET[state.tier] * BW_BACKOFF_MARGIN);
   if (congested) {
-    return { tier: TIERS[Math.max(0, idx - 1)], healthyStreak: 0 };
+    const unhealthy = state.unhealthyStreak + 1;
+    if (unhealthy >= CONGEST_AFTER) return down();
+    return { tier: state.tier, healthyStreak: 0, unhealthyStreak: unhealthy };
   }
 
-  // Above the clamp (e.g. pin lowered, or more peers joined and dropped the ceiling) → come down.
+  // Healthy. Above the clamp (pin lowered, or more peers joined and dropped the ceiling) → come down.
   if (idx > clampIdx) {
-    return { tier: clamp, healthyStreak: 0 };
+    return { tier: clamp, healthyStreak: 0, unhealthyStreak: 0 };
   }
 
-  // Healthy and below the ceiling → climb one step after K consecutive healthy samples. Without
-  // a known bandwidth estimate (Safari) never blind-climb past `high`; HD needs a real estimate.
-  const ceilingIdx = knownBw ? clampIdx : Math.min(clampIdx, idxOf('high'));
+  // Climb one step toward the ceiling after a short healthy streak. The ceiling is the clamp
+  // itself — we DO allow HD on a healthy 1:1 even without a candidate-pair estimate (the old
+  // "cap at high when no estimate" rule kept WebKit/Safari from ever reaching HD). Overshoot is
+  // caught by the per-tier maxBitrate + the sustained-congestion back-off above (and, once a peer
+  // reports it, the receiver-requested ceiling).
   const streak = state.healthyStreak + 1;
-  if (streak >= CLIMB_AFTER && idx < ceilingIdx) {
-    return { tier: TIERS[idx + 1], healthyStreak: 0 };
+  if (streak >= CLIMB_AFTER && idx < clampIdx) {
+    return { tier: TIERS[idx + 1], healthyStreak: 0, unhealthyStreak: 0 };
   }
-  return { tier: state.tier, healthyStreak: streak };
+  return { tier: state.tier, healthyStreak: streak, unhealthyStreak: 0 };
 }
 
 /** Reduce a getStats report to the controller's input signals. Missing fields (Safari doesn't

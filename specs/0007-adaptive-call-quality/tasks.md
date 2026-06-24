@@ -30,7 +30,7 @@ Single Vue PWA client (no server change). Key paths: `src/services/call/{quality
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm the e2e harness can (a) apply/lift per-context network throttling via CDP
+- [x] T001 Confirm the e2e harness can (a) apply/lift per-context network throttling via CDP
   `Network.emulateNetworkConditions`, and (b) read per-leg adaptive tier + inbound video bitrate via
   the existing test hooks (`meshDiag`/`groupCallDiag`, `remoteTracks`); note any gap to fill in T005.
 
@@ -69,7 +69,7 @@ and isn't stuck low/blocky — the reported regression is gone.
 **Independent test**: On an unthrottled harness, a 1:1 reaches HD and a 3–4-person group reaches high
 within ~5s; iOS low tier is a clean downscaled image (on-device).
 
-- [ ] T007 [US1] Write FAILING unit tests in `src/services/call/quality.test.ts` reproducing the
+- [x] T007 [US1] Write FAILING unit tests in `src/services/call/quality.test.ts` reproducing the
   regression: (a) healthy 1:1 with no `availableOutgoingBitrate` should reach `hd` but currently caps
   at `high`; (b) `tierEncoding('low', true)` keeps full resolution (should downscale); (c) a single
   high-`fractionLost` sample drops a tier (should require sustained); (d) climb from `low` to target
@@ -78,16 +78,16 @@ within ~5s; iOS low tier is a clean downscaled image (on-device).
   sender encoding (`scaleResolutionDownBy`) for low/medium on all platforms; narrow the bitrate-only
   fallback (`avoidEncoderScaling`) to only the genuinely-broken old-WebKit builds (feature/version
   gate), per research Decision 4.
-- [ ] T009 [US1] Fix the climb/ceiling/back-off in `nextTier` (`quality.ts`): converge to target fast
+- [x] T009 [US1] Fix the climb/ceiling/back-off in `nextTier` (`quality.ts`): converge to target fast
   (start sensible / multi-step or shorter streak), allow `hd` on a healthy 1:1/2-person leg without a
   candidate-pair estimate, require SUSTAINED congestion to back off (no single-sample drop), and set
   the AUTO default ceiling = HD (1:1) / high (group), bounded by `clampForPeers` and the tile target.
-- [ ] T010 [US1] Apply the corrected controller in `src/services/call/mesh.ts` (`adaptLeg`/
+- [x] T010 [US1] Apply the corrected controller in `src/services/call/mesh.ts` (`adaptLeg`/
   `effectiveCeiling`/`applyLegEncoding`) and `src/composables/useCall.ts` (`adaptOneToOne`/
   `applyOutgoingQuality`) so every leg + the 1:1 PC use it; record `limitationReason` for diag.
-- [ ] T011 [US1] Run T007 to GREEN. Add the e2e in `e2e/call-quality.spec.ts`: on an unthrottled
+- [x] T011 [US1] Run T007 to GREEN. Add the e2e in `e2e/call-quality.spec.ts`: on an unthrottled
   network a 1:1 reaches the HD-class tier and a 3-person group reaches `high` within ~5s (SC-001).
-- [ ] T012 [US1] Run `e2e/call-adaptive.spec.ts` + `e2e/calls.spec.ts` to confirm no regression to
+- [x] T012 [US1] Run `e2e/call-adaptive.spec.ts` + `e2e/calls.spec.ts` to confirm no regression to
   the existing adaptive/connect behavior.
 
 **Checkpoint**: healthy-network quality is visibly good and reached quickly; iOS low tier is clean.

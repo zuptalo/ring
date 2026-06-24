@@ -443,7 +443,7 @@ export class MeshSession {
     const ceilingIdx = TIERS.indexOf(this.effectiveCeiling());
     for (const leg of this.legs.values()) {
       if (TIERS.indexOf(leg.qc.tier) > ceilingIdx) {
-        leg.qc = { tier: TIERS[ceilingIdx], healthyStreak: 0 };
+        leg.qc = { tier: TIERS[ceilingIdx], healthyStreak: 0, unhealthyStreak: 0 };
         void this.applyLegEncoding(leg);
       }
     }

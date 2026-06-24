@@ -2078,7 +2078,7 @@ async function applyOutgoingQuality(): Promise<void> {
     return;
   }
   const clampIdx = TIERS.indexOf(qualityClamp());
-  if (TIERS.indexOf(oneToOneQc.tier) > clampIdx) oneToOneQc = { tier: qualityClamp(), healthyStreak: 0 };
+  if (TIERS.indexOf(oneToOneQc.tier) > clampIdx) oneToOneQc = { tier: qualityClamp(), healthyStreak: 0, unhealthyStreak: 0 };
   await applySenderTier(videoSender(), oneToOneQc.tier);
 }
 
