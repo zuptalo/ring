@@ -201,7 +201,20 @@ confirm each emits its distinct, subtle cue, and that disabling tones silences t
   end-to-end encrypted per the pair's secure session; the server MUST continue to relay
   only ciphertext and track only room membership and call kind — no plaintext, keys, or
   media. Hold/resume MUST NOT expose to the server which call a user is paying attention
-  to beyond what room membership already reveals.
+  to beyond what room membership already reveals. Specifically:
+  - **FR-012a**: A hold/resume signal MUST be indistinguishable to the server from any other
+    sealed call signal — it MUST ride an existing sealed call frame (no new frame type) so the
+    relay sees only relayed ciphertext, never a "hold" marker or the active-vs-held distinction.
+  - **FR-012b**: Holding or resuming MUST NOT change server-tracked room membership — it MUST
+    NOT emit a leave/join or otherwise alter the roster the server holds (a held participant
+    stays a member); pausing media MUST NOT create any app-server-observable signal (media is
+    peer-to-peer over the relay, not the app server).
+  - **FR-012c**: No log line, metric, error payload, or debug aid MAY record a hold/resume
+    event, its timing, or which of a user's calls is active vs held.
+  - **FR-012d**: No hold/swap/resume timestamp or event MAY be persisted anywhere that reaches
+    the server (call history is client-local; own-data sync is already encrypted).
+  - **FR-012e**: The two-call cap's busy reply to a third caller MUST reveal nothing more than
+    the existing single-call busy signal already does (no "two calls"/slot count leaked).
 - **FR-013**: Call-waiting MUST work in all supported browsers including iOS/Safari (no
   regression), consistent with the mesh's cross-browser support.
 
@@ -213,6 +226,27 @@ confirm each emits its distinct, subtle cue, and that disabling tones silences t
   the other party/members as "on hold".
 - **Call**: A 1:1 or group call (as defined in the companion calling spec), now extended
   with an on-hold lifecycle state and the ability to pause/resume its media.
+
+## Zero-Knowledge Impact *(mandatory — Constitution Principle I)*
+
+- **What crosses the wire**: only the new sealed `hold`/`resume` call signals, carried over an
+  *existing* sealed call frame (e.g. `call-ice`) — opaque ciphertext relayed between two room
+  members, exactly like the offer/answer/ICE that already flow. No media flows for a held call.
+- **What is encrypted**: the hold/resume signal payload, end-to-end under each pair's Double
+  Ratchet (the established sealed-signal path) — 1:1 to the peer, per-leg for the mesh.
+- **What metadata is unavoidably visible to the server, and why**: only what the relay already
+  observes — that a sealed call signal was relayed between two members of a room it already
+  tracks. The server CANNOT tell a hold from any other sealed signal, cannot tell which of a
+  user's two calls is active vs held, and sees no roster change on hold (a held participant
+  stays a member) — see FR-012/FR-012a–e. The two-call state is entirely client-local.
+- **What is NOT added**: no new server frame type, table, relay/allowlist change, or metric;
+  no IndexedDB store or `DB_VERSION` bump (call/hold state is ephemeral, in-memory); no
+  `SECRETS_KEY` impact; no hold/swap timing persisted server-side. A held-then-resumed call is
+  one client-local history entry (FR-010), and the third-caller busy reply is the existing
+  busy signal (no slot count leaked, FR-012e).
+- **Media boundary**: call media is peer-to-peer (native DTLS-SRTP) over the TURN relay, never
+  the app server; pausing via `replaceTrack(null)` is a local sender change with no
+  app-server-observable effect.
 
 ## Success Criteria *(mandatory)*
 
