@@ -399,6 +399,7 @@ import {
   notJoining, busyMembers, recallMember, cancelInvite,
   acceptCall, rejectCall, declineWithMessage,
   heldCall, remoteHeld, groupHeldPeers, resumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
+  setGroupTileSize,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useCallParticipants } from '@/composables/useCallParticipants';
@@ -754,6 +755,18 @@ const tileDims = computed(() => {
   }
   return { w: Math.floor(best.w), h: Math.floor(best.h) };
 });
+
+// Spec 0007 US4: as the uniform group grid resizes (more/fewer peers, window/orientation change),
+// tell the call layer how big we're rendering each remote so it asks every peer for only the quality
+// that size is worth — a small grid tile needs far less than a fullscreen view. immediate:true so the
+// initial grid size is reported as soon as tiles appear.
+watch(
+  () => Math.max(tileDims.value.w, tileDims.value.h),
+  (px) => {
+    if (px > 0) setGroupTileSize(px);
+  },
+  { immediate: true },
+);
 
 // The route button reflects the LIVE route so the user can tell where audio is going.
 // Earpiece uses a phone-handset icon (clearly distinct from the loudspeaker).

@@ -53,6 +53,7 @@ import {
   clampForPin,
   downlinkClassFrom,
   requestedTierOf,
+  tileTarget,
 } from '@/services/call/quality';
 import { activeDurationSec, bankActive, startActive } from '@/services/call/duration';
 import type { CallFrame } from '@/services/transport';
@@ -2259,6 +2260,32 @@ async function applyOutgoingQuality(): Promise<void> {
   const clampIdx = TIERS.indexOf(qualityClamp());
   if (TIERS.indexOf(oneToOneQc.tier) > clampIdx) oneToOneQc = { tier: qualityClamp(), healthyStreak: 0, unhealthyStreak: 0 };
   await applySenderTier(videoSender(), oneToOneQc.tier);
+  // spec 0007 US3: a manual pin folds into what we ASK the peer for, so tell them now (not on the
+  // next ~2s tick) — a low/medium pin must cut INCOMING promptly, not just our outgoing.
+  sendHealthNow();
+}
+
+/** Recompute our 1:1 requested ceiling from the current downlink + manual pin + view size and send
+ *  it immediately (spec 0007 US3 — pin changes shouldn't wait for the next poll). No-op off a 1:1. */
+function sendHealthNow(): void {
+  const meta = callMeta.value;
+  if (!meta?.chatId || !meta.peerUserId || meta.isGroup) return;
+  const requested = requestedTierOf(oneToOneDownlink, qualityClamp(), 'hd');
+  oneToOneLastSentTier = requested;
+  oneToOneLastSentAt = Date.now();
+  oneToOneHealthSeq += 1;
+  void sendHealth(meta.chatId, meta.peerUserId, meta.callId, {
+    requestedTier: requested,
+    downlinkClass: oneToOneDownlink,
+    seq: oneToOneHealthSeq,
+  });
+}
+
+/** Spec 0007 US4: the view reports the rendered group-tile size (CSS px, larger dimension); we map it
+ *  to a tier and ask every peer for at most that — a small grid tile needs far less than fullscreen.
+ *  No-op off a group call. */
+export function setGroupTileSize(px: number): void {
+  groupSession?.setAllTileTargets(tileTarget(px));
 }
 
 /** Change the outgoing-video quality tier and apply it immediately. */

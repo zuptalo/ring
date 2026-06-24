@@ -146,9 +146,11 @@ export class MeshSession {
   // Upper-bound tier from the manual quality pin + "use less data" (spec 0004 US4). The
   // adaptive controller may go BELOW this to keep a call alive, but never above it.
   private clampTier: Tier = 'hd';
-  // Spec 0007 US4: per-peer rendered tile-size ceiling (set by the view); folds into the health
-  // report we send that peer. Absent → treated as HD (fullscreen).
+  // Spec 0007 US4: rendered tile-size ceiling that folds into the health report we send each peer.
+  // The group grid is uniform, so `defaultTile` covers all legs (incl. ones that join later);
+  // `tileTargets` is an optional per-peer override (e.g. a future spotlight view). Default HD.
   private tileTargets = new Map<string, Tier>();
+  private defaultTile: Tier = 'hd';
   // Aggregate connection-state tracking (so a single leg blip doesn't end the call).
   private everConnected = false;
   private lastEmittedState: RTCPeerConnectionState | null = null;
@@ -471,12 +473,35 @@ export class MeshSession {
   setQualityClamp(clamp: Tier): void {
     this.clampTier = clamp;
     const ceilingIdx = TIERS.indexOf(this.effectiveCeiling());
+    const now = Date.now();
     for (const leg of this.legs.values()) {
       if (TIERS.indexOf(leg.qc.tier) > ceilingIdx) {
         leg.qc = { tier: TIERS[ceilingIdx], healthyStreak: 0, unhealthyStreak: 0 };
         void this.applyLegEncoding(leg);
       }
+      // spec 0007 US3: the manual pin folds into what we ASK each peer for, so a low/medium pin caps
+      // INCOMING too — push an updated report immediately instead of waiting for the next ~2s tick.
+      this.pushLegHealth(leg, now);
     }
+  }
+
+  /** Compute this leg's requested ceiling (downlink ∧ manual clamp ∧ tile target) and, if it changed
+   *  or the cadence elapsed, send a sealed `qos` to the peer. Shared by the periodic poll and the
+   *  immediate pin-change path. */
+  private pushLegHealth(leg: PeerLeg, now: number): void {
+    const h = leg.health;
+    const tile = this.tileTargets.get(leg.peerId) ?? this.defaultTile;
+    const requested = requestedTierOf(h.downlink, this.clampTier, tile);
+    if (requested === h.lastSentTier && now - h.lastSentAt < MESH_HEALTH_INTERVAL_MS) return;
+    h.lastSentTier = requested;
+    h.lastSentAt = now;
+    h.seq += 1;
+    void this.send('call-ice', leg.peerId, {
+      callId: this.roomId,
+      type: 'qos',
+      qos: { requestedTier: requested, downlinkClass: h.downlink, seq: h.seq },
+      roomId: this.roomId,
+    });
   }
 
   /** Apply a leg's current controller tier to its video sender (serialized per the
@@ -567,21 +592,8 @@ export class MeshSession {
     h.inPrevFrames = frames;
     const fractionLost = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
     h.downlink = downlinkClassFrom({ fractionLost, framesDropped: dDrop, framesReceived: dFrames }, h.downlink);
-    // The manual clamp folds in so a manual low/medium pin caps INCOMING too (US3). The tile target
-    // is HD until US4 threads each tile's rendered size in via setTileTarget().
-    const tile = this.tileTargets.get(leg.peerId) ?? 'hd';
-    const requested = requestedTierOf(h.downlink, this.clampTier, tile);
-    const changed = requested !== h.lastSentTier;
-    if (!changed && now - h.lastSentAt < MESH_HEALTH_INTERVAL_MS) return;
-    h.lastSentTier = requested;
-    h.lastSentAt = now;
-    h.seq += 1;
-    void this.send('call-ice', leg.peerId, {
-      callId: this.roomId,
-      type: 'qos',
-      qos: { requestedTier: requested, downlinkClass: h.downlink, seq: h.seq },
-      roomId: this.roomId,
-    });
+    // requestedTier = downlink ∧ manual clamp ∧ tile target — sent (if changed/cadence) by pushLegHealth.
+    this.pushLegHealth(leg, now);
   }
 
   /** A peer's sealed health report arrived (spec 0007 US2): keep the newest (by seq) for that leg;
@@ -600,6 +612,16 @@ export class MeshSession {
    *  ~2s report cadence; an immediate change is picked up on the next tick. */
   setTileTarget(peerId: string, tile: Tier): void {
     this.tileTargets.set(peerId, tile);
+  }
+
+  /** Spec 0007 US4: the uniform group grid renders every remote at the same size — set the tier that
+   *  size is worth for ALL legs (and future joiners). When it shrinks/grows (more peers, resize), the
+   *  next report asks each peer for correspondingly less/more. */
+  setAllTileTargets(tile: Tier): void {
+    if (tile === this.defaultTile) return;
+    this.defaultTile = tile;
+    const now = Date.now();
+    for (const leg of this.legs.values()) this.pushLegHealth(leg, now);
   }
 
   /** Stats from a representative connected leg (for the bitrate readout). */
