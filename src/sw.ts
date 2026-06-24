@@ -17,6 +17,9 @@
  * per-chat tags collapse the page- and SW-shown notes so there's never a duplicate.
  */
 import { precacheAndRoute } from 'workbox-precaching';
+import { registerRoute } from 'workbox-routing';
+import { CacheFirst } from 'workbox-strategies';
+import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, markShown, unreadCount, ackCall, previewConnections, markConnShown,
   type SwNote, type ConnNote,
@@ -30,6 +33,26 @@ declare const self: ServiceWorkerGlobalScope & {
 
 // App-shell precache (manifest injected at build time).
 precacheAndRoute(self.__WB_MANIFEST);
+
+// Reusable-asset runtime cache (spec 1017): a given animated emoji's Noto Lottie is immutable and
+// served from our own first-party proxy, so cache-first it persistently across sessions — a repeat
+// view never hits the network (and it animates offline). Bounded by count + age so it can't grow
+// without limit; purged on quota pressure. (Same-session hits are served even faster by the
+// in-memory cache in emoji-cache.ts.) Avatars are device-local `data:` URLs, so they need no
+// runtime route here.
+registerRoute(
+  ({ url }) => url.pathname.startsWith('/v1/emoji/'),
+  new CacheFirst({
+    cacheName: 'emoji-lottie-v1',
+    plugins: [
+      new ExpirationPlugin({
+        maxEntries: 512,
+        maxAgeSeconds: 60 * 60 * 24 * 60, // 60 days
+        purgeOnQuotaError: true,
+      }),
+    ],
+  }),
+);
 
 // Update model (pairs with registerType: 'prompt'): a freshly-installed worker
 // WAITS instead of taking over, so the page keeps running the version the user is
