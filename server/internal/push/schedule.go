@@ -9,18 +9,27 @@ import (
 	"ring/server/internal/store"
 )
 
-// 9-AM-local version-announcement scheduler (spec 1016). The on-boot all-device broadcast
-// is gone; instead a periodic sweep sends the content-free version push to each device that
-// is BEHIND the current version, at 09:00 in that device's local time, once per release.
+// Daytime-local version-announcement scheduler (spec 1016). The on-boot all-device broadcast
+// is gone; instead a periodic sweep sends the content-free version push to each device that is
+// BEHIND the current version, once per release, during waking hours in that device's local time.
+// A device that falls behind during the day is told that day; one behind overnight waits until
+// the window reopens at 09:00 — so an announcement never arrives in the middle of the night.
 
-// dueAtNine returns the subscriptions whose LOCAL time falls in the 09:00 hour, given the
-// current UTC time. JavaScript getTimezoneOffset() = UTC − local, so local = UTC − offset.
-// Pure + clock-injected, so the timezone math is unit-testable without a DB or real time.
-func dueAtNine(subs []store.PushSubscription, nowUTC time.Time) []store.PushSubscription {
+const (
+	// Local-time send window [start, end): a release reaches a device the first sweep tick its
+	// local clock is inside this window. Behind-at-2pm → that afternoon; behind-at-2am → 09:00.
+	sendWindowStartHour = 9  // inclusive — also the "held overnight, sent next morning" time
+	sendWindowEndHour   = 17 // exclusive — after this, hold until the window reopens at 09:00
+)
+
+// dueInSendWindow returns the subscriptions whose LOCAL time falls in the daytime send window,
+// given the current UTC time. JavaScript getTimezoneOffset() = UTC − local, so local = UTC −
+// offset. Pure + clock-injected, so the timezone math is unit-testable without a DB or real time.
+func dueInSendWindow(subs []store.PushSubscription, nowUTC time.Time) []store.PushSubscription {
 	out := make([]store.PushSubscription, 0, len(subs))
 	for _, s := range subs {
 		local := nowUTC.Add(-time.Duration(s.TZOffsetMinutes) * time.Minute)
-		if local.Hour() == 9 {
+		if h := local.Hour(); h >= sendWindowStartHour && h < sendWindowEndHour {
 			out = append(out, s)
 		}
 	}
@@ -40,10 +49,10 @@ type VersionSender interface {
 
 // SweepVersionAnnouncements is one tick of the scheduler: for every device that is BEHIND
 // the current version (SubscriptionsBehind already excludes up-to-date / already-announced
-// ones) AND whose LOCAL time is the 09:00 hour, send the version push and mark it announced
-// (dedup-on-send → once per release; the short TTL means a missed-morning push expires
-// rather than arriving at night). No-op on a dev/empty version. Bounded concurrency;
-// panic-safe so a bad tick can never crash the server.
+// ones) AND whose LOCAL time is within the daytime send window, send the version push and
+// mark it announced (dedup-on-send → once per release; the short TTL means a push that races
+// the window edge expires rather than arriving at night). No-op on a dev/empty version.
+// Bounded concurrency; panic-safe so a bad tick can never crash the server.
 func SweepVersionAnnouncements(ctx context.Context, st VersionSchedStore, sender VersionSender, currentVersion string, nowUTC time.Time) {
 	defer recoverLog("push: version sweep")
 	if currentVersion == "" || currentVersion == "dev" {
@@ -54,7 +63,7 @@ func SweepVersionAnnouncements(ctx context.Context, st VersionSchedStore, sender
 		slog.Error("push: version sweep load behind", "err", err)
 		return
 	}
-	due := dueAtNine(behind, nowUTC)
+	due := dueInSendWindow(behind, nowUTC)
 	if len(due) == 0 {
 		return
 	}

@@ -30,4 +30,18 @@ describe('claimCue — call-cue rate limiter (spec 0004 US5)', () => {
       expect(RECIPE_NAMES).toContain(name);
     }
   });
+
+  it('has a recipe for every call-waiting cue (spec 0005 US5)', () => {
+    for (const name of ['callwaiting', 'hold', 'resume', 'swap', 'resuming']) {
+      expect(RECIPE_NAMES).toContain(name);
+    }
+  });
+
+  it('de-dups a rapid hold→swap→hold storm so cue-fatigue is bounded (spec 0005 T027)', () => {
+    // Fumbling the swap button shouldn't machine-gun the same cue.
+    expect(claimCue('swap', 10_000)).toBe(true);
+    expect(claimCue('swap', 10_100)).toBe(false); // second tap within the window — suppressed
+    expect(claimCue('hold', 10_100)).toBe(true); // a distinct cue still plays
+    expect(claimCue('swap', 10_700)).toBe(true); // window elapsed — allowed again
+  });
 });

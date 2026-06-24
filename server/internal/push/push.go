@@ -83,13 +83,13 @@ const (
 	postTTL   = 7 * 24 * 60 * 60 // 604800s
 	postTopic = "ring-post"
 
-	// versionTTL / versionTopic: a "new version" announcement is sent at ~09:00 in the
-	// device's local time (spec 1016), so it must EXPIRE by roughly local midday rather
-	// than be held for late delivery — otherwise a device that was offline at 9 AM would
-	// get woken that evening/night, the exact disturbance the 9-AM schedule exists to
-	// avoid. A short TTL (a few hours) means a missed-morning push is dropped, not held.
+	// versionTTL / versionTopic: a "new version" announcement is sent during the device's
+	// local daytime window (09:00–17:00, spec 1016), so it must EXPIRE within a few hours
+	// rather than be held for late delivery — otherwise a device that was offline when the
+	// push was sent would get woken that night, the exact disturbance the schedule exists to
+	// avoid. A short TTL means a push that can't be delivered promptly is dropped, not held.
 	// Collapsed per subscription so multiple deploys while offline yield ONE wake.
-	versionTTL   = 3 * 60 * 60 // 10800s (~3h: expires by roughly local midday)
+	versionTTL   = 3 * 60 * 60 // 10800s (~3h: expires well before night even near the window edge)
 	versionTopic = "ring-version"
 
 	// versionSweepConcurrency bounds in-flight deliveries during a version-announcement

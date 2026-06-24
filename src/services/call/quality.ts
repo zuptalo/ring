@@ -36,6 +36,17 @@ export const TIER_ENCODING: Record<Tier, TierEncoding> = {
   hd: { maxBitrate: 2_500_000, scaleResolutionDownBy: 1, maxFramerate: 30 },
 };
 
+/** The encoding to actually push to a sender for a tier. On WebKit/iOS (`avoidEncoderScaling`)
+ *  `scaleResolutionDownBy` and `maxFramerate` applied via setParameters are unreliable on older
+ *  devices (e.g. iPhone 8) — they can stall the H.264 encoder so it produces NO frames, which
+ *  shows up as black/frozen self-view AND nothing transferred to the peer. There we tier by
+ *  `maxBitrate` alone (which WebKit honors) and let the encoder keep full frames. */
+export function tierEncoding(tier: Tier, avoidEncoderScaling = false): TierEncoding {
+  const base = TIER_ENCODING[tier];
+  if (!avoidEncoderScaling) return base;
+  return { maxBitrate: base.maxBitrate, scaleResolutionDownBy: 1 };
+}
+
 // The send-bitrate a tier wants; used both to climb (need headroom for the NEXT tier) and to
 // detect pressure (available dropped below the CURRENT tier's target).
 const TIER_TARGET: Record<Tier, number> = {

@@ -148,6 +148,16 @@ export async function waitCallLog(c: RingClient, peerId: string, timeout = 10_00
   );
 }
 
+/** Count call-log entries in the 1:1 chat with `peerId` (spec 0005 FR-010: a held-then-resumed
+ *  call must log as ONE entry — hold/swap/resume never log). */
+export async function callLogCount(c: RingClient, peerId: string): Promise<number> {
+  const chatId = await chatWith(c, peerId);
+  return c.page.evaluate(
+    async (id: string) => (await (window as any).__ringTest.messages(id)).filter((m: any) => m.kind === 'call').length,
+    chatId,
+  );
+}
+
 /* ---- group calls (spec 0004) ---- */
 
 /** Act as the INITIATOR: ring `members` into a group call `roomId` (they get an incoming
@@ -188,6 +198,29 @@ export async function waitRemotes(c: RingClient, n: number, timeout = 30_000): P
     { timeout },
   );
 }
+
+/* ---- call waiting (spec 0005): hold / swap / drop ---- */
+export const acceptAndHold = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.acceptAndHold());
+export const swapCalls = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.swapCalls());
+export const endActive = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.endActive());
+export const endHeld = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.endHeld());
+export const rejectSecond = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.rejectSecond());
+export const hasSecondIncoming = (c: RingClient): Promise<boolean> =>
+  c.page.evaluate(() => (window as any).__ringTest.hasSecondIncoming());
+export const canHoldIncoming = (c: RingClient): Promise<boolean> =>
+  c.page.evaluate(() => (window as any).__ringTest.canHoldIncoming());
+export const heldCallId = (c: RingClient): Promise<string | null> =>
+  c.page.evaluate(() => (window as any).__ringTest.heldCallId());
+export const isRemoteHeld = (c: RingClient): Promise<boolean> =>
+  c.page.evaluate(() => (window as any).__ringTest.isRemoteHeld());
+export const groupHeldPeers = (c: RingClient): Promise<string[]> =>
+  c.page.evaluate(() => (window as any).__ringTest.groupHeldPeers());
+/** The resume countdown value for the party coming off hold (number while counting, else null). */
+export const resumeCountdown = (c: RingClient): Promise<number | null> =>
+  c.page.evaluate(() => (window as any).__ringTest.resumeCountdown());
+/** Caller side: true when the callee we're ringing is busy but offered Accept & hold (queued). */
+export const isRemoteQueued = (c: RingClient): Promise<boolean> =>
+  c.page.evaluate(() => (window as any).__ringTest.isRemoteQueued());
 
 /* ---- call-cue recording (spec 0004 US5) ---- */
 export const recordCues = (c: RingClient, on: boolean) =>

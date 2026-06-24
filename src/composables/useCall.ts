@@ -34,7 +34,7 @@ import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
-  sendGroupLeave, sendGroupBusy,
+  sendGroupLeave, sendGroupBusy, sendHoldResume,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
 import { syncState } from '@/composables/useSync';
@@ -45,12 +45,13 @@ import {
   type Tier,
   type ControllerState,
   TIERS,
-  TIER_ENCODING,
+  tierEncoding,
   initialController,
   nextTier,
   snapshotFromReport,
   clampForPin,
 } from '@/services/call/quality';
+import { activeDurationSec, bankActive, startActive } from '@/services/call/duration';
 import type { CallFrame } from '@/services/transport';
 
 /* ---- reactive state (read by the call UI) ---- */
@@ -90,6 +91,39 @@ export const activeSpeakers = ref<string[]>([]);
 // A transient status shown during the call when the connection is degraded
 // ('Reconnecting…' while ICE is down, 'Connection unstable' on high packet loss).
 export const connectionWarning = ref<string | null>(null);
+
+/* ---- call waiting (spec 0005): hold / swap / drop a second call ---- */
+// The parked (held) call's meta, or null when only one call is in progress. Drives the
+// tap-to-swap "On hold" bar. The active call stays in the singleton refs above; the held
+// call's connection objects live in `heldSlot` (below).
+export const heldCall = ref<CallMeta | null>(null);
+// True when the OTHER side has put the ACTIVE call on hold (we render "on hold" and our
+// outgoing to them is paused until they resume). Distinct from heldCall (which WE hold).
+export const remoteHeld = ref(false);
+// Group calls: peers who have put us on hold, so their tile shows "on hold" (mesh-reported).
+export const groupHeldPeers = ref<string[]>([]);
+// When the other side resumes a call they'd put us on hold, we don't snap our camera/mic back
+// on instantly — we count down (5→1) with a cue first, so the person isn't caught off-guard
+// becoming visible/audible again. null = not counting down (spec 0005).
+export const resumeCountdown = ref<number | null>(null);
+// Caller side: the person we're calling is already in a call but CAN take a second one — they got
+// a call-waiting prompt (their device acked with reason 'call-waiting'). We show "in their queue"
+// instead of plain "Ringing…" so the caller knows they've been notified and may be picked up.
+export const remoteQueued = ref(false);
+// A second incoming call arriving while we're in one (and a held slot is free): shown over
+// the active call as an Accept-&-hold / Decline prompt, separate from the active call's state.
+export const incomingSecond = ref<{
+  kind: 'direct' | 'group';
+  callId: string;
+  from?: string;
+  chatId?: string;
+  roomId?: string;
+  name: string;
+  avatar: string;
+  callKind: CallKind;
+  offer?: { sdp: string; sdpType: RTCSdpType };
+  members?: string[];
+} | null>(null);
 
 /* ---- audio output routing (earpiece / loudspeaker / Bluetooth) ---- */
 // We model three logical routes the user understands, EARPIECE (held to the ear),
@@ -257,6 +291,74 @@ async function initAudioRoute(): Promise<void> {
 let pc: RTCPeerConnection | null = null;
 let groupSession: MeshSession | null = null;
 
+// Call waiting (spec 0005): the parked (held) call's live connection objects + media. The
+// ACTIVE call uses the singleton refs above; when a second call is taken, the current call is
+// paused and moved here (and restored on swap/drop). At most one held slot (two-call cap).
+interface HeldSlot {
+  meta: CallMeta;
+  pc: RTCPeerConnection | null;
+  groupSession: MeshSession | null;
+  remoteStream: MediaStream | null;
+  remoteStreams: MediaStream[];
+  owners: Record<string, string>;
+}
+let heldSlot: HeldSlot | null = null;
+// ICE candidates for the pending second incoming call, buffered until Accept & hold creates
+// its pc (drained in connectSecondDirect) — keeps the second call fast to connect.
+let secondIce: RTCIceCandidateInit[] = [];
+
+/** Attach (or, with `stream === null`, detach) the 1:1 sender tracks on `target`, matched by
+ *  the transceiver's media kind so a nulled sender is still found (renegotiation-free — call
+ *  waiting, spec 0005). Detach pauses outgoing; attach restores it from the shared stream. */
+async function set1to1Senders(target: RTCPeerConnection, stream: MediaStream | null): Promise<void> {
+  const a = stream?.getAudioTracks()[0] ?? null;
+  const v = stream?.getVideoTracks()[0] ?? null;
+  for (const tx of target.getTransceivers()) {
+    const kind = tx.receiver?.track?.kind ?? tx.sender.track?.kind;
+    if (kind === 'audio') await tx.sender.replaceTrack(a).catch(() => {});
+    else if (kind === 'video') await tx.sender.replaceTrack(v).catch(() => {});
+  }
+}
+
+const RESUME_COUNTDOWN_SEC = 5;
+
+/** Cancel any in-flight resume countdown (call ended, re-held, or swapped away). */
+function cancelResumeCountdown(): void {
+  if (resumeCountdownTimer) clearInterval(resumeCountdownTimer);
+  resumeCountdownTimer = null;
+  resumeCountdown.value = null;
+}
+
+/** The far side resumed a call they'd put us on hold. Their media unfreezes right away, but give
+ *  US a 5s heads-up (visible countdown + a cue) before our camera/mic go live again, so we're not
+ *  caught by surprise. Restores outgoing on `target` when the countdown hits zero — unless the
+ *  call moved on (torn down, re-held, or swapped) in the meantime. */
+function beginResumeCountdown(target: RTCPeerConnection): void {
+  cancelResumeCountdown();
+  let n = RESUME_COUNTDOWN_SEC;
+  resumeCountdown.value = n;
+  callCue('resuming'); // audible "you're about to be back" notification
+  resumeCountdownTimer = setInterval(() => {
+    n -= 1;
+    if (n > 0) {
+      resumeCountdown.value = n;
+      if (n === 2) callCue('resuming'); // sound again near the end so it re-grabs attention
+      return;
+    }
+    cancelResumeCountdown();
+    // Only actually go live if this is still the active, not-held call.
+    if (pc === target && !remoteHeld.value && localStream.value) {
+      void set1to1Senders(target, localStream.value);
+    }
+  }, 1000);
+}
+
+/** Whether a second incoming call can be taken with Accept & hold: we're in exactly one call
+ *  (active, no held slot yet) so a slot is free (two-call cap, spec 0005). */
+export function canHoldIncoming(): boolean {
+  return callState.value !== 'idle' && callState.value !== 'ended' && heldSlot === null;
+}
+
 /** Latest per-tile audio RMS for the active group call (tile key → level). Empty when
  *  not in a group call. Exposed for the e2e test hook to verify metering end-to-end. */
 export function groupAudioLevels(): Record<string, number> {
@@ -276,8 +378,13 @@ let dialTimer: ReturnType<typeof setTimeout> | null = null;
 let graceTimer: ReturnType<typeof setTimeout> | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let durationTimer: ReturnType<typeof setInterval> | null = null;
+let resumeCountdownTimer: ReturnType<typeof setInterval> | null = null;
 let lastBytes = { up: 0, down: 0, ts: 0 };
 let lastLoss = { lost: 0, recv: 0 };
+// After a swap/resume the active connection changes, so the cumulative byte counters jump to a
+// different PC's totals. Re-baseline on the next poll (emit no rate that tick) so we don't report
+// the whole-call total as one second's "usage" (the spike the user saw after a resume).
+let reprimeBytes = false;
 let returnPath = '/tabs/calls';
 
 const RING_TIMEOUT_MS = 60_000; // callee: auto-decline if unanswered (matches the ~60s push window)
@@ -393,6 +500,23 @@ async function loadCallPrefs(): Promise<void> {
 // rate-limiter de-dupes if more than one fires at once.
 watch(connectionWarning, (w, prev) => {
   if (w === 'Reconnecting…' && prev !== 'Reconnecting…') callCue('reconnecting');
+});
+
+// Call-waiting alert: a second call arriving while we're in one is easy to miss, so keep the cue
+// going (every CALL_WAITING_REPEAT_MS) the whole time the prompt is up — not just once — and stop
+// it however the prompt clears (accepted, declined, the caller gives up, or it times out). Gated
+// by callCue, so it stays silent when "Call sounds" is off.
+const CALL_WAITING_REPEAT_MS = 5000;
+let callWaitingCueTimer: ReturnType<typeof setInterval> | null = null;
+watch(incomingSecond, (inc) => {
+  if (callWaitingCueTimer) {
+    clearInterval(callWaitingCueTimer);
+    callWaitingCueTimer = null;
+  }
+  if (inc) {
+    callCue('callwaiting');
+    callWaitingCueTimer = setInterval(() => callCue('callwaiting'), CALL_WAITING_REPEAT_MS);
+  }
 });
 
 // The WebSocket came back (network restored, Wi-Fi↔cellular handoff). If we're in a live
@@ -585,13 +709,33 @@ function armDialTimeout(peerUserId: string, callId: string, ms: number): void {
   }, ms);
 }
 
+/** Active (talk) time of a call in seconds, EXCLUDING any time it spent on hold (call waiting).
+ *  Delegates to the pure `duration` module; each call carries its own counters on its CallMeta,
+ *  so two concurrent calls report distinct durations. */
+function callDurationSec(meta: CallMeta | null): number {
+  return activeDurationSec(meta, Date.now());
+}
+
+/** Bank the current active stint and stop the clock — called when a call goes on hold so held
+ *  time isn't counted as call duration. */
+function bankActiveTime(meta: CallMeta | null): void {
+  if (meta) bankActive(meta, Date.now());
+}
+
+/** (Re)start the active clock for a call becoming active (connect or resume). */
+function resumeActiveTime(meta: CallMeta | null): void {
+  if (meta) startActive(meta, Date.now());
+}
+
 function startTimers(): void {
   stopTimers();
-  const started = callMeta.value?.startedAt ?? Date.now();
   durationTimer = setInterval(() => {
-    callStats.value = { ...callStats.value, durationSec: Math.floor((Date.now() - started) / 1000) };
+    // Read the CURRENT active call's meta each tick (not a captured start) so after a swap the
+    // duration reflects the now-active call, and held time is excluded.
+    callStats.value = { ...callStats.value, durationSec: callDurationSec(callMeta.value) };
   }, 1000);
   lastBytes = { up: 0, down: 0, ts: Date.now() };
+  reprimeBytes = false;
   lastLoss = { lost: 0, recv: 0 };
   statsTimer = setInterval(() => void pollStats(), 1000);
 }
@@ -627,6 +771,16 @@ async function pollStats(): Promise<void> {
     return;
   }
   const now = Date.now();
+  // First sample after a swap/resume: the active PC (and its cumulative counters) just changed,
+  // so re-baseline against this PC's totals and report no rate this tick — otherwise the delta is
+  // "all bytes this PC ever sent" reported as one second of usage.
+  if (reprimeBytes) {
+    reprimeBytes = false;
+    lastBytes = { up, down, ts: now };
+    lastLoss = { lost, recv }; // re-baseline loss too, else the new PC's totals read as a loss spike
+    callStats.value = { ...callStats.value, kbpsUp: 0, kbpsDown: 0 };
+    return;
+  }
   const dt = (now - lastBytes.ts) / 1000 || 1;
   const kbpsUp = Math.max(0, Math.round(((up - lastBytes.up) * 8) / 1000 / dt));
   const kbpsDown = Math.max(0, Math.round(((down - lastBytes.down) * 8) / 1000 / dt));
@@ -775,9 +929,8 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   // informational row in the chat (1:1 or group). Each side logs its own. Internal
   // teardowns (answered-elsewhere, glare) pass silent → no user-facing log.
   if (meta) {
-    const durationSec = wasConnected
-      ? Math.max(0, Math.floor((Date.now() - (meta.startedAt ?? Date.now())) / 1000))
-      : 0;
+    // Talk time only — banked active stints + the current one, excluding any time on hold.
+    const durationSec = wasConnected ? callDurationSec(meta) : 0;
     const video = meta.kind === 'video';
     // Why an unanswered call ended, for a clearer log than "No answer": the peer was busy in
     // another call, unreachable, or declined (spec 0004 US2/FR-031). Only for calls that
@@ -834,7 +987,25 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   groupJoined.clear();
   clearAllMemberRingTimers();
 
+  // Call waiting (spec 0005): if a call is parked on hold, the active call ending means RETURN
+  // to the held one — resume it as the new active rather than going idle. Covers hanging up,
+  // a busy/unavailable result, AND a remote end of the active call; otherwise the held call
+  // would be stranded (the bug where the second call's hangup dropped everything).
+  if (heldSlot) {
+    await restoreHeldCall();
+    return;
+  }
+
   setState('ended');
+  cancelResumeCountdown();
+  // Clear ALL call-waiting display state so a hung-up call can't leak its "on hold" UI into the
+  // next call (the reported bug: a device that was on hold kept remoteHeld=true after the call
+  // dropped, so the next call opened showing the hold overlay).
+  remoteQueued.value = false;
+  remoteHeld.value = false;
+  groupHeldPeers.value = [];
+  heldCall.value = null;
+  incomingSecond.value = null;
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
   connectionWarning.value = null;
 
@@ -987,6 +1158,7 @@ async function enterGroupCall(
   avatar: string,
   direction: 'incoming' | 'outgoing',
   members: string[] = [],
+  existingStream?: MediaStream, // call waiting: reuse the camera/mic when this is the 2nd call
 ): Promise<void> {
   callMeta.value = {
     callId: roomId,
@@ -1023,6 +1195,7 @@ async function enterGroupCall(
       },
       onStreamMap: (m) => (groupStreamOwners.value = m),
       onActiveSpeakers: (keys) => (activeSpeakers.value = keys),
+      onHeldPeers: (ids) => (groupHeldPeers.value = ids),
       onConnectionState: (st) => {
         if (st === 'connected') {
           clearGrace();
@@ -1043,7 +1216,7 @@ async function enterGroupCall(
   );
 
   try {
-    await groupSession.start();
+    await groupSession.start(existingStream);
   } catch (e) {
     console.warn('[call] group start failed', e);
     await teardown('failed');
@@ -1252,6 +1425,10 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
       const self = getSelfUserId() ?? '';
       if (self < from) return; // we win, keep our outgoing offer, ignore theirs
       await teardown('answered-elsewhere', { silent: true }); // we yield, accept theirs
+    } else if (canHoldIncoming()) {
+      // Call waiting (spec 0005): a held slot is free → offer Accept & hold instead of busy.
+      await presentSecondDirect(frame, from);
+      return;
     } else {
       void sendControl('call-busy', from, frame.callId);
       return;
@@ -1356,6 +1533,308 @@ export async function acceptCall(): Promise<void> {
   navigateToCall();
 }
 
+/* ---- call waiting (spec 0005): hold the active call, take a second, swap, drop ---- */
+
+/** Pause the current ACTIVE call and move it into the held slot, keeping its connection +
+ *  ICE alive. 1:1: detach the senders + send a sealed hold to the peer. Group: pause every
+ *  leg (MeshSession.pause). The active singleton refs are then cleared for the new call to
+ *  populate — we do NOT teardown. */
+async function parkActiveAsHeld(): Promise<void> {
+  const meta = callMeta.value;
+  if (!meta) return;
+  bankActiveTime(meta); // freeze the parked call's duration clock — held time isn't talk time
+  if (meta.isGroup && groupSession) {
+    await groupSession.pause();
+  } else if (pc) {
+    await set1to1Senders(pc, null);
+    if (meta.chatId && meta.peerUserId) void sendHoldResume('hold', meta.chatId, meta.peerUserId, meta.callId);
+  }
+  heldSlot = {
+    meta,
+    pc,
+    groupSession,
+    remoteStream: remoteStream.value,
+    remoteStreams: remoteStreams.value,
+    owners: groupStreamOwners.value,
+  };
+  heldCall.value = meta;
+  callCue('hold');
+  // Detach the active refs (the new call repopulates them) WITHOUT tearing the held call down.
+  pc = null;
+  groupSession = null;
+  remoteStream.value = null;
+  remoteStreams.value = [];
+  groupStreamOwners.value = {};
+  activeSpeakers.value = [];
+  groupHeldPeers.value = [];
+  remoteHeld.value = false;
+}
+
+/** Return to the held call as the new ACTIVE call: restore its connection objects, capture a
+ *  FRESH local stream (the just-ended active call stopped the shared one), re-attach the held
+ *  call's senders + tell the other side(s) we resumed. Called when the active call ends while a
+ *  call is parked, so hanging up / busy / a remote end RETURNS to the held call instead of
+ *  stranding it (spec 0005 US3). */
+async function restoreHeldCall(): Promise<void> {
+  const slot = heldSlot;
+  if (!slot) return;
+  heldSlot = null;
+  heldCall.value = null;
+  pc = slot.pc;
+  groupSession = slot.groupSession;
+  callMeta.value = slot.meta;
+  resumeActiveTime(slot.meta); // restart this call's duration clock from now
+  reprimeBytes = true; // re-baseline byte counters against the resumed PC (no usage spike)
+  remoteStream.value = slot.remoteStream;
+  remoteStreams.value = slot.remoteStreams;
+  groupStreamOwners.value = slot.owners;
+  remoteHeld.value = false;
+  groupHeldPeers.value = [];
+  let stream: MediaStream | null = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(gumConstraints(slot.meta.kind));
+  } catch {
+    /* mic/camera unavailable on resume — proceed with no outgoing media rather than dropping */
+  }
+  localStream.value = stream;
+  if (slot.meta.isGroup && slot.groupSession && stream) {
+    await slot.groupSession.resume(stream);
+  } else if (slot.pc) {
+    if (stream) await set1to1Senders(slot.pc, stream);
+    if (slot.meta.chatId && slot.meta.peerUserId) {
+      void sendHoldResume('resume', slot.meta.chatId, slot.meta.peerUserId, slot.meta.callId);
+    }
+  }
+  callCue('resume');
+  setState('connected');
+  navigateToCall();
+}
+
+/** Swap the active and held calls (spec 0005 US2): pause the current active call, resume the
+ *  held one into the active slot, and park the just-paused call as the new held. The shared
+ *  camera/mic stays live (no re-capture) — only which call sends it changes. */
+export async function swapCalls(): Promise<void> {
+  const slot = heldSlot;
+  const activeMeta = callMeta.value;
+  if (!slot || !activeMeta) return;
+  const stream = localStream.value; // the one live camera/mic — moves to the resumed call
+  // 1) Pause the current ACTIVE call (it becomes the new held).
+  bankActiveTime(activeMeta); // freeze its clock; the resumed call's clock restarts below
+  if (activeMeta.isGroup && groupSession) {
+    await groupSession.pause();
+  } else if (pc) {
+    await set1to1Senders(pc, null);
+    if (activeMeta.chatId && activeMeta.peerUserId) void sendHoldResume('hold', activeMeta.chatId, activeMeta.peerUserId, activeMeta.callId);
+  }
+  const newHeld: HeldSlot = {
+    meta: activeMeta,
+    pc,
+    groupSession,
+    remoteStream: remoteStream.value,
+    remoteStreams: remoteStreams.value,
+    owners: groupStreamOwners.value,
+  };
+  // 2) Promote the held call to ACTIVE and resume its media from the shared stream.
+  pc = slot.pc;
+  groupSession = slot.groupSession;
+  callMeta.value = slot.meta;
+  resumeActiveTime(slot.meta); // restart the resumed call's duration clock
+  reprimeBytes = true; // re-baseline byte counters against the resumed PC (no usage spike)
+  remoteStream.value = slot.remoteStream;
+  remoteStreams.value = slot.remoteStreams;
+  groupStreamOwners.value = slot.owners;
+  remoteHeld.value = false;
+  groupHeldPeers.value = [];
+  if (slot.meta.isGroup && slot.groupSession && stream) {
+    await slot.groupSession.resume(stream);
+  } else if (slot.pc && stream) {
+    await set1to1Senders(slot.pc, stream);
+    if (slot.meta.chatId && slot.meta.peerUserId) void sendHoldResume('resume', slot.meta.chatId, slot.meta.peerUserId, slot.meta.callId);
+  }
+  // 3) The just-paused call is the new held slot.
+  heldSlot = newHeld;
+  heldCall.value = newHeld.meta;
+  callCue('swap');
+}
+
+/** End the ACTIVE call and continue on the held one (spec 0005 US3). hangupCall already routes
+ *  through teardown → restoreHeldCall when a call is parked, so this is just an alias. */
+export const endActive = hangupCall;
+
+/** Close + clear the held slot's connection (its senders carry null tracks, so the shared
+ *  stream the ACTIVE call uses is untouched). Used by both a local endHeld and a remote end of
+ *  the held call. */
+function freeHeldSlot(): void {
+  const slot = heldSlot;
+  if (!slot) return;
+  heldSlot = null;
+  heldCall.value = null;
+  if (slot.meta.isGroup && slot.groupSession) slot.groupSession.leave();
+  else if (slot.pc) {
+    try {
+      slot.pc.close();
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
+/** Drop the HELD call without disturbing the active one (spec 0005 US3): tell its other side
+ *  it ended, log it, and free the slot. */
+export async function endHeld(): Promise<void> {
+  const slot = heldSlot;
+  if (!slot) return;
+  if (!slot.meta.isGroup && slot.pc && slot.meta.peerUserId) {
+    void sendControl('call-end', slot.meta.peerUserId, slot.meta.callId, { reason: 'hangup' });
+  }
+  if (slot.meta.chatId && !slot.meta.isGroup) {
+    await logCallToChat(slot.meta.chatId, { direction: slot.meta.direction, video: slot.meta.kind === 'video', missed: false });
+  }
+  freeHeldSlot();
+}
+
+/** Connect the stashed second 1:1 incoming call as the new ACTIVE call, reusing the shared
+ *  camera/mic (no second getUserMedia). Mirrors acceptCall's 1:1 answer path. */
+async function connectSecondDirect(
+  inc: NonNullable<typeof incomingSecond.value>,
+  stream: MediaStream,
+): Promise<void> {
+  if (!inc.offer || !inc.from || !inc.chatId) return;
+  callMeta.value = {
+    callId: inc.callId,
+    isGroup: false,
+    kind: inc.callKind,
+    direction: 'incoming',
+    peerUserId: inc.from,
+    chatId: inc.chatId,
+    roster: [inc.from],
+    name: inc.name,
+    avatar: inc.avatar,
+  };
+  await createCall({ callId: inc.callId, contactId: inc.from, direction: 'incoming', video: inc.callKind === 'video' });
+  localStream.value = stream;
+  try {
+    pc = await newPeerConnection();
+    wireIce(pc);
+    addLocalTracks(pc, stream);
+    await pc.setRemoteDescription({ type: inc.offer.sdpType, sdp: inc.offer.sdp });
+    // Drain the ICE candidates that arrived while the offer was stashed (fast connect).
+    for (const c of secondIce.splice(0)) {
+      try {
+        await pc.addIceCandidate(c);
+      } catch {
+        /* stale/duplicate candidate is harmless */
+      }
+    }
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await sendSealedSignal('call-answer', inc.chatId, inc.from, inc.callId, {
+      callId: inc.callId,
+      type: 'answer',
+      sdp: answer.sdp,
+      sdpType: answer.type,
+    });
+  } catch {
+    await teardown('failed');
+    return;
+  }
+  setState('connecting');
+  navigateToCall();
+}
+
+/** Accept the pending second incoming call (US1): put the current call on hold and connect
+ *  the new one, reusing the one shared camera/mic. The held call's other side sees "on hold". */
+export async function acceptAndHold(): Promise<void> {
+  const inc = incomingSecond.value;
+  if (!inc || !canHoldIncoming()) return;
+  incomingSecond.value = null;
+  await loadCallPrefs();
+  await parkActiveAsHeld();
+  // Media for the new call: reuse the held call's camera/mic. But if the new call is VIDEO and
+  // the shared stream has no camera (the held call was audio-only), capture audio+video fresh —
+  // otherwise we'd answer a video call with no video to send. The held call's senders are
+  // already detached, so swapping its stream is safe (it re-captures on resume).
+  let shared = localStream.value;
+  if (inc.callKind === 'video' && !shared?.getVideoTracks().length) {
+    try {
+      const fresh = await navigator.mediaDevices.getUserMedia(gumConstraints('video'));
+      shared?.getTracks().forEach((t) => t.stop());
+      shared = fresh;
+    } catch {
+      /* camera unavailable → fall through and connect with whatever we have (audio-only) */
+    }
+  }
+  if (!shared) {
+    try {
+      shared = await navigator.mediaDevices.getUserMedia(gumConstraints(inc.callKind));
+    } catch {
+      await teardown('failed');
+      return;
+    }
+  }
+  localStream.value = shared;
+  if (inc.kind === 'direct') {
+    await connectSecondDirect(inc, shared);
+  } else {
+    // A group invite as the second call: join the room, reusing the shared stream.
+    await enterGroupCall(inc.roomId ?? inc.callId, inc.callKind, inc.name, inc.avatar, 'incoming', [], shared);
+  }
+}
+
+/** Decline the pending second incoming call (keep the active call): tell the caller busy and
+ *  clear the prompt. */
+export async function rejectSecond(): Promise<void> {
+  const inc = incomingSecond.value;
+  if (!inc) return;
+  incomingSecond.value = null;
+  if (inc.kind === 'direct' && inc.from) {
+    void sendControl('call-busy', inc.from, inc.callId);
+  } else if (inc.kind === 'group' && inc.from && inc.roomId) {
+    void sendGroupBusy(inc.from, inc.roomId);
+  }
+}
+
+/** A second 1:1 call arrived while we're in a call and a held slot is free (spec 0005):
+ *  stash its (decrypted) offer and raise the Accept-&-hold prompt with a call-waiting cue,
+ *  WITHOUT disturbing the active call. Falls back to busy if it can't be opened/resolved. */
+async function presentSecondDirect(
+  frame: Extract<CallFrame, { t: 'call-offer' }>,
+  from: string,
+): Promise<void> {
+  const busy = (): void => void sendControl('call-busy', from, frame.callId);
+  if (!isUnlockedNow()) return busy();
+  let contact = await getContact(from);
+  if (!contact) {
+    await addContactWithId(from, '');
+    contact = await getContact(from);
+  }
+  if (!contact) return busy();
+  const chatId = await startDirectChat(contact);
+  const offerChat = await getChat(chatId);
+  if ((offerChat?.mutedUntil && offerChat.mutedUntil > Date.now()) || offerChat?.notifyWebPush === false) return;
+  const signal = await openSealedSignal(chatId, frame.ciphertext);
+  if (!signal || signal.type !== 'offer' || !signal.sdp) return busy();
+  secondIce = []; // fresh ICE buffer for this pending second call
+  incomingSecond.value = {
+    kind: 'direct',
+    callId: frame.callId,
+    from,
+    chatId,
+    name: contact.name,
+    avatar: contact.avatar,
+    callKind: signal.kind ?? 'audio',
+    offer: { sdp: signal.sdp, sdpType: signal.sdpType ?? 'offer' },
+  };
+  // The call-waiting cue (and its repeat) is driven by the incomingSecond watcher below, so it
+  // also fires for the group second-incoming path and stops however the prompt is dismissed.
+  // Tag the ack 'call-waiting' so the caller shows "in their queue" rather than plain "Ringing…".
+  void sendControl('call-ringing', from, frame.callId, { reason: 'call-waiting' });
+  // If unanswered within the ring window, drop the prompt (the caller's own timeout ends it).
+  setTimeout(() => {
+    if (incomingSecond.value?.callId === frame.callId) incomingSecond.value = null;
+  }, RING_TIMEOUT_MS);
+}
+
 /** Decline the current incoming call. (Group rings carry no per-invitee decline;
  *  just stop ringing locally; the call continues for everyone else.) */
 export async function rejectCall(): Promise<void> {
@@ -1409,7 +1888,7 @@ export function expandCall(): void {
 export async function hangupCall(): Promise<void> {
   const meta = callMeta.value;
   if (!meta) return;
-  const duration = meta.startedAt ? Math.floor((Date.now() - meta.startedAt) / 1000) : 0;
+  const duration = callDurationSec(meta); // talk time, excluding any on-hold interval
   if (meta.peerUserId) {
     void sendControl('call-end', meta.peerUserId, meta.callId, { reason: 'hangup', duration });
   }
@@ -1479,7 +1958,7 @@ async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise
   if (!sender) return;
   const params = sender.getParameters();
   if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-  const enc = TIER_ENCODING[tier];
+  const enc = tierEncoding(tier, isIOS());
   const e = params.encodings[0];
   e.maxBitrate = enc.maxBitrate;
   e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
@@ -1827,7 +2306,11 @@ async function handleMeshSignal(
   const chatId = await meshSessionChatId(frame.from);
   const signal = await openSealedSignal(chatId, frame.ciphertext);
   if (groupSession !== gs || !signal) return true;
-  if (type === 'offer') await gs.onPeerOffer(frame.from, signal);
+  // Hold/resume ride a call-ice frame; dispatch on the INNER signal type (spec 0005) before
+  // the offer/answer/ice handling — a peer paused/resumed their leg to us.
+  if (signal.type === 'hold') await gs.onPeerHold(frame.from);
+  else if (signal.type === 'resume') await gs.onPeerResume(frame.from);
+  else if (type === 'offer') await gs.onPeerOffer(frame.from, signal);
   else if (type === 'answer') await gs.onPeerAnswer(frame.from, signal);
   else await gs.onPeerIce(frame.from, signal);
   return true;
@@ -1908,7 +2391,13 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // service worker showed the call notification and acked via /v1/call/ack and
       // the server forwarded this). Either way the phone is reachable → "Ringing".
       const meta = callMeta.value;
-      if (meta && meta.callId === frame.callId && callState.value === 'dialing') {
+      if (!meta || meta.callId !== frame.callId) return;
+      // The callee is busy but offered Accept & hold → they've been notified and may pick us up.
+      // Set this independent of the dialing→ringing transition below: the server auto-issues a
+      // plain call-ringing the instant the callee's socket gets the offer (flipping us to
+      // remote-ringing), so the callee app's later 'call-waiting'-tagged ack must still register.
+      if (frame.reason === 'call-waiting') remoteQueued.value = true;
+      if (callState.value === 'dialing') {
         setState('remote-ringing');
         startLoopTone('ringing', 2600); // switch the ringback to the "ringing" cue
         // Reachable now: extend the give-up window so we keep ringing while the callee
@@ -1974,10 +2463,34 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
 
     case 'call-ice': {
       if (await handleMeshSignal('ice', frame)) return;
+      // ICE for the pending SECOND incoming call (whose pc doesn't exist until Accept & hold):
+      // buffer it so the call connects fast once accepted, instead of discarding the early
+      // candidates (which made the second call slow to connect) — spec 0005.
+      const second = incomingSecond.value;
+      if (second && second.callId === frame.callId && second.chatId) {
+        const sig = await openSealedSignal(second.chatId, frame.ciphertext);
+        if (sig?.type === 'ice' && sig.candidate) secondIce.push(sig.candidate);
+        return;
+      }
       const meta = callMeta.value;
       if (!meta || meta.callId !== frame.callId || !meta.chatId) return;
       const signal = await openSealedSignal(meta.chatId, frame.ciphertext);
-      if (!signal || signal.type !== 'ice' || !signal.candidate) return;
+      if (!signal) return;
+      // Hold/resume ride a call-ice frame (spec 0005): the 1:1 peer paused/resumed the call.
+      // Pause/restore our outgoing to them and flag the call "on hold" — media stops/returns
+      // both ways. (Applies to the ACTIVE 1:1 call; a held-call hold is an US2/US3 edge.)
+      if (signal.type === 'hold' && pc) {
+        cancelResumeCountdown(); // re-held mid-countdown → abort the pending go-live
+        remoteHeld.value = true;
+        await set1to1Senders(pc, null); // pause OUR outgoing too — no data while held
+        return;
+      }
+      if (signal.type === 'resume' && pc) {
+        remoteHeld.value = false; // their video unfreezes immediately
+        beginResumeCountdown(pc); // 5s heads-up + cue before WE become visible/audible again
+        return;
+      }
+      if (signal.type !== 'ice' || !signal.candidate) return;
       if (pc?.remoteDescription) {
         try {
           await pc.addIceCandidate(signal.candidate);
@@ -2013,6 +2526,13 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // recall "remove" carries the roomId (no callId): dismiss the ring if it's for the
       // group we're being rung for. Also forget any held (locked) frames for it.
       const meta = callMeta.value;
+      // A second incoming call (call-waiting prompt) the caller gave up on before we answered →
+      // dismiss the Accept-&-hold prompt; our active call is untouched (spec 0005).
+      if (incomingSecond.value && incomingSecond.value.callId === frame.callId) {
+        incomingSecond.value = null;
+        secondIce = [];
+        return;
+      }
       dropHeldCall(frame.callId);
       dropHeldCall(frame.roomId);
       const matchesCall = !!frame.callId && meta?.callId === frame.callId;
@@ -2027,8 +2547,20 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
 
     case 'call-end': {
       const meta = callMeta.value;
+      // A second incoming call the caller ended before we answered → dismiss the prompt
+      // (some callers send call-end rather than call-cancel on give-up); spec 0005.
+      if (incomingSecond.value && incomingSecond.value.callId === frame.callId) {
+        incomingSecond.value = null;
+        secondIce = [];
+        return;
+      }
       if (meta && meta.callId === frame.callId) {
         await teardown(frame.reason === 'unavailable' ? 'unavailable' : 'remote');
+      } else if (heldSlot && heldSlot.meta.callId === frame.callId) {
+        // The HELD call's remote hung up → free the held slot; the active call is undisturbed
+        // (spec 0005 FR-009).
+        freeHeldSlot();
+        void toast('Your held call ended');
       }
       return;
     }

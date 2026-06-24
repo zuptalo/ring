@@ -70,24 +70,27 @@ func contains(s []string, v string) bool {
 	return false
 }
 
-// TestDueAtNine: a subscription is selected iff its LOCAL hour (UTC − tz offset) is 09.
-func TestDueAtNine(t *testing.T) {
+// TestDueInSendWindow: a subscription is selected iff its LOCAL hour (UTC − tz offset) is in
+// the daytime window [09:00, 17:00) — sent during the day, held overnight until 09:00.
+func TestDueInSendWindow(t *testing.T) {
 	cases := []struct {
 		name       string
 		tz         int
 		nowH, nowM int
 		want       bool
 	}{
-		{"UTC 09:30 → local 09:30", 0, 9, 30, true},
+		{"UTC 09:00 → local 09:00 (window start, inclusive)", 0, 9, 0, true},
+		{"UTC 12:00 → local 12:00 (midday)", 0, 12, 0, true},
+		{"UTC 16:59 → local 16:59 (just inside the end)", 0, 16, 59, true},
 		{"EST(+300) 14:15 → local 09:15", 300, 14, 15, true},
-		{"CEST(-120) 07:00 → local 09:00", -120, 7, 0, true},
-		{"IST(-330 half-hour, UTC+5:30) 03:30 → local 09:00", -330, 3, 30, true},
-		{"UTC 08:30 → local 08:30", 0, 8, 30, false},
-		{"UTC 10:00 → local 10:00", 0, 10, 0, false},
-		{"EST(+300) 13:30 → local 08:30", 300, 13, 30, false},
+		{"CEST(-120) 14:30 → local 16:30", -120, 14, 30, true},
+		{"UTC 17:00 → local 17:00 (end, exclusive → held)", 0, 17, 0, false},
+		{"UTC 08:59 → local 08:59 (before the window → held)", 0, 8, 59, false},
+		{"UTC 22:00 → local 22:00 (evening → held)", 0, 22, 0, false},
+		{"EST(+300) 02:00 → local 21:00 (night → held)", 300, 2, 0, false},
 	}
 	for _, c := range cases {
-		got := dueAtNine([]store.PushSubscription{schedSub("e", c.tz)}, utc(c.nowH, c.nowM))
+		got := dueInSendWindow([]store.PushSubscription{schedSub("e", c.tz)}, utc(c.nowH, c.nowM))
 		if sel := len(got) == 1; sel != c.want {
 			t.Errorf("%s: selected=%v, want %v", c.name, sel, c.want)
 		}

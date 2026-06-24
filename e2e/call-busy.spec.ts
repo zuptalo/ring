@@ -14,7 +14,9 @@ test.afterEach(async () => {
   await resetCallConfig();
 });
 
-test('a 1:1 call to someone already in a call gets a busy reply; their call is undisturbed', async ({ browser }) => {
+test('a second 1:1 call to someone in a call is offered Accept & hold (call waiting), not auto-busy; their call is undisturbed', async ({ browser }) => {
+  // Spec 0005 supersedes the old "second 1:1 call = busy": with a held slot free, the callee is
+  // offered Accept & hold instead. (Busy now only fires at the two-call cap — see call-waiting.)
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const ctxC = await browser.newContext();
@@ -31,15 +33,16 @@ test('a 1:1 call to someone already in a call gets a busy reply; their call is u
   await waitCallState(a, ['connected']);
   await waitCallState(b, ['connected']);
 
-  // C calls A. A is busy → C should not be left ringing; it resolves quickly.
+  // C calls A → A is offered Accept & hold (a slot is free), NOT auto-busied.
   await startCall(c, a.id, 'audio');
-  await waitCallState(c, ['idle', 'ended'], 15_000);
+  await a.page.waitForFunction(() => (window as any).__ringTest.hasSecondIncoming() === true, null, { timeout: 15_000 });
 
-  // A's call with B is undisturbed (still connected, A never went to 'incoming').
+  // A's call with B is undisturbed (still connected; A's active call never flipped to 'incoming').
   expect(await callState(a)).toBe('connected');
   expect(await callState(b)).toBe('connected');
 
   await hangup(a);
+  await hangup(c);
   await ctxA.close();
   await ctxB.close();
   await ctxC.close();

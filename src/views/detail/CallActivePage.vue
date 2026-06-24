@@ -32,6 +32,50 @@
         </div>
       </div>
       <div ref="stageEl" class="stage" :class="{ 'chrome-hidden': chromeHidden }" @click="onStageClick">
+        <!-- Coming off hold (spec 0005): the other side resumed, so we get a 5s heads-up + cue
+             before our camera/mic go live again, so we're not caught by surprise. -->
+        <div v-if="resumeCountdown !== null" class="resume-countdown" role="status" @click.stop>
+          <div class="rc-num">{{ resumeCountdown }}</div>
+          <div class="rc-text">You're back on camera…</div>
+        </div>
+        <!-- Call waiting (spec 0005): a second call arriving over the active one offers
+             Accept & hold / Decline; the call you already have on hold shows a bar; and when
+             the other side has put US on hold a badge shows. -->
+        <div
+          v-if="incomingSecond"
+          class="cw-prompt"
+          role="alertdialog"
+          :aria-label="`Incoming ${incomingSecond.callKind === 'video' ? 'video ' : ''}call from ${incomingSecond.name}`"
+          @click.stop
+        >
+          <div class="cw-prompt-head">
+            <ion-avatar class="cw-avatar">
+              <img v-if="incomingSecond.avatar" :src="incomingSecond.avatar" :alt="incomingSecond.name" />
+              <ion-icon v-else :icon="personOutline" />
+            </ion-avatar>
+            <div class="cw-text">
+              <strong>{{ incomingSecond.name }}</strong>
+              <span>Incoming {{ incomingSecond.callKind === 'video' ? 'video ' : '' }}call</span>
+            </div>
+          </div>
+          <div class="cw-actions">
+            <button class="cw-btn cw-decline" aria-label="Decline second call" @click.stop="rejectSecond">Decline</button>
+            <button class="cw-btn cw-accept" aria-label="Hold current call and answer" @click.stop="acceptAndHold">Accept &amp; hold</button>
+          </div>
+        </div>
+        <!-- The call you have parked: tap to swap back to it (the active call goes on hold). -->
+        <button
+          v-else-if="heldCall"
+          class="cw-held"
+          :aria-label="`On hold: ${heldCall.name}. Tap to resume this call.`"
+          @click.stop="swapCalls"
+        >
+          <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold · {{ heldCall.name }}</span>
+        </button>
+        <div v-if="remoteHeld" class="cw-onhold" role="status">
+          <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold</span>
+        </div>
+
         <!-- Group call: every participant - each incoming feed AND our own outgoing
              feed - is an equally-sized floating tile. Tiles are centred and wrap;
              they grow when few are on the call and shrink as people join, never
@@ -69,7 +113,7 @@
                 <video
                   :ref="(el) => attach(el as HTMLVideoElement | null, t.stream)"
                   class="tile-video"
-                  :class="{ mirror: t.isSelf && localMirror }"
+                  :class="{ mirror: t.isSelf && localMirror, 'held-frozen': groupHeldPeers.includes(t.key) }"
                   muted
                   autoplay
                   playsinline
@@ -98,6 +142,8 @@
                   <ion-icon :icon="refreshOutline" />
                 </button>
                 <span v-if="tileLabel(t)" class="tile-label">{{ tileLabel(t) }}</span>
+                <!-- This member has put us on hold (their leg to us is paused) — spec 0005. -->
+                <span v-if="groupHeldPeers.includes(t.key)" class="tile-onhold"><ion-icon :icon="pauseOutline" /> On hold</span>
                 <button
                   v-if="t.isSelf && canFlip && tileHasVideo(t)"
                   class="flip-btn tile-flip"
@@ -120,11 +166,17 @@
             v-show="mainHasVideo"
             ref="mainVideo"
             class="main-video"
-            :class="{ mirror: mainIsLocal && localMirror }"
+            :class="{ mirror: mainIsLocal && localMirror, 'held-frozen': remoteHeld && !mainIsLocal }"
             muted
             autoplay
             playsinline
           />
+          <!-- The other side put us on hold (spec 0005): their last frame is frozen, so blur it
+               (class above) and overlay a clear pause badge so it's obvious the call is paused. -->
+          <div v-if="remoteHeld && mainHasVideo && !mainIsLocal" class="held-overlay">
+            <ion-icon :icon="pauseOutline" />
+            <span>On hold</span>
+          </div>
           <!-- Flip button when our own camera fills the screen (local is the stage). -->
           <button
             v-if="mainIsLocal && mainHasVideo && canFlip"
@@ -192,6 +244,11 @@
           </button>
           <h2 class="name">{{ callMeta?.name }}</h2>
           <p class="status">{{ statusText }}</p>
+          <!-- Calling someone already in a call who can take a second one: reassure the caller
+               they're queued, not ignored (spec 0005). -->
+          <p v-if="remoteQueued && callState === 'remote-ringing'" class="queue-note">
+            They've been notified and will pick up if they can.
+          </p>
           <p v-if="connectionWarning" class="warn">
             <ion-icon :icon="warningOutline" /> {{ connectionWarning }}
           </p>
@@ -320,7 +377,7 @@ import {
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
   cellularOutline, informationCircleOutline, personOutline, refreshOutline,
-  chatbubbleEllipsesOutline,
+  chatbubbleEllipsesOutline, pauseOutline,
 } from 'ionicons/icons';
 import { getSelfUserId } from '@/services/auth';
 import {
@@ -333,6 +390,7 @@ import {
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite,
   acceptCall, rejectCall, declineWithMessage,
+  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useCallParticipants } from '@/composables/useCallParticipants';
@@ -425,10 +483,11 @@ function swapMain(): void {
 }
 
 // PiP anchor in a 3×3 grid: row 0=top,1=middle,2=bottom; col 0=left,1=center,2=right.
-// Default top-right (matches the old fixed position). The middle column is centered;
-// side columns hug their edge; top/bottom rows hug the outer edge, all with the SAME
-// margin, so the two corners nearest each outer edge are always equally inset.
-const pipPos = ref({ row: 0, col: 2 });
+// Default BOTTOM-right: our self-view sits clear of the call name/status overlay at the top of
+// the screen (which it used to cover) while still resting just above the control bar. The middle
+// column is centered; side columns hug their edge; top/bottom rows hug the outer edge, all with
+// the SAME margin, so the two corners nearest each outer edge are always equally inset.
+const pipPos = ref({ row: 2, col: 2 });
 const pipStyle = computed(() => {
   const { row, col } = pipPos.value;
   let left: string;
@@ -720,6 +779,18 @@ function attach(el: HTMLVideoElement | null, stream: MediaStream | null): void {
     // on older iOS (e.g. iPhone 8). Nudge again shortly after, once it's laid out.
     void el.play?.().catch(() => {});
     setTimeout(() => void el.play?.().catch(() => {}), 150);
+    // Older iOS (iPhone 8) frequently hands us a camera/remote track that starts `muted`
+    // (delivers NO frames) and unmutes a beat later — and re-mutes when the app briefly
+    // backgrounds. Without this, the <video> stays black until the next attach. Re-play the
+    // moment the track produces frames again. Assigning onunmute (not addEventListener) keeps
+    // it idempotent and always pointed at the element the track is currently shown in.
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+      track.onunmute = () => {
+        void el.play?.().catch(() => {});
+        setTimeout(() => void el.play?.().catch(() => {}), 150);
+      };
+    }
   }
   applySinkTo(el);
 }
@@ -840,7 +911,7 @@ const statusText = computed(() => {
     case 'dialing':
       return 'Calling…';
     case 'remote-ringing':
-      return 'Ringing…';
+      return remoteQueued.value ? 'Waiting in their call…' : 'Ringing…';
     case 'connecting':
       return 'Connecting…';
     case 'connected': {
@@ -1121,6 +1192,181 @@ const diag = computed(() => {
   background: rgba(0, 0, 0, 0.5);
   font-size: 11px;
 }
+/* Per-tile "on hold" badge: this member has us on hold (spec 0005). */
+.tile-onhold {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 11px;
+  color: #fff;
+}
+/* Call waiting (spec 0005): the second-incoming prompt + held-call / on-hold bars, anchored
+   below the header so they don't cover the call controls. Built from the call view's palette. */
+.cw-prompt,
+.cw-held,
+.cw-onhold {
+  /* Anchored ABOVE the call controls (not the top) so they never overlap the call name +
+     status header or the self-tile (spec 0005). */
+  position: absolute;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 104px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: min(92%, 460px);
+  border-radius: 16px;
+  background: rgba(28, 28, 30, 0.92);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #fff;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+}
+/* Column layout so the name/subtitle row and the action buttons each stay on one line
+   (the old single-row layout wrapped the text on narrow phones). */
+.cw-prompt {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px 14px;
+  width: min(92%, 380px);
+}
+.cw-prompt-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cw-avatar {
+  width: 38px;
+  height: 38px;
+  flex: none;
+}
+.cw-text {
+  flex: 1;
+  min-width: 0;
+}
+.cw-text strong {
+  display: block;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-text span {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.cw-actions {
+  display: flex;
+  gap: 8px;
+}
+.cw-btn {
+  flex: 1; /* the two buttons split the row evenly, each on a single line */
+  border: none;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cw-decline {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.cw-accept {
+  background: var(--ion-color-primary, #10b981);
+  color: #fff;
+}
+.cw-held,
+.cw-onhold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+/* .cw-held is a <button> (tap to swap back to the held call) — strip the native chrome and
+   inherit the bar's own palette/typography. */
+.cw-held {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.cw-held:active {
+  transform: translateX(-50%) scale(0.97);
+}
+.cw-onhold {
+  /* When BOTH a held bar and the remote-held badge could show, stack this one higher so they
+     don't overlap (both are bottom-anchored). */
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 152px);
+  background: rgba(120, 120, 128, 0.85);
+}
+/* On hold (spec 0005): the held peer's last frame is frozen, so blur it and dim it slightly —
+   paired with the .held-overlay / .tile-onhold pause badge so it reads as paused, not broken. */
+.held-frozen {
+  filter: blur(16px) brightness(0.7);
+}
+/* Centered pause badge over the blurred 1:1 main video while the other side has us on hold. */
+.held-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  pointer-events: none;
+}
+.held-overlay ion-icon {
+  font-size: 56px;
+  opacity: 0.95;
+}
+.held-overlay span {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* Resume countdown (spec 0005): a prominent, unmissable heads-up shown to the person coming off
+   hold for the few seconds before their camera/mic go live again. */
+.resume-countdown {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+}
+.rc-num {
+  font-size: 72px;
+  font-weight: 700;
+  line-height: 1;
+  width: 110px;
+  height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.85);
+}
+.rc-text {
+  font-size: 16px;
+  font-weight: 600;
+  opacity: 0.92;
+}
 /* A departed participant's placeholder: a waving hand that lingers, then fades out.
    Duration must match LEAVE_MS in the script. */
 .float-tile.leaving {
@@ -1320,6 +1566,13 @@ const diag = computed(() => {
   font-size: 12px;
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
+}
+.queue-note {
+  margin: 6px auto 0;
+  max-width: 280px;
+  font-size: 13px;
+  line-height: 1.35;
+  opacity: 0.75;
 }
 .diag {
   margin: 10px auto 0;

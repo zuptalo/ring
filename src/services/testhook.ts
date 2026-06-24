@@ -161,6 +161,18 @@ import {
   callStats,
   videoTransceiverCount,
   inboundVideoFrames,
+  acceptAndHold,
+  swapCalls,
+  endActive,
+  endHeld,
+  rejectSecond,
+  canHoldIncoming,
+  heldCall,
+  remoteHeld,
+  groupHeldPeers,
+  resumeCountdown,
+  remoteQueued,
+  incomingSecond,
 } from '@/composables/useCall';
 
 /**
@@ -908,6 +920,20 @@ export function installTestHook(): void {
      *  per-invitee tile state (no-answer set + busy set) for asserting recall behaviour. */
     recall: (memberId: string) => recallMember(memberId),
     removeInvitee: (memberId: string) => cancelInvite(memberId),
+    /** Call waiting (spec 0005): accept the pending second incoming call, holding the
+     *  current one; introspection for the held call + on-hold state. */
+    acceptAndHold: () => acceptAndHold(),
+    swapCalls: () => swapCalls(),
+    endActive: () => endActive(),
+    endHeld: () => endHeld(),
+    rejectSecond: () => rejectSecond(),
+    canHoldIncoming: () => canHoldIncoming(),
+    hasSecondIncoming: () => incomingSecond.value != null,
+    heldCallId: () => heldCall.value?.callId ?? null,
+    isRemoteHeld: () => remoteHeld.value,
+    groupHeldPeers: () => [...groupHeldPeers.value],
+    resumeCountdown: () => resumeCountdown.value,
+    isRemoteQueued: () => remoteQueued.value,
     notJoiningIds: () => [...notJoining.value],
     busyMemberIds: () => [...busyMembers.value],
     invitedIds: () => callMeta.value?.invited ?? [],

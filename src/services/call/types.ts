@@ -55,7 +55,8 @@ export interface CallMeta {
   name: string;
   avatar: string;
   // timing
-  startedAt?: number; // set when 'connected'
+  startedAt?: number; // start of the CURRENT active (not-held) stint; cleared while on hold
+  activeSec?: number; // active seconds banked from previous stints (call waiting: held time excluded)
   endedReason?: EndReason;
   // internal: set the moment teardown begins so a call is torn down + logged exactly
   // once even if several end-signals race (a fresh CallMeta object per call resets it).

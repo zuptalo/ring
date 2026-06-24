@@ -39,7 +39,15 @@ export type ToneName =
   | 'callfull'
   | 'incallmsg'
   // Classic "busy" signal played on the caller's screen when the callee is on another call.
-  | 'busy';
+  | 'busy'
+  // Call-waiting cues (spec 0005): a second-call alert (distinct from the normal incoming
+  // ring), and confirmations for putting a call on hold, resuming it, and swapping.
+  | 'callwaiting'
+  | 'hold'
+  | 'resume'
+  | 'swap'
+  // Played to the party coming OFF hold, alongside the 5s "you're about to be visible" countdown.
+  | 'resuming';
 
 interface Note {
   freq: number;
@@ -141,6 +149,35 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
   busy: [
     { freq: 480, start: 0, dur: 0.26, type: 'sine', gain: 0.2 },
     { freq: 480, start: 0.38, dur: 0.26, type: 'sine', gain: 0.2 },
+  ],
+  // Call-waiting alert: two equal high beeps — the classic "another call" tone, distinct
+  // from the rising incoming ring (beacon/ringing).
+  callwaiting: [
+    { freq: C6, start: 0, dur: 0.1, type: 'sine', gain: 0.24 },
+    { freq: C6, start: 0.24, dur: 0.1, type: 'sine', gain: 0.24 },
+  ],
+  // Hold: a gentle DESCENDING pair (the call steps back).
+  hold: [
+    { freq: A5, start: 0, dur: 0.1, type: 'sine', gain: 0.18 },
+    { freq: E5, start: 0.1, dur: 0.16, type: 'sine', gain: 0.16 },
+  ],
+  // Resume: an ASCENDING pair (the call comes back) — mirror of hold.
+  resume: [
+    { freq: E5, start: 0, dur: 0.1, type: 'sine', gain: 0.18 },
+    { freq: A5, start: 0.1, dur: 0.16, type: 'sine', gain: 0.18 },
+  ],
+  // Swap: a brisk two-note flip up, distinct from resume.
+  swap: [
+    { freq: G5, start: 0, dur: 0.08, type: 'triangle', gain: 0.18 },
+    { freq: C6, start: 0.08, dur: 0.12, type: 'triangle', gain: 0.18 },
+  ],
+  // Resuming (coming off hold): a brighter, more insistent rising arpeggio (triangle, up into the
+  // high register, a touch louder) so it actually grabs attention before you go live — repeated a
+  // couple of times across the countdown by the caller. Still short, so it's noticeable not annoying.
+  resuming: [
+    { freq: G5, start: 0, dur: 0.09, type: 'triangle', gain: 0.26 },
+    { freq: C6, start: 0.11, dur: 0.09, type: 'triangle', gain: 0.28 },
+    { freq: E6, start: 0.22, dur: 0.22, type: 'triangle', gain: 0.32 },
   ],
 };
 
