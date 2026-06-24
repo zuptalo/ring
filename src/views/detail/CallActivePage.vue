@@ -50,9 +50,17 @@
               :class="{ self: t.isSelf, leaving: t.leaving, speaking: isSpeaking(t) }"
               :style="{ width: tileDims.w + 'px', height: tileDims.h + 'px' }"
             >
-              <!-- A participant who just left: a waving hand that fades out (keeps the
-                   layout steady for a beat, then the rest reflow and grow). -->
-              <span v-if="t.leaving" class="leave-wave"><emoji emoji="👋" /></span>
+              <!-- A participant who just left: their avatar with a waving hand over it, held
+                   for a beat then faded out (the layout stays steady, then the rest reflow
+                   and grow). No toast — the tile itself is the goodbye. -->
+              <template v-if="t.leaving">
+                <div class="tile-camoff">
+                  <img v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
+                  <ion-icon v-else :icon="personOutline" />
+                </div>
+                <span class="leave-wave"><emoji emoji="👋" /></span>
+                <span v-if="t.name" class="tile-label">{{ t.name }}</span>
+              </template>
               <template v-else>
                 <!-- All tiles are MUTED here: remote audio plays through the persistent
                      global CallMediaSink so it survives minimising. The <video> stays
@@ -492,12 +500,21 @@ function onPipCancel(): void {
 /* ---- group stage: every participant is a floating, auto-sized tile ---- */
 const SELF = '__self__';
 
-// A participant who just left lingers as a waving-hand placeholder so the layout stays
-// steady — and the goodbye reads — before the remaining tiles reflow and grow. Kept in
-// sync with the `tile-leave` CSS animation duration below.
-const LEAVE_MS = 4000;
-const leaving = ref<{ id: string }[]>([]);
+// A participant who just left lingers as their avatar + a waving hand, so the layout stays
+// steady — and the goodbye reads — for ~5s before the remaining tiles reflow and grow. Kept
+// in sync with the `tile-leave` CSS animation duration below. We snapshot each stream's
+// owner identity every cycle so that when a stream disappears we can still show WHO left
+// (the streamId→userId mapping is already gone by the time the disappearance fires).
+const LEAVE_MS = 5000;
+const leaving = ref<{ id: string; name: string; avatar: string }[]>([]);
 let prevStreamIds: string[] = [];
+let prevIdentity = new Map<string, { name: string; avatar: string }>();
+function snapshotIdentities(streams: MediaStream[]): Map<string, { name: string; avatar: string }> {
+  const owners = groupStreamOwners.value;
+  const m = new Map<string, { name: string; avatar: string }>();
+  for (const s of streams) m.set(s.id, identity(owners[s.id]));
+  return m;
+}
 
 interface Tile {
   key: string;
@@ -582,7 +599,7 @@ const tiles = computed<Tile[]>(() => {
     });
   }
   for (const l of leaving.value) {
-    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, state: 'live', name: '', avatar: '' });
+    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, state: 'live', name: l.name, avatar: l.avatar });
   }
   return list;
 });
@@ -731,19 +748,23 @@ watch(remoteStreams, (streams) => {
   // before the streams clear, so it's the reliable "we initiated the leave" signal.
   if (callMeta.value?.tornDown) {
     prevStreamIds = ids;
+    prevIdentity = snapshotIdentities(streams);
     return;
   }
-  // A participant whose stream just disappeared left → show a brief waving-hand
-  // placeholder that fades out before the grid reflows (the rest then grow).
+  // A participant whose stream just disappeared left → show a brief avatar + waving-hand
+  // placeholder that fades out before the grid reflows (the rest then grow). Their identity
+  // comes from the PREVIOUS snapshot, since their streamId→owner mapping is already gone.
   for (const gone of prevStreamIds) {
     if (!ids.includes(gone) && !leaving.value.some((l) => l.id === gone)) {
-      leaving.value = [...leaving.value, { id: gone }];
+      const who = prevIdentity.get(gone) ?? { name: '', avatar: '' };
+      leaving.value = [...leaving.value, { id: gone, name: who.name, avatar: who.avatar }];
       setTimeout(() => {
         leaving.value = leaving.value.filter((l) => l.id !== gone);
       }, LEAVE_MS);
     }
   }
   prevStreamIds = ids;
+  prevIdentity = snapshotIdentities(streams);
   // New tiles mount asynchronously as participants join, re-assert the sink once
   // they're in the DOM (their :ref attach also applies it; this is the safety net
   // for a srcObject/setSinkId ordering race).
@@ -1103,10 +1124,12 @@ const diag = computed(() => {
 /* A departed participant's placeholder: a waving hand that lingers, then fades out.
    Duration must match LEAVE_MS in the script. */
 .float-tile.leaving {
+  /* The avatar (.tile-camoff) fills the tile behind; the in-flow waving hand is centred over
+     it by this flex, and the name label sits bottom-left as on a normal tile. */
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: tile-leave 4s ease forwards;
+  animation: tile-leave 5s ease forwards;
 }
 @keyframes tile-in {
   from {
