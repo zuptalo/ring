@@ -48,8 +48,16 @@ test('accepting a second 1:1 call holds the first (paused both ways, peer sees o
   await b.page.waitForFunction(() => (window as any).__ringTest.isRemoteHeld() === true, null, { timeout: 10_000 });
   expect(await isRemoteHeld(b)).toBe(true);
 
+  // Hang up the ACTIVE call (C) → A RETURNS to the held call (B), which resumes — it must NOT
+  // strand B or drop everything (the reported bug).
   await hangup(a);
-  await hangup(c);
+  await waitCallState(a, ['connected']); // back on the A↔B call, not idle
+  expect(await heldCallId(a)).toBeNull(); // nothing held anymore
+  await b.page.waitForFunction(() => (window as any).__ringTest.isRemoteHeld() === false, null, { timeout: 10_000 });
+  await waitCallState(c, ['idle', 'ended']); // C's call ended cleanly
+  expect(await callState(b)).toBe('connected'); // B's call is alive again
+
+  await hangup(a); // end the resumed A↔B call
   await ctxA.close();
   await ctxB.close();
   await ctxC.close();

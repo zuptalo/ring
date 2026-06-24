@@ -891,6 +891,15 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   groupJoined.clear();
   clearAllMemberRingTimers();
 
+  // Call waiting (spec 0005): if a call is parked on hold, the active call ending means RETURN
+  // to the held one — resume it as the new active rather than going idle. Covers hanging up,
+  // a busy/unavailable result, AND a remote end of the active call; otherwise the held call
+  // would be stranded (the bug where the second call's hangup dropped everything).
+  if (heldSlot) {
+    await restoreHeldCall();
+    return;
+  }
+
   setState('ended');
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
   connectionWarning.value = null;
@@ -1455,6 +1464,44 @@ async function parkActiveAsHeld(): Promise<void> {
   remoteHeld.value = false;
 }
 
+/** Return to the held call as the new ACTIVE call: restore its connection objects, capture a
+ *  FRESH local stream (the just-ended active call stopped the shared one), re-attach the held
+ *  call's senders + tell the other side(s) we resumed. Called when the active call ends while a
+ *  call is parked, so hanging up / busy / a remote end RETURNS to the held call instead of
+ *  stranding it (spec 0005 US3). */
+async function restoreHeldCall(): Promise<void> {
+  const slot = heldSlot;
+  if (!slot) return;
+  heldSlot = null;
+  heldCall.value = null;
+  pc = slot.pc;
+  groupSession = slot.groupSession;
+  callMeta.value = slot.meta;
+  remoteStream.value = slot.remoteStream;
+  remoteStreams.value = slot.remoteStreams;
+  groupStreamOwners.value = slot.owners;
+  remoteHeld.value = false;
+  groupHeldPeers.value = [];
+  let stream: MediaStream | null = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(gumConstraints(slot.meta.kind));
+  } catch {
+    /* mic/camera unavailable on resume — proceed with no outgoing media rather than dropping */
+  }
+  localStream.value = stream;
+  if (slot.meta.isGroup && slot.groupSession && stream) {
+    await slot.groupSession.resume(stream);
+  } else if (slot.pc) {
+    if (stream) await set1to1Senders(slot.pc, stream);
+    if (slot.meta.chatId && slot.meta.peerUserId) {
+      void sendHoldResume('resume', slot.meta.chatId, slot.meta.peerUserId, slot.meta.callId);
+    }
+  }
+  callCue('resume');
+  setState('connected');
+  navigateToCall();
+}
+
 /** Connect the stashed second 1:1 incoming call as the new ACTIVE call, reusing the shared
  *  camera/mic (no second getUserMedia). Mirrors acceptCall's 1:1 answer path. */
 async function connectSecondDirect(
@@ -1503,18 +1550,36 @@ export async function acceptAndHold(): Promise<void> {
   const inc = incomingSecond.value;
   if (!inc || !canHoldIncoming()) return;
   incomingSecond.value = null;
-  const shared = localStream.value; // the active call's camera/mic — reused by the new call
   await loadCallPrefs();
   await parkActiveAsHeld();
-  if (inc.kind === 'direct') {
-    if (!shared) {
+  // Media for the new call: reuse the held call's camera/mic. But if the new call is VIDEO and
+  // the shared stream has no camera (the held call was audio-only), capture audio+video fresh —
+  // otherwise we'd answer a video call with no video to send. The held call's senders are
+  // already detached, so swapping its stream is safe (it re-captures on resume).
+  let shared = localStream.value;
+  if (inc.callKind === 'video' && !shared?.getVideoTracks().length) {
+    try {
+      const fresh = await navigator.mediaDevices.getUserMedia(gumConstraints('video'));
+      shared?.getTracks().forEach((t) => t.stop());
+      shared = fresh;
+    } catch {
+      /* camera unavailable → fall through and connect with whatever we have (audio-only) */
+    }
+  }
+  if (!shared) {
+    try {
+      shared = await navigator.mediaDevices.getUserMedia(gumConstraints(inc.callKind));
+    } catch {
       await teardown('failed');
       return;
     }
+  }
+  localStream.value = shared;
+  if (inc.kind === 'direct') {
     await connectSecondDirect(inc, shared);
   } else {
     // A group invite as the second call: join the room, reusing the shared stream.
-    await enterGroupCall(inc.roomId ?? inc.callId, inc.callKind, inc.name, inc.avatar, 'incoming', [], shared ?? undefined);
+    await enterGroupCall(inc.roomId ?? inc.callId, inc.callKind, inc.name, inc.avatar, 'incoming', [], shared);
   }
 }
 

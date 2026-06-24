@@ -1163,8 +1163,10 @@ const diag = computed(() => {
 .cw-prompt,
 .cw-held,
 .cw-onhold {
+  /* Anchored ABOVE the call controls (not the top) so they never overlap the call name +
+     status header or the self-tile (spec 0005). */
   position: absolute;
-  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 104px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 40;
@@ -1230,7 +1232,9 @@ const diag = computed(() => {
   font-size: 13px;
 }
 .cw-onhold {
-  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  /* When BOTH a held bar and the remote-held badge could show, stack this one higher so they
+     don't overlap (both are bottom-anchored). */
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 152px);
   background: rgba(120, 120, 128, 0.85);
 }
 /* A departed participant's placeholder: a waving hand that lingers, then fades out.
