@@ -120,6 +120,10 @@ time-to-first-media on each freshly opened leg; compare against the second-call 
   working on), including its camera-track warm-up behavior.
 - **No-answer / cancel**: the faster setup must not change ring/cancel/no-answer behavior or
   cause a call to connect media before it is actually accepted.
+- **Clean teardown of pre-warmed state**: if a call is declined, cancelled, times out, or fails
+  after TURN was warmed (or a peer connection was pre-created), that state must be discarded
+  cleanly — no lingering half-open connection, no leftover instrumentation, and nothing that would
+  signal call intent to the server beyond what the normal cancel/no-answer flow already does.
 
 ## Requirements *(mandatory)*
 
@@ -153,6 +157,16 @@ time-to-first-media on each freshly opened leg; compare against the second-call 
   learns nothing new. This fix changes only **client-side timing/ordering** of work — it adds no
   new server message type, no new server-visible metadata, no new stored state, and no change to
   what the relay sees.
+- **FR-010**: Warming the TURN credential cache MUST reuse the existing authenticated
+  `/v1/turn-credentials` request unchanged (same endpoint, same payload, same response) — only
+  *when* it is issued may move earlier. Warming on **incoming ring** MUST NOT reveal any new signal
+  to the server: by the time the callee would warm, the server has already relayed the (sealed)
+  offer to that device, so a credential fetch correlates to nothing the relay didn't already cause.
+  No warming may fire for non-call events (it is triggered only by outgoing call intent or an
+  actual incoming offer).
+- **FR-011**: The connect-milestone instrumentation MUST be client-local, dev/test-only, stripped
+  from production builds, and hold only ephemeral timestamps — never SDP, ICE, keys, media, or peer
+  identifiers, and never transmitted off-device.
 
 ## Key Entities
 
