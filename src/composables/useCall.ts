@@ -646,11 +646,14 @@ function gumConstraints(kind: CallKind): MediaStreamConstraints {
   // (the default for video calls), where open-air feedback would otherwise howl.
   return {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    // Ask for an explicit, standard front-camera mode rather than bare `video: true`. On iOS
-    // (notably iPhone 8) a bare request can hand back a "live" track that delivers NO frames; a
-    // concrete 1280×720 ideal nudges WebKit to a known-good capture format. `ideal` is non-binding,
-    // so devices that can't do 720p fall back gracefully.
-    video: kind === 'video' ? { facingMode: { ideal: 'user' }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false,
+    // Ask for an explicit front-camera mode rather than bare `video: true` (which on iPhone 8 can
+    // hand back a "live" track delivering NO frames). Crucially the ideal is PORTRAIT (480×640), not
+    // landscape: phones are held in portrait, and asking for a landscape frame makes the A11/iOS-16.7
+    // iPhone 8 endlessly flip the camera between portrait and landscape (640×480 ↔ 480×640) — every
+    // flip resets the capture, so it never sustains frames (≈1fps, frozen self-view, black tile to
+    // the peer). Matching the ask to the device's natural orientation lets the camera settle and run
+    // at full framerate. `ideal` is non-binding, so other devices/orientations still fall back fine.
+    video: kind === 'video' ? { facingMode: { ideal: 'user' }, width: { ideal: 480 }, height: { ideal: 640 }, frameRate: { ideal: 30 } } : false,
   };
 }
 
