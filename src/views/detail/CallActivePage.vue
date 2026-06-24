@@ -861,9 +861,15 @@ onMounted(() => {
     const el = mainIsLocal.value ? mainVideo.value : pipVideo.value;
     if (!el) return;
     // iOS throttles the CAMERA capture to ~1fps unless a visible <video> is actively PLAYING the
-    // local stream (the RTP encoder alone isn't enough). Keep nudging play() so the preview stays
-    // live, which keeps the camera at full framerate → real outgoing video on iPhone.
-    if (el.paused || el.readyState < 2) void el.play?.().catch(() => {});
+    // local stream. Nudge play() every tick; if the preview has decoded NO frames, re-attach its
+    // srcObject to un-stick it. Keeps the camera at full framerate → real outgoing video on iPhone.
+    void el.play?.().catch(() => {});
+    if (el.videoWidth === 0 && el.srcObject) {
+      const so = el.srcObject;
+      el.srcObject = null;
+      el.srcObject = so;
+      void el.play?.().catch(() => {});
+    }
     pushDiag(`selfvid: ${el.videoWidth}x${el.videoHeight} t=${el.currentTime.toFixed(1)} paused=${el.paused}`);
   }, 2000);
 });
