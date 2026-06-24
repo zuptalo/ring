@@ -173,6 +173,8 @@ import {
   resumeCountdown,
   remoteQueued,
   incomingSecond,
+  recordConnect,
+  connectMarksSnapshot,
 } from '@/composables/useCall';
 
 /**
@@ -916,6 +918,10 @@ export function installTestHook(): void {
      *  silence gate. A recorded cue means it passed the gate + de-dup and would have played. */
     recordCues: (on: boolean) => recordCues(on),
     cuesFired: () => recordedCues(),
+    // Connect-milestone instrumentation (spec 2008): toggle recording, then read the current
+    // call's timestamps to assert the connect ordering/overlap invariants + time-to-first-media.
+    recordConnect: (on: boolean) => recordConnect(on),
+    connectMarks: () => connectMarksSnapshot(),
     /** Group calls (caller side): re-ring / remove a not-yet-joined invitee, and read the
      *  per-invitee tile state (no-answer set + busy set) for asserting recall behaviour. */
     recall: (memberId: string) => recallMember(memberId),
