@@ -36,7 +36,7 @@
              before our camera/mic go live again, so we're not caught by surprise. -->
         <div v-if="resumeCountdown !== null" class="resume-countdown" role="status" @click.stop>
           <div class="rc-num">{{ resumeCountdown }}</div>
-          <div class="rc-text">You're back on camera in {{ resumeCountdown }}…</div>
+          <div class="rc-text">You're back on camera…</div>
         </div>
         <!-- Call waiting (spec 0005): a second call arriving over the active one offers
              Accept & hold / Decline; the call you already have on hold shows a bar; and when
@@ -244,6 +244,11 @@
           </button>
           <h2 class="name">{{ callMeta?.name }}</h2>
           <p class="status">{{ statusText }}</p>
+          <!-- Calling someone already in a call who can take a second one: reassure the caller
+               they're queued, not ignored (spec 0005). -->
+          <p v-if="remoteQueued && callState === 'remote-ringing'" class="queue-note">
+            They've been notified and will pick up if they can.
+          </p>
           <p v-if="connectionWarning" class="warn">
             <ion-icon :icon="warningOutline" /> {{ connectionWarning }}
           </p>
@@ -385,7 +390,7 @@ import {
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite,
   acceptCall, rejectCall, declineWithMessage,
-  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
+  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useCallParticipants } from '@/composables/useCallParticipants';
@@ -905,7 +910,7 @@ const statusText = computed(() => {
     case 'dialing':
       return 'Calling…';
     case 'remote-ringing':
-      return 'Ringing…';
+      return remoteQueued.value ? 'Waiting in their call…' : 'Ringing…';
     case 'connecting':
       return 'Connecting…';
     case 'connected': {
@@ -1560,6 +1565,13 @@ const diag = computed(() => {
   font-size: 12px;
   opacity: 0.6;
   font-variant-numeric: tabular-nums;
+}
+.queue-note {
+  margin: 6px auto 0;
+  max-width: 280px;
+  font-size: 13px;
+  line-height: 1.35;
+  opacity: 0.75;
 }
 .diag {
   margin: 10px auto 0;

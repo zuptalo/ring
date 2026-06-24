@@ -4,6 +4,7 @@ import {
   remoteTracks, callState, acceptAndHold, hasSecondIncoming, canHoldIncoming, heldCallId,
   isRemoteHeld, groupHeldPeers, swapCalls, endHeld, rejectSecond, recordCues, cuesFired,
   setGlobalSetting, type RingClient, resetCallConfig, callLogCount, waitCallLog, resumeCountdown,
+  isRemoteQueued,
 } from './helpers';
 
 /** Set up the common state: A↔B connected (1:1), then C calls A and A accepts-and-holds, so
@@ -440,6 +441,41 @@ test('the call-waiting alert keeps repeating while the second call goes unanswer
   expect((await cuesFired(a)).filter((n) => n === 'callwaiting').length).toBe(afterDismiss);
 
   await hangup(a);
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});
+
+test('calling someone already in a call shows the caller they are queued (not just ringing)', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'CWQA');
+  const b = await createAccount(ctxB, 'CWQB');
+  const c = await createAccount(ctxC, 'CWQC');
+  await pair(a, b);
+  await pair(a, c);
+
+  // A and B are on a call.
+  await startCall(a, b.id, 'audio');
+  await waitCallState(b, ['incoming']);
+  await accept(b);
+  await waitCallState(a, ['connected']);
+
+  // C calls A (who is busy but has a free hold slot). C should land in the call-waiting queue:
+  // A is told (gets the prompt), and C sees the queued status, not plain ringing.
+  await startCall(c, a.id, 'audio');
+  await a.page.waitForFunction(() => (window as any).__ringTest.hasSecondIncoming() === true, null, { timeout: 15_000 });
+  await c.page.waitForFunction(() => (window as any).__ringTest.isRemoteQueued() === true, null, { timeout: 15_000 });
+  expect(await callState(c)).toBe('remote-ringing');
+  await expect(c.page.locator('.queue-note')).toBeVisible();
+
+  // When A accepts-and-holds, C connects and the queued flag no longer affects the status.
+  await acceptAndHold(a);
+  await waitCallState(c, ['connected']);
+
+  await hangup(a);
+  await hangup(c).catch(() => {});
   await ctxA.close();
   await ctxB.close();
   await ctxC.close();

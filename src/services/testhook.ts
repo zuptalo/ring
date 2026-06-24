@@ -171,6 +171,7 @@ import {
   remoteHeld,
   groupHeldPeers,
   resumeCountdown,
+  remoteQueued,
   incomingSecond,
 } from '@/composables/useCall';
 
@@ -932,6 +933,7 @@ export function installTestHook(): void {
     isRemoteHeld: () => remoteHeld.value,
     groupHeldPeers: () => [...groupHeldPeers.value],
     resumeCountdown: () => resumeCountdown.value,
+    isRemoteQueued: () => remoteQueued.value,
     notJoiningIds: () => [...notJoining.value],
     busyMemberIds: () => [...busyMembers.value],
     invitedIds: () => callMeta.value?.invited ?? [],

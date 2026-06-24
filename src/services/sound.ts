@@ -171,11 +171,13 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
     { freq: G5, start: 0, dur: 0.08, type: 'triangle', gain: 0.18 },
     { freq: C6, start: 0.08, dur: 0.12, type: 'triangle', gain: 0.18 },
   ],
-  // Resuming (coming off hold): an attention-getting rising triad — "get ready, you're back".
+  // Resuming (coming off hold): a brighter, more insistent rising arpeggio (triangle, up into the
+  // high register, a touch louder) so it actually grabs attention before you go live — repeated a
+  // couple of times across the countdown by the caller. Still short, so it's noticeable not annoying.
   resuming: [
-    { freq: E5, start: 0, dur: 0.1, type: 'sine', gain: 0.2 },
-    { freq: G5, start: 0.12, dur: 0.1, type: 'sine', gain: 0.2 },
-    { freq: C6, start: 0.24, dur: 0.16, type: 'sine', gain: 0.22 },
+    { freq: G5, start: 0, dur: 0.09, type: 'triangle', gain: 0.26 },
+    { freq: C6, start: 0.11, dur: 0.09, type: 'triangle', gain: 0.28 },
+    { freq: E6, start: 0.22, dur: 0.22, type: 'triangle', gain: 0.32 },
   ],
 };
 

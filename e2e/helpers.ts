@@ -218,6 +218,9 @@ export const groupHeldPeers = (c: RingClient): Promise<string[]> =>
 /** The resume countdown value for the party coming off hold (number while counting, else null). */
 export const resumeCountdown = (c: RingClient): Promise<number | null> =>
   c.page.evaluate(() => (window as any).__ringTest.resumeCountdown());
+/** Caller side: true when the callee we're ringing is busy but offered Accept & hold (queued). */
+export const isRemoteQueued = (c: RingClient): Promise<boolean> =>
+  c.page.evaluate(() => (window as any).__ringTest.isRemoteQueued());
 
 /* ---- call-cue recording (spec 0004 US5) ---- */
 export const recordCues = (c: RingClient, on: boolean) =>

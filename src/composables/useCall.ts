@@ -106,6 +106,10 @@ export const groupHeldPeers = ref<string[]>([]);
 // on instantly — we count down (5→1) with a cue first, so the person isn't caught off-guard
 // becoming visible/audible again. null = not counting down (spec 0005).
 export const resumeCountdown = ref<number | null>(null);
+// Caller side: the person we're calling is already in a call but CAN take a second one — they got
+// a call-waiting prompt (their device acked with reason 'call-waiting'). We show "in their queue"
+// instead of plain "Ringing…" so the caller knows they've been notified and may be picked up.
+export const remoteQueued = ref(false);
 // A second incoming call arriving while we're in one (and a held slot is free): shown over
 // the active call as an Accept-&-hold / Decline prompt, separate from the active call's state.
 export const incomingSecond = ref<{
@@ -338,6 +342,7 @@ function beginResumeCountdown(target: RTCPeerConnection): void {
     n -= 1;
     if (n > 0) {
       resumeCountdown.value = n;
+      if (n === 2) callCue('resuming'); // sound again near the end so it re-grabs attention
       return;
     }
     cancelResumeCountdown();
@@ -993,6 +998,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
 
   setState('ended');
   cancelResumeCountdown();
+  remoteQueued.value = false;
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
   connectionWarning.value = null;
 
@@ -1814,7 +1820,8 @@ async function presentSecondDirect(
   };
   // The call-waiting cue (and its repeat) is driven by the incomingSecond watcher below, so it
   // also fires for the group second-incoming path and stops however the prompt is dismissed.
-  void sendControl('call-ringing', from, frame.callId);
+  // Tag the ack 'call-waiting' so the caller shows "in their queue" rather than plain "Ringing…".
+  void sendControl('call-ringing', from, frame.callId, { reason: 'call-waiting' });
   // If unanswered within the ring window, drop the prompt (the caller's own timeout ends it).
   setTimeout(() => {
     if (incomingSecond.value?.callId === frame.callId) incomingSecond.value = null;
@@ -2377,7 +2384,13 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // service worker showed the call notification and acked via /v1/call/ack and
       // the server forwarded this). Either way the phone is reachable → "Ringing".
       const meta = callMeta.value;
-      if (meta && meta.callId === frame.callId && callState.value === 'dialing') {
+      if (!meta || meta.callId !== frame.callId) return;
+      // The callee is busy but offered Accept & hold → they've been notified and may pick us up.
+      // Set this independent of the dialing→ringing transition below: the server auto-issues a
+      // plain call-ringing the instant the callee's socket gets the offer (flipping us to
+      // remote-ringing), so the callee app's later 'call-waiting'-tagged ack must still register.
+      if (frame.reason === 'call-waiting') remoteQueued.value = true;
+      if (callState.value === 'dialing') {
         setState('remote-ringing');
         startLoopTone('ringing', 2600); // switch the ringback to the "ringing" cue
         // Reachable now: extend the give-up window so we keep ringing while the callee
