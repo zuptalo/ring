@@ -150,6 +150,10 @@ import {
   groupStreamOwners,
   groupAudioLevels,
   groupCallDiag,
+  recallMember,
+  cancelInvite,
+  notJoining,
+  busyMembers,
   activeSpeakers,
   localStream,
   callStats,
@@ -854,9 +858,11 @@ export function installTestHook(): void {
 
     /** Place a 1:1 call. */
     startCall: (peerId: string, kind: 'audio' | 'video') => startDirectCall(peerId, kind),
-    /** Join a group call room (shared roomId across participants). */
-    startGroup: (roomId: string, kind: 'audio' | 'video') =>
-      startGroupCall(roomId, kind, 'Group call', ''),
+    /** Join a group call room (shared roomId across participants). With `members`, act as the
+     *  INITIATOR — ring those members (so they get an incoming invite to accept); without,
+     *  just join an existing room. */
+    startGroup: (roomId: string, kind: 'audio' | 'video', members: string[] = []) =>
+      startGroupCall(roomId, kind, 'Group call', '', members),
     accept: () => acceptCall(),
     reject: () => rejectCall(),
     hangup: () => hangupCall(),
@@ -889,6 +895,13 @@ export function installTestHook(): void {
     /** Group calls: total inbound video frames decoded across ALL mesh legs + each leg's
      *  adaptive tier. inboundVideoFrames() is 1:1-only (reads `pc`); this sees the mesh. */
     groupCallDiag: () => groupCallDiag(),
+    /** Group calls (caller side): re-ring / remove a not-yet-joined invitee, and read the
+     *  per-invitee tile state (no-answer set + busy set) for asserting recall behaviour. */
+    recall: (memberId: string) => recallMember(memberId),
+    removeInvitee: (memberId: string) => cancelInvite(memberId),
+    notJoiningIds: () => [...notJoining.value],
+    busyMemberIds: () => [...busyMembers.value],
+    invitedIds: () => callMeta.value?.invited ?? [],
     activeSpeakers: () => [...activeSpeakers.value],
     remoteVideoTracks: () =>
       (remoteStream.value?.getVideoTracks().length ?? 0) +

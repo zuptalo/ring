@@ -253,14 +253,16 @@
           >
             <ion-icon :icon="desktopOutline" />
           </button>
-          <!-- Switch call mode: a video call drops to audio (record icon); an audio call
-               turns on video (videocam icon). Replaces the old "…" overflow. -->
+          <!-- Turn on video: only shown in an audio call (an audio call can become a video
+               call). A video call no longer offers a "drop to audio" switch — to stop sending
+               video, use the camera toggle. -->
           <button
+            v-if="!isVideoMode"
             class="ctl"
-            :aria-label="isVideoMode ? 'Switch to audio only' : 'Turn on video'"
+            aria-label="Turn on video"
             @click.stop="toggleVideoMode"
           >
-            <ion-icon :icon="isVideoMode ? recordingOutline : videocamOutline" />
+            <ion-icon :icon="videocamOutline" />
           </button>
           <button class="ctl hangup" aria-label="Hang up" @click.stop="hangup">
             <ion-icon :icon="callOutline" />
@@ -309,7 +311,7 @@ import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
-  recordingOutline, cellularOutline, informationCircleOutline, personOutline, refreshOutline,
+  cellularOutline, informationCircleOutline, personOutline, refreshOutline,
   chatbubbleEllipsesOutline,
 } from 'ionicons/icons';
 import { getSelfUserId } from '@/services/auth';

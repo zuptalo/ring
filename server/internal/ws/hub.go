@@ -428,6 +428,13 @@ func (h *Hub) startGroupMemberRing(notifier Notifier, roomID, member string, inv
 				}()
 			}
 		}
+		// Rounds exhausted and still not in the room → authoritatively tell the WHOLE room
+		// "no answer" so every participant flips this member's tile to recall/remove at the
+		// same moment (not each on its own local timer). A cancelled loop (recall/remove/join)
+		// returned above and never reaches here.
+		if ctx.Err() == nil && !h.rooms.InRoom(roomID, member) {
+			h.broadcastMemberState(roomID, member, "noanswer")
+		}
 	}()
 }
 
@@ -548,6 +555,22 @@ func (h *Hub) broadcastRoster(roomID string, roster []string) {
 		return
 	}
 	for _, uid := range roster {
+		h.Send(uid, payload)
+	}
+}
+
+// broadcastMemberState tells EVERYONE in the room about an invitee's ring-state transition
+// (status: "ringing" on recall, "noanswer" once the reminder rounds expire, "removed" when an
+// invitee is dropped). The server is the single authority on these transitions, so every
+// participant flips that member's tile at the same instant — instead of each client timing
+// it locally from its own join (which made the "still ringing vs. retry" tile differ per
+// person). Carries only ids the server already tracks (room roster) — no plaintext.
+func (h *Hub) broadcastMemberState(roomID, member, status string) {
+	payload, err := json.Marshal(frame{T: "call-member", RoomID: roomID, To: member, Status: status})
+	if err != nil {
+		return
+	}
+	for _, uid := range h.rooms.Roster(roomID) {
 		h.Send(uid, payload)
 	}
 }
@@ -1271,8 +1294,11 @@ func (c *Client) handleFrame(data []byte) {
 		}
 		// A group-call recall "remove" (call-cancel carrying a roomId + target) → stop
 		// reminding that invitee; the relay above also tells their device to stop ringing.
+		// Tell the whole room so everyone drops the removed tile together (any participant
+		// may remove, not just the initiator).
 		if f.T == "call-cancel" && f.RoomID != "" && f.To != "" {
 			c.hub.stopGroupMemberRing(f.RoomID, f.To)
+			c.hub.broadcastMemberState(f.RoomID, f.To, "removed")
 		}
 		// A busy invitee replying to a group invite (call-busy carrying a roomId) won't join →
 		// stop re-ringing the SENDER; the relay above tells the caller to mark them unavailable
@@ -1349,6 +1375,9 @@ func (c *Client) handleFrame(data []byte) {
 		invite := frame{T: "call-group-invite", From: c.userID, RoomID: f.RoomID, Kind: f.Kind, Members: f.Members}
 		if payload, err := json.Marshal(invite); err == nil {
 			c.ringMember(f.RoomID, f.To, payload)
+			// Tell the whole room this invitee is ringing again, so every participant's tile
+			// flips back from "no answer" to "ringing" together (any participant may recall).
+			c.hub.broadcastMemberState(f.RoomID, f.To, "ringing")
 		}
 	}
 }

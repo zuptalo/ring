@@ -145,6 +145,7 @@ export async function handleIncomingFrame(frame: Frame): Promise<void> {
     case 'call-join':
     case 'call-leave':
     case 'call-roster':
+    case 'call-member':
     case 'call-group-invite':
     case 'call-full': {
       // Live-only call signalling → hand to the call controller. Lazily imported

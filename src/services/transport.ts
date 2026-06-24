@@ -184,6 +184,15 @@ export interface CallRosterFrame {
   members: string[];
   from?: string;
 }
+/** Server-authoritative ring-state transition for ONE group-call invitee, broadcast to the
+ *  whole room so every participant flips that member's tile together: 'ringing' (recalled),
+ *  'noanswer' (reminder window elapsed → show recall/remove), 'removed' (dropped). */
+export interface CallMemberFrame {
+  t: 'call-member';
+  roomId: string;
+  to: string; // the invitee whose state changed
+  status: 'ringing' | 'noanswer' | 'removed';
+}
 /** 1:1 audio<->video upgrade consent (no SDP; relayed like the other call control
  *  frames): the requester asks, the other party accepts or rejects, and only then do
  *  both sides add their cameras + renegotiate. */
@@ -202,6 +211,7 @@ export type CallFrame =
   | CallJoinFrame
   | CallLeaveFrame
   | CallRosterFrame
+  | CallMemberFrame
   | CallGroupInviteFrame
   | CallFullFrame
   | CallRingFrame

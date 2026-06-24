@@ -1157,21 +1157,23 @@ export async function acceptGroupCall(): Promise<void> {
   await enterGroupCall(meta.roomId, meta.kind, meta.name, meta.avatar, 'incoming');
 }
 
-/** Caller taps "Ring again" on a non-joiner's tile → re-ring them and put the tile back to
- *  "ringing" (re-arm the give-up timer). Caller-only. */
+/** Tap "Ring again" on a non-joiner's tile → re-ring them and put the tile back to "ringing".
+ *  ANY participant may recall (spec 0004): the server re-rings and broadcasts the new state to
+ *  the whole room, so every tile flips together — not just the initiator's. */
 export async function recallMember(memberId: string): Promise<void> {
   const meta = callMeta.value;
-  if (!meta?.isGroup || meta.direction !== 'outgoing' || !meta.roomId) return;
+  if (!meta?.isGroup || !meta.roomId) return;
   markNotJoining(memberId, false);
   armMemberRingTimer(memberId);
   await sendRecall(memberId, meta.roomId, meta.kind, meta.invited ?? []);
 }
 
-/** Caller taps "Remove from call" on a non-joiner's tile → stop ringing them, drop them
- *  from the invited set (their tile disappears), and tell their device to stop. Caller-only. */
+/** Tap "Remove from call" on a non-joiner's tile → stop ringing them, drop them from the
+ *  invited set, and tell their device to stop. ANY participant may remove; the server then
+ *  broadcasts the removal so everyone's tile disappears together. */
 export async function cancelInvite(memberId: string): Promise<void> {
   const meta = callMeta.value;
-  if (!meta?.isGroup || meta.direction !== 'outgoing' || !meta.roomId) return;
+  if (!meta?.isGroup || !meta.roomId) return;
   clearMemberRingTimer(memberId);
   markNotJoining(memberId, false);
   meta.invited = (meta.invited ?? []).filter((id) => id !== memberId);
@@ -1757,23 +1759,6 @@ async function addLocalVideo(renegotiateAfter: boolean): Promise<boolean> {
   return true;
 }
 
-/** Remove the local 1:1 video track (downgrade to audio-only) and reset the route. */
-async function removeLocalVideo(): Promise<void> {
-  const meta = callMeta.value;
-  if (!pc || !meta) return;
-  screenSharing.value = false;
-  activeScreenTrack?.stop();
-  activeScreenTrack = null;
-  const sender = videoSender();
-  if (sender) {
-    sender.track?.stop();
-    await sender.replaceTrack(null);
-  }
-  setLocalVideoTrack(null, true);
-  meta.kind = 'audio';
-  if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
-}
-
 /** Ask the 1:1 peer to switch the call to video (consent-gated). The peer gets a
  *  prompt; only on accept do BOTH sides add their cameras. */
 export async function requestVideoUpgrade(): Promise<void> {
@@ -1806,64 +1791,50 @@ export async function rejectUpgrade(): Promise<void> {
   if (meta?.peerUserId) await sendControl('call-upgrade-reject', meta.peerUserId, meta.callId);
 }
 
-/** Toggle a call between audio-only and video. 1:1 audio->video goes through the
- *  consent flow (requestVideoUpgrade); 1:1 video->audio downgrades unilaterally (the
- *  peer mirrors it via the renegotiation). Group audio<->video is per-participant
- *  (no consent), negotiated by the SFU. */
+/** Turn an audio-only call INTO a video call. 1:1 goes through the consent flow
+ *  (requestVideoUpgrade); a group turns on my own camera immediately (each peer renegotiates
+ *  to receive it). There is no longer a video->audio downgrade — once a call is video it stays
+ *  video; use the camera toggle to stop sending. A no-op if already a video call. */
 export async function toggleVideoMode(): Promise<void> {
   const meta = callMeta.value;
-  if (!meta) return;
+  if (!meta || meta.kind !== 'audio') return;
   if (meta.isGroup ? !groupSession : !pc) return;
 
-  if (meta.kind === 'audio') {
-    if (!meta.isGroup) {
-      await requestVideoUpgrade(); // 1:1 needs both parties' consent
-      return;
-    }
-    // Group video is capped (spec 0004 US3): once a call has more than VIDEO_MAX participants
-    // it can't become a video call (the roster includes self).
-    if ((meta.roster?.length ?? 0) > VIDEO_MAX) {
-      await toast(`Video is limited to ${VIDEO_MAX} people`);
-      return;
-    }
-    // Group: turn on my own video immediately (each peer renegotiates to receive it).
-    let s: MediaStream;
-    try {
-      s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
-    } catch {
-      await toast('Camera unavailable');
-      return;
-    }
-    const track = s.getVideoTracks()[0];
-    if (!track) return;
-    // Publish BEFORE touching the local preview / kind, and surface a failure instead
-    // of half-applying (a throw here used to leave a black self tile + nothing sent).
-    try {
-      await groupSession!.addVideoTrack(track);
-    } catch (e) {
-      console.warn('[call] group addVideoTrack failed', e);
-      track.stop();
-      await toast('Could not turn on video');
-      return;
-    }
-    setLocalVideoTrack(track, true);
-    meta.kind = 'video';
-    cameraOff.value = false;
-    await applyOutgoingQuality();
-    void refreshCameraCount(); // surface the flip-camera button now that video is on
-  } else {
-    if (meta.isGroup) {
-      screenSharing.value = false;
-      activeScreenTrack?.stop();
-      activeScreenTrack = null;
-      await groupSession!.removeVideoTrack();
-      setLocalVideoTrack(null, true);
-      meta.kind = 'audio';
-    } else {
-      await removeLocalVideo();
-      await renegotiate(); // tell the peer to mirror the downgrade
-    }
+  if (!meta.isGroup) {
+    await requestVideoUpgrade(); // 1:1 needs both parties' consent
+    return;
   }
+  // Group video is capped (spec 0004 US3): once a call has more than VIDEO_MAX participants
+  // it can't become a video call (the roster includes self).
+  if ((meta.roster?.length ?? 0) > VIDEO_MAX) {
+    await toast(`Video is limited to ${VIDEO_MAX} people`);
+    return;
+  }
+  // Group: turn on my own video immediately (each peer renegotiates to receive it).
+  let s: MediaStream;
+  try {
+    s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+  } catch {
+    await toast('Camera unavailable');
+    return;
+  }
+  const track = s.getVideoTracks()[0];
+  if (!track) return;
+  // Publish BEFORE touching the local preview / kind, and surface a failure instead
+  // of half-applying (a throw here used to leave a black self tile + nothing sent).
+  try {
+    await groupSession!.addVideoTrack(track);
+  } catch (e) {
+    console.warn('[call] group addVideoTrack failed', e);
+    track.stop();
+    await toast('Could not turn on video');
+    return;
+  }
+  setLocalVideoTrack(track, true);
+  meta.kind = 'video';
+  cameraOff.value = false;
+  await applyOutgoingQuality();
+  void refreshCameraCount(); // surface the flip-camera button now that video is on
 }
 
 /* ---- inbound frame dispatch (called from sync.ts) ---- */
@@ -2131,6 +2102,33 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       } else {
         clearGroupIdleTimeout(); // someone is here
         if (someoneLeft) void toast(await describeLeft(left));
+      }
+      return;
+    }
+
+    case 'call-member': {
+      // Server-authoritative ring-state for one invitee, broadcast to the whole room so every
+      // participant's tile flips together (spec 0004): 'noanswer' once the reminder window
+      // elapsed, 'ringing' on a recall, 'removed' when dropped. This replaces each client
+      // timing the no-answer locally from its own join — which is why the retry tile used to
+      // appear at different moments for different people.
+      const meta = callMeta.value;
+      if (!meta?.isGroup || meta.roomId !== frame.roomId) return;
+      const id = frame.to;
+      if (!id || meta.roster.includes(id)) return; // already joined → ignore stale state
+      if (frame.status === 'noanswer') {
+        clearMemberRingTimer(id);
+        markNotJoining(id, true);
+      } else if (frame.status === 'ringing') {
+        markNotJoining(id, false);
+        markMemberBusy(id, false);
+        if (!(meta.invited ?? []).includes(id)) meta.invited = [...(meta.invited ?? []), id];
+        armMemberRingTimer(id); // local fallback in case the next 'noanswer' broadcast is missed
+      } else if (frame.status === 'removed') {
+        clearMemberRingTimer(id);
+        markNotJoining(id, false);
+        markMemberBusy(id, false);
+        if (meta.invited) meta.invited = meta.invited.filter((m) => m !== id);
       }
       return;
     }
