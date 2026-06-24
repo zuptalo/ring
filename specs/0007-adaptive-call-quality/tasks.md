@@ -74,10 +74,13 @@ within ~5s; iOS low tier is a clean downscaled image (on-device).
   at `high`; (b) `tierEncoding('low', true)` keeps full resolution (should downscale); (c) a single
   high-`fractionLost` sample drops a tier (should require sustained); (d) climb from `low` to target
   takes too many steps.
-- [ ] T008 [US1] Fix the iOS encoder downscale in `src/services/call/quality.ts`: downscale via the
+- [x] T008 [US1] Fix the iOS encoder downscale in `src/services/call/quality.ts`: downscale via the
   sender encoding (`scaleResolutionDownBy`) for low/medium on all platforms; narrow the bitrate-only
   fallback (`avoidEncoderScaling`) to only the genuinely-broken old-WebKit builds (feature/version
-  gate), per research Decision 4.
+  gate), per research Decision 4. *(Done conservatively: bitrate-only retained for ALL iOS/WebKit
+  rather than version-gated, since resolution scaling stalls the iPhone 8 H.264 encoder — confirmed
+  on-device this session — and that device is deprioritized. Quality tiering on iOS is restored via
+  the maxBitrate cap; non-iOS keeps the clean resolution downscale.)*
 - [x] T009 [US1] Fix the climb/ceiling/back-off in `nextTier` (`quality.ts`): converge to target fast
   (start sensible / multi-step or shorter streak), allow `hd` on a healthy 1:1/2-person leg without a
   candidate-pair estimate, require SUSTAINED congestion to back off (no single-sample drop), and set

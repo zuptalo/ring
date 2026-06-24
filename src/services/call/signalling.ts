@@ -6,7 +6,7 @@
  */
 import { sealForChat, openPacket, clearSession } from '@/services/messaging';
 import { getContact, startDirectChat } from '@/db/queries';
-import type { CallSignal } from '@/services/crypto/message';
+import type { CallSignal, QosReport } from '@/services/crypto/message';
 import { sendLive } from '@/composables/useSync';
 import type { CallAnswerFrame, CallIceFrame, CallOfferFrame, CallKind } from '@/services/transport';
 
@@ -90,6 +90,23 @@ export function sendHoldResume(
   roomId?: string,
 ): Promise<boolean> {
   return sendSealedSignal('call-ice', chatId, peerUserId, callId, { callId, type: signalType, roomId }, roomId);
+}
+
+/**
+ * Send a sealed per-pair connection-health report (spec 0007 `qos`). Identical transport to
+ * hold/resume: sealed inside an EXISTING `call-ice` frame, so no new frame, no server change —
+ * the relay forwards opaque ciphertext and can't tell it from any other call signal. The payload
+ * is coarse enums + a counter only (no raw bitrate/IP/location — FR-011). 1:1: omit `roomId`;
+ * mesh: pass the leg's `roomId`.
+ */
+export function sendHealth(
+  chatId: string,
+  peerUserId: string,
+  callId: string,
+  qos: QosReport,
+  roomId?: string,
+): Promise<boolean> {
+  return sendSealedSignal('call-ice', chatId, peerUserId, callId, { callId, type: 'qos', qos, roomId }, roomId);
 }
 
 /** Decrypt an inbound 1:1 call signal from a sealed packet. Returns null if the

@@ -125,9 +125,18 @@ export function clampForPeers(peers: number): Tier {
  * and we back off promptly on a real congestion signal (bandwidth/cpu limitation, packet loss,
  * or the estimate collapsing well under the current tier).
  */
-export function nextTier(state: ControllerState, snap: StatsSnapshot, clamp: Tier): ControllerState {
+export function nextTier(
+  state: ControllerState,
+  snap: StatsSnapshot,
+  clamp: Tier,
+  peerRequestedTier?: Tier,
+): ControllerState {
+  // The receiver's reported ceiling (spec 0007 US2) is just another upper bound: fold it into the
+  // clamp. Pass `undefined` when there is no fresh report (older build, or stale per the staleness
+  // window) so we fall back to pure send-side adaptation (FR-004) — never a hang.
+  const effClamp = peerRequestedTier == null ? clamp : tierMin(clamp, peerRequestedTier);
   const idx = idxOf(state.tier);
-  const clampIdx = idxOf(clamp);
+  const clampIdx = idxOf(effClamp);
   const knownBw = typeof snap.availableOutgoingBitrate === 'number';
   const down = (): ControllerState => ({ tier: TIERS[Math.max(0, idx - 1)], healthyStreak: 0, unhealthyStreak: 0 });
 
@@ -148,9 +157,10 @@ export function nextTier(state: ControllerState, snap: StatsSnapshot, clamp: Tie
     return { tier: state.tier, healthyStreak: 0, unhealthyStreak: unhealthy };
   }
 
-  // Healthy. Above the clamp (pin lowered, or more peers joined and dropped the ceiling) → come down.
+  // Healthy. Above the clamp (pin lowered, a peer asked for less, or more peers joined and dropped
+  // the ceiling) → come down to it.
   if (idx > clampIdx) {
-    return { tier: clamp, healthyStreak: 0, unhealthyStreak: 0 };
+    return { tier: effClamp, healthyStreak: 0, unhealthyStreak: 0 };
   }
 
   // Climb one step toward the ceiling after a short healthy streak. The ceiling is the clamp
@@ -200,4 +210,54 @@ export function clampForPin(pin: 'auto' | 'medium' | 'low', lessData: boolean): 
   if (pin === 'low') return 'low';
   if (pin === 'medium') return 'medium';
   return lessData ? 'medium' : 'hd';
+}
+
+/** Step one tier from `from` toward `to` (hysteresis helper): never jump more than a single step per
+ *  call, so a noisy sample can't swing a class across the whole range. */
+function stepToward(from: Tier, to: Tier): Tier {
+  const f = idxOf(from);
+  const t = idxOf(to);
+  if (t === f) return from;
+  return TIERS[t > f ? f + 1 : f - 1];
+}
+
+/** A receiver's coarse self-assessment of its own DOWNLINK for one peer's video (spec 0007 US2),
+ *  derived from that inbound stream. A bad downlink shows up as packet LOSS and dropped frames —
+ *  NOT merely a low received bitrate, which often just means the sender is choosing to send little.
+ *  So we key off loss (with dropped frames nudging it down a step) and apply one-step hysteresis from
+ *  `prev` so the class doesn't flap. Returns a coarse Tier used as the requested ceiling. */
+export interface InboundSnapshot {
+  fractionLost: number; // 0..1, this peer's inbound video loss
+  framesDropped?: number; // frames dropped in the interval (decode/render couldn't keep up)
+  framesReceived?: number; // frames received in the interval (denominator for the drop ratio)
+}
+export function downlinkClassFrom(snap: InboundSnapshot, prev: Tier = 'hd'): Tier {
+  let target: Tier;
+  if (snap.fractionLost > 0.2) target = 'low';
+  else if (snap.fractionLost > 0.1) target = 'medium';
+  else if (snap.fractionLost > 0.03) target = 'high';
+  else target = 'hd';
+  // A high dropped-frame ratio (render/decode can't keep up) trims one more step.
+  const recv = snap.framesReceived ?? 0;
+  const dropped = snap.framesDropped ?? 0;
+  if (recv > 0 && dropped / (recv + dropped) > 0.1) target = TIERS[Math.max(1, idxOf(target) - 1)];
+  return stepToward(prev, target);
+}
+
+/** Map a peer's rendered tile size (the larger CSS-px dimension on screen) to the quality it's worth
+ *  receiving (spec 0007 US4): a thumbnail doesn't need HD, a fullscreen view does. Coarse buckets so
+ *  layout jitter doesn't thrash the encoder; 0 (not rendered/minimized) asks for nothing. */
+export function tileTarget(sizePx: number): Tier {
+  if (sizePx <= 0) return 'off';
+  if (sizePx < 160) return 'low';
+  if (sizePx < 320) return 'medium';
+  if (sizePx < 640) return 'high';
+  return 'hd';
+}
+
+/** The single ceiling a receiver asks each sender for (spec 0007): the most conservative of its
+ *  self-assessed downlink, its manual pin (data-saver/manual cap), and the on-screen tile target.
+ *  This is what travels in the sealed `qos` report's `requestedTier`. */
+export function requestedTierOf(downlinkClass: Tier, manualPin: Tier, tile: Tier): Tier {
+  return tierMin(tierMin(downlinkClass, manualPin), tile);
 }

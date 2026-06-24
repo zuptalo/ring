@@ -83,7 +83,11 @@ export interface CallSignal {
   // 'hold'/'resume' (spec 0005): the sender paused/resumed this call. Carried sealed over an
   // EXISTING call frame (no new frame type) and dispatched on this inner `type` by the
   // receiver, so the relay can't tell a hold from any other sealed signal (FR-012a).
-  type: 'offer' | 'answer' | 'ice' | 'key' | 'streamid' | 'hold' | 'resume';
+  // 'qos' (spec 0007): a per-pair connection-health report — the receiver tells this sender the
+  // max quality it wants/can use. Same trick: sealed inside the existing call-ice frame, coarse
+  // enums + a counter ONLY (never raw bitrate/IP/location — Principle IX, FR-011), so the server
+  // still only relays opaque ciphertext and can't tell it from any other sealed call signal.
+  type: 'offer' | 'answer' | 'ice' | 'key' | 'streamid' | 'hold' | 'resume' | 'qos';
   kind?: 'audio' | 'video'; // on offer
   sdp?: string; // offer/answer
   sdpType?: RTCSdpType; // offer/answer
@@ -95,6 +99,18 @@ export interface CallSignal {
   // member can map an incoming (otherwise anonymous) stream to its owner for the
   // name/avatar label. Carried E2EE like the key; the server never reads it.
   streamId?: string;
+  qos?: QosReport; // on 'qos' (spec 0007)
+}
+
+/** Spec 0007 connection-health report (sealed; never seen by the server). Coarse enums + a
+ *  monotonic counter ONLY — deliberately no raw bandwidth, IP, or location (data minimization,
+ *  FR-011). `requestedTier` is a hard ceiling the receiver asks this sender to honor;
+ *  `downlinkClass` is the receiver's coarse self-assessment of its own downlink; `seq` is
+ *  monotonic per sender→peer so the newest report wins and stale/reordered ones are dropped. */
+export interface QosReport {
+  requestedTier: 'off' | 'low' | 'medium' | 'high' | 'hd';
+  downlinkClass: 'off' | 'low' | 'medium' | 'high' | 'hd';
+  seq: number;
 }
 
 /**
