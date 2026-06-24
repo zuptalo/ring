@@ -32,7 +32,6 @@ import { capitalizeFirst } from '@/utils/text';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
-import { pushDiag } from '@/services/call/diag';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
   sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth,
@@ -542,18 +541,13 @@ async function loadCallPrefs(): Promise<void> {
   lessDataCalls = lessData;
   callSoundsOn = sounds;
 }
-// Camera-capture watchdog (iOS, esp. iPhone 8). On the A11/iOS-16.7 iPhone 8 the front camera comes
-// up live, then WebKit reconfigures it (orientation/format) and MUTES the track in the same instant —
-// and it never auto-unmutes, so the self-view is black AND nothing is encoded/sent (~1fps forever).
-// The real cause (WebKit bug 252465 / Apple Forums 667453): iOS tears down/mutes a capture that has no
-// VISIBLE, PLAYING <video> rendering it — and our previews are `display:none` (v-show) until they have
-// frames, a chicken-and-egg that mutes the camera before any frame arrives. The fix lives in the view:
-// an always-mounted, opacity-hidden (NOT display:none), playing keep-alive <video> renders the local
-// stream so iOS keeps the capture alive. Here we only OBSERVE the track for the ⓘ panel and re-kick the
-// preview on unmute. We do NOT re-acquire on a stuck mute: a second getUserMedia is itself a documented
-// mute trigger (WebKit bug 179363) and on-device it re-muted every time — restart can't escape it.
-let instrumentedCamTrack: MediaStreamTrack | null = null;
-let diagTick = 0; // debug: throttles the 1:1 outbound-video readout in pollStats
+// Camera mute recovery (iOS, esp. iPhone 8). On iOS a live camera track can briefly MUTE on an
+// orientation/format reconfiguration; when it unmutes, the self-preview + encoder don't always pick
+// the frames back up. (The iPhone 8's PERMANENT mute is prevented in the view by the always-rendered
+// keep-alive <video> — WebKit bug 252465 / Apple Forums 667453.) We do NOT re-acquire on a stuck
+// mute: a second getUserMedia is itself a documented mute trigger (WebKit bug 179363). So we only
+// re-kick the preview + sender when the track unmutes.
+let watchedCamTrack: MediaStreamTrack | null = null;
 
 /** Hand the self-preview a FRESH MediaStream object so its <video> re-attaches + re-plays. iOS
  *  Safari doesn't reliably render a track that resumed after a mute, so reassigning the ref is the
@@ -570,36 +564,21 @@ async function reassertOutgoingVideo(): Promise<void> {
   if (v && v.readyState === 'live' && !v.muted) await replaceOutgoingVideo(v).catch(() => {});
 }
 
-/** Reset the camera instrumentation for a fresh call (called from teardown). */
+/** Reset the camera watcher for a fresh call (called from teardown). */
 function resetCameraWatchdog(): void {
-  instrumentedCamTrack = null;
+  watchedCamTrack = null;
 }
 
-/** Instrument one local camera track: report its state to the ⓘ panel and, on unmute, kick the
- *  self-preview + sender so iOS resumes frames. We do NOT re-acquire on a stuck mute — a second
- *  getUserMedia is itself a mute trigger and re-muted every time on-device; preventing the mute (the
- *  keep-alive renderer in the view) is what works. Idempotent per track. */
+/** Watch one local camera track: on unmute, kick the self-preview + sender so iOS resumes frames.
+ *  Idempotent per track. */
 function instrumentCamTrack(v: MediaStreamTrack): void {
-  if (v === instrumentedCamTrack) return;
-  instrumentedCamTrack = v;
-  const report = (ev: string): void => {
-    let st: MediaTrackSettings = {};
-    try {
-      st = v.getSettings();
-    } catch {
-      /* getSettings can throw on a dead track */
-    }
-    pushDiag(`cam ${ev}: muted=${v.muted} ready=${v.readyState} ${st.width ?? '?'}x${st.height ?? '?'}@${Math.round(st.frameRate ?? 0)}`);
-  };
-  report('init');
+  if (v === watchedCamTrack) return;
+  watchedCamTrack = v;
   v.addEventListener('unmute', () => {
-    report('unmuted');
     // iOS resumed the track but the self-preview + encoder may not pick the frames back up — kick both.
     forceSelfPreviewReattach();
     void reassertOutgoingVideo();
   });
-  v.addEventListener('mute', () => report('MUTED'));
-  v.addEventListener('ended', () => report('ENDED'));
 }
 
 watch(localStream, (s) => {
@@ -876,20 +855,10 @@ async function pollStats(): Promise<void> {
   let down = 0;
   let lost = 0;
   let recv = 0;
-  let outVidFrames = -1;
-  let outVidBytes = 0;
   try {
     const report = await getStats;
     report.forEach((s) => {
-      if (s.type === 'outbound-rtp' && typeof s.bytesSent === 'number') {
-        up += s.bytesSent;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const o = s as any;
-        if (o.kind === 'video') {
-          outVidFrames = o.framesEncoded ?? 0;
-          outVidBytes = o.bytesSent ?? 0;
-        }
-      }
+      if (s.type === 'outbound-rtp' && typeof s.bytesSent === 'number') up += s.bytesSent;
       if (s.type === 'inbound-rtp') {
         if (typeof s.bytesReceived === 'number') down += s.bytesReceived;
         if (typeof s.packetsLost === 'number') lost += s.packetsLost;
@@ -901,12 +870,6 @@ async function pollStats(): Promise<void> {
     if (pc) await adaptOneToOne(report);
   } catch {
     return;
-  }
-  // Debug: surface the 1:1 outbound VIDEO frames-encoded to the ⓘ panel every few seconds, so a
-  // stuck-black camera (enc not advancing) is visible on a 1:1 call (the mesh path already shows
-  // per-leg out/in; the 1:1 pc path showed nothing). Cheap; removed before this branch merges.
-  if (pc && outVidFrames >= 0 && ++diagTick % 3 === 0) {
-    pushDiag(`out1to1 video: enc=${outVidFrames} b=${outVidBytes >= 1e3 ? Math.round(outVidBytes / 1e3) + 'k' : outVidBytes}`);
   }
   const now = Date.now();
   // First sample after a swap/resume: the active PC (and its cumulative counters) just changed,
