@@ -32,6 +32,26 @@
         </div>
       </div>
       <div ref="stageEl" class="stage" :class="{ 'chrome-hidden': chromeHidden }" @click="onStageClick">
+        <!-- Call waiting (spec 0005): a second call arriving over the active one offers
+             Accept & hold / Decline; the call you already have on hold shows a bar; and when
+             the other side has put US on hold a badge shows. -->
+        <div v-if="incomingSecond" class="cw-prompt" @click.stop>
+          <ion-avatar class="cw-avatar">
+            <img v-if="incomingSecond.avatar" :src="incomingSecond.avatar" :alt="incomingSecond.name" />
+            <ion-icon v-else :icon="personOutline" />
+          </ion-avatar>
+          <div class="cw-text">
+            <strong>{{ incomingSecond.name }}</strong>
+            <span>Incoming call — hold the current one?</span>
+          </div>
+          <div class="cw-actions">
+            <button class="cw-btn cw-decline" @click.stop="rejectSecond">Decline</button>
+            <button class="cw-btn cw-accept" @click.stop="acceptAndHold">Accept &amp; hold</button>
+          </div>
+        </div>
+        <div v-else-if="heldCall" class="cw-held"><ion-icon :icon="pauseOutline" /><span>On hold · {{ heldCall.name }}</span></div>
+        <div v-if="remoteHeld" class="cw-onhold"><ion-icon :icon="pauseOutline" /><span>On hold</span></div>
+
         <!-- Group call: every participant - each incoming feed AND our own outgoing
              feed - is an equally-sized floating tile. Tiles are centred and wrap;
              they grow when few are on the call and shrink as people join, never
@@ -98,6 +118,8 @@
                   <ion-icon :icon="refreshOutline" />
                 </button>
                 <span v-if="tileLabel(t)" class="tile-label">{{ tileLabel(t) }}</span>
+                <!-- This member has put us on hold (their leg to us is paused) — spec 0005. -->
+                <span v-if="groupHeldPeers.includes(t.key)" class="tile-onhold"><ion-icon :icon="pauseOutline" /> On hold</span>
                 <button
                   v-if="t.isSelf && canFlip && tileHasVideo(t)"
                   class="flip-btn tile-flip"
@@ -320,7 +342,7 @@ import {
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
   cellularOutline, informationCircleOutline, personOutline, refreshOutline,
-  chatbubbleEllipsesOutline,
+  chatbubbleEllipsesOutline, pauseOutline,
 } from 'ionicons/icons';
 import { getSelfUserId } from '@/services/auth';
 import {
@@ -333,6 +355,7 @@ import {
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite,
   acceptCall, rejectCall, declineWithMessage,
+  heldCall, remoteHeld, groupHeldPeers, incomingSecond, acceptAndHold, rejectSecond,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useCallParticipants } from '@/composables/useCallParticipants';
@@ -1120,6 +1143,95 @@ const diag = computed(() => {
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.5);
   font-size: 11px;
+}
+/* Per-tile "on hold" badge: this member has us on hold (spec 0005). */
+.tile-onhold {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 11px;
+  color: #fff;
+}
+/* Call waiting (spec 0005): the second-incoming prompt + held-call / on-hold bars, anchored
+   below the header so they don't cover the call controls. Built from the call view's palette. */
+.cw-prompt,
+.cw-held,
+.cw-onhold {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: min(92%, 460px);
+  border-radius: 16px;
+  background: rgba(28, 28, 30, 0.92);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #fff;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+}
+.cw-prompt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+.cw-avatar {
+  width: 36px;
+  height: 36px;
+  flex: none;
+}
+.cw-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.cw-text strong {
+  font-size: 14px;
+}
+.cw-text span {
+  font-size: 12px;
+  opacity: 0.8;
+}
+.cw-actions {
+  display: flex;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+.cw-btn {
+  border: none;
+  border-radius: 12px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cw-decline {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.cw-accept {
+  background: var(--ion-color-primary, #10b981);
+  color: #fff;
+}
+.cw-held,
+.cw-onhold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.cw-onhold {
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  background: rgba(120, 120, 128, 0.85);
 }
 /* A departed participant's placeholder: a waving hand that lingers, then fades out.
    Duration must match LEAVE_MS in the script. */

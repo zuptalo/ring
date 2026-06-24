@@ -189,6 +189,19 @@ export async function waitRemotes(c: RingClient, n: number, timeout = 30_000): P
   );
 }
 
+/* ---- call waiting (spec 0005): hold / swap / drop ---- */
+export const acceptAndHold = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.acceptAndHold());
+export const hasSecondIncoming = (c: RingClient): Promise<boolean> =>
+  c.page.evaluate(() => (window as any).__ringTest.hasSecondIncoming());
+export const canHoldIncoming = (c: RingClient): Promise<boolean> =>
+  c.page.evaluate(() => (window as any).__ringTest.canHoldIncoming());
+export const heldCallId = (c: RingClient): Promise<string | null> =>
+  c.page.evaluate(() => (window as any).__ringTest.heldCallId());
+export const isRemoteHeld = (c: RingClient): Promise<boolean> =>
+  c.page.evaluate(() => (window as any).__ringTest.isRemoteHeld());
+export const groupHeldPeers = (c: RingClient): Promise<string[]> =>
+  c.page.evaluate(() => (window as any).__ringTest.groupHeldPeers());
+
 /* ---- call-cue recording (spec 0004 US5) ---- */
 export const recordCues = (c: RingClient, on: boolean) =>
   c.page.evaluate((v) => (window as any).__ringTest.recordCues(v), on);

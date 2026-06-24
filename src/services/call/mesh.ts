@@ -46,6 +46,9 @@ export interface MeshCallbacks {
   onStreamMap: (map: Record<string, string>) => void;
   /** Tile keys (remote stream ids, or SELF_KEY) currently speaking. */
   onActiveSpeakers: (keys: string[]) => void;
+  /** Call waiting (spec 0005): the set of peers who have put US on hold (their tile shows
+   *  "on hold"). Empty when nobody has us held. */
+  onHeldPeers?: (peerIds: string[]) => void;
 }
 
 /** Outgoing-video encoding tier (shape matches useCall's QUALITY_ENCODING entry). */
@@ -126,6 +129,8 @@ export class MeshSession {
   // Call waiting (spec 0005): true while this call is HELD — every leg's senders are detached
   // (replaceTrack(null)) and adaptation is suspended until resume().
   private paused = false;
+  // Peers who have put US on hold (their tile shows "on hold"); we pause our outgoing to them.
+  private heldPeers = new Set<string>();
 
   constructor(roomId: string, kind: CallKind, cb: MeshCallbacks, members: string[] = []) {
     this.roomId = roomId;
@@ -747,6 +752,34 @@ export class MeshSession {
       void this.send('call-ice', leg.peerId, { callId: this.roomId, type: 'resume', roomId: this.roomId });
     }
     this.startDiag();
+  }
+
+  /** A peer put US on hold (received their sealed `hold`): stop OUR outgoing to that one leg
+   *  (the rest of the mesh is untouched — the other members keep talking) and mark the peer
+   *  "on hold" for the tile. Mirrors the holder pausing their leg to us. */
+  async onPeerHold(from: string): Promise<void> {
+    const leg = this.legs.get(from);
+    if (!leg) return;
+    for (const k of ['audio', 'video'] as const) {
+      const s = this.senderOfKind(leg, k);
+      if (s?.track) await s.replaceTrack(null).catch(() => {});
+    }
+    this.heldPeers.add(from);
+    this.cb.onHeldPeers?.([...this.heldPeers]);
+  }
+
+  /** A peer resumed (received their sealed `resume`): restore OUR outgoing to that leg. */
+  async onPeerResume(from: string): Promise<void> {
+    const leg = this.legs.get(from);
+    if (!leg || !this.local) return;
+    const a = this.local.getAudioTracks()[0] ?? null;
+    const v = this.local.getVideoTracks()[0] ?? null;
+    const aSender = this.senderOfKind(leg, 'audio');
+    if (aSender) await aSender.replaceTrack(a).catch(() => {});
+    const vSender = this.senderOfKind(leg, 'video');
+    if (vSender && v) await vSender.replaceTrack(v).catch(() => {});
+    this.heldPeers.delete(from);
+    this.cb.onHeldPeers?.([...this.heldPeers]);
   }
 
   private onLegState(leg: PeerLeg): void {
