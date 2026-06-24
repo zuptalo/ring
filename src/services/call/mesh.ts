@@ -17,7 +17,7 @@
  */
 import { sendLive } from '@/composables/useSync';
 import { getSelfUserId } from '@/services/auth';
-import { getTurnConfig, rtcConfig } from '@/services/call/turn';
+import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
 import { sendSealedSignal, meshSessionChatId, clearCallSession } from '@/services/call/signalling';
 import { pushDiag, setDiagSnapshot } from '@/services/call/diag';
 import {
@@ -156,6 +156,10 @@ export class MeshSession {
   async start(existing?: MediaStream): Promise<void> {
     this.selfId = getSelfUserId() ?? '';
     if (!this.selfId) throw new Error('not signed in');
+    // Fast-connect (spec 2008): warm the TURN cache OFF the critical path before awaiting capture,
+    // so the credential fetch overlaps getUserMedia instead of running serially after it (the same
+    // first-call speed-up applied to the 1:1 paths). Harmless when `existing` reuses a stream.
+    warmTurnConfig();
     this.local =
       existing ??
       (await navigator.mediaDevices.getUserMedia({
@@ -163,7 +167,7 @@ export class MeshSession {
         video: this.kind === 'video' ? { facingMode: { ideal: 'user' } } : false,
       }));
     this.cb.onLocalStream(this.local);
-    await getTurnConfig(); // warm the (refresh-aware) TURN-cred cache before legs build
+    await getTurnConfig(); // now a warm cache hit (fetch overlapped the capture above)
     this.syncAudioMonitors();
     this.startDiag();
     // Initiator sends the member list so the server rings the group exactly once;

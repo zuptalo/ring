@@ -43,6 +43,19 @@ export function clearTurnConfig(): void {
 }
 
 /**
+ * Fire-and-forget cache warm (spec 2008): kick the TTL-cached credential fetch off the critical
+ * path — at outgoing call intent and on incoming ring — so the eventual `newPeerConnection` finds
+ * the cache warm instead of blocking on a network round-trip. Idempotent (a warm hit returns the
+ * cache); never throws. Reuses the exact same authenticated request — only *when* it runs moves
+ * earlier, so it reveals nothing new to the server.
+ */
+export function warmTurnConfig(): void {
+  void getTurnConfig().catch(() => {
+    /* a failed warm is harmless — the real call still fetches/awaits on its own path */
+  });
+}
+
+/**
  * Build the RTCConfiguration for a call. We force `iceTransportPolicy: 'relay'`
  * because in the 443-only deployment the only reachable candidate is the TURNS
  * relay; trying host/srflx pairs would only add gathering latency.

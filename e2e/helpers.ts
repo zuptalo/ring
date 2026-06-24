@@ -228,6 +228,13 @@ export const recordCues = (c: RingClient, on: boolean) =>
 export const cuesFired = (c: RingClient): Promise<string[]> =>
   c.page.evaluate(() => (window as any).__ringTest.cuesFired());
 
+/* ---- connect-milestone instrumentation (spec 2008) ---- */
+export const recordConnect = (c: RingClient, on: boolean) =>
+  c.page.evaluate((v) => (window as any).__ringTest.recordConnect(v), on);
+/** The current call's connect-milestone timestamps ({} if none yet). */
+export const connectMarks = (c: RingClient): Promise<Record<string, number>> =>
+  c.page.evaluate(() => (window as any).__ringTest.connectMarks());
+
 /* ---- dev/e2e backend call-config (caps + ring/recovery cadence) ---- */
 const BACKEND = `http://localhost:${process.env.RING_E2E_PORT || 8081}`; // isolated e2e ringd (see global-setup)
 export interface CallConfig {

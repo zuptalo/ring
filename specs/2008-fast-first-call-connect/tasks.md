@@ -29,7 +29,7 @@ Single Vue PWA client (change is client-only). Key paths: `src/composables/useCa
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Confirm the e2e harness can observe time-to-first-media via the existing remote-stream/
+- [x] T001 Confirm the e2e harness can observe time-to-first-media via the existing remote-stream/
   track hooks (`remoteTracks`/`waitRemotes`/`callState` in `e2e/helpers.ts`); note any gap to fill
   in T002–T003. No code change if already sufficient.
 
@@ -39,15 +39,15 @@ Single Vue PWA client (change is client-only). Key paths: `src/composables/useCa
 
 **⚠️ MUST complete before the user-story phases — both US1 and US2 tests depend on these.**
 
-- [ ] T002 Add a dev-only connect-milestone recorder in `src/composables/useCall.ts`: a module
+- [x] T002 Add a dev-only connect-milestone recorder in `src/composables/useCall.ts`: a module
   record reset at the start of each 1:1 call that timestamps `callStart`, `turnWarmStart`,
   `turnReady`, `gumStart`, `gumResolved`, `pcCreated`, `remoteDescriptionSet`,
   `offerSent`/`answerSent`, `firstRemoteMedia` (per data-model.md). Recording is a no-op unless the
   test hook is active; nothing persisted, nothing sent to the server.
-- [ ] T003 [P] Expose the milestones read-only via `src/services/testhook.ts`
+- [x] T003 [P] Expose the milestones read-only via `src/services/testhook.ts`
   (`connectMilestones()`), stripped from production builds like the rest of the hook, and add a
   matching `connectMilestones(client)` helper in `e2e/helpers.ts`.
-- [ ] T004 [P] Add a fire-and-forget `warmTurnConfig()` to `src/services/call/turn.ts` that calls
+- [x] T004 [P] Add a fire-and-forget `warmTurnConfig()` to `src/services/call/turn.ts` that calls
   `getTurnConfig().catch(() => {})` (idempotent against the existing TTL cache), so callers can warm
   the credential cache off the critical path without awaiting or throwing.
 
@@ -63,22 +63,22 @@ Single Vue PWA client (change is client-only). Key paths: `src/composables/useCa
 invariant (TURN warm not gated behind gUM) and that the caller receives B's media within the parity
 margin of the second-call path.
 
-- [ ] T005 [US1] Write the FAILING regression e2e `e2e/call-connect-speed.spec.ts` (chromium): place
+- [x] T005 [US1] Write the FAILING regression e2e `e2e/call-connect-speed.spec.ts` (chromium): place
   a first 1:1 audio call A→B, B answers; assert the **caller overlap invariant** from data-model.md
   — `turnWarmStart <= gumStart` (TURN warming is not serialized after `getUserMedia`). This FAILS on
   current code (TURN is fetched inside `newPeerConnection`, strictly after gUM).
-- [ ] T006 [US1] Extend the same spec: measure first-call caller **time-to-first-media** (caller
+- [x] T006 [US1] Extend the same spec: measure first-call caller **time-to-first-media** (caller
   receives the callee's decoded audio/video) and the second/call-waiting path's TTFM under the same
   setup, and assert the concrete margin — first-call median TTFM ≤ second-call median TTFM **+ 1000
   ms** over ≥ 5 runs (SC-001), and caller receives media within **2000 ms** of answer on the LAN-
   equivalent harness (SC-002). Add the video variant. (The T005 ordering invariant is the gate;
   this margin is generous validation.)
-- [ ] T007 [US1] Implement the caller fast path in `startDirectCall` (`src/composables/useCall.ts`):
+- [x] T007 [US1] Implement the caller fast path in `startDirectCall` (`src/composables/useCall.ts`):
   call `warmTurnConfig()` at call intent, run `getUserMedia` and TURN warming **concurrently**
   (e.g. `Promise.all`), then build the PC from the already-resolved TURN config, add tracks, create
   + send the offer. Record the US1 milestones (T002). Preserve all existing semantics
   (dialing/ringback/dial-timeout, failure → teardown).
-- [ ] T008 [US1] Run T005–T006 to GREEN; run `e2e/calls.spec.ts` (outgoing-call cases) to confirm no
+- [x] T008 [US1] Run T005–T006 to GREEN; run `e2e/calls.spec.ts` (outgoing-call cases) to confirm no
   regression to ring/answer/cancel/no-answer.
 
 **Checkpoint**: outgoing first call connects without the cold-TURN + serial-gUM stall.
@@ -93,25 +93,25 @@ margin of the second-call path.
 invariant (SDP/PC setup not gated behind gUM) and that BOTH parties receive media within the parity
 margin after accept.
 
-- [ ] T009 [US2] Extend `e2e/call-connect-speed.spec.ts`: place a first 1:1 call to A, A answers;
+- [x] T009 [US2] Extend `e2e/call-connect-speed.spec.ts`: place a first 1:1 call to A, A answers;
   assert the **callee overlap invariant** — `remoteDescriptionSet`/`pcCreated` is reached without
   first awaiting `gumResolved` (capture overlaps SDP/PC setup). FAILS on current code (serial gUM →
   PC → setRemote in `acceptCall`).
-- [ ] T010 [US2] Extend the spec: measure accept→media time-to-first-media for BOTH directions
+- [x] T010 [US2] Extend the spec: measure accept→media time-to-first-media for BOTH directions
   (callee receives caller media AND caller receives callee media) and assert each within **2000 ms**
   of accept (SC-002) and within **+1000 ms** of the second-call path median (SC-001), audio and
   video. (The T009 ordering invariant is the gate; this margin is generous validation.)
-- [ ] T011 [US2] Warm TURN on incoming ring: in the 1:1 incoming-offer handler of
+- [x] T011 [US2] Warm TURN on incoming ring: in the 1:1 incoming-offer handler of
   `src/composables/useCall.ts` (the `presentIncoming` / offer-receipt path that sets state to
   `incoming` and acks `call-ringing`, near where `pendingOffer` is stored), call `warmTurnConfig()`
   so the cache is warm before the callee accepts. MUST NOT capture camera/mic before accept
   (privacy, Principle IX) — network/SDP prep only.
-- [ ] T012 [US2] Implement the callee fast path in `acceptCall` (`src/composables/useCall.ts`): start
+- [x] T012 [US2] Implement the callee fast path in `acceptCall` (`src/composables/useCall.ts`): start
   `getUserMedia` **concurrently** with creating the PC + `setRemoteDescription(offer)` + draining
   buffered ICE (these don't need the stream); once the stream resolves, add tracks, `createAnswer`,
   `setLocalDescription`, send the answer. Record the US2 milestones (T002). Preserve failure →
   reject/teardown behavior.
-- [ ] T013 [US2] Run T009–T010 to GREEN; run `e2e/calls.spec.ts` + `e2e/call-waiting.spec.ts` to
+- [x] T013 [US2] Run T009–T010 to GREEN; run `e2e/calls.spec.ts` + `e2e/call-waiting.spec.ts` to
   confirm no regression to answering, busy, or the (already-fast) second-call path.
 
 **Checkpoint**: the full 1:1 first call — both placing and answering — is as snappy as a second call.
@@ -126,10 +126,10 @@ verified to already do so).
 **Independent test**: Start a 3-person group call in the harness; measure per-leg time-to-first-
 media against the second-call path.
 
-- [ ] T014 [US3] Investigate `src/services/call/mesh.ts` `start()`/`buildLeg()` for the same serial
+- [x] T014 [US3] Investigate `src/services/call/mesh.ts` `start()`/`buildLeg()` for the same serial
   `getUserMedia` → TURN/leg pattern (note: `start()` already warms TURN before legs build). Record
   the finding in `research.md` (confirmed asymmetry, or no-op).
-- [ ] T015 [US3] IF T014 confirms an asymmetry: FIRST add the FAILING group-leg overlap assertion to
+- [x] T015 [US3] IF T014 confirms an asymmetry: FIRST add the FAILING group-leg overlap assertion to
   `e2e/call-connect-speed.spec.ts` (group `start()`'s first leg reaches TURN-ready / leg setup
   without serializing behind the initial `getUserMedia` — fails on current code), THEN overlap the
   initial `getUserMedia` in `mesh.start()` with TURN warming (mirror US1, leaving leg-building
@@ -143,20 +143,20 @@ media against the second-call path.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T016 [P] Confirm no dropped early ICE on the first call: assert in
+- [x] T016 [P] Confirm no dropped early ICE on the first call: assert in
   `e2e/call-connect-speed.spec.ts` that the first call connects on the first attempt with early
   candidates applied (SC-003).
-- [ ] T017 Zero-knowledge confirmation (Principle I): verify the change adds no server interaction
+- [x] T017 Zero-knowledge confirmation (Principle I): verify the change adds no server interaction
   beyond the existing `/v1/turn-credentials` request (only its timing moved), no new frame, no new
   metadata, no stored state; the instrumentation hook is dev-only. Satisfies the required
   `/speckit-checklist` zero-knowledge pass.
-- [ ] T018 Run the full gate: `npm run build`; `npm run test:unit`; `cd server && go build ./... &&
+- [x] T018 Run the full gate: `npm run build`; `npm run test:unit`; `cd server && go build ./... &&
   go vet ./... && go test ./...` (must stay green — server untouched); `RING_E2E_PORT=8085
   npm run test:e2e` (call-connect-speed + calls + call-waiting all green).
-- [ ] T019 Walk `specs/2008-fast-first-call-connect/quickstart.md`, including the on-device
+- [x] T019 Walk `specs/2008-fast-first-call-connect/quickstart.md`, including the on-device
   iOS/Safari first-call check via `make deploy-dev` (FR-008) and the no-pre-accept-camera privacy
   check.
-- [ ] T020 Flip spec `Status:` in `specs/2008-fast-first-call-connect/spec.md` to `in-progress`
+- [x] T020 Flip spec `Status:` in `specs/2008-fast-first-call-connect/spec.md` to `in-progress`
   (then `in-review` at PR) and run `make roadmap`.
 
 ---

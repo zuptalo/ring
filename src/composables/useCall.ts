@@ -31,7 +31,7 @@ import { groupAvatar } from '@/db/avatars';
 import { capitalizeFirst } from '@/utils/text';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
-import { getTurnConfig, rtcConfig } from '@/services/call/turn';
+import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
   sendGroupLeave, sendGroupBusy, sendHoldResume,
@@ -373,6 +373,35 @@ export function groupCallDiag(): Promise<{ inboundVideoFrames: number; tiers: Re
 
 let pendingOffer: { sdp: string; sdpType: RTCSdpType } | null = null;
 const pendingIce: RTCIceCandidateInit[] = [];
+
+/* ---- connect-milestone instrumentation (spec 2008, dev/test-only) -------------------------
+ * Records ephemeral timestamps for the 1:1 connect path so the Playwright harness can assert the
+ * ordering/overlap invariants (TURN warmed off the critical path; setup not serialized behind
+ * media capture) and measure time-to-first-media. OFF (null) by default → a complete no-op in
+ * production; the dev test hook flips it on. Holds only timestamps — never SDP/ICE/keys/media/
+ * peer ids — and is never sent anywhere (FR-011). */
+let connectMarks: Record<string, number> | null = null;
+let connectRecording = false;
+/** Dev hook: turn connect-milestone recording on/off (clears any in-progress record). */
+export function recordConnect(on: boolean): void {
+  connectRecording = on;
+  connectMarks = on ? {} : null;
+}
+/** Dev hook: snapshot the current call's milestones (empty if not recording). */
+export function connectMarksSnapshot(): Record<string, number> {
+  return connectMarks ? { ...connectMarks } : {};
+}
+/** Begin a fresh milestone record for a new call leg (caller intent / incoming ring). No-op
+ *  unless recording is enabled. */
+function resetConnectMarks(): void {
+  if (connectRecording) connectMarks = {};
+}
+/** Stamp a milestone once (write-once per call). No-op unless recording is enabled. */
+function markConnect(name: string): void {
+  if (connectRecording && connectMarks && connectMarks[name] === undefined) {
+    connectMarks[name] = Date.now();
+  }
+}
 let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
 let dialTimer: ReturnType<typeof setTimeout> | null = null;
 let graceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -550,9 +579,11 @@ function gumConstraints(kind: CallKind): MediaStreamConstraints {
 async function newPeerConnection(): Promise<RTCPeerConnection> {
   const turn = await getTurnConfig();
   const conn = new RTCPeerConnection(rtcConfig(turn));
+  markConnect('pcCreated');
 
   conn.ontrack = (e) => {
     remoteStream.value = e.streams[0] ?? null;
+    markConnect('firstRemoteMedia');
   };
   conn.onconnectionstatechange = () => {
     if (!pc) return;
@@ -1073,9 +1104,19 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
   await createCall({ callId, contactId, direction: 'outgoing', video: kind === 'video' });
   await loadCallPrefs(); // data-saver floor + call-sounds pref, read once for this call
 
+  // Fast-connect (spec 2008): warm the TURN credential cache OFF the critical path before we
+  // await getUserMedia, so the fetch overlaps camera/mic capture and `newPeerConnection` finds it
+  // cached instead of blocking on a cold network round-trip (the slow first-call path).
+  resetConnectMarks();
+  markConnect('callStart');
+  markConnect('turnWarmStart');
+  warmTurnConfig();
+
   let stream: MediaStream;
   try {
+    markConnect('gumStart');
     stream = await navigator.mediaDevices.getUserMedia(gumConstraints(kind));
+    markConnect('gumResolved');
   } catch {
     await teardown('failed');
     return;
@@ -1095,6 +1136,7 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
       sdp: offer.sdp,
       sdpType: offer.type,
     });
+    markConnect('offerSent');
     if (!sent) {
       console.warn('[call] offer not sent (no session or offline)');
       await teardown('unavailable');
@@ -1475,6 +1517,14 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
   pendingOffer = { sdp: signal.sdp, sdpType: signal.sdpType ?? 'offer' };
   await createCall({ callId: frame.callId, contactId: from, direction: 'incoming', video: kind === 'video' });
 
+  // Fast-connect (spec 2008): warm the TURN cache NOW, during the ring, so accepting doesn't pay a
+  // cold fetch. Network/SDP prep only — NO camera/mic capture before the user accepts (Principle
+  // IX). Begins the callee's connect-milestone record (continued in acceptCall, no reset there).
+  resetConnectMarks();
+  markConnect('ringStart');
+  markConnect('turnWarmStart');
+  warmTurnConfig();
+
   setState('incoming');
   presentIncoming(); // full-screen if the app is being opened for this call; else the banner
   startLoopTone('beacon', 2000);
@@ -1499,9 +1549,36 @@ export async function acceptCall(): Promise<void> {
   stopLoopTone();
   await loadCallPrefs(); // data-saver floor + call-sounds pref, read once for this call
 
+  markConnect('callStart');
+  // Fast-connect (spec 2008): start media capture and connection setup CONCURRENTLY. getUserMedia
+  // doesn't need the peer connection, and building the PC + applying the remote offer + buffered
+  // ICE doesn't need the captured stream — so overlapping them removes the serial gap. TURN was
+  // already warmed during the ring, so newPeerConnection doesn't pay a cold fetch here.
+  markConnect('gumStart');
+  const gumPromise = navigator.mediaDevices
+    .getUserMedia(gumConstraints(meta.kind))
+    .then((s) => {
+      markConnect('gumResolved');
+      return s;
+    });
+  gumPromise.catch(() => {}); // tame the unhandled-rejection while the PC sets up in parallel
+
+  try {
+    pc = await newPeerConnection();
+    wireIce(pc);
+    await pc.setRemoteDescription({ type: pendingOffer.sdpType, sdp: pendingOffer.sdp });
+    markConnect('remoteDescriptionSet');
+    await drainPendingIce();
+  } catch {
+    // Connection setup failed; stop any capture that may still resolve, then end.
+    void gumPromise.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => {});
+    await teardown('failed');
+    return;
+  }
+
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia(gumConstraints(meta.kind));
+    stream = await gumPromise; // capture overlapped the setup above; usually already resolved
   } catch {
     void sendControl('call-reject', meta.peerUserId, meta.callId, { reason: 'failed' });
     await teardown('failed');
@@ -1510,11 +1587,7 @@ export async function acceptCall(): Promise<void> {
   localStream.value = stream;
 
   try {
-    pc = await newPeerConnection();
-    wireIce(pc);
     addLocalTracks(pc, stream);
-    await pc.setRemoteDescription({ type: pendingOffer.sdpType, sdp: pendingOffer.sdp });
-    await drainPendingIce();
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await sendSealedSignal('call-answer', meta.chatId, meta.peerUserId, meta.callId, {
@@ -1523,6 +1596,7 @@ export async function acceptCall(): Promise<void> {
       sdp: answer.sdp,
       sdpType: answer.type,
     });
+    markConnect('answerSent');
   } catch {
     await teardown('failed');
     return;
@@ -1713,6 +1787,10 @@ async function connectSecondDirect(
   };
   await createCall({ callId: inc.callId, contactId: inc.from, direction: 'incoming', video: inc.callKind === 'video' });
   localStream.value = stream;
+  // Connect-milestone record for the SECOND (call-waiting) call — the performance benchmark the
+  // first call is measured against (spec 2008). callStart = accept; firstRemoteMedia via ontrack.
+  resetConnectMarks();
+  markConnect('callStart');
   try {
     pc = await newPeerConnection();
     wireIce(pc);

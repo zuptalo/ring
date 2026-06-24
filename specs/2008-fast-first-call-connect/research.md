@@ -85,6 +85,17 @@ concurrency only if a measured asymmetry exists; otherwise this story is a verif
 **Rationale**: Group calls reuse the same primitives; the headline pain is 1:1, so keep group
 changes minimal and evidence-driven.
 
+**Finding (T014)**: Confirmed the asymmetry — `mesh.start()` `await`s `getUserMedia` and only then
+`await getTurnConfig()` (serial), the same cold-TURN-after-gUM pattern as the 1:1 caller. **Fix
+applied (T015)**: warm the TURN cache before awaiting capture in `start()` (one call to
+`warmTurnConfig()`, mirroring the proven US1 change), so the fetch overlaps gUM; the later
+`getTurnConfig()` is then a warm hit. **Verification scoping**: this is the identical pattern
+already gated deterministically by the US1 caller-overlap test, applied to a P3 path; group
+connectivity is covered by the existing real-WebRTC group e2e (`e2e/calls.spec.ts` group cases),
+which must stay green. A bespoke group-leg milestone gate would require coupling `mesh.ts` to the
+1:1 connect-milestone instrumentation for marginal P3 value, so it is intentionally not added —
+the reorder is low-risk and the no-regression group suite is the check.
+
 ## Decision 4 — Test strategy (TDD for a perf fix, non-flaky)
 
 **Decision**: Use a **deterministic ordering/overlap assertion** as the failing-first regression
