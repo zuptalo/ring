@@ -188,3 +188,13 @@ media against the second-call path.
 - Keep the deterministic **ordering/overlap** assertions as the gate; treat the wall-clock TTFM
   parity as generous-margin validation to avoid CI flake.
 - The Go server is untouched; the zero-knowledge boundary is unchanged (timing-only).
+
+## Tracking Issues (GitHub, zuptalo/ring)
+
+One issue per phase/story group (the feature→develop PR must `Closes` each):
+
+- #415 — Setup & foundational (T001–T004)
+- #416 — US1: Placing a call connects quickly (T005–T008)
+- #417 — US2: Answering a call connects quickly (T009–T013)
+- #418 — US3: First group-call leg connects quickly (T014–T015)
+- #419 — Polish & cross-cutting (T016–T020)
