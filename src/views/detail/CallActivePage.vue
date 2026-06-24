@@ -36,13 +36,15 @@
              Accept & hold / Decline; the call you already have on hold shows a bar; and when
              the other side has put US on hold a badge shows. -->
         <div v-if="incomingSecond" class="cw-prompt" @click.stop>
-          <ion-avatar class="cw-avatar">
-            <img v-if="incomingSecond.avatar" :src="incomingSecond.avatar" :alt="incomingSecond.name" />
-            <ion-icon v-else :icon="personOutline" />
-          </ion-avatar>
-          <div class="cw-text">
-            <strong>{{ incomingSecond.name }}</strong>
-            <span>Incoming call — hold the current one?</span>
+          <div class="cw-prompt-head">
+            <ion-avatar class="cw-avatar">
+              <img v-if="incomingSecond.avatar" :src="incomingSecond.avatar" :alt="incomingSecond.name" />
+              <ion-icon v-else :icon="personOutline" />
+            </ion-avatar>
+            <div class="cw-text">
+              <strong>{{ incomingSecond.name }}</strong>
+              <span>Incoming {{ incomingSecond.callKind === 'video' ? 'video ' : '' }}call</span>
+            </div>
           </div>
           <div class="cw-actions">
             <button class="cw-btn cw-decline" @click.stop="rejectSecond">Decline</button>
@@ -1178,24 +1180,35 @@ const diag = computed(() => {
   color: #fff;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
 }
+/* Column layout so the name/subtitle row and the action buttons each stay on one line
+   (the old single-row layout wrapped the text on narrow phones). */
 .cw-prompt {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px 14px;
+  width: min(92%, 380px);
+}
+.cw-prompt-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
 }
 .cw-avatar {
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   flex: none;
 }
 .cw-text {
-  display: flex;
-  flex-direction: column;
+  flex: 1;
   min-width: 0;
 }
 .cw-text strong {
-  font-size: 14px;
+  display: block;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cw-text span {
   font-size: 12px;
@@ -1204,13 +1217,13 @@ const diag = computed(() => {
 .cw-actions {
   display: flex;
   gap: 8px;
-  margin-inline-start: auto;
 }
 .cw-btn {
+  flex: 1; /* the two buttons split the row evenly, each on a single line */
   border: none;
   border-radius: 12px;
-  padding: 7px 12px;
-  font-size: 13px;
+  padding: 10px 12px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
