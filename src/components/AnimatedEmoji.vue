@@ -7,6 +7,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { loadEmojiLottie } from '@/services/emoji-cache';
 
 /**
  * An emoji that plays its Noto Lottie animation in a continuous loop WHILE it is
@@ -44,10 +45,10 @@ async function ensureLoaded(): Promise<void> {
   if (anim || loading || !props.animate || !anchor.value) return;
   loading = true;
   try {
-    // Self-hosted: proxied + cached by our own server (never a third-party CDN).
-    const res = await fetch(`/v1/emoji/${codepoints()}/lottie.json`);
-    if (!res.ok) return; // no Noto animation → keep the native glyph
-    const data = await res.json();
+    // Self-hosted proxy, cached in-memory per session (spec 1017) + persistently by the service
+    // worker — so a repeat view of the same emoji never refetches. null = no Noto animation.
+    const data = await loadEmojiLottie(codepoints());
+    if (!data) return; // no Noto animation (or fetch failed) → keep the native glyph
     // lottie_light has no expression engine (no eval, smaller), fine for Noto.
     const lottie = (await import('lottie-web/build/player/lottie_light')).default;
     anim = lottie.loadAnimation({
