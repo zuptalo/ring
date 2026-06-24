@@ -480,3 +480,47 @@ test('calling someone already in a call shows the caller they are queued (not ju
   await ctxB.close();
   await ctxC.close();
 });
+
+test('a held call disconnecting clears the on-hold state — the next call is not stuck in hold UI', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const ctxD = await browser.newContext();
+  const a = await createAccount(ctxA, 'CWLKA');
+  const b = await createAccount(ctxB, 'CWLKB');
+  const c = await createAccount(ctxC, 'CWLKC');
+  const d = await createAccount(ctxD, 'CWLKD');
+  await pair(a, b);
+  await pair(a, c);
+  await pair(b, d);
+
+  // A↔B connected; C calls A; A accepts-and-holds → B is on hold (remoteHeld).
+  await startCall(a, b.id, 'audio');
+  await waitCallState(b, ['incoming']);
+  await accept(b);
+  await waitCallState(a, ['connected']);
+  await startCall(c, a.id, 'audio');
+  await a.page.waitForFunction(() => (window as any).__ringTest.hasSecondIncoming() === true, null, { timeout: 15_000 });
+  await acceptAndHold(a);
+  await b.page.waitForFunction(() => (window as any).__ringTest.isRemoteHeld() === true, null, { timeout: 10_000 });
+
+  // The held call disconnects (A drops it). B's hold state MUST clear, not linger.
+  await endHeld(a);
+  await waitCallState(b, ['idle', 'ended']);
+  await b.page.waitForFunction(() => (window as any).__ringTest.isRemoteHeld() === false, null, { timeout: 10_000 });
+
+  // A fresh call from B starts clean — no leaked on-hold UI.
+  await startCall(b, d.id, 'audio');
+  await waitCallState(d, ['incoming']);
+  await accept(d);
+  await waitCallState(b, ['connected']);
+  expect(await isRemoteHeld(b)).toBe(false);
+  await expect(b.page.locator('.cw-onhold')).toHaveCount(0);
+
+  await hangup(b);
+  await hangup(a);
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+  await ctxD.close();
+});

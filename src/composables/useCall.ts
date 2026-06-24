@@ -998,7 +998,14 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
 
   setState('ended');
   cancelResumeCountdown();
+  // Clear ALL call-waiting display state so a hung-up call can't leak its "on hold" UI into the
+  // next call (the reported bug: a device that was on hold kept remoteHeld=true after the call
+  // dropped, so the next call opened showing the hold overlay).
   remoteQueued.value = false;
+  remoteHeld.value = false;
+  groupHeldPeers.value = [];
+  heldCall.value = null;
+  incomingSecond.value = null;
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
   connectionWarning.value = null;
 
