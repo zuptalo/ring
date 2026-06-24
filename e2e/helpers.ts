@@ -191,6 +191,10 @@ export async function waitRemotes(c: RingClient, n: number, timeout = 30_000): P
 
 /* ---- call waiting (spec 0005): hold / swap / drop ---- */
 export const acceptAndHold = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.acceptAndHold());
+export const swapCalls = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.swapCalls());
+export const endActive = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.endActive());
+export const endHeld = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.endHeld());
+export const rejectSecond = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.rejectSecond());
 export const hasSecondIncoming = (c: RingClient): Promise<boolean> =>
   c.page.evaluate(() => (window as any).__ringTest.hasSecondIncoming());
 export const canHoldIncoming = (c: RingClient): Promise<boolean> =>

@@ -162,6 +162,10 @@ import {
   videoTransceiverCount,
   inboundVideoFrames,
   acceptAndHold,
+  swapCalls,
+  endActive,
+  endHeld,
+  rejectSecond,
   canHoldIncoming,
   heldCall,
   remoteHeld,
@@ -917,6 +921,10 @@ export function installTestHook(): void {
     /** Call waiting (spec 0005): accept the pending second incoming call, holding the
      *  current one; introspection for the held call + on-hold state. */
     acceptAndHold: () => acceptAndHold(),
+    swapCalls: () => swapCalls(),
+    endActive: () => endActive(),
+    endHeld: () => endHeld(),
+    rejectSecond: () => rejectSecond(),
     canHoldIncoming: () => canHoldIncoming(),
     hasSecondIncoming: () => incomingSecond.value != null,
     heldCallId: () => heldCall.value?.callId ?? null,

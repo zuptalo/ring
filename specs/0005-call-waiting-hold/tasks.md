@@ -78,10 +78,10 @@ when held and restores when resumed; the "on hold" indicator follows the held ca
 **Independent Test**: With one active + one held call, swap ≥ 3 times; confirm media is paused
 when held and restored when resumed each time, and a held group call re-publishes on resume.
 
-- [ ] T016 [P] [US2] Extend `e2e/call-waiting.spec.ts`: swap ≥ 3 times → each time exactly one call active (media both ways) + one held; the on-hold indicator follows the held call; a resumed GROUP call's other members see the holder active again within a few seconds.
-- [ ] T017 [US2] Implement `swapCalls()` in `src/composables/useCall.ts`: pause the active slot, resume the held slot (move the live track set via `replaceTrack`, send `hold`/`resume`), and exchange active⇄held via the `slots.ts` reducer.
-- [ ] T018 [P] [US2] Add the tap-to-swap **"On hold — <name>"** bar + a swap control to `src/views/detail/CallActivePage.vue` (stock `ion-item`/`ion-chip`/control button + `--ring-*` tokens), bound to `heldCall` and `swapCalls()`.
-- [ ] T019 [US2] Add the `resume` + `swap` cue triggers on `swapCalls()` via `callCue` in `src/composables/useCall.ts`.
+- [x] T016 [P] [US2] Extend `e2e/call-waiting.spec.ts`: swap ≥ 3 times → each time exactly one call active (media both ways) + one held; the on-hold indicator follows the held call; a resumed GROUP call's other members see the holder active again within a few seconds.
+- [x] T017 [US2] Implement `swapCalls()` in `src/composables/useCall.ts`: pause the active slot, resume the held slot (move the live track set via `replaceTrack`, send `hold`/`resume`), and exchange active⇄held via the `slots.ts` reducer.
+- [x] T018 [P] [US2] Add the tap-to-swap **"On hold — <name>"** bar + a swap control to `src/views/detail/CallActivePage.vue` (stock `ion-item`/`ion-chip`/control button + `--ring-*` tokens), bound to `heldCall` and `swapCalls()`.
+- [x] T019 [US2] Add the `resume` + `swap` cue triggers on `swapCalls()` via `callCue` in `src/composables/useCall.ts`.
 
 **Checkpoint**: US1 + US2 work — full hold/swap loop.
 
@@ -96,9 +96,9 @@ remaining call resumes if it was held); a remote-ended held call frees its slot 
 the held call instead → the active is undisturbed; remote ends the held call while held → its
 slot frees and the user is informed, active untouched.
 
-- [ ] T020 [P] [US3] Extend `e2e/call-waiting.spec.ts`: drop active → held resumes as sole call; drop held → active undisturbed; remote-ends-held → held slot freed, active untouched (SC-005). Also the concurrency edge (spec Edge Cases): a remote party ends one call AT THE SAME TIME the user swaps → resolves deterministically to a single, correct remaining call with no orphan/"ghost" slot.
-- [ ] T021 [US3] Implement `endActive()` / `endHeld()` in `src/composables/useCall.ts`: tear down the chosen slot; if the held slot remains, resume it into active (via `slots.ts` + T017's resume path); when only one call remains, behaviour is exactly the normal single-call path.
-- [ ] T022 [US3] Handle a remote-ended HELD call in `src/composables/useCall.ts`: detect the held call's teardown (1:1 hang-up, or a group where everyone else left), free the held slot, inform the user, and leave the active call undisturbed (FR-009). Also handle a held call dying past the grace window (spec 0004 recovery) → free its slot, no auto-recall. Resolve the concurrency edge deterministically: a remote-end that races a `swapCalls()` MUST route the teardown through the `slots.ts` reducer against the post-swap state (one reducer mutation at a time) so the correct slot is freed and no ghost slot is left.
+- [x] T020 [P] [US3] Extend `e2e/call-waiting.spec.ts`: drop active → held resumes as sole call; drop held → active undisturbed; remote-ends-held → held slot freed, active untouched (SC-005). Also the concurrency edge (spec Edge Cases): a remote party ends one call AT THE SAME TIME the user swaps → resolves deterministically to a single, correct remaining call with no orphan/"ghost" slot.
+- [x] T021 [US3] Implement `endActive()` / `endHeld()` in `src/composables/useCall.ts`: tear down the chosen slot; if the held slot remains, resume it into active (via `slots.ts` + T017's resume path); when only one call remains, behaviour is exactly the normal single-call path.
+- [x] T022 [US3] Handle a remote-ended HELD call in `src/composables/useCall.ts`: detect the held call's teardown (1:1 hang-up, or a group where everyone else left), free the held slot, inform the user, and leave the active call undisturbed (FR-009). Also handle a held call dying past the grace window (spec 0004 recovery) → free its slot, no auto-recall. Resolve the concurrency edge deterministically: a remote-end that races a `swapCalls()` MUST route the teardown through the `slots.ts` reducer against the post-swap state (one reducer mutation at a time) so the correct slot is freed and no ghost slot is left.
 
 **Checkpoint**: US1–US3 — the full hold/swap/drop lifecycle returns cleanly to one call.
 
@@ -112,8 +112,8 @@ not prompted for a third slot.
 **Independent Test**: Put A in two calls (active + held); a third party calls A → they get
 busy/unavailable and A sees no third prompt.
 
-- [ ] T023 [P] [US4] Extend `e2e/call-waiting.spec.ts`: with A at the two-call cap, a third caller (1:1 and group invite) gets busy/unavailable and A is shown no third prompt (SC-004).
-- [ ] T024 [US4] Enforce the two-call cap in the second-incoming handlers in `src/composables/useCall.ts`: when `heldCall` is already set (two calls), reply busy exactly as spec 0004 does (1:1 `call-busy`; group `sendGroupBusy`) and do NOT raise the Accept & hold prompt.
+- [x] T023 [P] [US4] Extend `e2e/call-waiting.spec.ts`: with A at the two-call cap, a third caller (1:1 and group invite) gets busy/unavailable and A is shown no third prompt (SC-004).
+- [x] T024 [US4] Enforce the two-call cap in the second-incoming handlers in `src/composables/useCall.ts`: when `heldCall` is already set (two calls), reply busy exactly as spec 0004 does (1:1 `call-busy`; group `sendGroupBusy`) and do NOT raise the Accept & hold prompt.
 
 **Checkpoint**: The feature is bounded — never more than two calls.
 
@@ -127,9 +127,9 @@ swap, honouring the tone/mute settings.
 **Independent Test**: Trigger a second incoming call, accept-and-hold, swap, resume; each emits
 its distinct cue, and disabling tones silences them.
 
-- [ ] T025 [P] [US5] Add FAILING vitest for the cue-trigger decisions (pure: which cue for which transition, gated off when sounds disabled) in `src/services/call/slots.test.ts` (or a sibling `cues` test), and assert the four recipes exist in `src/services/sound.ts`.
-- [ ] T026 [P] [US5] Extend `e2e/call-waiting.spec.ts` using the `recordCues`/`cuesFired` hooks (spec 0004): `callwaiting`/`hold`/`resume`/`swap` each fire distinctly across the transitions, and NONE fire when "Call sounds" is off (SC-006).
-- [ ] T027 [US5] Finalise the cue recipes + triggers (tones tuned, rate-limited via the existing `claimCue` de-dup) in `src/services/sound.ts` and `src/composables/useCall.ts` — ensure rapid hold/swap doesn't storm cues (cue-fatigue edge).
+- [x] T025 [P] [US5] Add FAILING vitest for the cue-trigger decisions (pure: which cue for which transition, gated off when sounds disabled) in `src/services/call/slots.test.ts` (or a sibling `cues` test), and assert the four recipes exist in `src/services/sound.ts`.
+- [x] T026 [P] [US5] Extend `e2e/call-waiting.spec.ts` using the `recordCues`/`cuesFired` hooks (spec 0004): `callwaiting`/`hold`/`resume`/`swap` each fire distinctly across the transitions, and NONE fire when "Call sounds" is off (SC-006).
+- [x] T027 [US5] Finalise the cue recipes + triggers (tones tuned, rate-limited via the existing `claimCue` de-dup) in `src/services/sound.ts` and `src/composables/useCall.ts` — ensure rapid hold/swap doesn't storm cues (cue-fatigue edge).
 
 **Checkpoint**: All five stories complete.
 

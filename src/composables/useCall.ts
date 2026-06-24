@@ -294,6 +294,9 @@ interface HeldSlot {
   owners: Record<string, string>;
 }
 let heldSlot: HeldSlot | null = null;
+// ICE candidates for the pending second incoming call, buffered until Accept & hold creates
+// its pc (drained in connectSecondDirect) — keeps the second call fast to connect.
+let secondIce: RTCIceCandidateInit[] = [];
 
 /** Attach (or, with `stream === null`, detach) the 1:1 sender tracks on `target`, matched by
  *  the transceiver's media kind so a nulled sender is still found (renegotiation-free — call
@@ -1502,6 +1505,86 @@ async function restoreHeldCall(): Promise<void> {
   navigateToCall();
 }
 
+/** Swap the active and held calls (spec 0005 US2): pause the current active call, resume the
+ *  held one into the active slot, and park the just-paused call as the new held. The shared
+ *  camera/mic stays live (no re-capture) — only which call sends it changes. */
+export async function swapCalls(): Promise<void> {
+  const slot = heldSlot;
+  const activeMeta = callMeta.value;
+  if (!slot || !activeMeta) return;
+  const stream = localStream.value; // the one live camera/mic — moves to the resumed call
+  // 1) Pause the current ACTIVE call (it becomes the new held).
+  if (activeMeta.isGroup && groupSession) {
+    await groupSession.pause();
+  } else if (pc) {
+    await set1to1Senders(pc, null);
+    if (activeMeta.chatId && activeMeta.peerUserId) void sendHoldResume('hold', activeMeta.chatId, activeMeta.peerUserId, activeMeta.callId);
+  }
+  const newHeld: HeldSlot = {
+    meta: activeMeta,
+    pc,
+    groupSession,
+    remoteStream: remoteStream.value,
+    remoteStreams: remoteStreams.value,
+    owners: groupStreamOwners.value,
+  };
+  // 2) Promote the held call to ACTIVE and resume its media from the shared stream.
+  pc = slot.pc;
+  groupSession = slot.groupSession;
+  callMeta.value = slot.meta;
+  remoteStream.value = slot.remoteStream;
+  remoteStreams.value = slot.remoteStreams;
+  groupStreamOwners.value = slot.owners;
+  remoteHeld.value = false;
+  groupHeldPeers.value = [];
+  if (slot.meta.isGroup && slot.groupSession && stream) {
+    await slot.groupSession.resume(stream);
+  } else if (slot.pc && stream) {
+    await set1to1Senders(slot.pc, stream);
+    if (slot.meta.chatId && slot.meta.peerUserId) void sendHoldResume('resume', slot.meta.chatId, slot.meta.peerUserId, slot.meta.callId);
+  }
+  // 3) The just-paused call is the new held slot.
+  heldSlot = newHeld;
+  heldCall.value = newHeld.meta;
+  callCue('swap');
+}
+
+/** End the ACTIVE call and continue on the held one (spec 0005 US3). hangupCall already routes
+ *  through teardown → restoreHeldCall when a call is parked, so this is just an alias. */
+export const endActive = hangupCall;
+
+/** Close + clear the held slot's connection (its senders carry null tracks, so the shared
+ *  stream the ACTIVE call uses is untouched). Used by both a local endHeld and a remote end of
+ *  the held call. */
+function freeHeldSlot(): void {
+  const slot = heldSlot;
+  if (!slot) return;
+  heldSlot = null;
+  heldCall.value = null;
+  if (slot.meta.isGroup && slot.groupSession) slot.groupSession.leave();
+  else if (slot.pc) {
+    try {
+      slot.pc.close();
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
+/** Drop the HELD call without disturbing the active one (spec 0005 US3): tell its other side
+ *  it ended, log it, and free the slot. */
+export async function endHeld(): Promise<void> {
+  const slot = heldSlot;
+  if (!slot) return;
+  if (!slot.meta.isGroup && slot.pc && slot.meta.peerUserId) {
+    void sendControl('call-end', slot.meta.peerUserId, slot.meta.callId, { reason: 'hangup' });
+  }
+  if (slot.meta.chatId && !slot.meta.isGroup) {
+    await logCallToChat(slot.meta.chatId, { direction: slot.meta.direction, video: slot.meta.kind === 'video', missed: false });
+  }
+  freeHeldSlot();
+}
+
 /** Connect the stashed second 1:1 incoming call as the new ACTIVE call, reusing the shared
  *  camera/mic (no second getUserMedia). Mirrors acceptCall's 1:1 answer path. */
 async function connectSecondDirect(
@@ -1527,7 +1610,14 @@ async function connectSecondDirect(
     wireIce(pc);
     addLocalTracks(pc, stream);
     await pc.setRemoteDescription({ type: inc.offer.sdpType, sdp: inc.offer.sdp });
-    await drainPendingIce();
+    // Drain the ICE candidates that arrived while the offer was stashed (fast connect).
+    for (const c of secondIce.splice(0)) {
+      try {
+        await pc.addIceCandidate(c);
+      } catch {
+        /* stale/duplicate candidate is harmless */
+      }
+    }
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await sendSealedSignal('call-answer', inc.chatId, inc.from, inc.callId, {
@@ -1616,6 +1706,7 @@ async function presentSecondDirect(
   if ((offerChat?.mutedUntil && offerChat.mutedUntil > Date.now()) || offerChat?.notifyWebPush === false) return;
   const signal = await openSealedSignal(chatId, frame.ciphertext);
   if (!signal || signal.type !== 'offer' || !signal.sdp) return busy();
+  secondIce = []; // fresh ICE buffer for this pending second call
   incomingSecond.value = {
     kind: 'direct',
     callId: frame.callId,
@@ -2256,6 +2347,15 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
 
     case 'call-ice': {
       if (await handleMeshSignal('ice', frame)) return;
+      // ICE for the pending SECOND incoming call (whose pc doesn't exist until Accept & hold):
+      // buffer it so the call connects fast once accepted, instead of discarding the early
+      // candidates (which made the second call slow to connect) — spec 0005.
+      const second = incomingSecond.value;
+      if (second && second.callId === frame.callId && second.chatId) {
+        const sig = await openSealedSignal(second.chatId, frame.ciphertext);
+        if (sig?.type === 'ice' && sig.candidate) secondIce.push(sig.candidate);
+        return;
+      }
       const meta = callMeta.value;
       if (!meta || meta.callId !== frame.callId || !meta.chatId) return;
       const signal = await openSealedSignal(meta.chatId, frame.ciphertext);
@@ -2309,6 +2409,13 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // recall "remove" carries the roomId (no callId): dismiss the ring if it's for the
       // group we're being rung for. Also forget any held (locked) frames for it.
       const meta = callMeta.value;
+      // A second incoming call (call-waiting prompt) the caller gave up on before we answered →
+      // dismiss the Accept-&-hold prompt; our active call is untouched (spec 0005).
+      if (incomingSecond.value && incomingSecond.value.callId === frame.callId) {
+        incomingSecond.value = null;
+        secondIce = [];
+        return;
+      }
       dropHeldCall(frame.callId);
       dropHeldCall(frame.roomId);
       const matchesCall = !!frame.callId && meta?.callId === frame.callId;
@@ -2323,8 +2430,20 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
 
     case 'call-end': {
       const meta = callMeta.value;
+      // A second incoming call the caller ended before we answered → dismiss the prompt
+      // (some callers send call-end rather than call-cancel on give-up); spec 0005.
+      if (incomingSecond.value && incomingSecond.value.callId === frame.callId) {
+        incomingSecond.value = null;
+        secondIce = [];
+        return;
+      }
       if (meta && meta.callId === frame.callId) {
         await teardown(frame.reason === 'unavailable' ? 'unavailable' : 'remote');
+      } else if (heldSlot && heldSlot.meta.callId === frame.callId) {
+        // The HELD call's remote hung up → free the held slot; the active call is undisturbed
+        // (spec 0005 FR-009).
+        freeHeldSlot();
+        void toast('Your held call ended');
       }
       return;
     }
