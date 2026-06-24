@@ -497,6 +497,23 @@ watch(connectionWarning, (w, prev) => {
   if (w === 'Reconnecting…' && prev !== 'Reconnecting…') callCue('reconnecting');
 });
 
+// Call-waiting alert: a second call arriving while we're in one is easy to miss, so keep the cue
+// going (every CALL_WAITING_REPEAT_MS) the whole time the prompt is up — not just once — and stop
+// it however the prompt clears (accepted, declined, the caller gives up, or it times out). Gated
+// by callCue, so it stays silent when "Call sounds" is off.
+const CALL_WAITING_REPEAT_MS = 5000;
+let callWaitingCueTimer: ReturnType<typeof setInterval> | null = null;
+watch(incomingSecond, (inc) => {
+  if (callWaitingCueTimer) {
+    clearInterval(callWaitingCueTimer);
+    callWaitingCueTimer = null;
+  }
+  if (inc) {
+    callCue('callwaiting');
+    callWaitingCueTimer = setInterval(() => callCue('callwaiting'), CALL_WAITING_REPEAT_MS);
+  }
+});
+
 // The WebSocket came back (network restored, Wi-Fi↔cellular handoff). If we're in a live
 // call, re-communicate with the backend right away so it cancels its grace eviction and the
 // others reconnect smoothly: a group call re-affirms its room membership + re-gathers ICE; a
@@ -1795,7 +1812,8 @@ async function presentSecondDirect(
     callKind: signal.kind ?? 'audio',
     offer: { sdp: signal.sdp, sdpType: signal.sdpType ?? 'offer' },
   };
-  callCue('callwaiting');
+  // The call-waiting cue (and its repeat) is driven by the incomingSecond watcher below, so it
+  // also fires for the group second-incoming path and stops however the prompt is dismissed.
   void sendControl('call-ringing', from, frame.callId);
   // If unanswered within the ring window, drop the prompt (the caller's own timeout ends it).
   setTimeout(() => {

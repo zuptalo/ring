@@ -408,3 +408,39 @@ test('on a video call, the held party sees the frozen frame blurred with a pause
   await ctxB.close();
   await ctxC.close();
 });
+
+test('the call-waiting alert keeps repeating while the second call goes unanswered', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'CWREPA');
+  const b = await createAccount(ctxB, 'CWREPB');
+  const c = await createAccount(ctxC, 'CWREPC');
+  await pair(a, b);
+  await pair(a, c);
+  await recordCues(a, true);
+  await startCall(a, b.id, 'audio');
+  await waitCallState(b, ['incoming']);
+  await accept(b);
+  await waitCallState(a, ['connected']);
+
+  // C calls A; A doesn't answer the call-waiting prompt. The alert should re-sound (~5s apart),
+  // not play just once — so over ~6.5s we expect at least two 'callwaiting' cues.
+  await startCall(c, a.id, 'audio');
+  await a.page.waitForFunction(() => (window as any).__ringTest.hasSecondIncoming() === true, null, { timeout: 15_000 });
+  await a.page.waitForTimeout(6_500);
+  const repeats = (await cuesFired(a)).filter((n) => n === 'callwaiting').length;
+  expect(repeats).toBeGreaterThanOrEqual(2);
+
+  // Once the prompt is dismissed, the repeating alert stops.
+  await rejectSecond(a);
+  await a.page.waitForFunction(() => (window as any).__ringTest.hasSecondIncoming() === false, null, { timeout: 10_000 });
+  const afterDismiss = (await cuesFired(a)).filter((n) => n === 'callwaiting').length;
+  await a.page.waitForTimeout(6_000);
+  expect((await cuesFired(a)).filter((n) => n === 'callwaiting').length).toBe(afterDismiss);
+
+  await hangup(a);
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});
