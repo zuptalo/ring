@@ -467,10 +467,10 @@ export class MeshSession {
   private async setLegTier(leg: PeerLeg, retry = true): Promise<void> {
     const sender = this.videoSenderOf(leg);
     if (!sender) return;
-    // iOS/WebKit: skip encoder reconfiguration — setParameters stalls the iPhone 8 H.264 encoder
-    // (it can't downscale, so it chokes encoding full-res at a capped bitrate, freezing capture).
-    // Let WebKit's native adaptive encoding run instead.
-    if (isWebKitVideo) return;
+    // iOS/WebKit: tier by BITRATE ONLY (`avoidEncoderScaling`) — never scaleResolutionDownBy/
+    // maxFramerate, which stall the old iPhone H.264 encoder (spec 0005). maxBitrate alone is honored
+    // and safe, so per-receiver + manual quality caps (spec 0007) still apply on iOS. Non-iOS gets the
+    // full per-tier encoding.
     const params = sender.getParameters();
     if (!params.encodings || params.encodings.length === 0) return;
     const enc = tierEncoding(leg.qc.tier, isWebKitVideo);
