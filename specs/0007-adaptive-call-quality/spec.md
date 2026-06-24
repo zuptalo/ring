@@ -236,7 +236,9 @@ the throttling.
   regardless of what it is transmitting to any peer.
 - **FR-009**: The ⓘ on-call info panel MUST expose, per leg/receiver, the current tier and the
   signals behind it (measured send bitrate, reported downlink, loss/RTT, limitation reason, manual
-  pin) so the decisions are observable.
+  pin) so the decisions are observable. These diagnostics (and any connect/quality instrumentation)
+  MUST be client-local — derived from locally-available stats and the already-received reports — and
+  MUST NEVER be transmitted off-device.
 - **FR-010**: Behavior MUST be verifiable in automated tests that run up to 4 participants and
   throttle individual devices' network on the fly, asserting timely, correct, per-receiver
   adjustments and smoothness.
@@ -249,6 +251,12 @@ the throttling.
   server-visible metadata, no new stored state. It MUST carry only coarse, call-relevant signals
   (e.g. an approximate downlink class / health and a quality-preference tier) — never precise
   network identifiers, IP, or location — minimizing what even a peer learns to what the call needs.
+- **FR-012**: The report MUST be authenticated by its seal so a forged or injected report cannot take
+  effect — a server or man-in-the-middle MUST NOT be able to push a fake cap to degrade a call — and
+  stale/replayed reports MUST be ignored (newest `seq` wins, with the staleness fallback of FR-004).
+- **FR-013**: All per-receiver cap and screen-size-target decisions MUST be computed client-side and
+  MUST NOT cause the server to learn who can see/hear whom beyond what room membership already
+  exposes (no new social-graph or who-sees-whom signal reaches the server).
 
 ### Key Entities
 
