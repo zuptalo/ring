@@ -75,6 +75,23 @@ export async function sendSealedSignal(
   return sendLive(frame);
 }
 
+/**
+ * Send a sealed hold/resume control signal for a call (spec 0005). Carried over an EXISTING
+ * `call-ice` frame so there is NO new transport frame and NO server change — the relay
+ * forwards opaque ciphertext exactly as for offer/answer/ICE, and the receiver dispatches on
+ * the inner `CallSignal.type` (it can't tell a hold from any other sealed signal — FR-012a).
+ * 1:1: omit `roomId`; mesh: pass the leg's `roomId` (one per leg).
+ */
+export function sendHoldResume(
+  signalType: 'hold' | 'resume',
+  chatId: string,
+  peerUserId: string,
+  callId: string,
+  roomId?: string,
+): Promise<boolean> {
+  return sendSealedSignal('call-ice', chatId, peerUserId, callId, { callId, type: signalType, roomId }, roomId);
+}
+
 /** Decrypt an inbound 1:1 call signal from a sealed packet. Returns null if the
  *  packet doesn't carry a call payload or can't be opened. */
 export async function openSealedSignal(

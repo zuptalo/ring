@@ -123,6 +123,9 @@ export class MeshSession {
   private levelTimer: ReturnType<typeof setInterval> | null = null;
   // Per-leg RTP snapshot feeding the on-screen ⓘ call-stats panel (see diag.ts).
   private diagTimer: ReturnType<typeof setInterval> | null = null;
+  // Call waiting (spec 0005): true while this call is HELD — every leg's senders are detached
+  // (replaceTrack(null)) and adaptation is suspended until resume().
+  private paused = false;
 
   constructor(roomId: string, kind: CallKind, cb: MeshCallbacks, members: string[] = []) {
     this.roomId = roomId;
@@ -132,14 +135,19 @@ export class MeshSession {
     this.cb = cb;
   }
 
-  /** getUserMedia, then join the room. Legs are built lazily as the roster arrives. */
-  async start(): Promise<void> {
+  /** getUserMedia, then join the room. Legs are built lazily as the roster arrives.
+   *  `existing` reuses an already-captured local stream (call waiting, spec 0005): when this
+   *  call is started as the SECOND call, it shares the first call's camera/mic instead of a
+   *  second getUserMedia (one capture per device; the active call owns the live tracks). */
+  async start(existing?: MediaStream): Promise<void> {
     this.selfId = getSelfUserId() ?? '';
     if (!this.selfId) throw new Error('not signed in');
-    this.local = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: this.kind === 'video' ? { facingMode: { ideal: 'user' } } : false,
-    });
+    this.local =
+      existing ??
+      (await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: this.kind === 'video' ? { facingMode: { ideal: 'user' } } : false,
+      }));
     this.cb.onLocalStream(this.local);
     await getTurnConfig(); // warm the (refresh-aware) TURN-cred cache before legs build
     this.syncAudioMonitors();
@@ -692,12 +700,53 @@ export class MeshSession {
   }
 
   private videoSenderOf(leg: PeerLeg): RTCRtpSender | null {
-    // Match by the transceiver's video direction so a sender whose track was nulled is
-    // still found (avoids adding a duplicate video m-line on a later re-add).
+    return this.senderOfKind(leg, 'video');
+  }
+
+  /** The leg's sender for a media kind, matched by the TRANSCEIVER (its receiver track kind
+   *  survives our own replaceTrack(null), so a paused/held leg's sender is still found —
+   *  avoids adding a duplicate m-line on resume). */
+  private senderOfKind(leg: PeerLeg, kind: 'audio' | 'video'): RTCRtpSender | null {
     const tx = leg.pc
       .getTransceivers()
-      .find((t) => t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video');
+      .find((t) => t.receiver?.track?.kind === kind || t.sender?.track?.kind === kind);
     return tx?.sender ?? null;
+  }
+
+  /** Hold this call (spec 0005): detach every leg's audio+video senders (replaceTrack(null))
+   *  so we send nothing, and tell each peer we paused so they pause their outgoing to us too —
+   *  media stops in BOTH directions. The PeerConnections + ICE stay up so resume is instant;
+   *  adaptive sampling is suspended while held. */
+  async pause(): Promise<void> {
+    if (this.paused) return;
+    this.paused = true;
+    this.stopDiag();
+    for (const leg of this.legs.values()) {
+      for (const k of ['audio', 'video'] as const) {
+        const s = this.senderOfKind(leg, k);
+        if (s?.track) await s.replaceTrack(null).catch(() => {});
+      }
+      void this.send('call-ice', leg.peerId, { callId: this.roomId, type: 'hold', roomId: this.roomId });
+    }
+  }
+
+  /** Resume a held call: re-attach the (shared) local tracks to every leg's senders, tell each
+   *  peer we resumed, and restart adaptation (from the low tier). `stream` is the call's single
+   *  shared camera/mic — the active call owns the live tracks (call waiting). */
+  async resume(stream: MediaStream): Promise<void> {
+    if (!this.paused) return;
+    this.paused = false;
+    this.local = stream;
+    const a = stream.getAudioTracks()[0] ?? null;
+    const v = stream.getVideoTracks()[0] ?? null;
+    for (const leg of this.legs.values()) {
+      const aSender = this.senderOfKind(leg, 'audio');
+      if (aSender) await aSender.replaceTrack(a).catch(() => {});
+      const vSender = this.senderOfKind(leg, 'video');
+      if (vSender && v) await vSender.replaceTrack(v).catch(() => {});
+      void this.send('call-ice', leg.peerId, { callId: this.roomId, type: 'resume', roomId: this.roomId });
+    }
+    this.startDiag();
   }
 
   private onLegState(leg: PeerLeg): void {

@@ -80,7 +80,10 @@ export interface ContactCard {
  */
 export interface CallSignal {
   callId: string;
-  type: 'offer' | 'answer' | 'ice' | 'key' | 'streamid';
+  // 'hold'/'resume' (spec 0005): the sender paused/resumed this call. Carried sealed over an
+  // EXISTING call frame (no new frame type) and dispatched on this inner `type` by the
+  // receiver, so the relay can't tell a hold from any other sealed signal (FR-012a).
+  type: 'offer' | 'answer' | 'ice' | 'key' | 'streamid' | 'hold' | 'resume';
   kind?: 'audio' | 'video'; // on offer
   sdp?: string; // offer/answer
   sdpType?: RTCSdpType; // offer/answer
