@@ -27,32 +27,24 @@ func newFakePushStore() *fakePushStore {
 	return &fakePushStore{recs: map[string][]*fakePushRecord{}}
 }
 
-// SaveSubscription upserts by (userID, endpoint): keys are always refreshed; version/tz are
-// updated ONLY when provided (non-nil), mimicking the real COALESCE so a version-less
+// SaveSubscription stores ONE subscription per user, overwriting any previous one (mirrors
+// the real ON CONFLICT (user_id) upsert — migration 0026). Keys are always refreshed;
+// version/tz are updated ONLY when provided (non-nil), mimicking COALESCE, so a version-less
 // re-subscribe preserves the stored values. last_announced_version is never written here.
 func (f *fakePushStore) SaveSubscription(_ context.Context, userID string, sub store.PushSubscription, installedVersion *string, tzOffsetMinutes *int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, r := range f.recs[userID] {
-		if r.endpoint == sub.Endpoint {
-			r.p256dh, r.auth = sub.P256dh, sub.Auth
-			if installedVersion != nil {
-				r.version = *installedVersion
-			}
-			if tzOffsetMinutes != nil {
-				r.tz = tzOffsetMinutes
-			}
-			return nil
-		}
-	}
 	r := &fakePushRecord{endpoint: sub.Endpoint, p256dh: sub.P256dh, auth: sub.Auth}
+	if existing := f.recs[userID]; len(existing) > 0 {
+		r.version, r.tz = existing[0].version, existing[0].tz // COALESCE: preserve unless provided below
+	}
 	if installedVersion != nil {
 		r.version = *installedVersion
 	}
 	if tzOffsetMinutes != nil {
 		r.tz = tzOffsetMinutes
 	}
-	f.recs[userID] = append(f.recs[userID], r)
+	f.recs[userID] = []*fakePushRecord{r} // exactly one per user
 	return nil
 }
 
@@ -144,6 +136,30 @@ func TestPushSubscribeStoresVersionAndTz(t *testing.T) {
 	}
 	if r.p256dh != "PUB2" || r.auth != "AUTH2" {
 		t.Errorf("keys not refreshed on re-subscribe: %s/%s", r.p256dh, r.auth)
+	}
+}
+
+// TestPushOneSubscriptionPerAccount: a new subscription (e.g. a rotated endpoint, or a login
+// from another device) REPLACES the account's previous one — so a single message is delivered
+// once, not fanned out to every endpoint the account ever registered (migration 0026).
+func TestPushOneSubscriptionPerAccount(t *testing.T) {
+	p := newFakePushStore()
+	srv := newTestServerWithPush(p)
+	token, _ := registerUser(t, srv)
+	subscribe := func(ep string) {
+		body := `{"endpoint":"` + ep + `","keys":{"p256dh":"PUB","auth":"AUTH"}}`
+		if rr := do(t, srv, http.MethodPost, "/v1/push/subscribe", token, body); rr.Code != http.StatusOK {
+			t.Fatalf("subscribe %s status = %d", ep, rr.Code)
+		}
+	}
+	subscribe("https://push.example/old")
+	subscribe("https://push.example/new")
+
+	if p.get("https://push.example/old") != nil {
+		t.Error("old subscription was not replaced — account would receive duplicate pushes")
+	}
+	if p.get("https://push.example/new") == nil {
+		t.Error("the current subscription is missing")
 	}
 }
 
