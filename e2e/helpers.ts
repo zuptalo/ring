@@ -190,6 +190,50 @@ export const setGlobalSetting = (c: RingClient, key: string, value: unknown) =>
 export const setVideoQuality = (c: RingClient, q: 'auto' | 'medium' | 'low') =>
   c.page.evaluate((v) => (window as any).__ringTest.setVideoQuality(v), q);
 
+/** Spec 0007 adaptive-quality helpers. */
+
+/** Per-leg adaptive-quality diagnostics for a mesh participant (the controller's tier, the ceiling
+ *  the peer asked us for, our self-assessed downlink, and the limitation reason), keyed by the peer's
+ *  short id. Built on the existing `groupCallDiag` test hook (extended for spec 0007 US5). */
+export function legDiag(c: RingClient): Promise<{
+  inboundVideoFrames: number;
+  tiers: Record<string, string>;
+  legs: Record<string, { tier: string; requestedByPeer?: string; downlink: string; limitation?: string }>;
+}> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return c.page.evaluate(() => (window as any).__ringTest.groupCallDiag());
+}
+
+/** The tier `c` is currently SENDING to the peer whose id starts with `peerShort` (undefined if no
+ *  such leg yet). */
+export async function legTierTo(c: RingClient, peerShort: string): Promise<string | undefined> {
+  const d = await legDiag(c);
+  return d.legs[peerShort.slice(0, 8)]?.tier;
+}
+
+/** CDP network shaping for a participant's context. `null` lifts it. Profiles are coarse downlink
+ *  caps used to drive a single receiver's downlink class down (spec 0007 US2). NOTE: Chromium applies
+ *  emulateNetworkConditions at the network-service layer; on some builds it shapes app traffic more
+ *  than UDP media — prefer the deterministic manual-pin path (US3) for the per-receiver assertion and
+ *  treat the throttle path as corroborating. */
+export async function throttle(c: RingClient, profile: 'poor' | 'ok' | null): Promise<void> {
+  const cdp = await c.page.context().newCDPSession(c.page);
+  if (profile === null) {
+    await cdp.send('Network.emulateNetworkConditions', {
+      offline: false,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+      latency: 0,
+    });
+    return;
+  }
+  const profiles = {
+    poor: { downloadThroughput: (200 * 1024) / 8, uploadThroughput: (200 * 1024) / 8, latency: 300 },
+    ok: { downloadThroughput: (4 * 1024 * 1024) / 8, uploadThroughput: (4 * 1024 * 1024) / 8, latency: 40 },
+  } as const;
+  await cdp.send('Network.emulateNetworkConditions', { offline: false, ...profiles[profile] });
+}
+
 /** Wait until `c` reports exactly `n` remote streams (mesh peers). */
 export async function waitRemotes(c: RingClient, n: number, timeout = 30_000): Promise<void> {
   await c.page.waitForFunction(

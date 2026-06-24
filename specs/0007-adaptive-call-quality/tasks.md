@@ -46,7 +46,7 @@ Single Vue PWA client (no server change). Key paths: `src/services/call/{quality
 - [x] T003 [P] Add `sendHealth(chatId, peerUserId, callId, qos, roomId?)` to
   `src/services/call/signalling.ts`, carrying the `qos` payload over the existing sealed `call-ice`
   frame (mirrors `sendHoldResume`).
-- [ ] T004 [P] Add the e2e throttling + introspection helpers to `e2e/helpers.ts`: `throttle(client,
+- [x] T004 [P] Add the e2e throttling + introspection helpers to `e2e/helpers.ts`: `throttle(client,
   profile|null)` (CDP emulateNetworkConditions on/off/levels), `legTiers(client)` and
   `inboundVideoBitrate(client, peerId)` readers built on the existing diag/test hooks.
 - [x] T005 [P] Extend `src/services/call/diag.ts` to carry per-leg `tier`, `limitationReason`, the
@@ -116,7 +116,7 @@ step down (~3–5s) and recover (~10s); others stay high; no freezes.
   change (via `sendHealth`, T003) from `mesh.ts` (per leg) + `useCall.ts` (1:1); receive in the
   `call-ice`/mesh signal handlers, store latest-per-peer (newest `seq`), apply `peerRequestedTier` as
   a hard ceiling in `adaptLeg`/`adaptOneToOne`, with staleness fallback.
-- [ ] T016 [US2] Extend `e2e/call-quality.spec.ts` (3–4 instances): throttle one receiver's downlink
+- [x] T016 [US2] Extend `e2e/call-quality.spec.ts` (3–4 instances): throttle one receiver's downlink
   on the fly → only streams TO it drop within ~3–5s (measured inbound + leg tier), others stay high,
   no frozen video; lift throttle → climbs back within ~10s without flapping (SC-002/SC-005).
 
@@ -138,7 +138,7 @@ self-preview unchanged.
   `requestedTier` and sends an immediate `qos` to all peers; apply the pin to our own outgoing clamp;
   confirm the self-preview binds the full local stream (encoding caps are per-sender, FR-008) — add
   no track-level constraint.
-- [ ] T019 [US3] Extend `e2e/call-quality.spec.ts`: pin one participant to low → measured inbound to
+- [x] T019 [US3] Extend `e2e/call-quality.spec.ts`: pin one participant to low → measured inbound to
   it drops to the low tier and its outgoing caps, while each sender's self-preview remains full
   quality (SC-003); returning to auto climbs inbound back.
 
@@ -157,7 +157,7 @@ self-preview unchanged.
 - [x] T021 [US4] In `src/views/detail/CallActivePage.vue`, measure each remote tile's rendered size
   (ResizeObserver) and thread it into that peer's `requestedTier` (rate-limited so layout churn
   doesn't thrash the encoder); recompute on fullscreen/grid changes.
-- [ ] T022 [US4] Extend `e2e/call-quality.spec.ts`: the requestedTier/target for a peer shown in a
+- [x] T022 [US4] Extend `e2e/call-quality.spec.ts`: the requestedTier/target for a peer shown in a
   small grid tile is lower than when the same peer is brought fullscreen (SC-004).
 
 **Checkpoint**: quality is right-sized to the display.
@@ -174,7 +174,7 @@ reason shown and tracking the throttle.
 - [x] T023 [US5] Surface the richer per-leg diagnostics in `src/services/call/diag.ts` snapshot +
   `src/views/detail/CallActivePage.vue` ⓘ panel: current tier, limitation reason, peer's reported
   requestedTier/downlinkClass, manual pin (alongside the existing codec/bitrate/frames).
-- [ ] T024 [US5] Extend `e2e/call-quality.spec.ts`: with the ⓘ data exposed via a test hook, assert
+- [x] T024 [US5] Extend `e2e/call-quality.spec.ts`: with the ⓘ data exposed via a test hook, assert
   per-leg tier + reported downlink + limitation reason are present and change as a leg is throttled
   (SC-006).
 
