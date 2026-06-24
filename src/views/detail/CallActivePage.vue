@@ -35,7 +35,13 @@
         <!-- Call waiting (spec 0005): a second call arriving over the active one offers
              Accept & hold / Decline; the call you already have on hold shows a bar; and when
              the other side has put US on hold a badge shows. -->
-        <div v-if="incomingSecond" class="cw-prompt" @click.stop>
+        <div
+          v-if="incomingSecond"
+          class="cw-prompt"
+          role="alertdialog"
+          :aria-label="`Incoming ${incomingSecond.callKind === 'video' ? 'video ' : ''}call from ${incomingSecond.name}`"
+          @click.stop
+        >
           <div class="cw-prompt-head">
             <ion-avatar class="cw-avatar">
               <img v-if="incomingSecond.avatar" :src="incomingSecond.avatar" :alt="incomingSecond.name" />
@@ -47,12 +53,22 @@
             </div>
           </div>
           <div class="cw-actions">
-            <button class="cw-btn cw-decline" @click.stop="rejectSecond">Decline</button>
-            <button class="cw-btn cw-accept" @click.stop="acceptAndHold">Accept &amp; hold</button>
+            <button class="cw-btn cw-decline" aria-label="Decline second call" @click.stop="rejectSecond">Decline</button>
+            <button class="cw-btn cw-accept" aria-label="Hold current call and answer" @click.stop="acceptAndHold">Accept &amp; hold</button>
           </div>
         </div>
-        <div v-else-if="heldCall" class="cw-held"><ion-icon :icon="pauseOutline" /><span>On hold · {{ heldCall.name }}</span></div>
-        <div v-if="remoteHeld" class="cw-onhold"><ion-icon :icon="pauseOutline" /><span>On hold</span></div>
+        <!-- The call you have parked: tap to swap back to it (the active call goes on hold). -->
+        <button
+          v-else-if="heldCall"
+          class="cw-held"
+          :aria-label="`On hold: ${heldCall.name}. Tap to resume this call.`"
+          @click.stop="swapCalls"
+        >
+          <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold · {{ heldCall.name }}</span>
+        </button>
+        <div v-if="remoteHeld" class="cw-onhold" role="status">
+          <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold</span>
+        </div>
 
         <!-- Group call: every participant - each incoming feed AND our own outgoing
              feed - is an equally-sized floating tile. Tiles are centred and wrap;
@@ -357,7 +373,7 @@ import {
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite,
   acceptCall, rejectCall, declineWithMessage,
-  heldCall, remoteHeld, groupHeldPeers, incomingSecond, acceptAndHold, rejectSecond,
+  heldCall, remoteHeld, groupHeldPeers, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useCallParticipants } from '@/composables/useCallParticipants';
@@ -1243,6 +1259,17 @@ const diag = computed(() => {
   gap: 6px;
   padding: 6px 12px;
   font-size: 13px;
+}
+/* .cw-held is a <button> (tap to swap back to the held call) — strip the native chrome and
+   inherit the bar's own palette/typography. */
+.cw-held {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.cw-held:active {
+  transform: translateX(-50%) scale(0.97);
 }
 .cw-onhold {
   /* When BOTH a held bar and the remote-held badge could show, stack this one higher so they

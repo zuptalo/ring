@@ -17,6 +17,7 @@ Specs are grouped by category band; status moves
 | [0002](specs/0002-connections-and-friendship/spec.md) | Connections & Friendship | 🟢 shipped |
 | [0003](specs/0003-zero-knowledge-social/spec.md) | Zero-Knowledge Social Wall | 🟢 shipped |
 | [0004](specs/0004-group-call-reliability/spec.md) | Group call reliability, adaptive quality, caps, audio cues & busy signalling | 🔵 in-review |
+| [0005](specs/0005-call-waiting-hold/spec.md) | Call waiting — hold, swap & drop between two concurrent calls | 🟡 in-progress |
 
 ## ⚡ Ad-hoc (1001–1999)
 

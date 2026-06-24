@@ -137,12 +137,12 @@ its distinct cue, and disabling tones silences them.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T028 [P] Confirm a held-then-resumed call logs as ONE history entry (no log on hold/swap/resume) — assert in `e2e/call-waiting.spec.ts` (FR-010).
-- [ ] T029 [P] Bidi/a11y pass on the held-call bar + Accept & hold label in `src/views/detail/CallActivePage.vue` / `src/components/IncomingCallOverlay.vue` (RTL-correct, labelled, theme tokens — Principles X/XI).
-- [ ] T030 Run the full gate: `npm run build`; `cd server && go build ./... && go vet ./... && go test ./...`; `npm run test:unit`; `RING_E2E_PORT=8085 npm run test:e2e` (call-waiting + no regression to spec 0004 call specs).
+- [x] T028 [P] Confirm a held-then-resumed call logs as ONE history entry (no log on hold/swap/resume) — assert in `e2e/call-waiting.spec.ts` (FR-010).
+- [x] T029 [P] Bidi/a11y pass on the held-call bar + Accept & hold label in `src/views/detail/CallActivePage.vue` / `src/components/IncomingCallOverlay.vue` (RTL-correct, labelled, theme tokens — Principles X/XI).
+- [x] T030 Run the full gate: `npm run build`; `cd server && go build ./... && go vet ./... && go test ./...`; `npm run test:unit`; `RING_E2E_PORT=8085 npm run test:e2e` (call-waiting + no regression to spec 0004 call specs).
 - [ ] T031 Walk `specs/0005-call-waiting-hold/quickstart.md` end-to-end, including the on-device iOS/Safari hold/swap check via `make deploy-dev` (the hard cross-browser constraint, FR-013).
-- [ ] T032 [P] Zero-knowledge review: confirm the server relays only sealed hold/resume signals (indistinguishable from other sealed signals), logs/metrics never print a hold marker or which call is active, and no new server state/metadata was added (FR-012 / Principle I). Satisfies the required `/speckit-checklist` zero-knowledge pass.
-- [ ] T033 Flip spec `Status:` in `specs/0005-call-waiting-hold/spec.md` to `in-progress` (then `in-review` at PR) and run `make roadmap`.
+- [x] T032 [P] Zero-knowledge review: confirm the server relays only sealed hold/resume signals (indistinguishable from other sealed signals), logs/metrics never print a hold marker or which call is active, and no new server state/metadata was added (FR-012 / Principle I). Satisfies the required `/speckit-checklist` zero-knowledge pass.
+- [x] T033 Flip spec `Status:` in `specs/0005-call-waiting-hold/spec.md` to `in-progress` (then `in-review` at PR) and run `make roadmap`.
 
 ---
 

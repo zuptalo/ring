@@ -148,6 +148,16 @@ export async function waitCallLog(c: RingClient, peerId: string, timeout = 10_00
   );
 }
 
+/** Count call-log entries in the 1:1 chat with `peerId` (spec 0005 FR-010: a held-then-resumed
+ *  call must log as ONE entry — hold/swap/resume never log). */
+export async function callLogCount(c: RingClient, peerId: string): Promise<number> {
+  const chatId = await chatWith(c, peerId);
+  return c.page.evaluate(
+    async (id: string) => (await (window as any).__ringTest.messages(id)).filter((m: any) => m.kind === 'call').length,
+    chatId,
+  );
+}
+
 /* ---- group calls (spec 0004) ---- */
 
 /** Act as the INITIATOR: ring `members` into a group call `roomId` (they get an incoming

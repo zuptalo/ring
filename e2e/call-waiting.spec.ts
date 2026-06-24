@@ -3,7 +3,7 @@ import {
   createAccount, pair, startCall, startGroup, accept, hangup, waitCallState, waitRemotes,
   remoteTracks, callState, acceptAndHold, hasSecondIncoming, canHoldIncoming, heldCallId,
   isRemoteHeld, groupHeldPeers, swapCalls, endHeld, rejectSecond, recordCues, cuesFired,
-  setGlobalSetting, type RingClient, resetCallConfig,
+  setGlobalSetting, type RingClient, resetCallConfig, callLogCount, waitCallLog,
 } from './helpers';
 
 /** Set up the common state: A↔B connected (1:1), then C calls A and A accepts-and-holds, so
@@ -309,4 +309,41 @@ test('US5: the call-waiting cues fire (alert, hold, swap, resume) and silence wh
   await ctx2A.close();
   await ctx2B.close();
   await ctx2C.close();
+});
+
+test('FR-010: a held-then-resumed call logs as ONE history entry (hold/swap/resume never log)', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'CWLOGA');
+  const b = await createAccount(ctxB, 'CWLOGB');
+  const c = await createAccount(ctxC, 'CWLOGC');
+  await pair(a, b);
+  await pair(a, c);
+  await startCall(a, b.id, 'audio');
+  await waitCallState(b, ['incoming']);
+  await accept(b);
+  await waitCallState(a, ['connected']);
+
+  // Take a second call (B is held), swap back and forth, then drop C → resume B, then end B.
+  await startCall(c, a.id, 'audio');
+  await a.page.waitForFunction(() => (window as any).__ringTest.hasSecondIncoming() === true, null, { timeout: 15_000 });
+  await acceptAndHold(a);
+  await waitCallState(c, ['connected']);
+  await swapCalls(a); // active B, held C
+  await swapCalls(a); // active C, held B
+  await endHeld(a); // drop B (held) → it logs its single entry now
+  await waitCallState(b, ['idle', 'ended']);
+  await hangup(a); // end the remaining A↔C call
+
+  // Exactly one call-log entry in each 1:1 chat — no per-hold/swap/resume noise (FR-010).
+  await waitCallLog(a, b.id);
+  await waitCallLog(a, c.id);
+  await a.page.waitForTimeout(500); // let any stray duplicate land if the impl were wrong
+  expect(await callLogCount(a, b.id)).toBe(1);
+  expect(await callLogCount(a, c.id)).toBe(1);
+
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
 });
