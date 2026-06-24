@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,10 +31,9 @@
 
 ## Notes
 
-- **Two deliberate [NEEDS CLARIFICATION] markers** for `/speckit-clarify`: (1) the connection-health
-  report cadence (and whether it's also event-driven), and (2) whether a receiver's manual
-  low/medium is a HARD cap senders must honor or a strong hint (spec currently assumes a hard cap,
-  FR-007). Both materially shape the design, so they're left for the clarify step.
+- Both clarifications resolved (`/speckit-clarify`, 2026-06-24): (1) health report **~2s + on
+  change** (FR-004); (2) manual low/medium is a **hard cap** both ways (FR-007); plus (3) AUTO
+  default target = **HD on 1:1, high for groups**, screen-size-bounded (FR-006). No markers remain.
 - The "Current behavior" section names internal mechanisms as *investigation context*; the
   requirements themselves stay behavioral/measurable.
 - Touches Principle I (a new sealed per-pair health report) → the zero-knowledge `/speckit-checklist`

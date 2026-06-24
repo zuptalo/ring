@@ -54,11 +54,13 @@ These are the behaviors the investigation must confirm/correct; the desired beha
 
 ### Session 2026-06-24
 
-- (pending `/speckit-clarify`) Default cadence for the peer connection-health report (e.g. every
-  2s vs 5s), and whether it is event-driven (on significant change) in addition to periodic.
-- (pending `/speckit-clarify`) Whether a receiver's manual low/medium is a HARD cap that senders
-  must honor, or a strong hint a sender may exceed if it has ample headroom (this spec assumes a
-  hard cap — see FR-007).
+- Q: Cadence of the peer connection-health report? → A: **~2s periodic, plus an immediate report on
+  a significant change** (sharp downlink change or a manual-pin change).
+- Q: Is a receiver's manual low/medium a hard cap or a hint? → A: **Hard cap** — senders MUST NOT
+  exceed the receiver's requested tier for the stream sent to it.
+- Q: What should AUTO reach by default on a capable device + healthy network? → A: **HD on 1:1 /
+  2-person; "high" for 3–4-person groups** (per-leg, and never above what the rendered tile size
+  warrants).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -212,20 +214,24 @@ the throttling.
 - **FR-003**: Outgoing video quality MUST adapt **per receiver / per mesh leg**, using BOTH the
   sender's own send-side stats AND the receiver's reported connection health, so different peers in
   one call can receive different qualities matched to their own links.
-- **FR-004**: Devices MUST periodically share a small connection-health report (downlink
-  capacity/health and the receiver's current quality preference) with their call peers, on a
-  defined cadence; senders MUST use the freshest report to choose per-receiver quality and MUST
-  fall back to send-side adaptation when no fresh report is available.
+- **FR-004**: Devices MUST share a small connection-health report (downlink capacity/health and the
+  receiver's current quality preference) with their call peers **~every 2 seconds, plus immediately
+  on a significant change** (a sharp downlink change or a manual-pin change); senders MUST use the
+  freshest report to choose per-receiver quality and MUST fall back to send-side adaptation when no
+  fresh report is available.
 - **FR-005**: Quality targets MUST account for the rendered tile/screen size (and participant
   count): a small tile targets a lower resolution than a fullscreen view, updating when the layout
   changes (rate-limited to avoid thrash).
 - **FR-006**: Adaptation MUST converge quickly to the best sustainable quality and remain stable
   (no oscillation/flapping), backing off promptly on real congestion (bandwidth, sustained loss,
-  or CPU limitation) and preserving audio over video under severe congestion.
-- **FR-007**: A manual quality pin (auto / medium / low) MUST remain available and MUST act as an
-  upper bound in BOTH directions: it caps what the user sends AND causes other participants to cap
-  the stream they send TO that user at the chosen tier (a receiver-requested cap carried by the
-  health/preference report).
+  or CPU limitation) and preserving audio over video under severe congestion. On a capable device
+  and healthy network, AUTO MUST reach **HD on a 1:1 / 2-person call and "high" on a 3–4-person
+  group** by default (per-leg), never exceeding what the rendered tile size warrants (FR-005).
+- **FR-007**: A manual quality pin (auto / medium / low) MUST remain available and MUST act as a
+  **hard** upper bound in BOTH directions: it caps what the user sends AND every other participant
+  MUST NOT exceed the chosen tier for the stream they send TO that user (a receiver-requested cap
+  carried by the health/preference report — senders honor it, they do not merely treat it as a
+  hint).
 - **FR-008**: A participant's own self-preview MUST always show its full local capture quality,
   regardless of what it is transmitting to any peer.
 - **FR-009**: The ⓘ on-call info panel MUST expose, per leg/receiver, the current tier and the
