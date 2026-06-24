@@ -7,8 +7,8 @@
  * relayed through the server's TURN only when a direct path is blocked
  * (iceTransportPolicy 'relay', forced by the 443-only deployment).
  *
- * Group calls (SFU) are layered on separately (services/call/sfu.ts); this file
- * owns the 1:1 path and the shared reactive state/UI surface.
+ * Group calls are a peer-to-peer mesh layered on separately (services/call/mesh.ts);
+ * this file owns the 1:1 path and the shared reactive state/UI surface.
  */
 import { ref, computed, watch } from 'vue';
 import { appToast } from '@/services/toast';
@@ -34,10 +34,23 @@ import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
+  sendGroupLeave, sendGroupBusy,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
-import { startLoopTone, stopLoopTone, playTone } from '@/services/sound';
+import { syncState } from '@/composables/useSync';
+import { startLoopTone, stopLoopTone, playTone, cue, type ToneName } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
+import { VIDEO_MAX } from '@/services/call/types';
+import {
+  type Tier,
+  type ControllerState,
+  TIERS,
+  TIER_ENCODING,
+  initialController,
+  nextTier,
+  snapshotFromReport,
+  clampForPin,
+} from '@/services/call/quality';
 import type { CallFrame } from '@/services/transport';
 
 /* ---- reactive state (read by the call UI) ---- */
@@ -250,6 +263,12 @@ export function groupAudioLevels(): Record<string, number> {
   return groupSession?.audioLevels() ?? {};
 }
 
+/** Test/diagnostic: group-call video flow + per-leg tiers across the whole mesh (the 1:1
+ *  inboundVideoFrames() can't see a mesh's per-peer connections). Empty when not in a group. */
+export function groupCallDiag(): Promise<{ inboundVideoFrames: number; tiers: Record<string, string> }> {
+  return groupSession?.meshDiag() ?? Promise.resolve({ inboundVideoFrames: 0, tiers: {} });
+}
+
 let pendingOffer: { sdp: string; sdpType: RTCSdpType } | null = null;
 const pendingIce: RTCIceCandidateInit[] = [];
 let noAnswerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -261,13 +280,13 @@ let lastBytes = { up: 0, down: 0, ts: 0 };
 let lastLoss = { lost: 0, recv: 0 };
 let returnPath = '/tabs/calls';
 
-const RING_TIMEOUT_MS = 35_000; // callee: auto-decline if unanswered
-const DIAL_TIMEOUT_MS = 30_000; // caller: give up if NO sign of reachability (30s)
+const RING_TIMEOUT_MS = 60_000; // callee: auto-decline if unanswered (matches the ~60s push window)
+const DIAL_TIMEOUT_MS = 60_000; // caller: give up if NO sign of reachability (~60s push window)
 // Once the callee is confirmed reachable (call-ringing, e.g. its push was acked), give
 // it a longer answer window so the caller doesn't hang up while the callee is still
 // cold-starting the app from the push (which cancelled the ring the instant it opened).
 const ANSWER_TIMEOUT_MS = 60_000;
-const GRACE_MS = 12_000; // mid-call: tolerate a blip before ending
+const GRACE_MS = 18_000; // mid-call: tolerate a blip/handoff before ending (matches the server grace)
 
 // Group calls: the set of OTHER participants that actually joined during the call
 // (accumulated from call-roster frames), for the call log + Calls-tab record.
@@ -278,8 +297,12 @@ const groupJoined = new Set<string>();
 // per-member timer arms when we start ringing them and re-arms on a recall; it's cleared
 // the moment they join. Caller-only (callees don't ring anyone).
 export const notJoining = ref<Set<string>>(new Set());
+// Group calls (caller side): invitees who replied "busy" — they're in another call and can't
+// take ours. Their tile shows "Unavailable" (distinct from a silent non-joiner). Cleared if
+// they later join (a free device picks up). Spec 0004 US2.
+export const busyMembers = ref<Set<string>>(new Set());
 const memberRingTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const MEMBER_RING_WINDOW_MS = 30_000; // matches the server's reminder window (groupRing*)
+const MEMBER_RING_WINDOW_MS = 60_000; // matches the server's reminder window (groupRing*)
 
 function markNotJoining(memberId: string, on: boolean): void {
   if (on === notJoining.value.has(memberId)) return;
@@ -287,6 +310,15 @@ function markNotJoining(memberId: string, on: boolean): void {
   if (on) next.add(memberId);
   else next.delete(memberId);
   notJoining.value = next;
+}
+// Mark/unmark a member "busy" (non-overriding: cleared the moment they actually join, so a
+// user busy on one device but answering on another still goes live).
+function markMemberBusy(memberId: string, on: boolean): void {
+  if (on === busyMembers.value.has(memberId)) return;
+  const next = new Set(busyMembers.value);
+  if (on) next.add(memberId);
+  else next.delete(memberId);
+  busyMembers.value = next;
 }
 function armMemberRingTimer(memberId: string): void {
   clearMemberRingTimer(memberId);
@@ -311,17 +343,75 @@ function clearAllMemberRingTimers(): void {
   for (const t of memberRingTimers.values()) clearTimeout(t);
   memberRingTimers.clear();
   if (notJoining.value.size) notJoining.value = new Set();
+  if (busyMembers.value.size) busyMembers.value = new Set();
 }
 
 
 /* ---- helpers ---- */
 
 function setState(s: CallState): void {
+  const prev = callState.value;
   callState.value = s;
+  // Audio cues for the meaningful state transitions (spec 0004 US5). 'ended' is cued from
+  // teardown instead (so a silent/internal teardown stays silent).
+  if (s !== prev) {
+    if (s === 'connecting') callCue('connecting');
+    else if (s === 'connected') callCue('connected');
+  }
 }
 
+// After a call ends, the state lingers on 'ended' for a short display dwell (400ms, or 2s
+// for the "Busy on another call" screen) before settling to 'idle'. That dwell is NOT being
+// busy — so a user who hangs up and immediately places another call shouldn't be told
+// "You're already in a call". Pre-empt the dwell here so starting a call from 'ended' just
+// works. Returns true if there's a genuinely active call in the way (caller should bail).
+function callBusyForNewOutgoing(): boolean {
+  if (callState.value === 'ended') {
+    setState('idle');
+    callMeta.value = null;
+  }
+  return callState.value !== 'idle';
+}
+
+// In-call audio cues honour the "In-app sounds" / "Call sounds" preference, read once per
+// call (default on). callCue is the gated, rate-limited entry the call flow uses.
+let callSoundsOn = true;
+export function callCue(name: ToneName): void {
+  if (callSoundsOn) cue(name);
+}
+/** Read the per-call audio preferences (data-saver floor + call-sounds) once at call start. */
+async function loadCallPrefs(): Promise<void> {
+  const [lessData, sounds] = await Promise.all([
+    getSetting<boolean>('storage.lessDataCalls', false),
+    getSetting<boolean>('notifications.callSounds', true),
+  ]);
+  lessDataCalls = lessData;
+  callSoundsOn = sounds;
+}
+// Cue "reconnecting" whenever the call enters the reconnecting state, from any of the
+// several places that set the warning (1:1 ICE blip, group leg failure). The cue's own
+// rate-limiter de-dupes if more than one fires at once.
+watch(connectionWarning, (w, prev) => {
+  if (w === 'Reconnecting…' && prev !== 'Reconnecting…') callCue('reconnecting');
+});
+
+// The WebSocket came back (network restored, Wi-Fi↔cellular handoff). If we're in a live
+// call, re-communicate with the backend right away so it cancels its grace eviction and the
+// others reconnect smoothly: a group call re-affirms its room membership + re-gathers ICE; a
+// 1:1 caller fires an ICE-restart offer. If the outage outlasted the grace window the call
+// has already ended (server-side eviction + client grace), and we do NOT auto-redial.
+watch(syncState, (s, prev) => {
+  if (s !== 'online' || prev === 'online') return;
+  if (callState.value !== 'connected' && callState.value !== 'connecting') return;
+  if (groupSession) void groupSession.rejoin();
+  else if (pc) void onIceFailed();
+});
+
 async function toast(message: string): Promise<void> {
-  await appToast({ message, duration: 1800 });
+  // Call-state notices ("Alice left the call", "This call is full", …) report something
+  // that just happened and may name a person, so give them a little longer on screen than
+  // a bare confirmation toast.
+  await appToast({ message, duration: 3500 });
 }
 
 function gumConstraints(kind: CallKind): MediaStreamConstraints {
@@ -530,6 +620,9 @@ async function pollStats(): Promise<void> {
         if (typeof s.packetsReceived === 'number') recv += s.packetsReceived;
       }
     });
+    // 1:1 adaptive outgoing quality (spec 0004 US4): the group path adapts per-leg inside
+    // MeshSession; the 1:1 PC adapts here off the same sample.
+    if (pc) await adaptOneToOne(report);
   } catch {
     return;
   }
@@ -574,6 +667,41 @@ function navigateToCall(): void {
     returnPath = cur.startsWith('/call-active') ? '/tabs/calls' : cur;
     void router.push('/call-active');
   }
+}
+
+// How recently the app must have started for an incoming call to count as "opened for this
+// call" (a cold start / notification tap), vs. one arriving while you've been using the app.
+const APP_OPENED_FOR_CALL_MS = 8000;
+const appStartedAt = Date.now();
+let pendingIncomingForeground = false;
+
+/** Decide how an incoming call is presented (spec 0004 call UX): full-screen when the call is
+ *  *why* you're opening the app — backgrounded (show it the moment you foreground) or a cold
+ *  start / notification tap (show it now). When you're already actively in the app, leave the
+ *  non-intrusive banner (IncomingCallOverlay) to handle it. */
+function presentIncoming(): void {
+  const hidden = typeof document !== 'undefined' && document.visibilityState !== 'visible';
+  if (hidden) {
+    // Arrived while backgrounded → open the full-screen view as soon as the app comes forward.
+    pendingIncomingForeground = true;
+    armIncomingForegroundNav();
+  } else if (Date.now() - appStartedAt < APP_OPENED_FOR_CALL_MS) {
+    // App was just opened (cold start / tapped the call notification) → straight to full screen.
+    navigateToCall();
+  }
+  // else: actively in the app → the banner handles it (less intrusive), unchanged.
+}
+
+function armIncomingForegroundNav(): void {
+  if (typeof document === 'undefined') return;
+  const onVisible = (): void => {
+    if (document.visibilityState !== 'visible') return;
+    document.removeEventListener('visibilitychange', onVisible);
+    // Only if still ringing for the same call (the caller may have given up while we were away).
+    if (pendingIncomingForeground && callState.value === 'incoming') navigateToCall();
+    pendingIncomingForeground = false;
+  };
+  document.addEventListener('visibilitychange', onVisible);
 }
 
 /** Tear everything down and reset to idle. Logs the call result locally. */
@@ -631,6 +759,8 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   hasMultipleCameras.value = false;
   videoQuality.value = 'auto';
   lessDataCalls = false;
+  oneToOneQc = initialController(); // next call starts low again
+  pendingIncomingForeground = false;
   upgradePending.value = false;
   upgradeRequest.value = false;
   activeScreenTrack?.stop();
@@ -649,10 +779,17 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
       ? Math.max(0, Math.floor((Date.now() - (meta.startedAt ?? Date.now())) / 1000))
       : 0;
     const video = meta.kind === 'video';
-    // 1:1 Calls-tab record (unchanged behaviour).
+    // Why an unanswered call ended, for a clearer log than "No answer": the peer was busy in
+    // another call, unreachable, or declined (spec 0004 US2/FR-031). Only for calls that
+    // never connected.
+    const callOutcome: 'busy' | 'unavailable' | 'declined' | undefined =
+      !wasConnected && (reason === 'busy' || reason === 'unavailable' || reason === 'declined')
+        ? reason
+        : undefined;
+    // 1:1 Calls-tab record.
     if (!meta.isGroup) {
       if (wasConnected) await finishCall(meta.callId, durationSec, totalBytes);
-      else await markCallMissed(meta.callId);
+      else await markCallMissed(meta.callId, callOutcome);
     }
     if (!opts?.silent) {
       if (meta.isGroup) {
@@ -687,6 +824,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
           direction: meta.direction,
           video,
           missed: !wasConnected, // unanswered either way (text differs by direction)
+          outcome: callOutcome, // busy/unavailable/declined → clearer than "No answer"
           durationSec: wasConnected ? durationSec : undefined,
         });
       }
@@ -700,8 +838,15 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
   connectionWarning.value = null;
 
+  // Reaching a busy peer holds the full-screen "Busy on another call" (with its own cue)
+  // briefly before returning to where the call was placed from, instead of vanishing
+  // instantly (spec 0004 US2). Other endings settle quickly as before.
+  const busy = reason === 'busy';
+  const dwellMs = busy ? 2000 : 400;
+
   // Tell the surviving party why the call ended, when it wasn't a clean hangup.
   if (!opts?.silent) {
+    callCue(busy ? 'busy' : 'callended'); // audio cue for the ending (spec 0004 US5)
     if (reason === 'failed') {
       void toast(wasConnected ? 'Call ended, connection lost' : "Couldn't connect the call");
     } else if (reason === 'unavailable') {
@@ -710,23 +855,31 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   }
 
   if (!opts?.silent && router.currentRoute.value.fullPath === '/call-active') {
-    void router.replace(returnPath);
+    // Busy: keep the "Busy on another call" screen up for the dwell, then return.
+    if (busy) {
+      setTimeout(() => {
+        if (router.currentRoute.value.fullPath === '/call-active') void router.replace(returnPath);
+      }, dwellMs);
+    } else {
+      void router.replace(returnPath);
+    }
   }
 
-  // Settle back to idle so the next call can start.
+  // Settle back to idle so the next call can start (after the dwell, so the busy screen's
+  // endedReason survives long enough to show).
   setTimeout(() => {
     if (callState.value === 'ended') {
       setState('idle');
       callMeta.value = null;
     }
-  }, 400);
+  }, dwellMs);
 }
 
 /* ---- outgoing (1:1) ---- */
 
 /** Place a 1:1 call to a contact (peer user id). */
 export async function startDirectCall(contactId: string, kind: CallKind): Promise<void> {
-  if (callState.value !== 'idle') {
+  if (callBusyForNewOutgoing()) {
     await toast('You’re already in a call');
     return;
   }
@@ -747,6 +900,7 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
     avatar: contact.avatar,
   };
   await createCall({ callId, contactId, direction: 'outgoing', video: kind === 'video' });
+  await loadCallPrefs(); // data-saver floor + call-sounds pref, read once for this call
 
   let stream: MediaStream;
   try {
@@ -802,7 +956,7 @@ export async function startGroupCall(
   avatar: string,
   members: string[] = [],
 ): Promise<void> {
-  if (callState.value !== 'idle') {
+  if (callBusyForNewOutgoing()) {
     await toast('You’re already in a call');
     return;
   }
@@ -849,11 +1003,13 @@ async function enterGroupCall(
     avatar,
   };
   setState('connecting');
-  // Caller side: start the per-invitee give-up timers so a member who never joins flips to
-  // the recall/remove tile after the reminder window. Callees ring no one.
-  if (direction === 'outgoing') for (const m of members) armMemberRingTimer(m);
-  // Read the "use less data" floor once for this call (used by the adaptive tier).
-  lessDataCalls = await getSetting<boolean>('storage.lessDataCalls', false);
+  // Start the per-invitee give-up timers so a member who never joins flips to the
+  // recall/remove tile after the reminder window. EVERY participant arms these (not just the
+  // initiator) so anyone in the call can ring a no-show again or remove them (spec 0004): a
+  // joiner inherits the invited set via callMeta.invited, so it knows who's still expected.
+  for (const m of callMeta.value?.invited ?? []) armMemberRingTimer(m);
+  // Read the per-call audio prefs once (data-saver floor for the adaptive tier + call-sounds).
+  await loadCallPrefs();
 
   groupSession = new MeshSession(
     roomId,
@@ -923,7 +1079,12 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
   if (!roomId || !frame.from) return;
   // Already ringing/connected for this room → ignore duplicate invites.
   if (callMeta.value?.roomId === roomId) return;
-  if (callState.value !== 'idle') return; // busy with another call, can't join two
+  if (callState.value !== 'idle') {
+    // Busy in another call → tell the caller we're unavailable instead of letting their tile
+    // for us ring forever, and stop their server-side re-ring of us (spec 0004 US2).
+    void sendGroupBusy(frame.from, roomId);
+    return;
+  }
   if (!isUnlockedNow()) return; // locked → can't decrypt the sealed signalling; skip the ring
 
   // Everyone we were told about: the initiator plus their named members (which already
@@ -949,9 +1110,15 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
     avatar: chat?.avatar || groupAvatar(roomId),
   };
   setState('incoming');
+  presentIncoming(); // full-screen if the app is being opened for this call; else the banner
   startLoopTone('beacon', 2000);
   clearRingTimeout();
-  noAnswerTimer = setTimeout(() => void teardown('timeout'), RING_TIMEOUT_MS);
+  noAnswerTimer = setTimeout(() => {
+    // Letting an unanswered group invite lapse also tells the server to stop re-ringing us
+    // (spec 0004 US1), the same as an explicit decline.
+    void sendGroupLeave(roomId);
+    void teardown('timeout');
+  }, RING_TIMEOUT_MS);
 }
 
 /** Accept the current incoming GROUP call → join the room (no members → no re-ring). */
@@ -963,21 +1130,23 @@ export async function acceptGroupCall(): Promise<void> {
   await enterGroupCall(meta.roomId, meta.kind, meta.name, meta.avatar, 'incoming');
 }
 
-/** Caller taps "Ring again" on a non-joiner's tile → re-ring them and put the tile back to
- *  "ringing" (re-arm the give-up timer). Caller-only. */
+/** Tap "Ring again" on a non-joiner's tile → re-ring them and put the tile back to "ringing".
+ *  ANY participant may recall (spec 0004): the server re-rings and broadcasts the new state to
+ *  the whole room, so every tile flips together — not just the initiator's. */
 export async function recallMember(memberId: string): Promise<void> {
   const meta = callMeta.value;
-  if (!meta?.isGroup || meta.direction !== 'outgoing' || !meta.roomId) return;
+  if (!meta?.isGroup || !meta.roomId) return;
   markNotJoining(memberId, false);
   armMemberRingTimer(memberId);
   await sendRecall(memberId, meta.roomId, meta.kind, meta.invited ?? []);
 }
 
-/** Caller taps "Remove from call" on a non-joiner's tile → stop ringing them, drop them
- *  from the invited set (their tile disappears), and tell their device to stop. Caller-only. */
+/** Tap "Remove from call" on a non-joiner's tile → stop ringing them, drop them from the
+ *  invited set, and tell their device to stop. ANY participant may remove; the server then
+ *  broadcasts the removal so everyone's tile disappears together. */
 export async function cancelInvite(memberId: string): Promise<void> {
   const meta = callMeta.value;
-  if (!meta?.isGroup || meta.direction !== 'outgoing' || !meta.roomId) return;
+  if (!meta?.isGroup || !meta.roomId) return;
   clearMemberRingTimer(memberId);
   markNotJoining(memberId, false);
   meta.invited = (meta.invited ?? []).filter((id) => id !== memberId);
@@ -1130,6 +1299,7 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
   await createCall({ callId: frame.callId, contactId: from, direction: 'incoming', video: kind === 'video' });
 
   setState('incoming');
+  presentIncoming(); // full-screen if the app is being opened for this call; else the banner
   startLoopTone('beacon', 2000);
   void sendControl('call-ringing', from, frame.callId);
 
@@ -1150,6 +1320,7 @@ export async function acceptCall(): Promise<void> {
   if (callState.value !== 'incoming' || !meta?.chatId || !meta.peerUserId || !pendingOffer) return;
   clearRingTimeout();
   stopLoopTone();
+  await loadCallPrefs(); // data-saver floor + call-sounds pref, read once for this call
 
   let stream: MediaStream;
   try {
@@ -1192,6 +1363,11 @@ export async function rejectCall(): Promise<void> {
   if (!meta) return;
   if (!meta.isGroup && meta.peerUserId) {
     void sendControl('call-reject', meta.peerUserId, meta.callId, { reason: 'declined' });
+  } else if (meta.isGroup && meta.roomId) {
+    // Dismissing a group invite we never accepted: tell the server so it stops re-ringing
+    // us (otherwise the reminder rounds keep bringing the ring back — spec 0004 US1). A
+    // joined call instead sends call-leave through the mesh teardown.
+    void sendGroupLeave(meta.roomId);
   }
   await teardown('declined', { silent: meta.isGroup });
 }
@@ -1245,10 +1421,12 @@ export async function hangupCall(): Promise<void> {
 export function toggleMute(): void {
   muted.value = !muted.value;
   localStream.value?.getAudioTracks().forEach((t) => (t.enabled = !muted.value));
+  callCue(muted.value ? 'mute' : 'unmute');
 }
 
 export function toggleCamera(): void {
   cameraOff.value = !cameraOff.value;
+  callCue(cameraOff.value ? 'cameraoff' : 'cameraon');
   // Acts on whichever video track is live (camera, or the screen while sharing), so
   // the user can blank/resume the outgoing video without ending the call.
   localStream.value?.getVideoTracks().forEach((t) => (t.enabled = !cameraOff.value));
@@ -1279,67 +1457,60 @@ function videoSender(): RTCRtpSender | null {
   return tx?.sender ?? null;
 }
 
-/* ---- outgoing-video quality tiers ----
- * The user can trade picture quality for data use mid-call. 'auto' removes any cap and
- * lets the browser's bandwidth estimator pick; the lower tiers clamp the first encoding's
- * bitrate (and scale resolution/framerate down) so the camera sends less. Applied via
- * RTCRtpSender.setParameters, which leaves the track (and its E2EE transform) in place. */
-const QUALITY_ENCODING: Record<VideoQuality, { maxBitrate?: number; scaleResolutionDownBy: number; maxFramerate?: number }> = {
-  auto: { maxBitrate: undefined, scaleResolutionDownBy: 1 },
-  medium: { maxBitrate: 600_000, scaleResolutionDownBy: 1.5, maxFramerate: 24 },
-  low: { maxBitrate: 150_000, scaleResolutionDownBy: 3, maxFramerate: 15 },
-};
-
-// Adaptive outbound quality (group/mesh): as more participants publish video, step the
-// tier DOWN so the O(N) mesh uplink doesn't overwhelm the connection. A manual pick
-// (anything but 'auto') always wins. `lessDataCalls` (the "Use less data for calls"
-// setting, read once at group-call start) is a floor: never full 'auto'.
+/* ---- outgoing-video quality (adaptive, spec 0004 US4) ----
+ * Both 1:1 and group video START LOW and adapt: each connection runs the pure controller in
+ * services/call/quality (AIMD over getStats — climb only with headroom, back off on local or
+ * remote-reported congestion). The manual quality pin + "use less data" are an UPPER-BOUND
+ * clamp (the controller may still drop below to keep the call alive). Group adaptation is
+ * per-receiver inside MeshSession; 1:1 runs here against the single PC's video sender. */
 let lessDataCalls = false;
 
-/** How many remote participants are currently publishing video. */
-function videoPublisherCount(): number {
-  return remoteStreams.value.filter((s) => s.getVideoTracks().some((t) => t.readyState === 'live')).length;
+// 1:1 adaptive state, sampled in pollStats; reset per call.
+let oneToOneQc: ControllerState = initialController();
+
+/** The current upper-bound tier from the manual pin + data-saver. */
+function qualityClamp(): Tier {
+  return clampForPin(videoQuality.value, lessDataCalls);
 }
 
-/** The tier to actually apply: a manual pin wins; otherwise scale by publisher count. */
-function effectiveTier(): VideoQuality {
-  if (videoQuality.value !== 'auto') return videoQuality.value;
-  const n = videoPublisherCount();
-  let tier: VideoQuality = n <= 1 ? 'auto' : n <= 3 ? 'medium' : 'low';
-  if (lessDataCalls && tier === 'auto') tier = 'medium';
-  return tier;
-}
-
-/** The outgoing video sender on the 1:1 PC (group fan-out goes through MeshSession). */
-function activeVideoSender(): RTCRtpSender | null {
-  return groupSession ? groupSession.videoSender() : videoSender();
-}
-
-/** Push the effective quality tier onto a 1:1 video sender's first encoding (best-effort:
- *  not every browser honors every field, and there may be no sender yet on audio). */
-async function applyVideoQuality(sender: RTCRtpSender | null): Promise<void> {
+/** Apply a tier's encoding to a single (1:1) sender. Best-effort: not every browser honors
+ *  every field, and there may be no sender yet on an audio call. */
+async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise<void> {
   if (!sender) return;
   const params = sender.getParameters();
   if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-  const tier = QUALITY_ENCODING[effectiveTier()];
-  const enc = params.encodings[0];
-  if (tier.maxBitrate == null) delete enc.maxBitrate;
-  else enc.maxBitrate = tier.maxBitrate;
-  enc.scaleResolutionDownBy = tier.scaleResolutionDownBy;
-  if (tier.maxFramerate == null) delete enc.maxFramerate;
-  else enc.maxFramerate = tier.maxFramerate;
+  const enc = TIER_ENCODING[tier];
+  const e = params.encodings[0];
+  e.maxBitrate = enc.maxBitrate;
+  e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
+  if (enc.maxFramerate == null) delete e.maxFramerate;
+  else e.maxFramerate = enc.maxFramerate;
   try {
     await sender.setParameters(params);
-  } catch (e) {
-    console.warn('[call] could not apply video quality', e);
+  } catch (e2) {
+    console.warn('[call] could not apply video quality', e2);
   }
 }
 
-/** Apply the effective tier to the active outgoing video — fanned across every mesh leg
- *  for a group call, or the single sender for 1:1. */
+/** One 1:1 adaptive step from a fresh getStats report: step the controller toward the clamp
+ *  and apply if the tier changed. Called from pollStats (~1s). */
+async function adaptOneToOne(report: RTCStatsReport): Promise<void> {
+  const before = oneToOneQc.tier;
+  oneToOneQc = nextTier(oneToOneQc, snapshotFromReport(report), qualityClamp());
+  if (oneToOneQc.tier !== before) await applySenderTier(videoSender(), oneToOneQc.tier);
+}
+
+/** Re-evaluate outgoing quality after a manual change. Group: push the clamp to the mesh
+ *  (per-leg controllers adapt toward it). 1:1: bring the controller down to the clamp if the
+ *  pin was lowered, and apply the current tier now (the controller keeps adapting in pollStats). */
 async function applyOutgoingQuality(): Promise<void> {
-  if (groupSession) await groupSession.applyVideoQuality(QUALITY_ENCODING[effectiveTier()]);
-  else await applyVideoQuality(videoSender());
+  if (groupSession) {
+    groupSession.setQualityClamp(qualityClamp());
+    return;
+  }
+  const clampIdx = TIERS.indexOf(qualityClamp());
+  if (TIERS.indexOf(oneToOneQc.tier) > clampIdx) oneToOneQc = { tier: qualityClamp(), healthyStreak: 0 };
+  await applySenderTier(videoSender(), oneToOneQc.tier);
 }
 
 /** Change the outgoing-video quality tier and apply it immediately. */
@@ -1417,7 +1588,7 @@ async function replaceOutgoingVideo(track: MediaStreamTrack): Promise<boolean> {
   const sender = videoSender();
   if (!sender) return false;
   await sender.replaceTrack(track);
-  await applyVideoQuality(sender);
+  await applySenderTier(sender, oneToOneQc.tier);
   return true;
 }
 
@@ -1552,30 +1723,13 @@ async function addLocalVideo(renegotiateAfter: boolean): Promise<boolean> {
   setLocalVideoTrack(track, true);
   meta.kind = 'video';
   cameraOff.value = false;
-  await applyVideoQuality(activeVideoSender());
+  await applySenderTier(videoSender(), oneToOneQc.tier);
   // The camera wasn't enumerated on an audio-only call, so re-check now that video is
   // on - this is what makes the flip-camera button appear after an audio->video switch.
   void refreshCameraCount();
   if (renegotiateAfter) await renegotiate();
   if (audioRoute.value !== 'bluetooth') await setRoute('speaker');
   return true;
-}
-
-/** Remove the local 1:1 video track (downgrade to audio-only) and reset the route. */
-async function removeLocalVideo(): Promise<void> {
-  const meta = callMeta.value;
-  if (!pc || !meta) return;
-  screenSharing.value = false;
-  activeScreenTrack?.stop();
-  activeScreenTrack = null;
-  const sender = videoSender();
-  if (sender) {
-    sender.track?.stop();
-    await sender.replaceTrack(null);
-  }
-  setLocalVideoTrack(null, true);
-  meta.kind = 'audio';
-  if (audioRoute.value !== 'bluetooth') await setRoute('earpiece');
 }
 
 /** Ask the 1:1 peer to switch the call to video (consent-gated). The peer gets a
@@ -1610,58 +1764,50 @@ export async function rejectUpgrade(): Promise<void> {
   if (meta?.peerUserId) await sendControl('call-upgrade-reject', meta.peerUserId, meta.callId);
 }
 
-/** Toggle a call between audio-only and video. 1:1 audio->video goes through the
- *  consent flow (requestVideoUpgrade); 1:1 video->audio downgrades unilaterally (the
- *  peer mirrors it via the renegotiation). Group audio<->video is per-participant
- *  (no consent), negotiated by the SFU. */
+/** Turn an audio-only call INTO a video call. 1:1 goes through the consent flow
+ *  (requestVideoUpgrade); a group turns on my own camera immediately (each peer renegotiates
+ *  to receive it). There is no longer a video->audio downgrade — once a call is video it stays
+ *  video; use the camera toggle to stop sending. A no-op if already a video call. */
 export async function toggleVideoMode(): Promise<void> {
   const meta = callMeta.value;
-  if (!meta) return;
+  if (!meta || meta.kind !== 'audio') return;
   if (meta.isGroup ? !groupSession : !pc) return;
 
-  if (meta.kind === 'audio') {
-    if (!meta.isGroup) {
-      await requestVideoUpgrade(); // 1:1 needs both parties' consent
-      return;
-    }
-    // Group: turn on my own video immediately (the SFU forwards it).
-    let s: MediaStream;
-    try {
-      s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
-    } catch {
-      await toast('Camera unavailable');
-      return;
-    }
-    const track = s.getVideoTracks()[0];
-    if (!track) return;
-    // Publish BEFORE touching the local preview / kind, and surface a failure instead
-    // of half-applying (a throw here used to leave a black self tile + nothing sent).
-    try {
-      await groupSession!.addVideoTrack(track);
-    } catch (e) {
-      console.warn('[call] group addVideoTrack failed', e);
-      track.stop();
-      await toast('Could not turn on video');
-      return;
-    }
-    setLocalVideoTrack(track, true);
-    meta.kind = 'video';
-    cameraOff.value = false;
-    await applyOutgoingQuality();
-    void refreshCameraCount(); // surface the flip-camera button now that video is on
-  } else {
-    if (meta.isGroup) {
-      screenSharing.value = false;
-      activeScreenTrack?.stop();
-      activeScreenTrack = null;
-      await groupSession!.removeVideoTrack();
-      setLocalVideoTrack(null, true);
-      meta.kind = 'audio';
-    } else {
-      await removeLocalVideo();
-      await renegotiate(); // tell the peer to mirror the downgrade
-    }
+  if (!meta.isGroup) {
+    await requestVideoUpgrade(); // 1:1 needs both parties' consent
+    return;
   }
+  // Group video is capped (spec 0004 US3): once a call has more than VIDEO_MAX participants
+  // it can't become a video call (the roster includes self).
+  if ((meta.roster?.length ?? 0) > VIDEO_MAX) {
+    await toast(`Video is limited to ${VIDEO_MAX} people`);
+    return;
+  }
+  // Group: turn on my own video immediately (each peer renegotiates to receive it).
+  let s: MediaStream;
+  try {
+    s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+  } catch {
+    await toast('Camera unavailable');
+    return;
+  }
+  const track = s.getVideoTracks()[0];
+  if (!track) return;
+  // Publish BEFORE touching the local preview / kind, and surface a failure instead
+  // of half-applying (a throw here used to leave a black self tile + nothing sent).
+  try {
+    await groupSession!.addVideoTrack(track);
+  } catch (e) {
+    console.warn('[call] group addVideoTrack failed', e);
+    track.stop();
+    await toast('Could not turn on video');
+    return;
+  }
+  setLocalVideoTrack(track, true);
+  meta.kind = 'video';
+  cameraOff.value = false;
+  await applyOutgoingQuality();
+  void refreshCameraCount(); // surface the flip-camera button now that video is on
 }
 
 /* ---- inbound frame dispatch (called from sync.ts) ---- */
@@ -1847,6 +1993,15 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
     case 'call-reject':
     case 'call-busy': {
       const meta = callMeta.value;
+      // Group busy (roomId, no callId): ONE invitee can't take it → mark their tile
+      // "unavailable" and stop ringing them, but DON'T end the group call for everyone else
+      // (spec 0004 US2). The busy mark is non-overriding — if a free device of theirs joins,
+      // the roster handler clears it.
+      if (frame.t === 'call-busy' && frame.roomId && frame.from && meta?.isGroup && meta.roomId === frame.roomId) {
+        clearMemberRingTimer(frame.from);
+        markMemberBusy(frame.from, true);
+        return;
+      }
       if (meta && meta.callId === frame.callId) {
         await teardown(frame.t === 'call-busy' ? 'busy' : 'declined');
       }
@@ -1892,16 +2047,24 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       for (const id of after) {
         clearMemberRingTimer(id);
         markNotJoining(id, false);
+        markMemberBusy(id, false); // a free device joined → no longer "unavailable" (US2)
       }
       const afterSet = new Set(after);
-      const someoneLeft = [...before].some((id) => !afterSet.has(id));
+      const left = [...before].filter((id) => !afterSet.has(id));
+      // Someone who WAS in the room and is now gone has left → drop them from the invited set
+      // too, so their tile disappears (after the goodbye wave) instead of reverting to a
+      // "Ringing…" placeholder as if we were still calling them. (A genuine no-show who never
+      // joined stays in `invited` and keeps its ringing/recall tile.)
+      if (left.length && callMeta.value?.invited) {
+        callMeta.value.invited = callMeta.value.invited.filter((id) => !left.includes(id));
+      }
       if (callMeta.value) callMeta.value.roster = frame.members;
       await gs.onRoster(frame.members);
 
       if (after.length === 0) {
         if (before.size > 0) {
-          // We had company and now we're alone → end the call.
-          void toast('Everyone left the call');
+          // We had company and now we're alone → end the call (the leaving tile's wave is the
+          // goodbye; no toast).
           await teardown('remote');
           return;
         }
@@ -1910,7 +2073,35 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         armGroupIdleTimeout();
       } else {
         clearGroupIdleTimeout(); // someone is here
-        if (someoneLeft) void toast('Someone left the call');
+        // No toast when someone leaves: their tile shows the waving-hand goodbye (with their
+        // avatar), then the grid reflows.
+      }
+      return;
+    }
+
+    case 'call-member': {
+      // Server-authoritative ring-state for one invitee, broadcast to the whole room so every
+      // participant's tile flips together (spec 0004): 'noanswer' once the reminder window
+      // elapsed, 'ringing' on a recall, 'removed' when dropped. This replaces each client
+      // timing the no-answer locally from its own join — which is why the retry tile used to
+      // appear at different moments for different people.
+      const meta = callMeta.value;
+      if (!meta?.isGroup || meta.roomId !== frame.roomId) return;
+      const id = frame.to;
+      if (!id || meta.roster.includes(id)) return; // already joined → ignore stale state
+      if (frame.status === 'noanswer') {
+        clearMemberRingTimer(id);
+        markNotJoining(id, true);
+      } else if (frame.status === 'ringing') {
+        markNotJoining(id, false);
+        markMemberBusy(id, false);
+        if (!(meta.invited ?? []).includes(id)) meta.invited = [...(meta.invited ?? []), id];
+        armMemberRingTimer(id); // local fallback in case the next 'noanswer' broadcast is missed
+      } else if (frame.status === 'removed') {
+        clearMemberRingTimer(id);
+        markNotJoining(id, false);
+        markMemberBusy(id, false);
+        if (meta.invited) meta.invited = meta.invited.filter((m) => m !== id);
       }
       return;
     }
@@ -1920,18 +2111,21 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       await handleGroupInvite(frame);
       return;
 
-    // SFU-era frames, dormant under the mesh: the server no longer drives an SFU and
-    // mesh never sends keys/stream-ids (each leg is a known peer over native DTLS-SRTP).
-    // Left as no-ops so an in-flight frame from a mid-deploy peer is harmlessly ignored.
-    case 'call-key':
-    case 'call-key-request':
-    case 'call-streamid':
-    case 'sfu-offer':
-    case 'sfu-ice':
-    // The client never receives call-join/leave or sfu-answer (server-bound).
+    case 'call-full': {
+      // The server refused our join: the room is at its participant cap (spec 0004 US3).
+      // Abandon our local attempt and tell the user; the existing call is undisturbed.
+      const meta = callMeta.value;
+      if (meta?.isGroup && meta.roomId === frame.roomId) {
+        callCue('callfull');
+        await toast('This call is full');
+        await teardown('unavailable', { silent: true });
+      }
+      return;
+    }
+
+    // call-join/call-leave are client→server only (we send, never receive them).
     case 'call-join':
     case 'call-leave':
-    case 'sfu-answer':
       return;
   }
 }

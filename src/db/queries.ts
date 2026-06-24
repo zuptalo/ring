@@ -6,6 +6,7 @@
 import { bulkPut, clearStore, get, getAll, getByIndex, put, remove } from './idb';
 import { enqueue, removeOutboxByFrameId } from './outbox';
 import { recordTombstone } from './tombstones';
+import { callLogPreview } from './calllog';
 import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
@@ -4258,10 +4259,11 @@ export async function finishCall(callId: string, durationSec: number, bytes = 0)
  * an unanswered OUTGOING call stays a plain outgoing call (no answer), not red,
  * not counted in the missed badge.
  */
-export async function markCallMissed(callId: string): Promise<void> {
+export async function markCallMissed(callId: string, outcome?: 'busy' | 'unavailable' | 'declined'): Promise<void> {
   const call = await get<Call>('calls', callId);
   if (!call) return;
   call.missed = call.direction === 'incoming';
+  call.outcome = outcome; // busy/unavailable/declined → a clearer label than "No answer"
   call.durationSec = 0;
   call.seen = call.direction !== 'incoming'; // outgoing never pings the badge
   call.updatedAt = now();
@@ -4300,17 +4302,10 @@ export async function recordGroupCall(meta: {
   });
 }
 
-const clockDur = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-
-/** Preview/summary text for a call-log chat row + chats-list preview. */
-export function callLogPreview(log: CallLog): string {
-  if (log.isGroup) {
-    if (log.missed) return 'Group call, no answer';
-    return log.durationSec ? `Group call · ${clockDur(log.durationSec)}` : 'Group call';
-  }
-  if (log.missed) return log.direction === 'incoming' ? 'Missed call' : 'No answer';
-  return `Call · ${clockDur(log.durationSec ?? 0)}`;
-}
+// callLogPreview lives in ./calllog (pure, unit-testable without the IndexedDB graph);
+// re-exported here so existing importers of '@/db/queries' are unaffected (it's imported
+// at the top of this module so logCallToChat can use it locally).
+export { callLogPreview };
 
 /** Insert a LOCAL-ONLY informational "call" row into a chat's history (each side logs
  *  its own; never sent to the peer), and update the chat's last-message preview. Works

@@ -1,8 +1,9 @@
 <template>
   <!-- Incoming-call ring: a NON-blocking banner at the top so you can keep using the
-       app (e.g. finish a chat) while deciding. Accepting is the gesture that unlocks
-       audio AND switches to the full-screen call screen. -->
-  <div v-if="callState === 'incoming' && callMeta" class="ring-banner">
+       app (e.g. finish a chat) while deciding. Shown only when you're ACTIVELY in the app;
+       when the call is why you're opening the app (backgrounded/cold start), the full-screen
+       incoming view on /call-active takes over instead, so the banner is suppressed there. -->
+  <div v-if="callState === 'incoming' && callMeta && !onCallScreen" class="ring-banner">
     <ion-avatar class="ring-avatar">
       <img :src="callMeta.avatar" :alt="callMeta.name" />
     </ion-avatar>
@@ -36,43 +37,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed } from 'vue';
+import { useRoute } from 'vue-router';
 import { IonAvatar, IonIcon, actionSheetController } from '@ionic/vue';
 import { callOutline, videocamOutline, chatbubbleEllipsesOutline } from 'ionicons/icons';
 import { callState, callMeta, acceptCall, rejectCall, declineWithMessage } from '@/composables/useCall';
+import { useCallParticipants } from '@/composables/useCallParticipants';
 import { getQuickDeclines } from '@/services/quick-declines';
-import { getContact } from '@/db/queries';
-import { getSelfUserId } from '@/services/auth';
 
-// Resolve the other participants' names for the consent line. Re-runs whenever the ringing
-// call changes; a co-participant who isn't a contact has no name and is counted as someone
-// "you don't know" — the privacy-relevant case for an ad-hoc mesh call.
-const others = ref<{ name: string }[]>([]);
-watch(
-  () => (callState.value === 'incoming' && callMeta.value?.isGroup ? callMeta.value?.roster : null),
-  async (roster) => {
-    const self = getSelfUserId() ?? '';
-    const ids = (roster ?? []).filter((id) => id && id !== self);
-    others.value = await Promise.all(ids.map(async (id) => ({ name: (await getContact(id))?.name ?? '' })));
-  },
-  { immediate: true },
-);
+// The full-screen incoming view lives on /call-active; suppress the banner there so the two
+// don't stack (useCall routes to it when the call is why you're opening the app).
+const route = useRoute();
+const onCallScreen = computed(() => route.path.startsWith('/call-active'));
 
-function joinNames(parts: string[]): string {
-  if (parts.length <= 1) return parts.join('');
-  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
-  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
-}
-
-const participantsLine = computed(() => {
-  const list = others.value;
-  if (!list.length) return '';
-  const known = list.filter((o) => o.name).map((o) => o.name);
-  const unknown = list.length - known.length;
-  const parts = [...known];
-  if (unknown > 0) parts.push(unknown === 1 ? 'someone you don’t know' : `${unknown} people you don’t know`);
-  return `With ${joinNames(parts)}`;
-});
+const { participantsLine } = useCallParticipants();
 
 function accept(): void {
   void acceptCall();

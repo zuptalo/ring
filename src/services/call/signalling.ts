@@ -44,51 +44,10 @@ export async function clearCallSession(peerUserId: string): Promise<void> {
   await clearSession(CALL_SESSION_PREFIX + peerUserId);
 }
 
-/**
- * Seal the group media key for one member and send it as a live `call-key`
- * frame. Distributed peer-to-peer over the member's 1:1 ratchet, so the server
- * never sees the key. Returns false if no 1:1 session exists with the member.
- */
-export async function sendSealedKey(
-  peerUserId: string,
-  roomId: string,
-  epoch: number,
-  keyB64: string,
-): Promise<boolean> {
-  const chatId = await chatIdForPeer(peerUserId);
-  if (!chatId) return false;
-  const sealed = await sealForChat(chatId, peerUserId, false, {
-    body: '',
-    kind: 'call',
-    timestamp: Date.now(),
-    call: { callId: roomId, type: 'key', roomId, epoch, key: keyB64 },
-  });
-  if (!sealed) return false;
-  return sendLive({ t: 'call-key', to: sealed.to, roomId, ciphertext: sealed.packet });
-}
-
-/**
- * Seal our outgoing stream id for one member and send it as a live `call-streamid`
- * frame. Distributed peer-to-peer over the member's 1:1 ratchet, so the server never
- * learns the stream↔member binding (it can derive it at the SFU, but we don't hand it
- * over on the wire). Returns false if no 1:1 session exists with the member.
- */
-export async function sendSealedStreamId(
-  peerUserId: string,
-  roomId: string,
-  streamId: string,
-): Promise<boolean> {
-  const chatId = await chatIdForPeer(peerUserId);
-  if (!chatId) return false;
-  const sealed = await sealForChat(chatId, peerUserId, false, {
-    body: '',
-    kind: 'call',
-    timestamp: Date.now(),
-    call: { callId: roomId, type: 'streamid', roomId, streamId },
-  });
-  if (!sealed) return false;
-  return sendLive({ t: 'call-streamid', to: sealed.to, roomId, ciphertext: sealed.packet });
-}
+// NOTE: the SFU-era sealed group-key (call-key) and stream-id (call-streamid) senders were
+// removed with the SFU (spec 0004 US6). The mesh needs neither: each leg is a known peer over
+// native DTLS-SRTP, so there is no per-frame media key to distribute and the stream↔member
+// binding is local (one PeerConnection per peer).
 
 /**
  * Seal a CallSignal for the peer and send it as the given 1:1 call frame.
@@ -146,6 +105,21 @@ export function sendRecall(
  *  halts their reminders and relays the cancel so their ringing device dismisses it. */
 export function sendGroupInviteeCancel(memberId: string, roomId: string): Promise<boolean> {
   return sendLive({ t: 'call-cancel', to: memberId, roomId, reason: 'declined' });
+}
+
+/** Invitee → server: decline/dismiss a group invite (or leave the room) so the server stops
+ *  re-ringing us. Without this a dismissed group ring keeps coming back every reminder round
+ *  until the rounds run out (spec 0004 US1). Sent on decline of an invite we never accepted;
+ *  a joined call already sends call-leave via the mesh teardown. */
+export function sendGroupLeave(roomId: string): Promise<boolean> {
+  return sendLive({ t: 'call-leave', roomId });
+}
+
+/** Busy invitee → caller: we can't take this group call (already in another call). The server
+ *  relays it so the caller resolves our tile to "unavailable" instead of ringing us forever,
+ *  and stops re-ringing us (spec 0004 US2). No callId — group busy is keyed by roomId. */
+export function sendGroupBusy(to: string, roomId: string): Promise<boolean> {
+  return sendLive({ t: 'call-busy', to, roomId });
 }
 
 /** Send a payload-free 1:1 control frame (ringing/accept/reject/cancel/busy/end, and

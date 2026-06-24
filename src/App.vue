@@ -30,9 +30,11 @@ import { useRouter } from 'vue-router';
 import { isAuthenticated } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { warmAll, clearWarm } from '@/composables/warmStores';
-import { IonApp, IonRouterOutlet, toastController } from '@ionic/vue';
+import { IonApp, IonRouterOutlet } from '@ionic/vue';
+import { alertCircleOutline } from 'ionicons/icons';
 import { inviteNeedsProfile } from '@/services/invites';
 import { appToast } from '@/services/toast';
+import { showActionBanner, dismissActionBanner } from '@/services/notify';
 import { useViewportHeight } from '@/composables/useViewportHeight';
 import { useTheme } from '@/composables/useTheme';
 import { useAppBadge } from '@/composables/useAppBadge';
@@ -102,10 +104,13 @@ watch(inviteNeedsProfile, async (needs) => {
 });
 
 // Sticky "failed to send" notice: when one or more outgoing messages have
-// exhausted their auto-retries, show a persistent toast with a Retry action. It
-// updates its count live and dismisses itself once nothing is failed.
+// exhausted their auto-retries, show a persistent in-app banner with a Retry action.
+// It renders through the SAME overlay/component as every other in-app notification
+// (NotificationBanners.vue) — a danger-toned, persistent action card keyed by a fixed
+// url so re-showing it updates the count in place rather than stacking. Dismisses
+// itself once nothing is failed.
+const FAILED_SENDS_URL = 'failed-sends';
 const failedSends = useLiveQuery<Message[]>(() => listFailedMessages(), ['messages'], []);
-let failedToast: HTMLIonToastElement | null = null;
 function failedMessageText(msgs: Message[]): string {
   const n = msgs.length;
   // When every failure is a size rejection, say so specifically. Retrying won't
@@ -116,31 +121,27 @@ function failedMessageText(msgs: Message[]): string {
   return n === 1 ? "A message couldn't be sent." : `${n} messages couldn't be sent.`;
 }
 // Re-run when the set of failed messages changes by COUNT or reason, so the wording
-// updates (e.g. a new too-large failure) even if the count is unchanged.
+// updates (e.g. a new too-large failure) even if the count is unchanged. Re-showing the
+// banner with the same url replaces it in place (no flicker — the card is keyed by url).
 watch(
   () => failedSends.value.map((m) => `${m.id}:${m.failReason ?? ''}`).join(','),
-  async () => {
+  () => {
     const msgs = failedSends.value;
     if (msgs.length > 0) {
-      if (failedToast) {
-        failedToast.message = failedMessageText(msgs);
-        return;
-      }
-      failedToast = await toastController.create({
-        message: failedMessageText(msgs),
-        position: 'top',
-        color: 'danger',
+      showActionBanner({
+        url: FAILED_SENDS_URL,
+        tone: 'danger',
+        icon: alertCircleOutline,
+        name: failedMessageText(msgs),
+        body: '',
         // Sticky (no duration) but dismissible: Retry re-sends, Dismiss closes it.
-        buttons: [
+        actions: [
           { text: 'Retry', handler: () => void retryAllFailed() },
-          { text: 'Dismiss', role: 'cancel' },
+          { text: 'Dismiss', role: 'cancel', handler: () => {} },
         ],
       });
-      failedToast.addEventListener('didDismiss', () => (failedToast = null));
-      await failedToast.present();
-    } else if (failedToast) {
-      await failedToast.dismiss();
-      failedToast = null;
+    } else {
+      dismissActionBanner(FAILED_SENDS_URL);
     }
   },
 );
@@ -269,24 +270,9 @@ body.keyboard-open ion-footer {
   overflow: hidden;
 }
 
-/* Functional toasts (confirmations like "Muted"/"Copied" and errors) all go through the
-   shared appToast() helper (src/services/toast.ts) with this one cssClass, so they share a
-   single look — rounded corners, sitting just below the app header (same safe-area + 56px
-   offset as the in-app banner stack) rather than pinned to the very top — tunable here in
-   one place. (The "update available" prompt is NOT a toast; it renders as a persistent
-   card through the in-app banner overlay, NotificationBanners.vue.) */
-ion-toast.app-toast {
-  --border-radius: 14px;
-  --max-width: 560px;
-  --box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-}
-/* Offset the visible box (the `container` part) below the header so a functional toast
-   lines up with the in-app banners instead of overlapping the status bar / header. */
-ion-toast.app-toast::part(container) {
-  margin-top: calc(env(safe-area-inset-top, 0px) + 56px);
-}
-/* Defensive: never let a long unbreakable token wrap one character per line. */
-ion-toast.app-toast::part(message) {
-  overflow-wrap: anywhere;
-}
+/* Functional toasts ("Muted"/"Copied", status notices, errors) are no longer Ionic toasts:
+   appToast() (src/services/toast.ts) routes them through the SAME in-app banner overlay as
+   messages/requests/system notices/the update prompt (NotificationBanners.vue), so every
+   in-app notification shares one component, style, and position. No app-toast styling lives
+   here anymore. */
 </style>

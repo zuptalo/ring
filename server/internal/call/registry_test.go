@@ -34,3 +34,31 @@ func TestSharesRoom(t *testing.T) {
 		t.Fatal("a left room1, should no longer share with b")
 	}
 }
+
+// JoinIfRoom admits up to max members, refuses an over-cap join without mutating, and
+// always re-admits a user already in the room (idempotent re-join / ICE recovery).
+func TestJoinIfRoom(t *testing.T) {
+	r := NewRegistry()
+
+	if roster, ok := r.JoinIfRoom("room", "a", 2); !ok || len(roster) != 1 {
+		t.Fatalf("first join should be admitted, got ok=%v roster=%v", ok, roster)
+	}
+	if roster, ok := r.JoinIfRoom("room", "b", 2); !ok || len(roster) != 2 {
+		t.Fatalf("second join (at cap-1) should be admitted, got ok=%v roster=%v", ok, roster)
+	}
+	// Room is now full (2/2): a third distinct user is refused, roster unchanged.
+	roster, ok := r.JoinIfRoom("room", "c", 2)
+	if ok {
+		t.Fatalf("over-cap join should be refused")
+	}
+	if len(roster) != 2 {
+		t.Fatalf("refused join must not mutate the room, got roster=%v", roster)
+	}
+	if r.InRoom("room", "c") {
+		t.Fatal("refused user must not be in the room")
+	}
+	// An already-present user is always re-admitted even at cap (idempotent recovery).
+	if _, ok := r.JoinIfRoom("room", "a", 2); !ok {
+		t.Fatal("an already-present member must be re-admitted at cap")
+	}
+}

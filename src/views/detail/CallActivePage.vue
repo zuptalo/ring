@@ -1,6 +1,36 @@
 <template>
   <ion-page>
     <ion-content :fullscreen="true" class="call">
+      <!-- Full-screen incoming-call answer view: shown when the call is why you're opening the
+           app (backgrounded → foreground, or a cold start / notification tap). When you're
+           already using the app, the non-intrusive banner handles it instead and this route
+           is never pushed. -->
+      <div v-if="callState === 'incoming' && callMeta" class="incoming-fs">
+        <div class="incoming-info">
+          <ion-avatar class="incoming-avatar"><img :src="callMeta.avatar" :alt="callMeta.name" /></ion-avatar>
+          <h2 class="incoming-name">{{ callMeta.name }}</h2>
+          <p class="incoming-kind">
+            {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
+          </p>
+          <p v-if="participantsLine" class="incoming-with">{{ participantsLine }}</p>
+        </div>
+        <div class="incoming-actions">
+          <button class="ans-btn decline" aria-label="Decline" @click="rejectCall">
+            <ion-icon :icon="callOutline" />
+          </button>
+          <button
+            v-if="!callMeta.isGroup"
+            class="ans-btn message"
+            aria-label="Decline with message"
+            @click="incomingDeclineMenu"
+          >
+            <ion-icon :icon="chatbubbleEllipsesOutline" />
+          </button>
+          <button class="ans-btn accept" aria-label="Accept" @click="acceptCall">
+            <ion-icon :icon="callMeta.kind === 'video' ? videocamOutline : callOutline" />
+          </button>
+        </div>
+      </div>
       <div ref="stageEl" class="stage" :class="{ 'chrome-hidden': chromeHidden }" @click="onStageClick">
         <!-- Group call: every participant - each incoming feed AND our own outgoing
              feed - is an equally-sized floating tile. Tiles are centred and wrap;
@@ -20,9 +50,17 @@
               :class="{ self: t.isSelf, leaving: t.leaving, speaking: isSpeaking(t) }"
               :style="{ width: tileDims.w + 'px', height: tileDims.h + 'px' }"
             >
-              <!-- A participant who just left: a waving hand that fades out (keeps the
-                   layout steady for a beat, then the rest reflow and grow). -->
-              <span v-if="t.leaving" class="leave-wave"><emoji emoji="👋" /></span>
+              <!-- A participant who just left: their avatar with a waving hand over it, held
+                   for a beat then faded out (the layout stays steady, then the rest reflow
+                   and grow). No toast — the tile itself is the goodbye. -->
+              <template v-if="t.leaving">
+                <div class="tile-camoff">
+                  <img v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
+                  <ion-icon v-else :icon="personOutline" />
+                </div>
+                <span class="leave-wave"><emoji emoji="👋" /></span>
+                <span v-if="t.name" class="tile-label">{{ t.name }}</span>
+              </template>
               <template v-else>
                 <!-- All tiles are MUTED here: remote audio plays through the persistent
                      global CallMediaSink so it survives minimising. The <video> stays
@@ -50,9 +88,9 @@
                     class="tile-spinner"
                   />
                 </div>
-                <!-- Non-joiner (caller only): tap to ring again or remove from the call. -->
+                <!-- Non-joiner / busy (caller only): tap to ring again or remove from the call. -->
                 <button
-                  v-if="t.state === 'not-joining'"
+                  v-if="t.state === 'not-joining' || t.state === 'busy'"
                   class="recall-btn"
                   aria-label="Ring again or remove"
                   @click.stop="openRecall(t)"
@@ -223,14 +261,16 @@
           >
             <ion-icon :icon="desktopOutline" />
           </button>
-          <!-- Switch call mode: a video call drops to audio (record icon); an audio call
-               turns on video (videocam icon). Replaces the old "…" overflow. -->
+          <!-- Turn on video: only shown in an audio call (an audio call can become a video
+               call). A video call no longer offers a "drop to audio" switch — to stop sending
+               video, use the camera toggle. -->
           <button
+            v-if="!isVideoMode"
             class="ctl"
-            :aria-label="isVideoMode ? 'Switch to audio only' : 'Turn on video'"
+            aria-label="Turn on video"
             @click.stop="toggleVideoMode"
           >
-            <ion-icon :icon="isVideoMode ? recordingOutline : videocamOutline" />
+            <ion-icon :icon="videocamOutline" />
           </button>
           <button class="ctl hangup" aria-label="Hang up" @click.stop="hangup">
             <ion-icon :icon="callOutline" />
@@ -279,7 +319,8 @@ import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
-  recordingOutline, cellularOutline, informationCircleOutline, personOutline, refreshOutline,
+  cellularOutline, informationCircleOutline, personOutline, refreshOutline,
+  chatbubbleEllipsesOutline,
 } from 'ionicons/icons';
 import { getSelfUserId } from '@/services/auth';
 import {
@@ -290,9 +331,12 @@ import {
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   iosSpeaker, setIosSpeakerphone,
-  notJoining, recallMember, cancelInvite,
+  notJoining, busyMembers, recallMember, cancelInvite,
+  acceptCall, rejectCall, declineWithMessage,
   type AudioRoute,
 } from '@/composables/useCall';
+import { useCallParticipants } from '@/composables/useCallParticipants';
+import { getQuickDeclines } from '@/services/quick-declines';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { callDiagLines, callDiagSnapshot, callDiagOpen, clearDiag } from '@/services/call/diag';
 import { listContacts } from '@/db/queries';
@@ -303,6 +347,21 @@ import type { Contact } from '@/db/types';
 const mainVideo = ref<HTMLVideoElement | null>(null);
 const pipVideo = ref<HTMLVideoElement | null>(null);
 const stageEl = ref<HTMLElement | null>(null);
+
+// Full-screen incoming-call answer view (the consent line is shared with the banner).
+const { participantsLine } = useCallParticipants();
+async function incomingDeclineMenu(): Promise<void> {
+  const replies = await getQuickDeclines();
+  const sheet = await actionSheetController.create({
+    header: 'Decline with a message',
+    buttons: [
+      ...replies.map((text) => ({ text, handler: () => void declineWithMessage(text) })),
+      { text: 'Decline without message', role: 'destructive', handler: () => void rejectCall() },
+      { text: 'Cancel', role: 'cancel' },
+    ],
+  });
+  await sheet.present();
+}
 
 /* ---- 1:1 stage: which stream is fullscreen, and where the PiP sits ---- */
 // mainIsLocal=false → remote is fullscreen, local is the PiP (the usual layout);
@@ -441,12 +500,21 @@ function onPipCancel(): void {
 /* ---- group stage: every participant is a floating, auto-sized tile ---- */
 const SELF = '__self__';
 
-// A participant who just left lingers as a waving-hand placeholder so the layout stays
-// steady — and the goodbye reads — before the remaining tiles reflow and grow. Kept in
-// sync with the `tile-leave` CSS animation duration below.
-const LEAVE_MS = 4000;
-const leaving = ref<{ id: string }[]>([]);
+// A participant who just left lingers as their avatar + a waving hand, so the layout stays
+// steady — and the goodbye reads — for ~5s before the remaining tiles reflow and grow. Kept
+// in sync with the `tile-leave` CSS animation duration below. We snapshot each stream's
+// owner identity every cycle so that when a stream disappears we can still show WHO left
+// (the streamId→userId mapping is already gone by the time the disappearance fires).
+const LEAVE_MS = 5000;
+const leaving = ref<{ id: string; name: string; avatar: string }[]>([]);
 let prevStreamIds: string[] = [];
+let prevIdentity = new Map<string, { name: string; avatar: string }>();
+function snapshotIdentities(streams: MediaStream[]): Map<string, { name: string; avatar: string }> {
+  const owners = groupStreamOwners.value;
+  const m = new Map<string, { name: string; avatar: string }>();
+  for (const s of streams) m.set(s.id, identity(owners[s.id]));
+  return m;
+}
 
 interface Tile {
   key: string;
@@ -455,9 +523,10 @@ interface Tile {
   leaving: boolean;
   // 'live' = a present participant (their video, or their avatar when camera-off); 'ringing'
   // = invited, not yet in the room; 'connecting' = joined but their media hasn't landed yet;
-  // 'not-joining' = rang out the reminder window without joining (caller sees recall/remove).
-  // ringing/connecting render an avatar card with a spinner; not-joining a recall button.
-  state: 'live' | 'ringing' | 'connecting' | 'not-joining';
+  // 'not-joining' = rang out the reminder window without joining (caller sees recall/remove);
+  // 'busy' = replied unavailable (in another call). ringing/connecting render an avatar card
+  // with a spinner; not-joining/busy a recall button.
+  state: 'live' | 'ringing' | 'connecting' | 'not-joining' | 'busy';
   name: string; // '' → no name label (an as-yet-unidentified participant)
   avatar: string; // '' → fall back to a person icon
 }
@@ -509,7 +578,13 @@ const tiles = computed<Tile[]>(() => {
   for (const id of callMeta.value?.invited ?? []) {
     if (!id || id === self || streamed.has(id) || roster.has(id)) continue;
     const { name, avatar } = identity(id);
-    const state = isInitiator.value && notJoining.value.has(id) ? 'not-joining' : 'ringing';
+    // Any participant (not just the initiator) can ring a no-show again or remove them, so the
+    // not-joining tile shows for everyone (spec 0004).
+    const state: Tile['state'] = busyMembers.value.has(id)
+      ? 'busy'
+      : notJoining.value.has(id)
+        ? 'not-joining'
+        : 'ringing';
     list.push({ key: id, stream: null, isSelf: false, leaving: false, state, name, avatar });
   }
   if (localStream.value) {
@@ -524,7 +599,7 @@ const tiles = computed<Tile[]>(() => {
     });
   }
   for (const l of leaving.value) {
-    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, state: 'live', name: '', avatar: '' });
+    list.push({ key: `leave-${l.id}`, stream: null, isSelf: false, leaving: true, state: 'live', name: l.name, avatar: l.avatar });
   }
   return list;
 });
@@ -535,14 +610,12 @@ function tileLabel(t: Tile): string {
   if (t.leaving) return '';
   if (t.state === 'ringing') return 'Ringing…';
   if (t.state === 'connecting') return 'Connecting…';
+  if (t.state === 'busy') return t.name ? `${t.name} · Unavailable` : 'Unavailable';
   if (t.state === 'not-joining') return t.name || 'Not joined';
   return t.name;
 }
 
-// Only the caller can recall/remove a non-joiner.
-const isInitiator = computed(() => callMeta.value?.direction === 'outgoing');
-
-// Recall/remove menu for a non-joining invitee's tile (caller-only).
+// Recall/remove menu for a non-joining invitee's tile (any participant).
 async function openRecall(t: Tile): Promise<void> {
   const sheet = await actionSheetController.create({
     header: t.name || 'Not joined yet',
@@ -669,17 +742,29 @@ watch([pipVideo, pipStream, pipHasVideo], () =>
 watch(audioOutputId, applySinkAll);
 watch(remoteStreams, (streams) => {
   const ids = streams.map((s) => s.id);
-  // A participant whose stream just disappeared left → show a brief waving-hand
-  // placeholder that fades out before the grid reflows (the rest then grow).
+  // The waving "bye" is for when SOMEONE ELSE leaves while we stay. When WE'RE the one leaving
+  // (teardown closes every peer connection at once, emptying remoteStreams), don't wave goodbye
+  // to everybody — we're exiting. `tornDown` is set synchronously at the start of teardown,
+  // before the streams clear, so it's the reliable "we initiated the leave" signal.
+  if (callMeta.value?.tornDown) {
+    prevStreamIds = ids;
+    prevIdentity = snapshotIdentities(streams);
+    return;
+  }
+  // A participant whose stream just disappeared left → show a brief avatar + waving-hand
+  // placeholder that fades out before the grid reflows (the rest then grow). Their identity
+  // comes from the PREVIOUS snapshot, since their streamId→owner mapping is already gone.
   for (const gone of prevStreamIds) {
     if (!ids.includes(gone) && !leaving.value.some((l) => l.id === gone)) {
-      leaving.value = [...leaving.value, { id: gone }];
+      const who = prevIdentity.get(gone) ?? { name: '', avatar: '' };
+      leaving.value = [...leaving.value, { id: gone, name: who.name, avatar: who.avatar }];
       setTimeout(() => {
         leaving.value = leaving.value.filter((l) => l.id !== gone);
       }, LEAVE_MS);
     }
   }
   prevStreamIds = ids;
+  prevIdentity = snapshotIdentities(streams);
   // New tiles mount asynchronously as participants join, re-assert the sink once
   // they're in the DOM (their :ref attach also applies it; this is the safety net
   // for a srcObject/setSinkId ordering race).
@@ -764,7 +849,16 @@ const statusText = computed(() => {
       return `${m}:${String(s % 60).padStart(2, '0')}`;
     }
     case 'ended':
-      return 'Call ended';
+      switch (callMeta.value?.endedReason) {
+        case 'busy':
+          return 'Busy on another call';
+        case 'unavailable':
+          return 'Unavailable';
+        case 'declined':
+          return 'Call declined';
+        default:
+          return 'Call ended';
+      }
     default:
       return '';
   }
@@ -1030,10 +1124,12 @@ const diag = computed(() => {
 /* A departed participant's placeholder: a waving hand that lingers, then fades out.
    Duration must match LEAVE_MS in the script. */
 .float-tile.leaving {
+  /* The avatar (.tile-camoff) fills the tile behind; the in-flow waving hand is centred over
+     it by this flex, and the name label sits bottom-left as on a normal tile. */
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: tile-leave 4s ease forwards;
+  animation: tile-leave 5s ease forwards;
 }
 @keyframes tile-in {
   from {
@@ -1137,7 +1233,7 @@ const diag = computed(() => {
   height: 30px;
   font-size: 16px;
 }
-/* Recall/remove control on a non-joiner's tile (caller only): centred over the avatar. */
+/* Recall/remove control on a non-joiner's tile (any participant): centred over the avatar. */
 .recall-btn {
   position: absolute;
   left: 50%;
@@ -1346,5 +1442,96 @@ const diag = computed(() => {
 .up-btn.accept {
   background: var(--ion-color-primary, #10b981);
   color: #fff;
+}
+
+/* ---- full-screen incoming-call answer view ---- */
+.incoming-fs {
+  position: absolute;
+  inset: 0;
+  z-index: 30; /* above the (empty) stage, below modals */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(env(safe-area-inset-top) + 8vh) 24px calc(env(safe-area-inset-bottom) + 6vh);
+  background: radial-gradient(120% 120% at 50% 0%, #0e8a63 0%, #06402f 70%);
+  color: #fff;
+  text-align: center;
+}
+.incoming-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6vh;
+}
+.incoming-avatar {
+  width: 128px;
+  height: 128px;
+  border: 3px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+}
+.incoming-name {
+  margin: 6px 0 0;
+  font-size: 28px;
+  font-weight: 700;
+}
+.incoming-kind {
+  margin: 0;
+  font-size: 15px;
+  opacity: 0.9;
+}
+.incoming-with {
+  margin: 2px 0 0;
+  font-size: 13px;
+  opacity: 0.82;
+  max-width: 80vw;
+}
+.incoming-actions {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.ans-btn {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 30px;
+  cursor: pointer;
+}
+.ans-btn ion-icon {
+  font-size: 30px;
+}
+.ans-btn.decline {
+  background: var(--ion-color-danger, #eb445a);
+  transform: rotate(135deg);
+}
+.ans-btn.message {
+  width: 54px;
+  height: 54px;
+  font-size: 24px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.ans-btn.message ion-icon {
+  font-size: 24px;
+}
+.ans-btn.accept {
+  background: #fff;
+  color: #0a7d5c;
+  animation: ans-pulse 1.6s ease-in-out infinite;
+}
+@keyframes ans-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
 }
 </style>

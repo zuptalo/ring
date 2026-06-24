@@ -17,9 +17,20 @@
  */
 import { sendLive } from '@/composables/useSync';
 import { getSelfUserId } from '@/services/auth';
-import { getTurnConfig, rtcConfig, type TurnConfig } from '@/services/call/turn';
+import { getTurnConfig, rtcConfig } from '@/services/call/turn';
 import { sendSealedSignal, meshSessionChatId, clearCallSession } from '@/services/call/signalling';
 import { pushDiag, setDiagSnapshot } from '@/services/call/diag';
+import {
+  type Tier,
+  type ControllerState,
+  TIERS,
+  TIER_ENCODING,
+  initialController,
+  nextTier,
+  snapshotFromReport,
+  clampForPeers,
+  tierMin,
+} from '@/services/call/quality';
 import type { CallKind } from '@/services/call/types';
 import type { CallSignal } from '@/services/crypto/message';
 
@@ -50,6 +61,10 @@ const SELF_KEY = '__self__';
 const SPEAK_THRESH = 0.05;
 const SPEAK_HOLD_MS = 700;
 const SAMPLE_MS = 120;
+// Initial-negotiation watchdog: re-send the first offer if unanswered within this window,
+// up to this many times (≈5s × 3 = 15s, inside the call's connection-grace window).
+const NEGOTIATE_TIMEOUT_MS = 5000;
+const NEGOTIATE_MAX_ATTEMPTS = 3;
 
 interface PeerLeg {
   pc: RTCPeerConnection;
@@ -62,6 +77,17 @@ interface PeerLeg {
   // Has this leg exchanged its first offer/answer yet? Until it has, only ONE side
   // (the impolite peer) sends the initial offer — see the negotiation guard in buildLeg.
   negotiated: boolean;
+  // Initial-negotiation watchdog (impolite peer only): the first offer is sent exactly once
+  // via onnegotiationneeded, so if that single sealed frame is lost during a chaotic join
+  // (several people accepting at once on a flaky link) the leg would deadlock — the polite
+  // peer can't safely offer (X3DH race). The watchdog retransmits the offer until the leg
+  // negotiates, bounded by offerAttempts.
+  negotiateTimer?: ReturnType<typeof setTimeout>;
+  offerAttempts: number;
+  // Per-receiver adaptive-quality state (spec 0004 US4): each leg adapts its OUTGOING video
+  // independently from this leg's own getStats, so one call can send different qualities to
+  // different peers based on each link. Starts low; climbs/backs off via quality.nextTier.
+  qc: ControllerState;
 }
 
 export class MeshSession {
@@ -71,14 +97,16 @@ export class MeshSession {
   private cb: MeshCallbacks;
   private members: string[]; // initiator-only: members to ring on the first join
   private local: MediaStream | null = null;
-  private turn: TurnConfig | null = null;
   private legs = new Map<string, PeerLeg>(); // peerUserId → leg
   private remote = new Map<string, MediaStream>(); // peerUserId → their stream
   // Roster updates apply one at a time (see onRoster): a burst of joins must not interleave.
   private rosterChain: Promise<void> = Promise.resolve();
-  // Video-quality changes apply one at a time too (see applyVideoQuality).
+  // Per-sender setParameters is serialized (interleaving getParameters/setParameters on the
+  // SAME sender trips "getParameters() has never been called").
   private qualityChain: Promise<void> = Promise.resolve();
-  private currentEnc: VideoEncoding | null = null; // applied to every leg's video sender
+  // Upper-bound tier from the manual quality pin + "use less data" (spec 0004 US4). The
+  // adaptive controller may go BELOW this to keep a call alive, but never above it.
+  private clampTier: Tier = 'hd';
   // Aggregate connection-state tracking (so a single leg blip doesn't end the call).
   private everConnected = false;
   private lastEmittedState: RTCPeerConnectionState | null = null;
@@ -93,8 +121,7 @@ export class MeshSession {
   private speaking = new Set<string>();
   private lastLoud = new Map<string, number>();
   private levelTimer: ReturnType<typeof setInterval> | null = null;
-  // DIAG(call-video): per-leg RTP snapshot, so the on-screen ⓘ panel works for mesh calls
-  // (it used to read only the SFU path). Temporary, paired with diag.ts.
+  // Per-leg RTP snapshot feeding the on-screen ⓘ call-stats panel (see diag.ts).
   private diagTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(roomId: string, kind: CallKind, cb: MeshCallbacks, members: string[] = []) {
@@ -114,7 +141,7 @@ export class MeshSession {
       video: this.kind === 'video' ? { facingMode: { ideal: 'user' } } : false,
     });
     this.cb.onLocalStream(this.local);
-    this.turn = await getTurnConfig();
+    await getTurnConfig(); // warm the (refresh-aware) TURN-cred cache before legs build
     this.syncAudioMonitors();
     this.startDiag();
     // Initiator sends the member list so the server rings the group exactly once;
@@ -160,6 +187,7 @@ export class MeshSession {
       // Modern browsers implicitly roll back the polite peer on collision here.
       await leg.pc.setRemoteDescription(desc);
       leg.negotiated = true; // a paired session now exists; this side may renegotiate too
+      this.clearNegotiationWatchdog(leg); // negotiating now — stop any pending retransmit
       await this.drainIce(leg);
       await leg.pc.setLocalDescription(); // implicit answer
       await this.send('call-answer', from, {
@@ -182,10 +210,67 @@ export class MeshSession {
     try {
       await leg.pc.setRemoteDescription({ type: signal.sdpType ?? 'answer', sdp: signal.sdp });
       leg.negotiated = true; // first offer/answer done; renegotiation glare is now safe
+      this.clearNegotiationWatchdog(leg); // the offer landed — stop retransmitting
       await this.drainIce(leg);
       this.flushLocalIce(leg); // release the candidates buffered while the offer was in flight
     } catch (e) {
       console.warn('[mesh] answer handling failed', e);
+    }
+  }
+
+  /** Send (or, from the watchdog, re-send) this leg's offer, sealed over the pair's ratchet. */
+  private async sendOffer(leg: PeerLeg): Promise<void> {
+    try {
+      leg.makingOffer = true;
+      await leg.pc.setLocalDescription(); // implicit offer
+      await this.send('call-offer', leg.peerId, {
+        callId: this.roomId,
+        type: 'offer',
+        kind: this.kind,
+        sdp: leg.pc.localDescription?.sdp,
+        sdpType: leg.pc.localDescription?.type,
+        roomId: this.roomId,
+      });
+    } catch (e) {
+      console.warn('[mesh] negotiation failed', e);
+    } finally {
+      leg.makingOffer = false;
+    }
+  }
+
+  /** Retransmit the initial offer if it hasn't been answered within the window — covers a
+   *  first-offer frame lost during a chaotic simultaneous join. Retransmits the EXISTING
+   *  offer SDP (no fresh setLocalDescription → no glare); bounded by offerAttempts, after
+   *  which the call-level connection grace takes over. Impolite peer only (it owns the first
+   *  offer); the polite peer must not offer first (X3DH race — see buildLeg). */
+  private armNegotiationWatchdog(leg: PeerLeg): void {
+    if (leg.polite) return;
+    this.clearNegotiationWatchdog(leg);
+    leg.negotiateTimer = setTimeout(() => {
+      if (leg.negotiated || leg.pc.connectionState === 'connected') return;
+      if (leg.offerAttempts >= NEGOTIATE_MAX_ATTEMPTS) return; // give up; grace handles it
+      leg.offerAttempts++;
+      const ld = leg.pc.localDescription;
+      if (ld?.type === 'offer') {
+        void this.send('call-offer', leg.peerId, {
+          callId: this.roomId,
+          type: 'offer',
+          kind: this.kind,
+          sdp: ld.sdp,
+          sdpType: ld.type,
+          roomId: this.roomId,
+        });
+      } else {
+        void this.sendOffer(leg); // no offer yet (negotiationneeded never fired) → make one
+      }
+      this.armNegotiationWatchdog(leg); // keep watching until negotiated or attempts exhausted
+    }, NEGOTIATE_TIMEOUT_MS);
+  }
+
+  private clearNegotiationWatchdog(leg: PeerLeg): void {
+    if (leg.negotiateTimer != null) {
+      clearTimeout(leg.negotiateTimer);
+      leg.negotiateTimer = undefined;
     }
   }
 
@@ -207,21 +292,48 @@ export class MeshSession {
     }
   }
 
+  /** Reconnect after the WebSocket came back (e.g. a Wi-Fi↔cellular handoff): re-affirm our
+   *  room membership so the server cancels its grace eviction and re-broadcasts the roster to
+   *  the others, then re-gather ICE on every leg. No members → no re-ring. */
+  async rejoin(): Promise<void> {
+    if (!this.local) return; // already torn down
+    await sendLive({ t: 'call-join', roomId: this.roomId, kind: this.kind });
+    await this.recover();
+  }
+
   /** Per-leg ICE recovery: re-gather on any leg that isn't healthy. */
   async recover(): Promise<void> {
     for (const leg of this.legs.values()) {
-      if (leg.pc.connectionState !== 'connected') {
-        try {
-          leg.pc.restartIce();
-        } catch {
-          /* not supported / already restarting */
-        }
-      }
+      if (leg.pc.connectionState !== 'connected') await this.restartLegIce(leg);
+    }
+  }
+
+  /** Restart a leg's ICE with FRESH TURN credentials (spec 0004 FR-034): on a long call the
+   *  creds the PC was built with may have expired, so re-fetch (getTurnConfig refreshes) and
+   *  setConfiguration before re-gathering — otherwise the restart re-gathers with dead creds. */
+  private async restartLegIce(leg: PeerLeg): Promise<void> {
+    try {
+      const turn = await getTurnConfig();
+      leg.pc.setConfiguration(rtcConfig(turn));
+    } catch {
+      /* couldn't refresh creds — fall through and restart with what we have */
+    }
+    try {
+      leg.pc.restartIce();
+    } catch {
+      /* not supported / already restarting */
     }
   }
 
   /** Tear down every leg and stop metering. */
   leave(): void {
+    // Tell the SERVER we've left so it removes us from the room and broadcasts the new roster:
+    // that's how the others learn we're gone (their onRoster closes our leg → our tile waves
+    // off and they stop trying to reconnect to us). Without this the server only finds out via
+    // our socket disconnecting (after the grace window) — or never, if the socket stays up —
+    // leaving a hung tile + reconnect attempts on every other client. (Server is the membership
+    // orchestrator; the roster is the authoritative "who's in".)
+    void sendLive({ t: 'call-leave', roomId: this.roomId });
     this.stopDiag();
     this.stopAudioMonitor();
     if (this.audioCtx) {
@@ -251,7 +363,7 @@ export class MeshSession {
         any = true;
       }
     }
-    if (any && this.currentEnc) await this.applyVideoQuality(this.currentEnc);
+    if (any) for (const leg of this.legs.values()) void this.applyLegEncoding(leg);
     return any;
   }
 
@@ -263,7 +375,7 @@ export class MeshSession {
       if (existing) await existing.replaceTrack(track);
       else leg.pc.addTrack(track, this.local ?? new MediaStream([track]));
     }
-    if (this.currentEnc) await this.applyVideoQuality(this.currentEnc);
+    for (const leg of this.legs.values()) void this.applyLegEncoding(leg);
   }
 
   /** Remove our video from every leg (video→audio). removeTrack + renegotiation so
@@ -291,37 +403,71 @@ export class MeshSession {
     return null;
   }
 
-  /** Apply an encoding tier to EVERY leg's video sender (the adaptive/manual path).
-   *  Serialized: the adaptive tier, a remote camera toggle and a manual change can all fire
-   *  at once, and interleaving getParameters/setParameters on the SAME sender trips
-   *  "getParameters() has never been called" (the per-sender params slot is shared). */
-  applyVideoQuality(enc: VideoEncoding): Promise<void> {
-    this.currentEnc = enc;
-    this.qualityChain = this.qualityChain.then(() => this.applyVideoQualityNow(enc)).catch(() => {});
+  /** The effective per-leg quality ceiling: the manual pin / data-saver clamp, lowered by the
+   *  per-peer mesh ceiling (more peers ⇒ N parallel encodes ⇒ a lower cap to keep CPU/uplink
+   *  sane). The adaptive controller climbs toward this and backs off below it on congestion. */
+  private effectiveCeiling(): Tier {
+    return tierMin(this.clampTier, clampForPeers(this.legs.size));
+  }
+
+  /** Set the upper-bound quality tier (from the manual pin + data-saver). Immediately brings
+   *  any leg currently above the new ceiling down to it; climbing back up is the controller's job. */
+  setQualityClamp(clamp: Tier): void {
+    this.clampTier = clamp;
+    const ceilingIdx = TIERS.indexOf(this.effectiveCeiling());
+    for (const leg of this.legs.values()) {
+      if (TIERS.indexOf(leg.qc.tier) > ceilingIdx) {
+        leg.qc = { tier: TIERS[ceilingIdx], healthyStreak: 0 };
+        void this.applyLegEncoding(leg);
+      }
+    }
+  }
+
+  /** Apply a leg's current controller tier to its video sender (serialized per the
+   *  getParameters/setParameters caveat). No-op until the leg has a negotiated video sender. */
+  private applyLegEncoding(leg: PeerLeg): Promise<void> {
+    this.qualityChain = this.qualityChain
+      .then(() => this.setLegTier(leg))
+      .catch((err) => console.warn('[mesh] could not apply video quality', err));
     return this.qualityChain;
   }
 
-  private async applyVideoQualityNow(enc: VideoEncoding): Promise<void> {
-    for (const leg of this.legs.values()) {
-      const sender = this.videoSenderOf(leg);
-      if (!sender) continue;
-      const params = sender.getParameters();
-      // A sender whose transceiver hasn't negotiated yet reports no encodings, and
-      // setParameters can't add them — skip it; the apply that runs after the offer/answer
-      // (onRemoteStreams → applyOutgoingQuality, or buildLeg's own re-apply) catches it.
-      if (!params.encodings || params.encodings.length === 0) continue;
-      const e = params.encodings[0];
-      if (enc.maxBitrate == null) delete e.maxBitrate;
-      else e.maxBitrate = enc.maxBitrate;
-      e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
-      if (enc.maxFramerate == null) delete e.maxFramerate;
-      else e.maxFramerate = enc.maxFramerate;
-      try {
-        await sender.setParameters(params);
-      } catch (err) {
-        console.warn('[mesh] could not apply video quality', err);
+  /** Apply the leg's current tier to its video sender. setParameters() rejects with
+   *  InvalidModificationError when the params snapshot went stale between getParameters() and
+   *  setParameters() — a renegotiation in between (a peer's late join, a camera toggle) bumps
+   *  the sender's transactionId / RTCP config, so the object we'd send back no longer matches.
+   *  That's transient: re-fetch fresh params and retry once; if it still races, the next ~2s
+   *  adapt cycle reapplies it, so we don't even warn for the one-off. */
+  private async setLegTier(leg: PeerLeg, retry = true): Promise<void> {
+    const sender = this.videoSenderOf(leg);
+    if (!sender) return;
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) return;
+    const enc = TIER_ENCODING[leg.qc.tier];
+    const e = params.encodings[0];
+    e.maxBitrate = enc.maxBitrate;
+    e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
+    if (enc.maxFramerate == null) delete e.maxFramerate;
+    else e.maxFramerate = enc.maxFramerate;
+    try {
+      await sender.setParameters(params);
+    } catch (err) {
+      if (retry && (err as DOMException)?.name === 'InvalidModificationError') {
+        await this.setLegTier(leg, false); // re-read fresh params (post-renegotiation) and retry
+        return;
       }
+      throw err;
     }
+  }
+
+  /** One adaptive step for a leg from a fresh getStats report: update the controller state
+   *  toward the clamp and apply the resulting tier. Per-receiver — driven by THIS leg's link. */
+  private adaptLeg(leg: PeerLeg, report: RTCStatsReport): void {
+    if (!this.videoSenderOf(leg)) return; // audio-only leg → nothing to tier
+    const snap = snapshotFromReport(report);
+    const before = leg.qc.tier;
+    leg.qc = nextTier(leg.qc, snap, this.effectiveCeiling());
+    if (leg.qc.tier !== before) void this.applyLegEncoding(leg);
   }
 
   /** Stats from a representative connected leg (for the bitrate readout). */
@@ -333,12 +479,30 @@ export class MeshSession {
     return first ? first.pc.getStats() : null;
   }
 
-  /** DIAG(call-video): every 2s, snapshot each leg's video RTP so the on-screen ⓘ panel
-   *  works for mesh calls. The decisive figures are the negotiated codec and, per peer,
-   *  `dec=` (frames decoded): on iOS this should be H264 with dec climbing — proof the
-   *  hardware decoder accepts the feed (which the SFU+VP8 path could not). Mesh media is
-   *  native DTLS-SRTP, so there is no per-frame E2EE xform / decrypt tally to report.
-   *  Temporary; paired with diag.ts, remove once confirmed on-device. */
+  /** Test/diagnostic introspection: total inbound video frames decoded across ALL legs, and
+   *  each leg's current adaptive tier. The mesh has one PeerConnection per peer, so the 1:1
+   *  `inboundVideoFrames()` (which reads a single `pc`) can't see group video — this sums
+   *  every leg. Tiers let a test confirm the per-receiver controller climbs/backs off. */
+  async meshDiag(): Promise<{ inboundVideoFrames: number; tiers: Record<string, Tier> }> {
+    let inboundVideoFrames = 0;
+    const tiers: Record<string, Tier> = {};
+    for (const leg of this.legs.values()) {
+      tiers[leg.peerId.slice(0, 8)] = leg.qc.tier;
+      try {
+        (await leg.pc.getStats()).forEach((r) => {
+          const s = r as { type: string; kind?: string; framesDecoded?: number };
+          if (s.type === 'inbound-rtp' && s.kind === 'video') inboundVideoFrames += s.framesDecoded ?? 0;
+        });
+      } catch {
+        /* a leg mid-teardown can't report; skip it */
+      }
+    }
+    return { inboundVideoFrames, tiers };
+  }
+
+  /** Every 2s, snapshot each leg's video RTP for the on-screen ⓘ call-stats panel: the
+   *  negotiated codec and, per peer, the in/out bitrate + frames decoded. Mesh media is
+   *  native DTLS-SRTP, so there is no per-frame E2EE transform / decrypt tally to report. */
   private startDiag(): void {
     if (this.diagTimer != null) return;
     const fmt = (n: number): string =>
@@ -350,6 +514,7 @@ export class MeshSession {
           const short = leg.peerId.slice(0, 8);
           try {
             const report = await leg.pc.getStats();
+            this.adaptLeg(leg, report); // per-receiver adaptive quality (spec 0004 US4)
             const codecs = new Map<string, string>();
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             report.forEach((st: any) => {
@@ -401,11 +566,14 @@ export class MeshSession {
   private async buildLeg(peerId: string): Promise<PeerLeg> {
     const existing = this.legs.get(peerId);
     if (existing) return existing;
-    // Fetching the TURN config is the only await before the leg is reserved below, so two
-    // roster updates racing to open the SAME leg could both get past the check above. Once
-    // the config is in hand, re-check and hand back the winner — building two peer
-    // connections to one peer would glare against itself and wedge the leg.
-    const turn = this.turn ?? (this.turn = await getTurnConfig());
+    // Fetch fresh TURN credentials for THIS leg (spec 0004 FR-034): getTurnConfig caches and
+    // refreshes ~30s before expiry, so a leg built late in a long call still gets valid,
+    // non-expired relay creds — a once-cached per-session snapshot would go stale and the
+    // late joiner's relay-only ICE would never gather. This await is also the only one before
+    // the leg is reserved below, so two roster updates racing to open the SAME leg could both
+    // get past the check above; re-check and hand back the winner (two PCs to one peer would
+    // glare against itself and wedge the leg).
+    const turn = await getTurnConfig();
     const raced = this.legs.get(peerId);
     if (raced) return raced;
     const pc = new RTCPeerConnection(rtcConfig(turn));
@@ -418,6 +586,8 @@ export class MeshSession {
       pendingIce: [],
       pendingLocalIce: [],
       negotiated: false,
+      offerAttempts: 0,
+      qc: initialController(), // starts sending low; the controller climbs from there
     };
     this.legs.set(peerId, leg);
 
@@ -436,22 +606,9 @@ export class MeshSession {
       // negotiated once, both sides may renegotiate freely (camera toggle) — a session now
       // exists, so there's no X3DH race and ordinary perfect negotiation applies.
       if (!leg.negotiated && leg.polite) return;
-      try {
-        leg.makingOffer = true;
-        await pc.setLocalDescription(); // implicit offer
-        await this.send('call-offer', peerId, {
-          callId: this.roomId,
-          type: 'offer',
-          kind: this.kind,
-          sdp: pc.localDescription?.sdp,
-          sdpType: pc.localDescription?.type,
-          roomId: this.roomId,
-        });
-      } catch (e) {
-        console.warn('[mesh] negotiation failed', e);
-      } finally {
-        leg.makingOffer = false;
-      }
+      await this.sendOffer(leg);
+      // After the impolite peer's first offer, guard against it being lost in transit.
+      if (!leg.negotiated) this.armNegotiationWatchdog(leg);
     };
     pc.onicecandidate = (e) => {
       if (!e.candidate) return;
@@ -484,8 +641,9 @@ export class MeshSession {
     };
     pc.onconnectionstatechange = () => this.onLegState(leg);
 
-    // A new leg that joins while we're already sending video inherits the current tier.
-    if (this.currentEnc) void this.applyVideoQuality(this.currentEnc);
+    // A new leg starts at its own low tier and adapts independently; apply it once a video
+    // sender exists (no-op until then).
+    void this.applyLegEncoding(leg);
     this.emitStreamMap();
     return leg;
   }
@@ -493,6 +651,7 @@ export class MeshSession {
   private closeLeg(peerId: string): void {
     const leg = this.legs.get(peerId);
     if (leg) {
+      this.clearNegotiationWatchdog(leg);
       leg.pc.onicecandidate = null;
       leg.pc.ontrack = null;
       leg.pc.onconnectionstatechange = null;
@@ -542,14 +701,8 @@ export class MeshSession {
   }
 
   private onLegState(leg: PeerLeg): void {
-    // Per-leg recovery: a single failed leg re-gathers, it doesn't end the call.
-    if (leg.pc.connectionState === 'failed') {
-      try {
-        leg.pc.restartIce();
-      } catch {
-        /* unsupported */
-      }
-    }
+    // Per-leg recovery: a single failed leg re-gathers (with refreshed creds), not ending the call.
+    if (leg.pc.connectionState === 'failed') void this.restartLegIce(leg);
     const states = [...this.legs.values()].map((l) => l.pc.connectionState);
     const anyConnected = states.some((s) => s === 'connected');
     const allDead = states.length > 0 && states.every((s) => s === 'failed' || s === 'closed');

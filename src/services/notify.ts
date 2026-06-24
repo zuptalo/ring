@@ -103,17 +103,25 @@ export interface NotifyAction {
   handler: () => void;
 }
 
+// 'status' is a transient, non-clickable functional notice (the old appToast cases:
+// "Someone left the call", "Invite cancelled", "Copied", errors…). It flows through this
+// SAME overlay so every in-app notification shares one style/position/feel — no parallel
+// Ionic toast.
+export type BannerKind = IncomingKind | 'status';
+
 export interface NotifyBanner {
   id: string;
-  kind: IncomingKind;
+  kind: BannerKind;
   name: string;
   body: string;
   avatar: string;
-  icon?: string; // system / action banners: shown in the avatar circle instead of an image
+  icon?: string; // system / action / status banners: shown in the avatar circle instead of an image
   url: string;
   chatId?: string; // message banners only: target for inline quick-reply
   actions?: NotifyAction[]; // 'action' banners: buttons rendered under the body
   persistent?: boolean; // no auto-dismiss timer + exempt from the cap; stays until acted on
+  durationMs?: number; // custom auto-dismiss (status toasts are shorter than message banners)
+  tone?: 'danger' | 'success'; // status banners: colour variant (error = red), else the green theme
   onDismiss?: () => void; // fired when the banner is removed (mirror of toast.onDidDismiss)
 }
 // Live list the overlay renders. Capped + deduped by target so a chatty
@@ -147,7 +155,31 @@ function showBanner(b: Omit<NotifyBanner, 'id'>): void {
   const kept = new Set([...pinned, ...others].map((x) => x.id));
   for (const dropped of merged.filter((x) => !kept.has(x.id))) clearBannerTimer(dropped.id);
   notifyBanners.value = merged.filter((x) => kept.has(x.id)); // preserves arrival order
-  if (!b.persistent) bannerTimers.set(id, setTimeout(() => dismissBanner(id), BANNER_MS));
+  if (!b.persistent) bannerTimers.set(id, setTimeout(() => dismissBanner(id), b.durationMs ?? BANNER_MS));
+}
+
+const STATUS_DURATION_MS = 1800; // transient functional notices are briefer than message banners
+
+/**
+ * Show a transient functional notice ("Someone left the call", "Invite cancelled", "Copied",
+ * an error…) through the SAME in-app banner overlay as messages/requests/system notices, so
+ * everything shares one style, position and feel. This is what `appToast` funnels into — there
+ * is no separate Ionic toast surface. Identical messages dedup (replace) rather than stack.
+ */
+export function showStatusBanner(
+  message: string,
+  opts: { icon?: string; tone?: 'danger' | 'success'; durationMs?: number } = {},
+): void {
+  showBanner({
+    kind: 'status',
+    name: message, // the whole notice is the (wrapping) headline; no separate body
+    body: '',
+    avatar: '',
+    icon: opts.icon,
+    tone: opts.tone,
+    url: `status:${message}`, // dedup identical notices; non-navigating (status isn't a link)
+    durationMs: opts.durationMs ?? STATUS_DURATION_MS,
+  });
 }
 
 // The fixed identity of the (single) app-update prompt: a constant `url` means a
@@ -166,6 +198,8 @@ export function showActionBanner(opts: {
   icon?: string;
   actions: NotifyAction[];
   onDismiss?: () => void;
+  url?: string; // defaults to the single update prompt; pass a distinct id for other action cards
+  tone?: 'danger' | 'success'; // e.g. the failed-send retry card is 'danger'
 }): void {
   showBanner({
     kind: 'action',
@@ -173,9 +207,10 @@ export function showActionBanner(opts: {
     body: opts.body,
     avatar: '',
     icon: opts.icon,
-    url: UPDATE_BANNER_URL,
+    url: opts.url ?? UPDATE_BANNER_URL,
     actions: opts.actions,
     persistent: true,
+    tone: opts.tone,
     onDismiss: opts.onDismiss,
   });
 }

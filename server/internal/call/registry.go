@@ -7,6 +7,15 @@ package call
 
 import "sync"
 
+// Participant caps (spec 0004 US3): a video group call holds at most VideoMax, an audio one
+// at most AudioMax. Enforced authoritatively here at room admission (JoinIfRoom) in addition
+// to the client's pre-emptive UX. The cap for a room follows the call kind on call-join.
+// var (not const) so tests can shrink them; production values are unchanged.
+var (
+	VideoMax = 4
+	AudioMax = 8
+)
+
 // Registry is the in-memory set of rooms → member user ids.
 type Registry struct {
 	mu    sync.RWMutex
@@ -28,6 +37,25 @@ func (r *Registry) Join(roomID, userID string) []string {
 	}
 	m[userID] = struct{}{}
 	return keys(m)
+}
+
+// JoinIfRoom admits userID to roomID only if the room has room under max, OR userID is
+// already present (an idempotent re-join / ICE-recovery re-join is never refused by the cap).
+// Returns the resulting roster and whether the user was admitted; a refused join does not
+// mutate the room. max <= 0 means uncapped.
+func (r *Registry) JoinIfRoom(roomID, userID string, max int) (roster []string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m := r.rooms[roomID]
+	if m == nil {
+		m = map[string]struct{}{}
+		r.rooms[roomID] = m
+	}
+	if _, present := m[userID]; !present && max > 0 && len(m) >= max {
+		return keys(m), false // full and not already in → refuse, no mutation
+	}
+	m[userID] = struct{}{}
+	return keys(m), true
 }
 
 // Leave removes userID from roomID; returns the new roster and whether the room

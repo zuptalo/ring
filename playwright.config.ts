@@ -33,7 +33,7 @@ export default defineConfig({
     url: 'http://localhost:5174',
     reuseExistingServer: false,
     timeout: 60_000,
-    env: { RING_PROXY_TARGET: 'http://localhost:8081' },
+    env: { RING_PROXY_TARGET: `http://localhost:${process.env.RING_E2E_PORT || 8081}` },
   },
   projects: [
     {

@@ -48,10 +48,20 @@
           </span>
         </button>
         <ion-buttons slot="end">
-          <ion-button v-if="!peerGhosted && !peerBlocked" aria-label="Video call" @click="startCall('Video')">
+          <!-- Group size gates the call type (spec 0004 US3): no video past 4 participants,
+               no group call at all past 8. 1:1 chats always show both. -->
+          <ion-button
+            v-if="!peerGhosted && !peerBlocked && canVideoCall"
+            aria-label="Video call"
+            @click="startCall('Video')"
+          >
             <ion-icon slot="icon-only" :icon="videocamOutline" />
           </ion-button>
-          <ion-button v-if="!peerGhosted && !peerBlocked" aria-label="Voice call" @click="startCall('Voice')">
+          <ion-button
+            v-if="!peerGhosted && !peerBlocked && canAudioCall"
+            aria-label="Voice call"
+            @click="startCall('Voice')"
+          >
             <ion-icon slot="icon-only" :icon="callOutline" />
           </ion-button>
         </ion-buttons>
@@ -984,6 +994,7 @@ import { peerPresence, presenceLabel } from '@/composables/usePresence';
 import { activityFor, activityKindLabel, coalescedActivityLabel } from '@/composables/useTyping';
 import { ACTIVITY, type ActivityKind, type ActivityState } from '@/services/transport';
 import { startDirectCall, startGroupCall } from '@/composables/useCall';
+import { VIDEO_MAX, AUDIO_MAX } from '@/services/call/types';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { setActiveChat } from '@/services/notify';
 import { formatClock, dayLabel, formatStamp, formatFull } from '@/utils/time';
@@ -1041,6 +1052,13 @@ async function startCall(kind: 'Voice' | 'Video') {
   if (!c) return;
   const k = kind === 'Video' ? 'video' : 'audio';
   if (c.isGroup) {
+    // Participant cap (spec 0004 US3): the call includes us, so members + 1 must fit the
+    // kind's cap (4 video / 8 audio). The server enforces this authoritatively at join too.
+    const cap = k === 'video' ? VIDEO_MAX : AUDIO_MAX;
+    if (c.participantIds.length + 1 > cap) {
+      await appToast({ message: `A ${k} call is limited to ${cap} people`, duration: 2200 });
+      return;
+    }
     // Pass the members so the server rings the rest of the group (it has no group object).
     await startGroupCall(c.id, k, c.name, c.avatar, c.participantIds);
     return;
@@ -2131,6 +2149,13 @@ const peerGhosted = computed(
   () => peerContact.value?.ghosted === true || chat.value?.ghosted === true,
 );
 const peerBlocked = computed(() => peerContact.value?.blocked === true);
+
+// Call-type availability by group size (spec 0004 US3): the call includes us, so total =
+// other participants + 1. No video past VIDEO_MAX, no group call at all past AUDIO_MAX.
+// 1:1 chats (1 other) always allow both.
+const callMemberCount = computed(() => (chat.value?.participantIds.length ?? 0) + 1);
+const canVideoCall = computed(() => callMemberCount.value <= VIDEO_MAX);
+const canAudioCall = computed(() => callMemberCount.value <= AUDIO_MAX);
 
 // Opening the conversation clears its unread count (and the Chats badge) and
 // sends 'seen' receipts to the sender (the blue "seen" checks on their side).

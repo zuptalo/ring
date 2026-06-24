@@ -44,7 +44,9 @@ import { sealActivity, openActivity, clearActivityKeys } from '@/services/crypto
 import type { Envelope } from '@/services/crypto/envelope';
 import { isInitialized, isUnlocked } from '@/services/crypto/identity';
 
-const syncState = ref<TransportState>('offline');
+// Exported so other composables (e.g. useCall) can react to reconnects — a call needs to
+// re-affirm its room membership + recover ICE the moment the socket comes back.
+export const syncState = ref<TransportState>('offline');
 let transport: Transport | null = null;
 let started = false;
 
@@ -369,6 +371,14 @@ function start(): void {
             await transport.send({ t: 'ack', refId: f.id });
           } catch {
             /* will be redelivered on reconnect */
+          }
+          // A message arriving DURING a call gets a quiet, distinct cue (spec 0004 US5).
+          // Lazy import avoids a static cycle (useCall imports sendLive from this module).
+          try {
+            const { callState, callCue } = await import('@/composables/useCall');
+            if (callState.value !== 'idle') callCue('incallmsg');
+          } catch {
+            /* cue is best-effort */
           }
         }
       })

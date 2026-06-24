@@ -1,8 +1,9 @@
 # Enabling voice & video calling in production
 
-Ring's calling is **fully self-hosted**: the `ringd` process embeds a TURN relay
-and a group-call SFU - no external STUN/TURN/SFU services. This doc covers what
-the deployment needs so calls work for real users over the public URL.
+Ring's calling is **fully self-hosted**: the `ringd` process embeds a TURN relay -
+no external STUN/TURN/SFU services. Calls (1:1 and group alike) are peer-to-peer;
+there is no server-side media component. This doc covers what the deployment needs
+so calls work for real users over the public URL.
 
 It applies to a deployment fronted by a **layer-4 (SNI-routable) proxy/tunnel**
 on a single public `:443` (the `ring-dev.zuptalo.com` setup). If your front proxy
@@ -29,8 +30,13 @@ solves this by sending **all** call media over **TURN-over-TLS (TURNS) on 443**:
 
 - **1:1 calls** are peer-to-peer (DTLS-SRTP, natively E2EE); media is relayed
   through the TURN only when a direct path is blocked.
-- **Group calls** go through the embedded SFU, reached *through* the same TURN.
-  Media stays E2EE from the SFU via insertable streams.
+- **Group calls** are a **full mesh**: each participant holds one direct,
+  DTLS-SRTP-encrypted connection to every other participant (N simultaneous 1:1
+  calls), all riding the same TURN. There is no SFU and no server-side media; the
+  server only relays sealed signalling and tracks room membership. Because media is
+  native DTLS-SRTP, group calls work in **every** browser (including Safari/iOS) and
+  the codec is whatever the pair negotiates (e.g. hardware H.264). Mesh uplink grows
+  with participant count, so group calls are capped at **4 (video) / 8 (audio)**.
 
 Because TURNS is TLS, it carries an **SNI** the L4 router can switch on. The
 router must do **SNI-based TLS passthrough**: forward `turn.<host>:443` to
@@ -144,7 +150,6 @@ On boot you'll see:
 
 ```
 INFO TURN relay ready   listen=:3478 ... url="turns:turn.ring-dev.zuptalo.com:443?transport=tcp" tls=true
-INFO group-call SFU ready relayVia="turn:127.0.0.1:<port>?transport=udp"
 ```
 
 ---
@@ -258,18 +263,19 @@ backend web
    you should get a `relay` candidate and "Done".
 4. **A real call** between two devices/accounts: place a 1:1 call (connects,
    audio/video both ways, clean hang-up), then a group call from a group chat
-   (each participant sees the others). Chromium/Edge required for group (E2EE
-   insertable streams); 1:1 works in every browser.
+   (each participant sees the others). Both work in every browser, including
+   Safari/iOS — group calls are a peer-to-peer mesh, not an SFU.
 
 ---
 
 ## Notes & limits
 
-- **Group E2EE browser support:** group calls need `createEncodedStreams`
-  (Chromium/Edge). Other browsers are blocked from group calls with a message;
-  1:1 works everywhere.
-- **Group key distribution** is peer-to-peer over each pair's 1:1 ratchet, so all
-  group members must be mutual contacts (have exchanged friend requests).
+- **Group calls are a peer-to-peer mesh** (native DTLS-SRTP per leg), so they work in
+  every browser including Safari/iOS — no insertable-streams/VP8/Chromium requirement.
+  Uplink is O(N) per participant, so group calls are capped at **4 (video) / 8 (audio)**.
+- **Per-pair signalling** is sealed over each pair's 1:1 ratchet. Co-participants who
+  aren't already contacts are introduced for the duration of the call via an ephemeral
+  call-scoped session (same-room key-bundle gate); nobody silently lands in contacts.
 - **Background ringing** is best-effort on the web: the server briefly buffers an
   offer and the Web Push tickle wakes a backgrounded-but-alive client to
   reconnect and ring. A fully-closed app shows the OS notification; tapping it

@@ -18,7 +18,10 @@ const SERVER = path.join(ROOT, 'server');
 const TMP = path.join(ROOT, '.tmp');
 const PIDS_FILE = path.join(TMP, 'e2e-pids.json');
 
-const RINGD_PORT = 8081;
+// Defaults to 8081 (CI); override with RING_E2E_PORT when 8081 is taken locally by another
+// service (e.g. a docker container publishing it). Keep in sync with playwright.config.ts
+// (RING_PROXY_TARGET) and e2e/helpers.ts (BACKEND), which read the same env.
+const RINGD_PORT = Number(process.env.RING_E2E_PORT) || 8081;
 const DB_URL = 'postgres://ring:ring@localhost:5432/ring_e2e?sslmode=disable';
 
 async function waitFor(url: string, timeoutMs = 30_000): Promise<void> {
@@ -82,7 +85,7 @@ export default async function globalSetup(): Promise<void> {
       PORT: String(RINGD_PORT),
       DATABASE_URL: DB_URL,
       PUBLIC_URL: `http://localhost:${RINGD_PORT}`,
-      ALLOWED_ORIGINS: 'http://localhost:5174,http://localhost:8081',
+      ALLOWED_ORIGINS: `http://localhost:5174,http://localhost:${RINGD_PORT}`,
       ENABLE_CALLS: 'true',
       TURN_LISTEN: ':3479',
       RELAY_IP: '127.0.0.1',

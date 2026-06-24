@@ -50,14 +50,14 @@ type Server struct {
 // reach this TURN - so the SFU can gather relay candidates at RelayIP that
 // relay-only clients can reach, without the TLS/cert complications of dialing
 // the public TURNS endpoint over loopback.
-func Start(cfg Config) (srv *Server, sfuUDPAddr string, err error) {
+func Start(cfg Config) (srv *Server, err error) {
 	relayIP := cfg.RelayIP
 	if relayIP == "" {
 		relayIP = "127.0.0.1"
 	}
 	ip := net.ParseIP(relayIP)
 	if ip == nil {
-		return nil, "", fmt.Errorf("turn: invalid RELAY_IP %q", cfg.RelayIP)
+		return nil, fmt.Errorf("turn: invalid RELAY_IP %q", cfg.RelayIP)
 	}
 
 	relayGen := &turn.RelayAddressGeneratorStatic{
@@ -73,27 +73,13 @@ func Start(cfg Config) (srv *Server, sfuUDPAddr string, err error) {
 
 	s := &Server{}
 
-	// Loopback plaintext listener used ONLY by the embedded SFU (never exposed).
-	// Same relay generator, so allocations made through it advertise RelayIP -
-	// reachable by clients exactly like the public path.
-	sfuConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
-	if err != nil {
-		return nil, "", fmt.Errorf("turn: sfu loopback listen: %w", err)
-	}
-	s.conns = append(s.conns, sfuConn)
-	srvCfg.PacketConnConfigs = append(srvCfg.PacketConnConfigs, turn.PacketConnConfig{
-		PacketConn:            sfuConn,
-		RelayAddressGenerator: relayGen,
-	})
-	sfuUDPAddr = sfuConn.LocalAddr().String()
-
 	if cfg.TLSConfig != nil {
 		// Production: TURNS over TLS. The L4 proxy hands us the SNI-matched 443
 		// TLS stream here; we terminate it (with a static cert or via autocert).
 		ln, lerr := tls.Listen("tcp", cfg.ListenAddr, cfg.TLSConfig)
 		if lerr != nil {
 			s.closeListeners()
-			return nil, "", fmt.Errorf("turn: tls listen %s: %w", cfg.ListenAddr, lerr)
+			return nil, fmt.Errorf("turn: tls listen %s: %w", cfg.ListenAddr, lerr)
 		}
 		s.listeners = append(s.listeners, ln)
 		srvCfg.ListenerConfigs = append(srvCfg.ListenerConfigs, turn.ListenerConfig{
@@ -106,7 +92,7 @@ func Start(cfg Config) (srv *Server, sfuUDPAddr string, err error) {
 		pc, perr := net.ListenPacket("udp4", cfg.ListenAddr)
 		if perr != nil {
 			s.closeListeners()
-			return nil, "", fmt.Errorf("turn: udp listen %s: %w", cfg.ListenAddr, perr)
+			return nil, fmt.Errorf("turn: udp listen %s: %w", cfg.ListenAddr, perr)
 		}
 		s.conns = append(s.conns, pc)
 		srvCfg.PacketConnConfigs = append(srvCfg.PacketConnConfigs, turn.PacketConnConfig{
@@ -117,7 +103,7 @@ func Start(cfg Config) (srv *Server, sfuUDPAddr string, err error) {
 		ln, lerr := net.Listen("tcp", cfg.ListenAddr)
 		if lerr != nil {
 			s.closeListeners()
-			return nil, "", fmt.Errorf("turn: tcp listen %s: %w", cfg.ListenAddr, lerr)
+			return nil, fmt.Errorf("turn: tcp listen %s: %w", cfg.ListenAddr, lerr)
 		}
 		s.listeners = append(s.listeners, ln)
 		srvCfg.ListenerConfigs = append(srvCfg.ListenerConfigs, turn.ListenerConfig{
@@ -129,10 +115,10 @@ func Start(cfg Config) (srv *Server, sfuUDPAddr string, err error) {
 	server, err := turn.NewServer(srvCfg)
 	if err != nil {
 		s.closeListeners()
-		return nil, "", fmt.Errorf("turn: new server: %w", err)
+		return nil, fmt.Errorf("turn: new server: %w", err)
 	}
 	s.turn = server
-	return s, sfuUDPAddr, nil
+	return s, nil
 }
 
 // MintCredentials returns an ephemeral username/password for the given user,

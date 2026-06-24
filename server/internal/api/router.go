@@ -325,6 +325,9 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	// Never mounted in production.
 	if h.DevMode {
 		mux.HandleFunc("POST /v1/dev/invite", h.devMintInvite)
+		// e2e-only: shrink participant caps + ring/recovery cadence so the cap/re-ring tests
+		// run fast and need only a few browser contexts (spec 0004 US1/US2/US3).
+		mux.HandleFunc("POST /v1/dev/call-config", h.devCallConfig)
 	}
 
 	// Single-container mode: serve the built PWA at / (with SPA fallback) so one

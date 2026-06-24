@@ -20,18 +20,6 @@ import (
 	"ring/server/internal/store"
 )
 
-// CallSFU is the embedded group-call SFU the hub drives. *sfu.SFU satisfies it;
-// kept as an interface so the ws package needn't import pion/webrtc.
-type CallSFU interface {
-	Join(roomID, userID string) error
-	Answer(roomID, userID string, sdp json.RawMessage) error
-	ICE(roomID, userID string, cand json.RawMessage) error
-	Leave(roomID, userID string)
-	// Renegotiate re-offers to a room's peers after a client changed its tracks
-	// mid-call (e.g. a group member toggled their camera on or off).
-	Renegotiate(roomID string)
-}
-
 const (
 	writeWait = 10 * time.Second
 	// pongWait bounds how long a sudden, silent disconnect (network drop, frozen
@@ -150,7 +138,6 @@ type Hub struct {
 	conns    map[string]map[*Client]struct{}
 	watchers map[string]map[*Client]struct{} // targetUserID → clients watching it
 	rooms    *call.Registry
-	sfu      CallSFU                   // nil when calling is disabled
 	callBuf  map[string][]bufferedCall // recipient → briefly-held call offers
 	ringMu   sync.Mutex
 	ringHist map[string][]time.Time // userID → recent group-ring timestamps (rate limit)
@@ -166,7 +153,18 @@ type Hub struct {
 	// answered keeps getting reminders regardless of who else joined. Keyed roomID → member.
 	groupRingMu sync.Mutex
 	groupRings  map[string]map[string]context.CancelFunc
+	// Per (room, user): a grace timer started when their last connection drops, so a brief
+	// network blip (e.g. Wi-Fi↔cellular handoff) doesn't instantly evict them from a live
+	// call. Cancelled if they reconnect and re-join within the window; on expiry they're
+	// removed and the roster re-broadcast (call dropped, no auto-recall). Keyed "room\x00user".
+	evictMu     sync.Mutex
+	evictTimers map[string]*time.Timer
 }
+
+// callRecoveryGrace is how long a disconnected participant is held in a call room before
+// being evicted, giving them ~a network-handoff's worth of time to reconnect and re-join.
+// var (not const) so tests can shrink it; production value is unchanged.
+var callRecoveryGrace = 18 * time.Second
 
 type callRing struct {
 	caller string
@@ -175,19 +173,21 @@ type callRing struct {
 }
 
 const (
-	// A backgrounded callee is re-pushed this many times, this far apart, to feel
-	// like ringing (distinct visible notifications, not one tickle). The window
-	// (count*interval) sits within the dial timeout.
-	callRingCount    = 5
-	callRingInterval = 5 * time.Second
+	// A backgrounded callee is re-pushed this many times, this far apart, to feel like
+	// ringing (distinct visible notifications, not one tickle). The window (count*interval)
+	// spans ~60s so the callee has a full minute to react, and a push is SKIPPED for any
+	// round where they're already foregrounded (they see the in-app ring) — see startCallRing.
+	callRingCount    = 6
+	callRingInterval = 10 * time.Second
 )
 
-const (
-	// A group-call invitee who hasn't joined is reminded this many times, this far apart
-	// (≈30s total), and stops the moment they join. Less pushy than the 1:1 cadence; after
-	// these run out the caller's UI offers a recall (re-ring) or remove for that member.
-	groupRingCount    = 4
-	groupRingInterval = 7 * time.Second
+// A group-call invitee who hasn't joined is reminded this many times, this far apart
+// (~60s total), and stops the moment they join OR explicitly decline/leave. Pushes are
+// skipped once the member is foregrounded (the in-app ring re-shows live regardless). var
+// (not const) so tests can shrink the cadence — production values are unchanged.
+var (
+	groupRingCount    = 6
+	groupRingInterval = 10 * time.Second
 )
 
 const (
@@ -224,10 +224,65 @@ func NewHub() *Hub {
 		watchers: make(map[string]map[*Client]struct{}),
 		rooms:    call.NewRegistry(),
 		callBuf:   make(map[string][]bufferedCall),
-		ringHist:   make(map[string][]time.Time),
-		callRings:  make(map[string]*callRing),
-		groupRings: make(map[string]map[string]context.CancelFunc),
+		ringHist:    make(map[string][]time.Time),
+		callRings:   make(map[string]*callRing),
+		groupRings:  make(map[string]map[string]context.CancelFunc),
+		evictTimers: make(map[string]*time.Timer),
 	}
+}
+
+// evictKey namespaces an eviction timer by room + user.
+func evictKey(roomID, userID string) string { return roomID + "\x00" + userID }
+
+// scheduleEviction holds a disconnected participant in roomID for callRecoveryGrace, then —
+// if they haven't reconnected and re-joined (which cancels this) and still have no live
+// connection — removes them and re-broadcasts the roster. No auto-recall: a dropped member
+// is simply gone until someone explicitly rings them again.
+func (h *Hub) scheduleEviction(roomID, userID string) {
+	key := evictKey(roomID, userID)
+	h.evictMu.Lock()
+	if old := h.evictTimers[key]; old != nil {
+		old.Stop()
+	}
+	h.evictTimers[key] = time.AfterFunc(callRecoveryGrace, func() {
+		h.evictMu.Lock()
+		delete(h.evictTimers, key)
+		h.evictMu.Unlock()
+		// Reconnected meanwhile? Then they're back online — leave them in the room; their
+		// re-join already refreshed the roster.
+		if h.isOnline(userID) || h.hasAnyConn(userID) {
+			return
+		}
+		// They didn't come back in time → the call is dropped for them. Remove them and tell
+		// the others, but do NOT auto-recall: stop any reminder and clear any held invite so
+		// nothing rings them back automatically. Only an explicit recall returns them.
+		h.stopGroupMemberRing(roomID, userID)
+		h.clearBufferedCalls(userID)
+		roster, empty := h.rooms.Leave(roomID, userID)
+		h.broadcastRoster(roomID, roster)
+		if empty {
+			h.stopRoomRings(roomID)
+		}
+	})
+	h.evictMu.Unlock()
+}
+
+// cancelEviction stops a pending eviction (the participant reconnected and re-joined).
+func (h *Hub) cancelEviction(roomID, userID string) {
+	key := evictKey(roomID, userID)
+	h.evictMu.Lock()
+	if t := h.evictTimers[key]; t != nil {
+		t.Stop()
+		delete(h.evictTimers, key)
+	}
+	h.evictMu.Unlock()
+}
+
+// hasAnyConn reports whether userID has any live connection (foregrounded or not).
+func (h *Hub) hasAnyConn(userID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.conns[userID]) > 0
 }
 
 // startCallRing re-pushes a call tickle to `callee` every few seconds (up to
@@ -257,11 +312,16 @@ func (h *Hub) startCallRing(notifier Notifier, caller, callee, callID string) {
 			if ctx.Err() != nil {
 				return
 			}
-			func() {
-				nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer ncancel()
-				notifier.NotifyCall(nctx, callee)
-			}()
+			// Skip the OS push once the callee is foregrounded + responsive: they can see the
+			// in-app ring, so further pushes are just noise (the loop keeps running in case
+			// they background again before answering).
+			if !h.isActiveFresh(callee) {
+				func() {
+					nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer ncancel()
+					notifier.NotifyCall(nctx, callee)
+				}()
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -358,11 +418,22 @@ func (h *Hub) startGroupMemberRing(notifier Notifier, roomID, member string, inv
 				return // cancelled, or they joined → stop reminding them
 			}
 			h.Send(member, invite) // a live socket re-rings; a dismissed one re-shows
-			func() {
-				nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer ncancel()
-				notifier.NotifyCall(nctx, member)
-			}()
+			// Skip the OS push once they're foregrounded + responsive — they already see the
+			// live in-app ring above; a backgrounded member still gets pushed (the point).
+			if !h.isActiveFresh(member) {
+				func() {
+					nctx, ncancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer ncancel()
+					notifier.NotifyCall(nctx, member)
+				}()
+			}
+		}
+		// Rounds exhausted and still not in the room → authoritatively tell the WHOLE room
+		// "no answer" so every participant flips this member's tile to recall/remove at the
+		// same moment (not each on its own local timer). A cancelled loop (recall/remove/join)
+		// returned above and never reaches here.
+		if ctx.Err() == nil && !h.rooms.InRoom(roomID, member) {
+			h.broadcastMemberState(roomID, member, "noanswer")
 		}
 	}()
 }
@@ -462,28 +533,20 @@ func (h *Hub) takeBufferedCalls(userID string) [][]byte {
 	return out
 }
 
-// SetSFU wires the embedded SFU (called once at startup when calls are enabled).
-func (h *Hub) SetSFU(s CallSFU) { h.sfu = s }
+// clearBufferedCalls drops any held call offers for a user. Called the moment they join,
+// leave, or are evicted from a call so a stale buffered invite can never re-ring them on a
+// later reconnect — only a fresh, explicit recall (ringMember) re-rings someone who's out.
+func (h *Hub) clearBufferedCalls(userID string) {
+	h.mu.Lock()
+	delete(h.callBuf, userID)
+	h.mu.Unlock()
+}
 
 // SharesCallRoom reports whether a and b are currently in a common call room. Used by the
 // key-bundle handler to let co-participants of a live call fetch each other's bundles
 // (so an ad-hoc group call can mesh between members who aren't contacts) for the duration
 // of the call only — no persistent connection is created.
 func (h *Hub) SharesCallRoom(a, b string) bool { return h.rooms.SharesRoom(a, b) }
-
-// SendCallSignal delivers an SFU→client signalling frame (sfu-offer/sfu-ice).
-// The SFU invokes this via a callback so it needn't know the frame shape.
-func (h *Hub) SendCallSignal(userID, t, roomID string, data json.RawMessage) {
-	f := frame{T: t, RoomID: roomID}
-	if t == "sfu-offer" {
-		f.SDP = data
-	} else { // sfu-ice
-		f.Ciphertext = data
-	}
-	if payload, err := json.Marshal(f); err == nil {
-		h.Send(userID, payload)
-	}
-}
 
 // broadcastRoster sends the current room roster to every member.
 func (h *Hub) broadcastRoster(roomID string, roster []string) {
@@ -492,6 +555,22 @@ func (h *Hub) broadcastRoster(roomID string, roster []string) {
 		return
 	}
 	for _, uid := range roster {
+		h.Send(uid, payload)
+	}
+}
+
+// broadcastMemberState tells EVERYONE in the room about an invitee's ring-state transition
+// (status: "ringing" on recall, "noanswer" once the reminder rounds expire, "removed" when an
+// invitee is dropped). The server is the single authority on these transitions, so every
+// participant flips that member's tile at the same instant — instead of each client timing
+// it locally from its own join (which made the "still ringing vs. retry" tile differ per
+// person). Carries only ids the server already tracks (room roster) — no plaintext.
+func (h *Hub) broadcastMemberState(roomID, member, status string) {
+	payload, err := json.Marshal(frame{T: "call-member", RoomID: roomID, To: member, Status: status})
+	if err != nil {
+		return
+	}
+	for _, uid := range h.rooms.Roster(roomID) {
 		h.Send(uid, payload)
 	}
 }
@@ -780,15 +859,14 @@ func (c *Client) cleanup() {
 	c.hub.remove(c)
 	c.hub.removeWatches(c)
 	c.hub.forgetRingIfGone(c.userID) // bound ringHist to connected users
-	// Leave any group calls this connection was in (best-effort; a user with
-	// other live devices stays in the room via those).
-	if c.hub.rooms != nil {
+	// Group calls: don't evict on a socket drop. A short interruption (network blip, a
+	// Wi-Fi↔cellular handoff) would otherwise instantly remove the participant and tell
+	// everyone they left. Instead, if this was their LAST connection, hold their place for
+	// callRecoveryGrace; they're evicted only if they don't reconnect and re-join in time
+	// (a re-join cancels it). A user with another live device stays put — no timer.
+	if c.hub.rooms != nil && !c.hub.hasAnyConn(c.userID) {
 		for _, roomID := range c.hub.rooms.RoomsForUser(c.userID) {
-			roster, empty := c.hub.rooms.Leave(roomID, c.userID)
-			c.hub.broadcastRoster(roomID, roster)
-			if empty {
-				c.hub.stopRoomRings(roomID) // last one out → stop reminding any non-joiners
-			}
+			c.hub.scheduleEviction(roomID, c.userID)
 		}
 	}
 	_ = c.conn.Close()
@@ -1216,23 +1294,18 @@ func (c *Client) handleFrame(data []byte) {
 		}
 		// A group-call recall "remove" (call-cancel carrying a roomId + target) → stop
 		// reminding that invitee; the relay above also tells their device to stop ringing.
+		// Tell the whole room so everyone drops the removed tile together (any participant
+		// may remove, not just the initiator).
 		if f.T == "call-cancel" && f.RoomID != "" && f.To != "" {
 			c.hub.stopGroupMemberRing(f.RoomID, f.To)
+			c.hub.broadcastMemberState(f.RoomID, f.To, "removed")
 		}
-
-	case "call-key":
-		// Group media key, sealed peer-to-peer; relayed live, never inspected.
-		c.relayCall(f)
-
-	case "call-streamid":
-		// A member's "this stream is mine" announcement, sealed peer-to-peer (lets
-		// peers label tiles with names/avatars); relayed live, never inspected.
-		c.relayCall(f)
-
-	case "call-key-request":
-		// A member missing the current group key asks the master (f.To) to resend it.
-		// Live relay only (like call-key); the master re-seals and sends.
-		c.relayCall(f)
+		// A busy invitee replying to a group invite (call-busy carrying a roomId) won't join →
+		// stop re-ringing the SENDER; the relay above tells the caller to mark them unavailable
+		// (spec 0004 US2).
+		if f.T == "call-busy" && f.RoomID != "" {
+			c.hub.stopGroupMemberRing(f.RoomID, c.userID)
+		}
 
 	case "call-join":
 		// Join a group-call room: update membership and tell everyone the roster. The
@@ -1241,7 +1314,25 @@ func (c *Client) handleFrame(data []byte) {
 		if f.RoomID == "" {
 			return
 		}
-		roster := c.hub.rooms.Join(f.RoomID, c.userID)
+		// A re-join (reconnect after a network blip) cancels any pending grace eviction so the
+		// participant keeps their place and others smoothly re-establish (spec 0004).
+		c.hub.cancelEviction(f.RoomID, c.userID)
+		// They're in now → drop any held invite so a later reconnect's flush can't re-ring them
+		// back into a call they're already in (reconnecting must never look like a new call).
+		c.hub.clearBufferedCalls(c.userID)
+		// Authoritative participant cap (spec 0004 US3): a video call holds at most VideoMax,
+		// an audio one at most AudioMax. The cap follows the join's kind. A user already in the
+		// room is always re-admitted (idempotent recovery). On refusal, tell only the joiner
+		// (call-full) and broadcast no roster change, so the existing call is undisturbed.
+		max := call.AudioMax
+		if f.Kind == "video" {
+			max = call.VideoMax
+		}
+		roster, admitted := c.hub.rooms.JoinIfRoom(f.RoomID, c.userID, max)
+		if !admitted {
+			c.send1(frame{T: "call-full", RoomID: f.RoomID, Kind: f.Kind})
+			return
+		}
 		c.hub.broadcastRoster(f.RoomID, roster)
 		c.hub.stopGroupMemberRing(f.RoomID, c.userID) // they're in now → stop reminding them
 		// The initiator (first into the room) supplies the group member list → ring
@@ -1256,8 +1347,23 @@ func (c *Client) handleFrame(data []byte) {
 		if f.RoomID == "" {
 			return
 		}
+		c.hub.cancelEviction(f.RoomID, c.userID) // explicit leave supersedes any pending grace timer
+		c.hub.clearBufferedCalls(c.userID)       // and drop any held invite so they aren't re-rung on reconnect
+		// Stop reminding THIS member: a call-leave is sent both when leaving a joined call
+		// and when declining/dismissing an invite they never accepted. Without this, a
+		// declined group invitee keeps getting re-rung every groupRingInterval until the
+		// reminder rounds run out — the "called back in automatically" bug (spec 0004 US1).
+		c.hub.stopGroupMemberRing(f.RoomID, c.userID)
+		// A leave from someone NOT in the room is a DECLINE of an invite they never accepted.
+		// The roster doesn't change (they were never in it), so the caller's tile would keep
+		// ringing until its local timeout — tell the room they're not coming so every tile
+		// flips to recall/remove together now (any participant can then recall them).
+		declined := !c.hub.rooms.InRoom(f.RoomID, c.userID)
 		roster, empty := c.hub.rooms.Leave(f.RoomID, c.userID)
 		c.hub.broadcastRoster(f.RoomID, roster)
+		if declined && !empty {
+			c.hub.broadcastMemberState(f.RoomID, c.userID, "noanswer")
+		}
 		if empty {
 			c.hub.stopRoomRings(f.RoomID) // call's over → stop reminding any non-joiners
 		}
@@ -1277,30 +1383,9 @@ func (c *Client) handleFrame(data []byte) {
 		invite := frame{T: "call-group-invite", From: c.userID, RoomID: f.RoomID, Kind: f.Kind, Members: f.Members}
 		if payload, err := json.Marshal(invite); err == nil {
 			c.ringMember(f.RoomID, f.To, payload)
+			// Tell the whole room this invitee is ringing again, so every participant's tile
+			// flips back from "no answer" to "ringing" together (any participant may recall).
+			c.hub.broadcastMemberState(f.RoomID, f.To, "ringing")
 		}
-
-	case "sfu-answer":
-		if c.hub.sfu == nil || f.RoomID == "" || len(f.SDP) == 0 {
-			return
-		}
-		if err := c.hub.sfu.Answer(f.RoomID, c.userID, f.SDP); err != nil {
-			slog.Error("sfu answer", "err", err)
-		}
-
-	case "sfu-ice":
-		if c.hub.sfu == nil || f.RoomID == "" || len(f.Ciphertext) == 0 {
-			return
-		}
-		if err := c.hub.sfu.ICE(f.RoomID, c.userID, f.Ciphertext); err != nil {
-			slog.Error("sfu ice", "err", err)
-		}
-
-	case "sfu-renegotiate":
-		// A participant added/removed a track mid-call (camera on/off) → have the SFU
-		// re-offer so the new track set is negotiated and forwarded.
-		if c.hub.sfu == nil || f.RoomID == "" {
-			return
-		}
-		c.hub.sfu.Renegotiate(f.RoomID)
 	}
 }

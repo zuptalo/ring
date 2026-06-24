@@ -126,9 +126,96 @@ export function startCall(caller: RingClient, peerId: string, kind: 'audio' | 'v
 }
 
 export const accept = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.accept());
+export const reject = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.reject());
 export const hangup = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.hangup());
 export const remoteTracks = (c: RingClient): Promise<number> =>
   c.page.evaluate(() => (window as any).__ringTest.remoteTracks());
+export const callState = (c: RingClient): Promise<string> =>
+  c.page.evaluate(() => (window as any).__ringTest.callState());
+/** The per-device 1:1 chat id for a peer (resolve on each side). */
+export const chatWith = (c: RingClient, peerId: string): Promise<string> =>
+  c.page.evaluate((p) => (window as any).__ringTest.chatWith(p), peerId);
+/** Messages in a chat ({ id, body, kind, ... }); a logged call is kind 'call'. */
+export const messages = (c: RingClient, chatId: string): Promise<{ id: string; body: string; kind: string }[]> =>
+  c.page.evaluate((id) => (window as any).__ringTest.messages(id), chatId);
+/** Wait until `c`'s chat with `peerId` contains a call-history (kind 'call') entry. */
+export async function waitCallLog(c: RingClient, peerId: string, timeout = 10_000): Promise<void> {
+  const chatId = await chatWith(c, peerId);
+  await c.page.waitForFunction(
+    async (id: string) => (await (window as any).__ringTest.messages(id)).some((m: any) => m.kind === 'call'),
+    chatId,
+    { timeout, polling: 300 },
+  );
+}
+
+/* ---- group calls (spec 0004) ---- */
+
+/** Act as the INITIATOR: ring `members` into a group call `roomId` (they get an incoming
+ *  invite to accept). Omit `members` to just JOIN an existing room. */
+export const startGroup = (c: RingClient, roomId: string, kind: 'audio' | 'video', members: string[] = []) =>
+  c.page.evaluate(
+    ([r, k, m]) => (window as any).__ringTest.startGroup(r, k, m),
+    [roomId, kind, members] as const,
+  );
+export const remoteStreamCount = (c: RingClient): Promise<number> =>
+  c.page.evaluate(() => (window as any).__ringTest.remoteStreamCount());
+export const roster = (c: RingClient): Promise<string[]> =>
+  c.page.evaluate(() => (window as any).__ringTest.callMeta()?.roster ?? []);
+export const recall = (c: RingClient, memberId: string) =>
+  c.page.evaluate((m) => (window as any).__ringTest.recall(m), memberId);
+export const removeInvitee = (c: RingClient, memberId: string) =>
+  c.page.evaluate((m) => (window as any).__ringTest.removeInvitee(m), memberId);
+export const notJoiningIds = (c: RingClient): Promise<string[]> =>
+  c.page.evaluate(() => (window as any).__ringTest.notJoiningIds());
+export const busyMemberIds = (c: RingClient): Promise<string[]> =>
+  c.page.evaluate(() => (window as any).__ringTest.busyMemberIds());
+export const invitedIds = (c: RingClient): Promise<string[]> =>
+  c.page.evaluate(() => (window as any).__ringTest.invitedIds());
+export const groupDiag = (c: RingClient): Promise<{ inboundVideoFrames: number; tiers: Record<string, string> }> =>
+  c.page.evaluate(() => (window as any).__ringTest.groupCallDiag());
+export const toggleVideo = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.toggleVideo());
+export const toggleMute = (c: RingClient) => c.page.evaluate(() => (window as any).__ringTest.toggleMute());
+export const setGlobalSetting = (c: RingClient, key: string, value: unknown) =>
+  c.page.evaluate(([k, v]) => (window as any).__ringTest.setGlobalSetting(k, v), [key, value] as const);
+export const setVideoQuality = (c: RingClient, q: 'auto' | 'medium' | 'low') =>
+  c.page.evaluate((v) => (window as any).__ringTest.setVideoQuality(v), q);
+
+/** Wait until `c` reports exactly `n` remote streams (mesh peers). */
+export async function waitRemotes(c: RingClient, n: number, timeout = 30_000): Promise<void> {
+  await c.page.waitForFunction(
+    (want: number) => (window as any).__ringTest.remoteStreamCount() === want,
+    n,
+    { timeout },
+  );
+}
+
+/* ---- call-cue recording (spec 0004 US5) ---- */
+export const recordCues = (c: RingClient, on: boolean) =>
+  c.page.evaluate((v) => (window as any).__ringTest.recordCues(v), on);
+export const cuesFired = (c: RingClient): Promise<string[]> =>
+  c.page.evaluate(() => (window as any).__ringTest.cuesFired());
+
+/* ---- dev/e2e backend call-config (caps + ring/recovery cadence) ---- */
+const BACKEND = `http://localhost:${process.env.RING_E2E_PORT || 8081}`; // isolated e2e ringd (see global-setup)
+export interface CallConfig {
+  videoMax?: number;
+  audioMax?: number;
+  ringCount?: number;
+  ringIntervalMs?: number;
+  recoveryGraceMs?: number;
+}
+/** Shrink participant caps / ring cadence on the shared backend so a cap or re-ring test
+ *  needs only a few contexts and runs in seconds. The suite is serial, so this is per-test;
+ *  ALWAYS resetCallConfig() in afterEach so later tests see production defaults. */
+export async function setCallConfig(cfg: CallConfig): Promise<void> {
+  const res = await fetch(`${BACKEND}/v1/dev/call-config`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) throw new Error(`call-config failed: ${res.status}`);
+}
+export const resetCallConfig = (): Promise<void> => setCallConfig({});
 
 /* ---- notification helpers (spec 1015) ---- */
 

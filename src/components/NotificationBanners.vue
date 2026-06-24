@@ -8,7 +8,7 @@
       v-for="b in banners"
       :key="b.url"
       class="nb"
-      :class="{ replying: replyUrl === b.url, dragging: dragUrl === b.url }"
+      :class="{ replying: replyUrl === b.url, dragging: dragUrl === b.url, 'nb-danger': b.tone === 'danger' }"
       :style="cardStyle(b)"
     >
       <!-- Explicit dismiss affordance (FR-015), in addition to swipe-up / auto-dismiss.
@@ -20,19 +20,21 @@
            prompt) is not a link — it carries its own buttons — so it isn't clickable. -->
       <div
         class="nb-main"
-        :class="{ 'nb-main-static': b.kind === 'action' }"
-        :role="b.kind === 'action' ? undefined : 'button'"
-        :tabindex="b.kind === 'action' ? undefined : 0"
-        @click="b.kind === 'action' ? undefined : open(b)"
-        @keydown.enter="b.kind === 'action' ? undefined : open(b)"
+        :class="{ 'nb-main-static': isStatic(b) }"
+        :role="isStatic(b) ? undefined : 'button'"
+        :tabindex="isStatic(b) ? undefined : 0"
+        @click="isStatic(b) ? undefined : open(b)"
+        @keydown.enter="isStatic(b) ? undefined : open(b)"
       >
-        <div class="nb-avatar" :class="{ 'nb-system': (b.kind === 'system' || b.kind === 'action') && !b.avatar }">
+        <div class="nb-avatar" :class="{ 'nb-system': (b.kind === 'system' || b.kind === 'action' || b.kind === 'status') && !b.avatar }">
           <img v-if="b.avatar" :src="b.avatar" :alt="b.name" />
           <ion-icon v-else :icon="bannerIcon(b)" />
         </div>
         <div class="nb-text">
-          <div class="nb-name">{{ b.name }}</div>
-          <div class="nb-body" :class="{ 'nb-body-wrap': b.kind === 'action' }">{{ sentId === b.id ? 'Sent' : b.body }}</div>
+          <!-- A status notice is a single (possibly long) line and carries no separate
+               body, so let its headline wrap instead of truncating. -->
+          <div class="nb-name" :class="{ 'nb-body-wrap': b.kind === 'status' }">{{ b.name }}</div>
+          <div v-if="b.body || sentId === b.id" class="nb-body" :class="{ 'nb-body-wrap': b.kind === 'action' }">{{ sentId === b.id ? 'Sent' : b.body }}</div>
         </div>
         <ion-icon v-if="sentId === b.id" :icon="checkmarkCircle" class="nb-sent" />
       </div>
@@ -92,7 +94,9 @@
           {{ a.text }}
         </button>
       </div>
-      <span v-else class="nb-handle nb-handle-static" aria-hidden="true" />
+      <!-- A status notice is a self-contained transient line: no quick-reply, no buttons,
+           and no grab handle (nothing to pull open). -->
+      <span v-else-if="b.kind !== 'status'" class="nb-handle nb-handle-static" aria-hidden="true" />
     </div>
   </div>
 </template>
@@ -102,7 +106,7 @@ import { ref, watch } from 'vue';
 import { IonIcon, IonTextarea } from '@ionic/vue';
 import {
   personAddOutline, chatbubbleEllipsesOutline, sendOutline, checkmarkCircle, closeOutline,
-  sparklesOutline,
+  sparklesOutline, informationCircleOutline, alertCircleOutline,
 } from 'ionicons/icons';
 import router from '@/router';
 import {
@@ -115,13 +119,21 @@ import { normalizeOutgoing } from '@/utils/text';
 
 const banners = notifyBanners;
 
-// The glyph for a banner with no avatar: a system / action notice carries its own icon;
-// a request shows the add-person icon; an action card falls back to sparkles; a message
-// falls back to the chat bubble.
+// A static (non-clickable) card carries its own content rather than linking to a chat:
+// the update prompt ('action') with its buttons, and transient functional notices ('status').
+function isStatic(b: NotifyBanner): boolean {
+  return b.kind === 'action' || b.kind === 'status';
+}
+
+// The glyph for a banner with no avatar: a system / action / status notice carries its own
+// icon; a request shows the add-person icon; an action card falls back to sparkles; a status
+// notice falls back to an info (or alert, when it's an error) glyph; a message falls back to
+// the chat bubble.
 function bannerIcon(b: NotifyBanner): string {
   if (b.icon) return b.icon;
   if (b.kind === 'request') return personAddOutline;
   if (b.kind === 'action') return sparklesOutline;
+  if (b.kind === 'status') return b.tone === 'danger' ? alertCircleOutline : informationCircleOutline;
   return chatbubbleEllipsesOutline;
 }
 
@@ -328,6 +340,19 @@ watch(
     /* Slightly more opaque in dark mode so the green reads as a solid surface. */
     background: rgba(var(--ion-color-primary-rgb, 16, 185, 129), 0.95);
   }
+}
+/* Error status notices ("Couldn't send…") use the danger token instead of the green theme,
+   so a failure reads as a failure while still sitting in the same banner surface/position. */
+.nb.nb-danger {
+  background: rgba(var(--ion-color-danger-rgb, 235, 68, 90), 0.92);
+}
+@media (prefers-color-scheme: dark) {
+  .nb.nb-danger {
+    background: rgba(var(--ion-color-danger-rgb, 235, 68, 90), 0.95);
+  }
+}
+.nb.nb-danger .nb-avatar.nb-system {
+  background: var(--ion-color-danger, #eb445a);
 }
 /* Explicit dismiss button (FR-015), top-trailing so it clears the avatar + text. */
 .nb-close {

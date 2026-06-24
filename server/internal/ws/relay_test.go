@@ -202,6 +202,8 @@ func testAuth(_ context.Context, token string) (string, bool, error) {
 		return "user-a", true, nil
 	case "tokB":
 		return "user-b", true, nil
+	case "tokC":
+		return "user-c", true, nil
 	}
 	return "", false, nil
 }

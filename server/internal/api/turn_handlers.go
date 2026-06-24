@@ -48,7 +48,5 @@ func (h *Handlers) turnCredentials(w http.ResponseWriter, r *http.Request) {
 			"credential": password,
 		}},
 		"ttl": int(turnCredTTL.Seconds()),
-		// Group calls negotiate with the SFU over the WS signalling channel.
-		"sfu": map[string]any{"signalVia": "ws"},
 	})
 }

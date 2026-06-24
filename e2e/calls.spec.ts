@@ -70,53 +70,25 @@ test('1:1 audio call upgrades to video only with the peer’s consent', async ({
     });
   }
 
-  // Regression: "video previewed locally but never sent" on a RE-upgrade. Downgrade to
-  // audio (this nulls the video sender's track but keeps its m-line/transceiver alive),
-  // then upgrade to video AGAIN. The re-upgrade must REUSE that dormant video
-  // transceiver (replaceTrack) rather than pc.addTrack a SECOND video m-line, which
-  // would strand the live track on a direction the peer never receives. (We key off
-  // callMeta().kind, not muted state: a 1:1 downgrade leaves the receiver track live in
-  // the stream, and its muted attribute doesn't flip reliably in headless Chromium.)
-  await a.page.evaluate(() => (window as any).__ringTest.toggleVideo()); // downgrade, peer mirrors
-  for (const p of [a, b]) {
-    await p.page.waitForFunction(() => (window as any).__ringTest.callMeta()?.kind === 'audio', null, {
-      timeout: 20_000,
-    });
-  }
-
-  // Baseline decoded-frame counts (frozen while audio-only) to prove NEW video flows after.
-  const aFrames0 = await a.page.evaluate(() => (window as any).__ringTest.inboundVideoFrames());
-  const bFrames0 = await b.page.evaluate(() => (window as any).__ringTest.inboundVideoFrames());
-
-  await a.page.evaluate(() => (window as any).__ringTest.toggleVideo()); // re-request video
-  await b.page.waitForFunction(() => (window as any).__ringTest.upgradeRequested() === true, null, {
-    timeout: 15_000,
-  });
-  await b.page.evaluate(() => (window as any).__ringTest.acceptVideoUpgrade());
+  // The upgrade adds EXACTLY ONE video transceiver per side (a clean single upgrade — a
+  // duplicate m-line would make this 2 and strand the live track). A call no longer drops
+  // back to audio, so there is no downgrade/re-upgrade path to exercise here.
   for (const p of [a, b]) {
     await p.page.waitForFunction(() => (window as any).__ringTest.callMeta()?.kind === 'video', null, {
       timeout: 20_000,
     });
-  }
-
-  // The fix, deterministically: exactly ONE video transceiver per side (a duplicate
-  // m-line from re-addTrack would make this 2 and is what stranded the video).
-  for (const p of [a, b]) {
     expect(await p.page.evaluate(() => (window as any).__ringTest.videoTransceivers())).toBe(1);
   }
 
-  // And real media flows again: each side decodes NEW video frames from the other after
-  // the re-upgrade (the live confirmation that video reaches the peer, not just locally).
-  await a.page.waitForFunction(
-    (base) => (window as any).__ringTest.inboundVideoFrames().then((f: number) => f > base),
-    aFrames0,
-    { timeout: 25_000 },
-  );
-  await b.page.waitForFunction(
-    (base) => (window as any).__ringTest.inboundVideoFrames().then((f: number) => f > base),
-    bFrames0,
-    { timeout: 25_000 },
-  );
+  // And real media flows: each side decodes the other's video frames (the live confirmation
+  // that video reaches the peer, not just previews locally).
+  for (const p of [a, b]) {
+    await p.page.waitForFunction(
+      () => (window as any).__ringTest.inboundVideoFrames().then((f: number) => f > 0),
+      null,
+      { timeout: 25_000 },
+    );
+  }
 
   await hangup(a);
   await ctxA.close();
@@ -207,16 +179,8 @@ test('group call: three participants exchange media over the mesh', async ({ bro
     );
   }
 
-  // And back to audio-only: A's video track is removed and each leg renegotiates, so B
-  // and C stop receiving video.
-  await a.page.evaluate(() => (window as any).__ringTest.toggleVideo());
-  for (const p of [b, c]) {
-    await p.page.waitForFunction(
-      () => (window as any).__ringTest.remoteVideoTracks() === 0,
-      null,
-      { timeout: 30_000 },
-    );
-  }
+  // (A call no longer drops back to audio mid-call — the video→audio downgrade was removed —
+  // so there's no "back to audio-only" leg to exercise here.)
 
   // Everyone tears down.
   for (const p of [a, b, c]) {
