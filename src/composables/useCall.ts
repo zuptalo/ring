@@ -536,62 +536,17 @@ async function loadCallPrefs(): Promise<void> {
   callSoundsOn = sounds;
 }
 // Camera-capture watchdog (iOS, esp. iPhone 8). On the A11/iOS-16.7 iPhone 8 the front camera comes
-// up live, then WebKit rotates it to the perpendicular orientation (portrait↔landscape) for the
-// held device, and THAT reconfiguration MUTES the track in the same instant — and it never auto-
-// unmutes. Stuck muted = no frames, so the self-view is black AND nothing is encoded/sent (confirmed
-// on-device: `cam init muted=false 480x640` → `cam MUTED muted=true 640x480`, then ~1fps forever).
-// We can't prevent the rotation (any requested orientation just flips to the other), so we RECOVER:
-// if a track mutes and is STILL muted after a grace window (genuinely-transient mutes — as on newer
-// phones — unmute on their own inside it, so we don't disturb those), do a clean stop-then-reacquire.
-// By then the orientation has settled, so the fresh capture usually comes up live and stays unmuted;
-// capped so a device that mutes every single time falls back to audio + a black tile, not a thrash
-// loop. State + decisions are surfaced to the ⓘ panel for diagnosis.
+// up live, then WebKit reconfigures it (orientation/format) and MUTES the track in the same instant —
+// and it never auto-unmutes, so the self-view is black AND nothing is encoded/sent (~1fps forever).
+// The real cause (WebKit bug 252465 / Apple Forums 667453): iOS tears down/mutes a capture that has no
+// VISIBLE, PLAYING <video> rendering it — and our previews are `display:none` (v-show) until they have
+// frames, a chicken-and-egg that mutes the camera before any frame arrives. The fix lives in the view:
+// an always-mounted, opacity-hidden (NOT display:none), playing keep-alive <video> renders the local
+// stream so iOS keeps the capture alive. Here we only OBSERVE the track for the ⓘ panel and re-kick the
+// preview on unmute. We do NOT re-acquire on a stuck mute: a second getUserMedia is itself a documented
+// mute trigger (WebKit bug 179363) and on-device it re-muted every time — restart can't escape it.
 let instrumentedCamTrack: MediaStreamTrack | null = null;
-let camRecoveryTimer: number | null = null; // pending "still muted after grace?" check
-let camRecoveries = 0; // restarts attempted this call (capped — see restartCamera)
 let diagTick = 0; // debug: throttles the 1:1 outbound-video readout in pollStats
-
-const MAX_CAM_RECOVERIES = 1; // give up after this many restarts in one call (avoid a churn loop)
-const CAM_MUTE_GRACE_MS = 2000; // wait this long for a transient mute to self-resolve before restarting
-
-function clearCamRecovery(): void {
-  if (camRecoveryTimer !== null) {
-    clearTimeout(camRecoveryTimer);
-    camRecoveryTimer = null;
-  }
-}
-
-/** Clean camera restart for the iPhone-8 permanent-mute: stop the muted track FIRST (frees the one
- *  iOS camera — re-acquiring while it's still live ENDs the track we're using, which is what made the
- *  naive version worse), then acquire a fresh capture, swap it into the outgoing sender(s) and the
- *  self-preview, and re-instrument it (so if the fresh track ALSO mutes we try again, up to the cap).
- *  Audio is untouched. */
-async function restartCamera(): Promise<void> {
-  const ls = localStream.value;
-  const old = ls?.getVideoTracks()[0];
-  if (!old || old.readyState === 'ended' || !old.muted) return; // recovered or gone — nothing to do
-  if (camRecoveries >= MAX_CAM_RECOVERIES) {
-    pushDiag(`cam recover: giving up after ${camRecoveries} (audio only)`);
-    return;
-  }
-  camRecoveries += 1;
-  pushDiag(`cam recover: restart #${camRecoveries}`);
-  old.stop(); // release the camera BEFORE re-acquiring (iOS allows a single consumer)
-  let fresh: MediaStream;
-  try {
-    fresh = await navigator.mediaDevices.getUserMedia({ video: gumConstraints('video').video, audio: false });
-  } catch {
-    pushDiag('cam recover: getUserMedia failed');
-    return;
-  }
-  const nv = fresh.getVideoTracks()[0];
-  if (!nv) return;
-  const audio = ls?.getAudioTracks() ?? [];
-  localStream.value = new MediaStream([...audio, nv]); // fresh ref → self-preview re-attaches + replays
-  await replaceOutgoingVideo(nv).catch(() => {});
-  instrumentedCamTrack = null;
-  instrumentCamTrack(nv);
-}
 
 /** Hand the self-preview a FRESH MediaStream object so its <video> re-attaches + re-plays. iOS
  *  Safari doesn't reliably render a track that resumed after a mute, so reassigning the ref is the
@@ -610,15 +565,13 @@ async function reassertOutgoingVideo(): Promise<void> {
 
 /** Reset the camera instrumentation for a fresh call (called from teardown). */
 function resetCameraWatchdog(): void {
-  clearCamRecovery();
   instrumentedCamTrack = null;
-  camRecoveries = 0;
 }
 
-/** Instrument one local camera track: report its state to the ⓘ panel; on a SUSTAINED mute (still
- *  muted after a grace window — the iPhone-8 permanent-mute), restart the camera; on unmute, cancel
- *  any pending restart (it recovered on its own) and kick the self-preview + sender so iOS resumes
- *  frames. Idempotent per track. */
+/** Instrument one local camera track: report its state to the ⓘ panel and, on unmute, kick the
+ *  self-preview + sender so iOS resumes frames. We do NOT re-acquire on a stuck mute — a second
+ *  getUserMedia is itself a mute trigger and re-muted every time on-device; preventing the mute (the
+ *  keep-alive renderer in the view) is what works. Idempotent per track. */
 function instrumentCamTrack(v: MediaStreamTrack): void {
   if (v === instrumentedCamTrack) return;
   instrumentedCamTrack = v;
@@ -634,22 +587,11 @@ function instrumentCamTrack(v: MediaStreamTrack): void {
   report('init');
   v.addEventListener('unmute', () => {
     report('unmuted');
-    clearCamRecovery(); // self-resolved within the grace window — don't restart (don't disturb newer phones)
     // iOS resumed the track but the self-preview + encoder may not pick the frames back up — kick both.
     forceSelfPreviewReattach();
     void reassertOutgoingVideo();
   });
-  v.addEventListener('mute', () => {
-    report('MUTED');
-    // Only the iPhone-8-style PERMANENT mute needs intervention. Wait out the grace window: a
-    // transient mute (newer phones) fires `unmute` inside it and cancels this; if we're still muted
-    // when it elapses, the orientation has settled — restart the camera into a fresh, stable capture.
-    clearCamRecovery();
-    camRecoveryTimer = window.setTimeout(() => {
-      camRecoveryTimer = null;
-      if (v.muted && v.readyState === 'live') void restartCamera();
-    }, CAM_MUTE_GRACE_MS);
-  });
+  v.addEventListener('mute', () => report('MUTED'));
   v.addEventListener('ended', () => report('ENDED'));
 }
 
