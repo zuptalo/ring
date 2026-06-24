@@ -483,10 +483,11 @@ function swapMain(): void {
 }
 
 // PiP anchor in a 3×3 grid: row 0=top,1=middle,2=bottom; col 0=left,1=center,2=right.
-// Default top-right (matches the old fixed position). The middle column is centered;
-// side columns hug their edge; top/bottom rows hug the outer edge, all with the SAME
-// margin, so the two corners nearest each outer edge are always equally inset.
-const pipPos = ref({ row: 0, col: 2 });
+// Default BOTTOM-right: our self-view sits clear of the call name/status overlay at the top of
+// the screen (which it used to cover) while still resting just above the control bar. The middle
+// column is centered; side columns hug their edge; top/bottom rows hug the outer edge, all with
+// the SAME margin, so the two corners nearest each outer edge are always equally inset.
+const pipPos = ref({ row: 2, col: 2 });
 const pipStyle = computed(() => {
   const { row, col } = pipPos.value;
   let left: string;
