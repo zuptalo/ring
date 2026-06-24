@@ -19,9 +19,13 @@ type CallSignal =
   | { type: 'resume'; callId: string; roomId?: string };  // sender resumed this call
 ```
 
-Routing (no new transport frame types): reuse `call-offer`/`call-answer`/`call-ice`'s sealed
-envelope, or piggyback on a generic sealed-signal frame already in `transport.ts`. The
-`roomId` is present for a mesh leg (one hold/resume per leg), absent for 1:1.
+Routing (**no new transport frame, no server change**): the signal rides an EXISTING sealed
+call frame — `call-ice` (already relayed by the server and on the `sync.ts` allowlist) — as an
+opaque carrier. The server forwards the ciphertext exactly as today. The **receiver** opens the
+sealed `CallSignal` and **dispatches on its inner `.type`**: `hold`/`resume` branch off before
+the offer/answer/ice handling. Because the outer frame type is unchanged, neither
+`transport.ts`, the server relay allowlist, nor the client `sync.ts` allowlist needs editing.
+The `roomId` is present for a mesh leg (one hold/resume per leg), absent for 1:1.
 
 **Receiver behaviour** (the other party / each other group member):
 - On `hold`: mark the sender `remote-held`, **pause own outgoing media to that sender**

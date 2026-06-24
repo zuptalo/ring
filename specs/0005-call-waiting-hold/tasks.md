@@ -27,7 +27,7 @@ spec 0004 calling stack; no server code or DB migration.
 
 **Purpose**: The shared primitives every story builds on (pure data/types — no behaviour yet).
 
-- [ ] T001 Add `'hold' | 'resume'` to the `CallSignal` union (with `callId`, optional `roomId`) in `src/services/crypto/message.ts`, and a matching sealed-signal carry path in `src/services/call/signalling.ts` (reuse the existing `sendSealedSignal` envelope; no new transport frame).
+- [ ] T001 Add `'hold' | 'resume'` to the `CallSignal` union (with `callId`, optional `roomId`) in `src/services/crypto/message.ts`. Carry them over an EXISTING sealed call frame (`call-ice`, already relayed + allowlisted) via `sendSealedSignal` in `src/services/call/signalling.ts` — the outer frame is just an opaque carrier; the receiver dispatches on the inner `CallSignal.type` (T007). This keeps the contract's promise of NO new transport frame and NO server change: confirm `transport.ts`, the server relay allowlist (`hub.go`), and the client `sync.ts` allowlist all need no edit.
 - [ ] T002 [P] Add the four cue recipe names (`callwaiting`, `hold`, `resume`, `swap`) to `RECIPES` in `src/services/sound.ts` (distinct, subtle tones; `callwaiting` ≠ the normal incoming ring).
 
 ---
@@ -39,11 +39,11 @@ that ALL user stories depend on.
 
 **⚠️ CRITICAL**: No user-story work begins until this phase is complete.
 
-- [ ] T003 [P] Create the PURE slot reducer in `src/services/call/slots.ts`: a `CallSlots` state (`active`, `held`) + `reduce(state, action)` for `accept` / `swap` / `dropActive` / `dropHeld` / `remoteEndedHeld`, with the two-call cap encoded (no WebRTC, no IndexedDB — pure, testable).
-- [ ] T004 [P] Write FAILING unit tests for the slot reducer in `src/services/call/slots.test.ts`: accept holds the current call; swap exchanges active⇄held N times; dropActive promotes held→active; dropHeld leaves active; remoteEndedHeld frees the held slot; a third accept while full is rejected (cap).
+- [ ] T003 [P] Write FAILING unit tests for the slot reducer in `src/services/call/slots.test.ts` (TDD — authored before the reducer, MUST fail first): accept holds the current call; swap exchanges active⇄held N times; dropActive promotes held→active; dropHeld leaves active; remoteEndedHeld frees the held slot; a third accept while full is rejected (cap).
+- [ ] T004 Create the PURE slot reducer in `src/services/call/slots.ts` to turn T003 green: a `CallSlots` state (`active`, `held`) + `reduce(state, action)` for `accept` / `swap` / `dropActive` / `dropHeld` / `remoteEndedHeld`, with the two-call cap encoded (no WebRTC, no IndexedDB — pure).
 - [ ] T005 Implement `MeshSession.pause()` / `resume()` in `src/services/call/mesh.ts`: `replaceTrack(null)` / `replaceTrack(liveTrack)` on every leg's senders and send the sealed `hold` / `resume` per leg; stop/restart that session's adaptive sampling while paused (resume restarts at the low tier).
 - [ ] T006 Add 1:1 pause/resume helpers in `src/composables/useCall.ts` (the `pc` path): `replaceTrack(null|live)` on the audio + video senders and send the sealed `hold`/`resume` to the peer; stop/restart the 1:1 stats sampler while paused.
-- [ ] T007 Handle inbound `hold` / `resume` signals in `src/composables/useCall.ts` (route through `handleMeshSignal` for the mesh, the 1:1 signal handler otherwise): set/clear a per-call `remoteHeld` flag and pause/restore OWN outgoing to the holder (`replaceTrack`), so media stops in both directions.
+- [ ] T007 Handle inbound `hold` / `resume` signals in `src/composables/useCall.ts`: in the sealed-signal receive path (mesh `handleMeshSignal` and the 1:1 signal handler), open the `CallSignal` and DISPATCH ON ITS INNER `.type` — `hold`/`resume` branch off BEFORE the offer/answer/ice handling, so no new outer frame type is needed. On `hold`: set the per-call `remoteHeld` flag and pause OWN outgoing to the holder (`replaceTrack(null)`); on `resume`: clear it and restore (`replaceTrack(live)`) — media stops/returns in both directions.
 - [ ] T008 Add the `held` slot holder + slot wiring to `src/composables/useCall.ts`: a `heldCall` holder of `{ meta, pc|groupSession, remoteHeld }`, reactive `heldCall`/`isHeld`/`canHoldIncoming`, and the single shared `getUserMedia` track set owned by the ACTIVE slot (held slot's senders carry `null`). Drive transitions through the `slots.ts` reducer.
 - [ ] T009 [P] Expose the new hooks for tests in `src/services/testhook.ts`: `acceptAndHold()`, `swapCalls()`, `endActive()`, `endHeld()`, `heldMeta()`, `isRemoteHeld()`, `canHoldIncoming()`.
 
@@ -61,7 +61,7 @@ media pauses both ways and shows "on hold", the second connects with working med
 
 - [ ] T010 [P] [US1] Write FAILING e2e `e2e/call-waiting.spec.ts` (chromium): A↔B connected; C calls A; A accept-and-holds → A↔B media pauses both ways + B sees `remoteHeld`/"on hold"; A↔C connects live. Plus a group case: A holds a group of {A,B,C} → B↔C media unaffected, B/C see A "on hold".
 - [ ] T011 [US1] Extend the second-incoming handlers in `src/composables/useCall.ts` (the 1:1 offer handler ~`:1244` and the group-invite handler ~`:1082`): when a held slot is free, surface the incoming call with an Accept & hold path instead of replying busy.
-- [ ] T012 [US1] Implement `acceptAndHold()` in `src/composables/useCall.ts`: pause the current active call (T005/T006), park it in `heldCall`, and connect the incoming call into the active refs (handle the hold-during-setup edge: cancel a still-ringing outgoing first call rather than parking it).
+- [ ] T012 [US1] Implement `acceptAndHold()` in `src/composables/useCall.ts`: pause the current active call (T005/T006), park it in `heldCall`, and connect the incoming call into the active refs. Handle both hold-during-setup sub-cases (data-model transitions): a still-RINGING outgoing first call is cancelled (not parked) when the second is accepted; a still-CONNECTING first call is parked and then either resumes or is cleaned up per its own connect/fail outcome (never left stranded).
 - [ ] T013 [P] [US1] Add the **Accept & hold** action to `src/components/IncomingCallOverlay.vue`, shown only when `canHoldIncoming` (stock Ionic + `--ring-*` tokens; alongside Decline / normal Accept).
 - [ ] T014 [P] [US1] Render the "on hold" affordance for `remoteHeld` in `src/views/detail/CallActivePage.vue` — the 1:1 peer / each other group member shows the holder as "on hold" (reuse the existing tile/call-view styling).
 - [ ] T015 [US1] Add the `callwaiting` cue trigger (second call arrives while in a call) and the `hold` cue trigger (on `acceptAndHold`) via the existing `callCue` gate in `src/composables/useCall.ts`.
@@ -96,9 +96,9 @@ remaining call resumes if it was held); a remote-ended held call frees its slot 
 the held call instead → the active is undisturbed; remote ends the held call while held → its
 slot frees and the user is informed, active untouched.
 
-- [ ] T020 [P] [US3] Extend `e2e/call-waiting.spec.ts`: drop active → held resumes as sole call; drop held → active undisturbed; remote-ends-held → held slot freed, active untouched (SC-005).
+- [ ] T020 [P] [US3] Extend `e2e/call-waiting.spec.ts`: drop active → held resumes as sole call; drop held → active undisturbed; remote-ends-held → held slot freed, active untouched (SC-005). Also the concurrency edge (spec Edge Cases): a remote party ends one call AT THE SAME TIME the user swaps → resolves deterministically to a single, correct remaining call with no orphan/"ghost" slot.
 - [ ] T021 [US3] Implement `endActive()` / `endHeld()` in `src/composables/useCall.ts`: tear down the chosen slot; if the held slot remains, resume it into active (via `slots.ts` + T017's resume path); when only one call remains, behaviour is exactly the normal single-call path.
-- [ ] T022 [US3] Handle a remote-ended HELD call in `src/composables/useCall.ts`: detect the held call's teardown (1:1 hang-up, or a group where everyone else left), free the held slot, inform the user, and leave the active call undisturbed (FR-009). Also handle a held call dying past the grace window (spec 0004 recovery) → free its slot, no auto-recall.
+- [ ] T022 [US3] Handle a remote-ended HELD call in `src/composables/useCall.ts`: detect the held call's teardown (1:1 hang-up, or a group where everyone else left), free the held slot, inform the user, and leave the active call undisturbed (FR-009). Also handle a held call dying past the grace window (spec 0004 recovery) → free its slot, no auto-recall. Resolve the concurrency edge deterministically: a remote-end that races a `swapCalls()` MUST route the teardown through the `slots.ts` reducer against the post-swap state (one reducer mutation at a time) so the correct slot is freed and no ghost slot is left.
 
 **Checkpoint**: US1–US3 — the full hold/swap/drop lifecycle returns cleanly to one call.
 
@@ -151,7 +151,7 @@ its distinct cue, and disabling tones silences them.
 ### Phase dependencies
 
 - **Setup (P1: T001–T002)**: no dependencies.
-- **Foundational (P2: T003–T009)**: depends on Setup — BLOCKS all user stories. (T004 unit test fails until T003; T003/T004 are the pure spine.)
+- **Foundational (P2: T003–T009)**: depends on Setup — BLOCKS all user stories. (T003 is the failing reducer test, T004 makes it green; they are the pure spine.)
 - **User Stories (P3–P7)**: all depend on Foundational. US1 is the MVP; US2/US3 build naturally on US1's hold/connect; US4 is a guard on the US1 handlers; US5 is additive polish.
 - **Polish (P8)**: after the desired stories.
 
@@ -165,7 +165,7 @@ its distinct cue, and disabling tones silences them.
 
 ### Within each story
 
-- Tests written FIRST and FAIL before implementation (TDD): T004 before T003 lands green; T010/T016/T020/T023/T026 before their implementation tasks.
+- Tests written FIRST and FAIL before implementation (TDD): T003 (failing reducer test) before T004 (reducer impl); T010/T016/T020/T023/T026 before their implementation tasks.
 - Pure reducer (`slots.ts`) before the `useCall` wiring that drives it; mesh/1:1 pause primitives before the actions that call them.
 
 ### Parallel opportunities

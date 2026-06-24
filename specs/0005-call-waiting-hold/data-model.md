@@ -76,6 +76,10 @@ Edge transitions (from research Decision 8):
 - **Held network blip**: the held call follows the spec 0004 grace/recovery; death past grace
   frees the held slot and informs the user (no auto-recall).
 - **Resume**: a resumed call's adaptive-quality controller restarts at the low tier.
+- **Concurrent remote-end + swap**: if a remote party ends one call at the same moment the
+  user swaps, both events are applied to the `slots.ts` reducer **one mutation at a time**
+  against the latest state, so exactly one correct call remains and no orphan ("ghost") slot
+  is left.
 
 ## Zero-Knowledge Impact
 
