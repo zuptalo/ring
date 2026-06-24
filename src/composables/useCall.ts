@@ -551,7 +551,7 @@ let camRecoveryTimer: number | null = null; // pending "still muted after grace?
 let camRecoveries = 0; // restarts attempted this call (capped — see restartCamera)
 let diagTick = 0; // debug: throttles the 1:1 outbound-video readout in pollStats
 
-const MAX_CAM_RECOVERIES = 3; // give up after this many restarts in one call (avoid a churn loop)
+const MAX_CAM_RECOVERIES = 1; // give up after this many restarts in one call (avoid a churn loop)
 const CAM_MUTE_GRACE_MS = 2000; // wait this long for a transient mute to self-resolve before restarting
 
 function clearCamRecovery(): void {
@@ -706,14 +706,15 @@ function gumConstraints(kind: CallKind): MediaStreamConstraints {
   // (the default for video calls), where open-air feedback would otherwise howl.
   return {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    // Ask for an explicit front-camera mode rather than bare `video: true` (which on iPhone 8 can
-    // hand back a "live" track delivering NO frames). Crucially the ideal is PORTRAIT (480×640), not
-    // landscape: phones are held in portrait, and asking for a landscape frame makes the A11/iOS-16.7
-    // iPhone 8 endlessly flip the camera between portrait and landscape (640×480 ↔ 480×640) — every
-    // flip resets the capture, so it never sustains frames (≈1fps, frozen self-view, black tile to
-    // the peer). Matching the ask to the device's natural orientation lets the camera settle and run
-    // at full framerate. `ideal` is non-binding, so other devices/orientations still fall back fine.
-    video: kind === 'video' ? { facingMode: { ideal: 'user' }, width: { ideal: 480 }, height: { ideal: 640 }, frameRate: { ideal: 30 } } : false,
+    // Ask for the front camera but DO NOT impose a resolution/orientation. On the A11/iOS-16.7
+    // iPhone 8, naming any width/height makes WebKit start at the requested orientation, then flip to
+    // the perpendicular one and MUTE the track in the same instant — permanently (≈1fps, frozen
+    // self-view, black tile to the peer). It always flips AWAY from whatever we ask, so there is no
+    // "right" resolution to request; the only escape is to impose none and let WebKit open the sensor
+    // in its native format with nothing to reconfigure away from. We still pin a frameRate ideal (cheap,
+    // doesn't drive the orientation flip) and rely on the per-tier bitrate cap (not resolution) to keep
+    // the encoder sane. Newer phones already coped with an explicit size, so this only helps the iPhone 8.
+    video: kind === 'video' ? { facingMode: { ideal: 'user' }, frameRate: { ideal: 30 } } : false,
   };
 }
 
