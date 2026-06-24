@@ -381,8 +381,12 @@ export function groupAudioLevels(): Record<string, number> {
 
 /** Test/diagnostic: group-call video flow + per-leg tiers across the whole mesh (the 1:1
  *  inboundVideoFrames() can't see a mesh's per-peer connections). Empty when not in a group. */
-export function groupCallDiag(): Promise<{ inboundVideoFrames: number; tiers: Record<string, string> }> {
-  return groupSession?.meshDiag() ?? Promise.resolve({ inboundVideoFrames: 0, tiers: {} });
+export function groupCallDiag(): Promise<{
+  inboundVideoFrames: number;
+  tiers: Record<string, string>;
+  legs: Record<string, { tier: string; requestedByPeer?: string; downlink: string; limitation?: string }>;
+}> {
+  return groupSession?.meshDiag() ?? Promise.resolve({ inboundVideoFrames: 0, tiers: {}, legs: {} });
 }
 
 let pendingOffer: { sdp: string; sdpType: RTCSdpType } | null = null;

@@ -637,21 +637,33 @@ export class MeshSession {
    *  each leg's current adaptive tier. The mesh has one PeerConnection per peer, so the 1:1
    *  `inboundVideoFrames()` (which reads a single `pc`) can't see group video — this sums
    *  every leg. Tiers let a test confirm the per-receiver controller climbs/backs off. */
-  async meshDiag(): Promise<{ inboundVideoFrames: number; tiers: Record<string, Tier> }> {
+  async meshDiag(): Promise<{
+    inboundVideoFrames: number;
+    tiers: Record<string, Tier>;
+    legs: Record<string, { tier: Tier; requestedByPeer?: Tier; downlink: Tier; limitation?: string }>;
+  }> {
     let inboundVideoFrames = 0;
     const tiers: Record<string, Tier> = {};
+    const legs: Record<string, { tier: Tier; requestedByPeer?: Tier; downlink: Tier; limitation?: string }> = {};
     for (const leg of this.legs.values()) {
-      tiers[leg.peerId.slice(0, 8)] = leg.qc.tier;
+      const short = leg.peerId.slice(0, 8);
+      tiers[short] = leg.qc.tier;
+      let limitation: string | undefined;
       try {
         (await leg.pc.getStats()).forEach((r) => {
-          const s = r as { type: string; kind?: string; framesDecoded?: number };
+          const s = r as { type: string; kind?: string; framesDecoded?: number; qualityLimitationReason?: string };
           if (s.type === 'inbound-rtp' && s.kind === 'video') inboundVideoFrames += s.framesDecoded ?? 0;
+          if (s.type === 'outbound-rtp' && s.kind === 'video' && s.qualityLimitationReason && s.qualityLimitationReason !== 'none') {
+            limitation = s.qualityLimitationReason;
+          }
         });
       } catch {
         /* a leg mid-teardown can't report; skip it */
       }
+      // spec 0007 US5: expose the controller's decision + the peer's reported ceiling for tests/ⓘ.
+      legs[short] = { tier: leg.qc.tier, requestedByPeer: leg.health.peerReq?.tier, downlink: leg.health.downlink, limitation };
     }
-    return { inboundVideoFrames, tiers };
+    return { inboundVideoFrames, tiers, legs };
   }
 
   /** Every 2s, snapshot each leg's video RTP for the on-screen ⓘ call-stats panel: the
@@ -678,16 +690,22 @@ export class MeshSession {
             const codecOf = (id?: string): string => (id && codecs.get(id)) || '?';
             let out = 'out -';
             let inl = 'in -';
+            let lim = '';
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             report.forEach((st: any) => {
               if (st.type === 'outbound-rtp' && st.kind === 'video') {
                 out = `out ${codecOf(st.codecId)} b=${fmt(st.bytesSent || 0)} enc=${st.framesEncoded ?? 0}`;
+                if (st.qualityLimitationReason && st.qualityLimitationReason !== 'none') lim = st.qualityLimitationReason;
               }
               if (st.type === 'inbound-rtp' && st.kind === 'video') {
                 inl = `in ${codecOf(st.codecId)} pt=${st.payloadType ?? '?'} recv=${st.packetsReceived ?? 0} frm=${st.framesReceived ?? 0} dec=${st.framesDecoded ?? 0} key=${st.keyFramesDecoded ?? 0} drop=${st.framesDropped ?? 0} b=${fmt(st.bytesReceived || 0)}`;
               }
             });
-            lines.push(`[${short}] ${leg.pc.connectionState} | ${out} | ${inl}`);
+            // spec 0007 US5: make the controller's decision observable — the tier we're sending this
+            // peer, why we're limited (if at all), and what THEY asked us for (their downlink/ceiling).
+            const pr = leg.health.peerReq;
+            const qual = `tier=${leg.qc.tier}${lim ? ' lim:' + lim : ''}${pr ? ` req:${pr.tier}` : ''} dl:${leg.health.downlink}`;
+            lines.push(`[${short}] ${leg.pc.connectionState} | ${qual} | ${out} | ${inl}`);
           } catch {
             lines.push(`[${short}] stats error`);
           }

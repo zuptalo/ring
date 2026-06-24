@@ -40,18 +40,18 @@ Single Vue PWA client (no server change). Key paths: `src/services/call/{quality
 
 **⚠️ Complete before the user-story phases — the signal, plumbing, and test scaffolding all stories need.**
 
-- [ ] T002 Add the sealed `qos` CallSignal kind + coarse payload (`requestedTier`, `downlinkClass`,
+- [x] T002 Add the sealed `qos` CallSignal kind + coarse payload (`requestedTier`, `downlinkClass`,
   `seq`) to `src/services/crypto/message.ts`, per `contracts/health-signal.md` (enums only — no raw
   bitrate/IP/location).
-- [ ] T003 [P] Add `sendHealth(chatId, peerUserId, callId, qos, roomId?)` to
+- [x] T003 [P] Add `sendHealth(chatId, peerUserId, callId, qos, roomId?)` to
   `src/services/call/signalling.ts`, carrying the `qos` payload over the existing sealed `call-ice`
   frame (mirrors `sendHoldResume`).
 - [ ] T004 [P] Add the e2e throttling + introspection helpers to `e2e/helpers.ts`: `throttle(client,
   profile|null)` (CDP emulateNetworkConditions on/off/levels), `legTiers(client)` and
   `inboundVideoBitrate(client, peerId)` readers built on the existing diag/test hooks.
-- [ ] T005 [P] Extend `src/services/call/diag.ts` to carry per-leg `tier`, `limitationReason`, the
+- [x] T005 [P] Extend `src/services/call/diag.ts` to carry per-leg `tier`, `limitationReason`, the
   peer's reported `requestedTier`/`downlinkClass`, and the manual pin (data plumbing; surfaced in US5).
-- [ ] T006 Extend the pure controller surface in `src/services/call/quality.ts`: a `requestedTier`
+- [x] T006 Extend the pure controller surface in `src/services/call/quality.ts`: a `requestedTier`
   input to the per-leg decision and helpers `downlinkClassFrom(stats)` + `tileTarget(sizePx)` +
   `requestedTierOf(downlinkClass, manualPin, tileTarget)` — signatures + types only (behavior + tests
   land per story). Keep it pure/unit-testable.
@@ -105,14 +105,14 @@ so only the weak-link receiver's streams drop.
 **Independent test**: Throttle one receiver's downlink in the 4-instance harness; only streams to it
 step down (~3–5s) and recover (~10s); others stay high; no freezes.
 
-- [ ] T013 [US2] Write FAILING unit tests (`quality.test.ts`): effective tier = `min(own-tier,
+- [x] T013 [US2] Write FAILING unit tests (`quality.test.ts`): effective tier = `min(own-tier,
   peerRequestedTier)`; a stale report (older than the staleness window) is ignored (fallback to
   send-side); `downlinkClassFrom(stats)` buckets throughput/loss with hysteresis; `requestedTierOf`
   = min(downlink, pin, tile).
-- [ ] T014 [US2] Implement the receiver self-assessment in `quality.ts` (`downlinkClassFrom` from
+- [x] T014 [US2] Implement the receiver self-assessment in `quality.ts` (`downlinkClassFrom` from
   inbound throughput/loss/framesDropped, with hysteresis) and the `requestedTier` derivation; wire the
   inbound sampling in `src/services/call/mesh.ts` + `src/composables/useCall.ts`.
-- [ ] T015 [US2] Wire the health report end-to-end: send `qos` per peer ~every 2s AND on significant
+- [x] T015 [US2] Wire the health report end-to-end: send `qos` per peer ~every 2s AND on significant
   change (via `sendHealth`, T003) from `mesh.ts` (per leg) + `useCall.ts` (1:1); receive in the
   `call-ice`/mesh signal handlers, store latest-per-peer (newest `seq`), apply `peerRequestedTier` as
   a hard ceiling in `adaptLeg`/`adaptOneToOne`, with staleness fallback.
@@ -131,10 +131,10 @@ step down (~3–5s) and recover (~10s); others stay high; no freezes.
 **Independent test**: Pin A to low → others' inbound to A drops + A's outgoing caps; every sender's
 self-preview unchanged.
 
-- [ ] T017 [US3] Write FAILING unit tests (`quality.test.ts`): the manual pin folds into
+- [x] T017 [US3] Write FAILING unit tests (`quality.test.ts`): the manual pin folds into
   `requestedTier` as a hard cap (so peers cap inbound to the picker) AND clamps the picker's own
   outgoing; `requestedTier` never raises a sender above its sustainable tier.
-- [ ] T018 [US3] Wire the manual pin in `src/composables/useCall.ts`: a pin change recomputes our
+- [x] T018 [US3] Wire the manual pin in `src/composables/useCall.ts`: a pin change recomputes our
   `requestedTier` and sends an immediate `qos` to all peers; apply the pin to our own outgoing clamp;
   confirm the self-preview binds the full local stream (encoding caps are per-sender, FR-008) — add
   no track-level constraint.
@@ -152,9 +152,9 @@ self-preview unchanged.
 
 **Independent test**: Same peer in a small tile vs fullscreen → different requestedTier/target.
 
-- [ ] T020 [US4] Write FAILING unit tests (`quality.test.ts`): `tileTarget(sizePx)` maps rendered
+- [x] T020 [US4] Write FAILING unit tests (`quality.test.ts`): `tileTarget(sizePx)` maps rendered
   size → tier (small→lower, fullscreen→hd) and folds into `requestedTier` via `min`.
-- [ ] T021 [US4] In `src/views/detail/CallActivePage.vue`, measure each remote tile's rendered size
+- [x] T021 [US4] In `src/views/detail/CallActivePage.vue`, measure each remote tile's rendered size
   (ResizeObserver) and thread it into that peer's `requestedTier` (rate-limited so layout churn
   doesn't thrash the encoder); recompute on fullscreen/grid changes.
 - [ ] T022 [US4] Extend `e2e/call-quality.spec.ts`: the requestedTier/target for a peer shown in a
@@ -171,7 +171,7 @@ self-preview unchanged.
 **Independent test**: Open ⓘ during a throttled call → per-leg tier + reported downlink + limitation
 reason shown and tracking the throttle.
 
-- [ ] T023 [US5] Surface the richer per-leg diagnostics in `src/services/call/diag.ts` snapshot +
+- [x] T023 [US5] Surface the richer per-leg diagnostics in `src/services/call/diag.ts` snapshot +
   `src/views/detail/CallActivePage.vue` ⓘ panel: current tier, limitation reason, peer's reported
   requestedTier/downlinkClass, manual pin (alongside the existing codec/bitrate/frames).
 - [ ] T024 [US5] Extend `e2e/call-quality.spec.ts`: with the ⓘ data exposed via a test hook, assert
