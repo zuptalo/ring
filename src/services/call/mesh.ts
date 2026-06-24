@@ -427,21 +427,37 @@ export class MeshSession {
    *  getParameters/setParameters caveat). No-op until the leg has a negotiated video sender. */
   private applyLegEncoding(leg: PeerLeg): Promise<void> {
     this.qualityChain = this.qualityChain
-      .then(async () => {
-        const sender = this.videoSenderOf(leg);
-        if (!sender) return;
-        const params = sender.getParameters();
-        if (!params.encodings || params.encodings.length === 0) return;
-        const enc = TIER_ENCODING[leg.qc.tier];
-        const e = params.encodings[0];
-        e.maxBitrate = enc.maxBitrate;
-        e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
-        if (enc.maxFramerate == null) delete e.maxFramerate;
-        else e.maxFramerate = enc.maxFramerate;
-        await sender.setParameters(params);
-      })
+      .then(() => this.setLegTier(leg))
       .catch((err) => console.warn('[mesh] could not apply video quality', err));
     return this.qualityChain;
+  }
+
+  /** Apply the leg's current tier to its video sender. setParameters() rejects with
+   *  InvalidModificationError when the params snapshot went stale between getParameters() and
+   *  setParameters() — a renegotiation in between (a peer's late join, a camera toggle) bumps
+   *  the sender's transactionId / RTCP config, so the object we'd send back no longer matches.
+   *  That's transient: re-fetch fresh params and retry once; if it still races, the next ~2s
+   *  adapt cycle reapplies it, so we don't even warn for the one-off. */
+  private async setLegTier(leg: PeerLeg, retry = true): Promise<void> {
+    const sender = this.videoSenderOf(leg);
+    if (!sender) return;
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) return;
+    const enc = TIER_ENCODING[leg.qc.tier];
+    const e = params.encodings[0];
+    e.maxBitrate = enc.maxBitrate;
+    e.scaleResolutionDownBy = enc.scaleResolutionDownBy;
+    if (enc.maxFramerate == null) delete e.maxFramerate;
+    else e.maxFramerate = enc.maxFramerate;
+    try {
+      await sender.setParameters(params);
+    } catch (err) {
+      if (retry && (err as DOMException)?.name === 'InvalidModificationError') {
+        await this.setLegTier(leg, false); // re-read fresh params (post-renegotiation) and retry
+        return;
+      }
+      throw err;
+    }
   }
 
   /** One adaptive step for a leg from a fresh getStats report: update the controller state
