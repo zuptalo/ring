@@ -32,6 +32,7 @@ import { capitalizeFirst } from '@/utils/text';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
+import { pushDiag } from '@/services/call/diag';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
   sendGroupLeave, sendGroupBusy, sendHoldResume,
@@ -534,6 +535,30 @@ async function loadCallPrefs(): Promise<void> {
   lessDataCalls = lessData;
   callSoundsOn = sounds;
 }
+// Camera-capture diagnostics (debug): surface the LOCAL camera track's live state to the on-call
+// ⓘ panel for whichever stream becomes the active local stream, on every capture path. Lets a
+// black self-view / no-outgoing-video be pinned to a CAPTURE failure (a muted/ended track, or
+// 0×0 frames) vs an encode problem — the iPhone-8 case we're chasing. Cheap and read-only.
+let instrumentedCamTrack: MediaStreamTrack | null = null;
+watch(localStream, (s) => {
+  const v = s?.getVideoTracks()[0] ?? null;
+  if (!v || v === instrumentedCamTrack) return;
+  instrumentedCamTrack = v;
+  const report = (ev: string): void => {
+    let st: MediaTrackSettings = {};
+    try {
+      st = v.getSettings();
+    } catch {
+      /* getSettings can throw on a dead track */
+    }
+    pushDiag(`cam ${ev}: muted=${v.muted} ready=${v.readyState} ${st.width ?? '?'}x${st.height ?? '?'}@${Math.round(st.frameRate ?? 0)}`);
+  };
+  report('init');
+  v.addEventListener('mute', () => report('MUTED'));
+  v.addEventListener('unmute', () => report('unmuted'));
+  v.addEventListener('ended', () => report('ENDED'));
+});
+
 // Cue "reconnecting" whenever the call enters the reconnecting state, from any of the
 // several places that set the warning (1:1 ICE blip, group leg failure). The cue's own
 // rate-limiter de-dupes if more than one fires at once.
