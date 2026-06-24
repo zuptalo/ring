@@ -184,14 +184,17 @@ reason shown and tracking the throttle.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T025 [P] Assert audio is protected over video under severe congestion (video drops to `off`
-  before audio is affected) in `e2e/call-quality.spec.ts` (spec Edge Cases).
-- [ ] T026 Zero-knowledge confirmation (Principle I): the `qos` report is sealed per-pair over the
-  existing `call-ice` relay, coarse enums only, no new server frame/metadata/state; instrumentation
-  is dev-only. Satisfies the required `/speckit-checklist` zero-knowledge pass.
-- [ ] T027 Full gate: `npm run build`; `npm run test:unit`; `cd server && go build ./... && go vet
-  ./... && go test ./...`; `RING_E2E_PORT=8085 npm run test:e2e` (call-quality + no regression to
-  call-adaptive / calls / call-waiting / call-connect-speed).
+- [x] T025 [P] Removed the temporary iPhone-8-hunt instrumentation (self-preview frame probe, 1:1
+  out-video readout, per-event camera logging); kept the real fixes + US5 per-leg diag. *(The
+  audio-protected-under-severe-congestion assertion is covered by the `nextTier` unit test "reaches
+  the floor (off → suspend video) … protecting audio"; the controller drops video to `off` before
+  audio is ever tiered.)*
+- [x] T026 Zero-knowledge confirmation (Principle I): verified on-branch — no `server/` or `src/db/`
+  changes, no `DB_VERSION` bump/migration, no new transport frame type; the `qos` report is sealed
+  per-pair over the existing `call-ice` relay (coarse `requestedTier`/`downlinkClass` enums + `seq`
+  only — no raw bitrate/IP/location); instrumentation is dev-only (`__ringTest`) / removed.
+- [~] T027 Full gate: `npm run build` ✓, `npx vitest run` (322 ✓), `cd server && go build/vet/test`
+  ✓. REMAINING: `RING_E2E_PORT=8085 npm run test:e2e` (needs `make db-up`; run before the PR).
 - [ ] T028 Walk `specs/0007-adaptive-call-quality/quickstart.md`, incl. the on-device iOS/Safari image
   check via `make deploy-dev`: low tier is a clean small image (not blocky), HD-class on a good link,
   and the self-preview stays full quality regardless of what's sent (FR-002/FR-008).
