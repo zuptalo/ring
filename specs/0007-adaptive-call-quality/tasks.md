@@ -225,3 +225,15 @@ reason shown and tracking the throttle.
 - Keep the decision logic in the **pure `quality.ts`** (deterministic unit gate); `mesh.ts`/
   `useCall.ts` are I/O; the throttled e2e proves the system behavior.
 - Zero-knowledge: the `qos` report stays sealed + coarse; no server change. Verify with the checklist.
+
+## Tracking Issues (GitHub, zuptalo/ring)
+
+One issue per phase/story group (the feature→develop PR must `Closes` each):
+
+- #426 — Setup & foundational (T001–T006)
+- #427 — US1: Quality as good as conditions allow / regression fixed (T007–T012)
+- #428 — US2: Senders adapt to each receiver's real connection (T013–T016)
+- #429 — US3: Manual quality reduces what others send to you (T017–T019)
+- #430 — US4: Quality matches the screen/tile size (T020–T022)
+- #431 — US5: See the decisions in the ⓘ panel (T023–T024)
+- #432 — Polish & cross-cutting (T025–T029)
