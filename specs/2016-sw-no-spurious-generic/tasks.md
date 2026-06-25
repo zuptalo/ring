@@ -34,6 +34,6 @@ the iOS per-push notification contract.
   `silenced` path already incurs?), plus badge accuracy and any path that now shows NO notification.
 - [x] T006 Zero-knowledge confirmation: no plaintext leaves the device; SW still only fetches sealed
   ciphertext; no server change (FR-006).
-- [ ] T007 Full gate: `npm run build`; `npx vitest run`; `cd server && go build/vet/test`;
+- [x] T007 Full gate: `npm run build`; `npx vitest run`; `cd server && go build/vet/test`;
   `RING_E2E_PORT=8085 npm run test:e2e` (notifications-inapp / sw-decrypt / calls — no regression).
-- [ ] T008 Flip spec `Status:` to `in-review` at PR and run `make roadmap`.
+- [x] T008 Flip spec `Status:` to `in-review` at PR and run `make roadmap`.
