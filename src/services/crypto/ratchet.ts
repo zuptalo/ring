@@ -193,6 +193,57 @@ export function ratchetDecrypt(
   return open(msgKey(mk), env, concat(ad, headerBytes(header)));
 }
 
+/**
+ * Decrypt exactly like ratchetDecrypt, but leave the decrypted message's own key
+ * RETRIEVABLE from the skipped-key cache afterwards instead of consuming it.
+ *
+ * This is the service-worker PREVIEW variant (spec 2015). The preview advances and
+ * PERSISTS the receiving ratchet so it can move past a base that live call/`qos`
+ * signalling already advanced, and so a queued backlog previews in order. But a
+ * plain ratchetDecrypt of the current message consumes its message key (advances
+ * the chain, leaves nothing in `skipped`) — so the page's later AUTHORITATIVE open
+ * of that very message would re-derive the wrong key and the message would be lost.
+ * To stay idempotent with the page, we keep this message's key in `skipped` (the
+ * Double Ratchet's normal out-of-order mechanism), so openPacket re-finds it there.
+ * Net effect: forward progress is persisted, but nothing this preview reads becomes
+ * undecryptable for the authoritative receiver — it only ever ADDS to the cache.
+ */
+export function ratchetDecryptPreview(
+  state: RatchetState,
+  header: Header,
+  env: Envelope,
+  ad: Uint8Array,
+): { plaintext: Uint8Array; advancedDh: boolean } {
+  const skKey = `${header.dh}:${header.n}`;
+  // Already in the cache (skipped over earlier): decrypt WITHOUT deleting, so the
+  // key stays available for the page's authoritative open. No DH step taken.
+  const cached = state.skipped.get(skKey);
+  if (cached) return { plaintext: open(msgKey(cached), env, concat(ad, headerBytes(header))), advancedDh: false };
+  // Otherwise advance the receiving chain up to AND INCLUDING this message, caching
+  // every key (including this one) via skipMessageKeys. We deliberately reuse the
+  // skip path for header.n+1 so the current message's key lands in `skipped` rather
+  // than being consumed, then read it back from there.
+  //
+  // `advancedDh` reports whether we had to take a DH-ratchet step. A DH ratchet mints
+  // a FRESH sending keypair (DHs); the caller (previewPacket) must NOT persist that
+  // from the service worker, or the SW becomes a competing writer of the SENDING key
+  // and the page↔SW last-write-wins race can clobber the page's authoritative
+  // send-state (permanent outbound divergence — adversarial review). So the caller
+  // persists ONLY same-chain advances (advancedDh === false): those are deterministic
+  // and purely ADDITIVE to the skipped-key cache, hence safe to converge via LWW.
+  const headerDh = b64urlToBytes(header.dh);
+  let advancedDh = false;
+  if (!state.DHr || !equalBytes(headerDh, state.DHr)) {
+    skipMessageKeys(state, header.pn);
+    dhRatchet(state, headerDh);
+    advancedDh = true;
+  }
+  skipMessageKeys(state, header.n + 1); // caches keys Nr..n (incl. this message)
+  const mk = state.skipped.get(skKey);
+  if (!mk) throw new Error('preview: message key not derivable'); // unreachable in practice
+  return { plaintext: open(msgKey(mk), env, concat(ad, headerBytes(header))), advancedDh };
+}
+
 function skipMessageKeys(state: RatchetState, until: number): void {
   if (state.CKr === null) return;
   if (state.Nr + MAX_SKIP < until) throw new Error('ratchet: too many skipped messages');

@@ -28,7 +28,7 @@ import {
   type RatchetState,
   type PreKeyBundlePub,
 } from './crypto/ratchet';
-import { sealMessage, openMessage, type MessagePayload, type WireMessage } from './crypto/message';
+import { sealMessage, openMessage, openMessagePreview, type MessagePayload, type WireMessage } from './crypto/message';
 import { KeyedMutex } from './keyed-mutex';
 import {
   getIdentityKeys,
@@ -238,10 +238,32 @@ export async function openPacket(chatId: string, raw: unknown): Promise<MessageP
 
 /**
  * Decrypt an incoming packet for PREVIEW ONLY (service-worker notifications).
- * Unlike openPacket it does NOT persist the advanced ratchet, consume prekeys, or
- * clear the send-preamble, so it never disturbs the session state the page will
- * advance for real when it next drains the relay. Safe to run in the service
- * worker: the ratchet advance happens on an in-memory copy that's discarded.
+ *
+ * Unlike openPacket this never consumes one-time prekeys, never persists a newly
+ * ESTABLISHED responder (X3DH) session, and never clears the initiator send-
+ * preamble — first-contact/X3DH and the preamble stay strictly the page's job.
+ *
+ * It DOES, however, persist the RECEIVING-ratchet advance (incl. the skipped
+ * message keys it generates) when an ALREADY-ESTABLISHED session decrypts a
+ * NORMAL packet. This is required, not cosmetic: 1:1 call signalling (offer/ICE
+ * and spec-0007 `qos`) rides the SAME pairwise ratchet as chat but is sent LIVE
+ * over the WebSocket and never queued in the relay. While the app is open those
+ * live signals are opened by openPacket, which advances + persists the receiving
+ * ratchet — moving the persisted base PAST a chat message still sitting in the
+ * relay queue. A purely read-only preview would reload that over-advanced base
+ * and re-derive the wrong key for the queued message ("ciphertext cannot be
+ * decrypted") → the notification degrades to generic. Persisting the advance lets
+ * the preview move forward and caches the skipped keys, so a queued message behind
+ * the base stays reachable and a backlog previews in order (FR-001/FR-002).
+ *
+ * Persisting from the SW is safe because the advance is idempotent with the page's
+ * later authoritative open: the Double Ratchet's skipped-key cache (the protocol's
+ * own out-of-order mechanism) means openPacket re-finds each key it needs in the
+ * persisted cache. Page and SW are different contexts; their writes converge via
+ * last-write-wins + that cache — exactly the idempotency the protocol already
+ * relies on. The per-chat sessionMutex serializes the load→advance→save so two
+ * concurrent background push handlers can't interleave (FR-006).
+ *
  * Throws if it can't decrypt/authenticate.
  */
 export async function previewPacket(chatId: string, raw: unknown): Promise<MessagePayload> {
@@ -249,21 +271,48 @@ export async function previewPacket(chatId: string, raw: unknown): Promise<Messa
   if (!packet || (packet.type !== 'prekey' && packet.type !== 'normal')) {
     throw new Error('malformed wire packet');
   }
+  // Serialize with the matching seals/opens AND with other background previews —
+  // now that this path persists, two concurrent SW push handlers must not interleave
+  // a load→advance→save on the same session. See sessionMutex.
+  return sessionMutex.run(chatId, async () => {
   let session = await loadSession(chatId);
   const hadExistingSession = !!session;
   if (!session) {
+    // No session yet → this must be a first-contact prekey packet. Establish a
+    // responder session IN MEMORY ONLY to decrypt the preview: do NOT consume the
+    // one-time prekey and do NOT persist the session. X3DH stays the page's
+    // authoritative job (FR-003), so the page's later openPacket still runs it.
     if (packet.type !== 'prekey') throw new Error('no session for incoming message and no prekey preamble');
-    session = establishResponderSession(packet);
+    return openMessage(establishResponderSession(packet), packet.msg);
   }
   try {
-    return openMessage(session, packet.msg);
+    // openMessagePreview advances the receiving ratchet but keeps THIS message's key
+    // in the skipped-key cache, so persisting the advance never makes the message
+    // undecryptable for the page's later authoritative open (it re-finds the key in
+    // the cache). A prekey re-init (the catch below) deliberately does NOT reach here.
+    const { payload, advancedDh } = openMessagePreview(session, packet.msg);
+    // Persist ONLY a same-receiving-chain advance (the base moves forward so a backlog previews in
+    // order and can pass a point live call/`qos` signalling already advanced). If this frame
+    // triggered a DH-ratchet step, do NOT persist: a DH ratchet mints a fresh SENDING keypair (DHs),
+    // and the SW persisting it would make the worker a competing writer of the send-state — the
+    // page↔SW last-write-wins race could then clobber the page's authoritative DHs and permanently
+    // break outbound to the peer (adversarial review). The DH-step frame still decrypted in-memory
+    // for this preview; the page authoritatively performs (and persists) that ratchet when it drains.
+    if (!advancedDh) await saveSession(chatId, session);
+    return payload;
   } catch (e) {
+    // The established session couldn't open this. If it's a prekey packet the peer
+    // likely RE-INITIATED a fresh session (e.g. they deleted the chat). Decrypt with
+    // a fresh responder session IN MEMORY ONLY — do NOT persist it or consume the
+    // prekey; replacing the live ratchet is the page's authoritative call (FR-003).
     if (hadExistingSession && packet.type === 'prekey') {
       return openMessage(establishResponderSession(packet), packet.msg);
     }
     throw e;
   }
-  // Deliberately NO saveSession / session-meta writes (read-only preview).
+  // Deliberately NO session-meta writes: the send-preamble is cleared only by
+  // openPacket (FR-004), never by a preview.
+  });
 }
 
 /* ---- own prekey publication ---- */

@@ -60,3 +60,4 @@ Specs are grouped by category band; status moves
 | [2012](specs/2012-call-invite-recovery/spec.md) | Call invite recovery & honest ringing | 🔵 in-review |
 | [2013](specs/2013-peer-resume-countdown/spec.md) | Mirror the resume countdown for the swapper | 🔵 in-review |
 | [2014](specs/2014-notif-title-and-auth/spec.md) | Notification title tidy & generic-fallback diagnosis | 🔵 in-review |
+| [2015](specs/2015-sw-preview-ratchet/spec.md) | Background notifications decrypt queued messages reliably | 🔵 in-review |

@@ -5,7 +5,13 @@
  * transport. The media blob itself is handled separately (media-transfer.ts);
  * only the small reference (id + wrapped file key) rides inside the payload.
  */
-import { ratchetEncrypt, ratchetDecrypt, type RatchetState, type Header } from './ratchet';
+import {
+  ratchetEncrypt,
+  ratchetDecrypt,
+  ratchetDecryptPreview,
+  type RatchetState,
+  type Header,
+} from './ratchet';
 import { utf8ToBytes, bytesToUtf8, type Envelope } from './envelope';
 import type { ReplyRef, GeoLocation, Poll, SharedContact, AudioMeta } from '@/db/types';
 
@@ -260,4 +266,19 @@ export function openMessage(
 ): MessagePayload {
   const pt = ratchetDecrypt(state, wire.header, wire.env, ad);
   return JSON.parse(bytesToUtf8(pt)) as MessagePayload;
+}
+
+/**
+ * Decrypt a wire message for the service-worker PREVIEW path (spec 2015): advances
+ * `state` the same way but leaves the read message's own key in the skipped-key
+ * cache, so persisting this advance can't make the message undecryptable for the
+ * page's later authoritative openMessage. Throws if it doesn't authenticate.
+ */
+export function openMessagePreview(
+  state: RatchetState,
+  wire: WireMessage,
+  ad: Uint8Array = new Uint8Array(0),
+): { payload: MessagePayload; advancedDh: boolean } {
+  const { plaintext, advancedDh } = ratchetDecryptPreview(state, wire.header, wire.env, ad);
+  return { payload: JSON.parse(bytesToUtf8(plaintext)) as MessagePayload, advancedDh };
 }
