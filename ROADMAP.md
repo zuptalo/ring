@@ -56,4 +56,4 @@ Specs are grouped by category band; status moves
 | [2008](specs/2008-fast-first-call-connect/spec.md) | Make the first call connect as fast as a call-waiting second call | 🔵 in-review |
 | [2009](specs/2009-single-call-waiting-slot/spec.md) | Only one caller may wait in call-waiting; further callers get busy | 🔵 in-review |
 | [2010](specs/2010-nav-notification-robustness/spec.md) | Navigation & notification robustness | 🔵 in-review |
-| [2011](specs/2011-hold-ui-and-1to1-diag/spec.md) | Call on-hold visualization & 1:1 diagnostics | ⚪ planned |
+| [2011](specs/2011-hold-ui-and-1to1-diag/spec.md) | Call on-hold visualization & 1:1 diagnostics | 🔵 in-review |
