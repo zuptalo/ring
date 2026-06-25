@@ -407,6 +407,7 @@ import {
   cellularOutline, informationCircleOutline, personOutline, refreshOutline,
   chatbubbleEllipsesOutline, pauseOutline, swapHorizontalOutline,
 } from 'ionicons/icons';
+import router from '@/router';
 import { getSelfUserId } from '@/services/auth';
 import {
   callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, callStats,
@@ -888,6 +889,14 @@ watch(remoteStreams, (streams) => {
   void nextTick(applySinkAll);
 });
 onMounted(() => {
+  // Call state lives in memory only; the /call-active url survives a reload but the
+  // live call doesn't. Landing here with no call (e.g. an app-update reload that
+  // happened to be on this route) would render black tiles over the tabs with nothing
+  // to end — so bounce to the shell instead of showing a wedged dead call screen.
+  if (callState.value === 'idle') {
+    void router.replace('/tabs/chats');
+    return;
+  }
   measureStage();
   // Prefer a ResizeObserver on the stage element; fall back to window resize where
   // it's unavailable. Either way, tile sizes recompute when the stage changes size.

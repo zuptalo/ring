@@ -25,6 +25,16 @@ import { fetchServerConfig } from '@/services/api';
 import { showActionBanner, type NotifyAction } from '@/services/notify';
 import { computeDelta, userFacing, displayVersion, type ReleaseNote } from '@/services/release-notes';
 import WhatsNewSheet from '@/components/WhatsNewSheet.vue';
+import router from '@/router';
+import { callState } from '@/composables/useCall';
+
+/** True while a call is in any live phase (ringing through connected). Applying an
+ *  update reloads the page, which tears down the in-memory WebRTC state — so we must
+ *  not surface or apply an update mid-call. 'ended' is the brief post-call display
+ *  dwell and counts as done. */
+function isInCall(): boolean {
+  return callState.value !== 'idle' && callState.value !== 'ended';
+}
 
 /** Present the "What's new" sheet with the per-user delta. Resolves true when the
  *  user chose to install from the sheet. */
@@ -63,6 +73,49 @@ export function checkForUpdate(force = false): void {
   void swReg.update().catch(() => {});
 }
 
+// Set once we've armed our own reload so a second controllerchange (workbox also
+// listens) can't double-fire window.location.reload mid-unload.
+let reloading = false;
+
+/**
+ * Apply a waiting update safely. The naive path — vite-plugin-pwa's
+ * updateServiceWorker(true) — just posts SKIP_WAITING and relies on workbox's own
+ * controllerchange listener to reload. Two ways that bites us, both reported as "the
+ * UI breaks / I have to fully close and reopen":
+ *
+ *   1. Transient route restored with dead state. The reload re-enters the CURRENT
+ *      url, but calls (and other transient pages) keep their state in memory only.
+ *      Reloading onto /call-active with callState back to 'idle' renders the
+ *      full-screen call UI over the tabs with black video tiles and no live call to
+ *      end — a wedged screen. So before reloading we bounce any non-tabs route to the
+ *      app shell; the reload then lands on /tabs/chats, never a restored-but-dead view.
+ *   2. Workbox's reload is gated on event.isUpdate (true only when a controller
+ *      existed at page-load time); some cold-start paths leave it false, so the new
+ *      worker takes control but the page never reloads — old JS under a new SW, with
+ *      mismatched lazy-route chunks → navigation silently dies. We add our OWN one-shot
+ *      controllerchange reload so the refresh is guaranteed regardless of that gate.
+ *
+ * Never applies mid-call (the prompt is hidden then anyway); the guard is belt-and-braces.
+ */
+async function applyUpdate(updateServiceWorker: (reload?: boolean) => Promise<void>): Promise<void> {
+  if (isInCall()) return; // a live call must not be torn down by an update reload
+  // Land the post-reload page on the app shell rather than a transient detail/call
+  // route whose in-memory state won't survive the reload.
+  if (!router.currentRoute.value.path.startsWith('/tabs')) {
+    await router.replace('/tabs/chats').catch(() => {});
+  }
+  // Guarantee the reload even if workbox's isUpdate-gated listener no-ops. Installed
+  // before SKIP_WAITING so we never miss the controllerchange it triggers.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
+    });
+  }
+  await updateServiceWorker(true); // posts SKIP_WAITING → new worker activates → controllerchange → reload
+}
+
 export function useAppUpdate(): void {
   if (started) return; // singleton: one registration + prompt driver per app
   started = true;
@@ -92,6 +145,11 @@ export function useAppUpdate(): void {
   // for someone who never fully closes the app — it comes back next time they reopen it.
   async function maybePrompt(): Promise<void> {
     if (!needRefresh.value || prompting) return;
+    // Defer entirely while a call is live: a stray tap on the update banner mid-ring
+    // would reload the page and kill the call. The watch on callState below re-fires
+    // this the moment the call ends, and every foreground re-checks too, so the
+    // deferred update resurfaces on its own — the user never has to hunt for it.
+    if (isInCall()) return;
     prompting = true;
     // The waiting SW IS the new build; ask the (already-deployed) server which
     // version that is AND its release notes, so the card can name the version and
@@ -125,12 +183,12 @@ export function useAppUpdate(): void {
         // updating, the prompt re-appears on the next foreground (prompting is reset below).
         handler: () => {
           void presentWhatsNew(shown, delta).then((wantsUpdate) => {
-            if (wantsUpdate) void updateServiceWorker(true);
+            if (wantsUpdate) void applyUpdate(updateServiceWorker);
           });
         },
       });
     }
-    actions.push({ text: 'Update', handler: () => void updateServiceWorker(true) });
+    actions.push({ text: 'Update', handler: () => void applyUpdate(updateServiceWorker) });
     // "Later": the card dismisses (NotificationBanners' onAction), which fires onDismiss
     // below and re-arms the prompt for the next foreground.
     actions.push({ text: 'Later', role: 'cancel', handler: () => {} });
@@ -151,4 +209,10 @@ export function useAppUpdate(): void {
   // Fire when a new worker first appears; immediate covers an update that was
   // already waiting when the app mounted.
   watch(needRefresh, () => void maybePrompt(), { immediate: true });
+
+  // A pending update deferred during a call (maybePrompt bails while isInCall) should
+  // resurface the instant the call settles, not only on the next foreground.
+  watch(callState, (s) => {
+    if (s === 'idle') void maybePrompt();
+  });
 }
