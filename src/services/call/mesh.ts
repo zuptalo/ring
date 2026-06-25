@@ -489,6 +489,11 @@ export class MeshSession {
    *  or the cadence elapsed, send a sealed `qos` to the peer. Shared by the periodic poll and the
    *  immediate pin-change path. */
   private pushLegHealth(leg: PeerLeg, now: number): void {
+    // Only report health for a CONNECTED leg. Before that there's no downlink to assess, and — more
+    // importantly — a qos seal/open competes for the SAME per-chat sessionMutex as the offer/ICE
+    // handshake, so emitting it during setup delays ICE delivery and (on a slow CI runner) blows the
+    // connection timeout. Gating on `connected` keeps the call-ice channel clear until media is up.
+    if (leg.pc.connectionState !== 'connected') return;
     const h = leg.health;
     const tile = this.tileTargets.get(leg.peerId) ?? this.defaultTile;
     const requested = requestedTierOf(h.downlink, this.clampTier, tile);

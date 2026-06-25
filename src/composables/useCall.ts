@@ -2177,6 +2177,10 @@ async function adaptOneToOne(report: RTCStatsReport): Promise<void> {
 async function reportHealthToPeer(report: RTCStatsReport, now: number): Promise<void> {
   const meta = callMeta.value;
   if (!meta?.chatId || !meta.peerUserId || meta.isGroup) return;
+  // Only report once the call is CONNECTED: before that there's no downlink to assess, and a qos
+  // seal/open competes for the same per-chat sessionMutex as the offer/ICE handshake — emitting it
+  // during setup delays ICE and can blow the connection timeout on a slow runner.
+  if (pc?.connectionState !== 'connected') return;
   // Per-interval inbound video loss + frame drops → coarse downlink class (hysteretic).
   let lost = 0;
   let recv = 0;
@@ -2237,6 +2241,7 @@ async function applyOutgoingQuality(): Promise<void> {
 function sendHealthNow(): void {
   const meta = callMeta.value;
   if (!meta?.chatId || !meta.peerUserId || meta.isGroup) return;
+  if (pc?.connectionState !== 'connected') return; // don't emit qos during setup (see reportHealthToPeer)
   const requested = requestedTierOf(oneToOneDownlink, qualityClamp(), 'hd');
   oneToOneLastSentTier = requested;
   oneToOneLastSentAt = Date.now();
