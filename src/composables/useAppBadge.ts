@@ -1,5 +1,6 @@
 import { onMounted, onUnmounted } from 'vue';
-import { getSetting } from '@/db/queries';
+import { getSetting, setSetting } from '@/db/queries';
+import { SUMMARY_KEY } from '@/services/sw-inbox';
 
 /**
  * Keeps the app-icon badge in sync: the service worker grows it (to the number
@@ -16,6 +17,10 @@ export function useAppBadge(): void {
         void reg?.getNotifications().then((list) => list.forEach((n) => n.close()));
       });
     }
+    // (spec 2017) Foregrounding means the user is now reading; retire the SW's per-chat "last shown"
+    // summary so a stray push within its TTL can't silently re-assert a notification for a chat that's
+    // just been read (or re-assert a now-stale cumulative count).
+    void setSetting(SUMMARY_KEY, []);
     void getSetting<string>('notifications.badge', 'open').then((mode) => {
       if (mode !== 'open') return; // "When viewed" → leave the unread-count badge
       const nav = navigator as Navigator & { clearAppBadge?: () => Promise<void> };
