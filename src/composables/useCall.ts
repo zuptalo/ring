@@ -110,6 +110,10 @@ export const groupHeldPeers = ref<string[]>([]);
 // on instantly — we count down (5→1) with a cue first, so the person isn't caught off-guard
 // becoming visible/audible again. null = not counting down (spec 0005).
 export const resumeCountdown = ref<number | null>(null);
+// (spec 2013) The MIRROR countdown shown to the party who RESUMED a held video call (the swapper):
+// "{peer}'s video resumes in N…", synced to the peer's own "You'll be on camera" heads-up so the
+// resumer isn't left staring at a frozen frame. null = not counting down; video calls only.
+export const peerResumeCountdown = ref<number | null>(null);
 // Caller side: the person we're calling is already in a call but CAN take a second one — they got
 // a call-waiting prompt (their device acked with reason 'call-waiting'). We show "in their queue"
 // instead of plain "Ringing…" so the caller knows they've been notified and may be picked up.
@@ -333,6 +337,34 @@ function cancelResumeCountdown(): void {
   resumeCountdown.value = null;
 }
 
+/** Cancel the peer-video resume countdown (spec 2013). */
+function cancelPeerResumeCountdown(): void {
+  if (peerResumeCountdownTimer) clearInterval(peerResumeCountdownTimer);
+  peerResumeCountdownTimer = null;
+  peerResumeCountdown.value = null;
+}
+
+/** (spec 2013) The MIRROR of beginResumeCountdown, shown to the party who RESUMED a held VIDEO call
+ *  (the swapper): the other side runs its own "You'll be on camera…" heads-up before its camera goes
+ *  live, so for ~5s the resumer just sees the peer's frozen frame. Show them a synchronized
+ *  "{peer}'s video resumes in N…" countdown so the brief wait is understood. Informational only — it
+ *  never gates media; the remote video appears when the peer's camera actually goes live. Audio calls
+ *  have no video to wait for, so no countdown (consistent with spec 2012). */
+function beginPeerResumeCountdown(kind: CallKind): void {
+  cancelPeerResumeCountdown();
+  if (kind !== 'video') return;
+  let n = RESUME_COUNTDOWN_SEC;
+  peerResumeCountdown.value = n;
+  peerResumeCountdownTimer = setInterval(() => {
+    n -= 1;
+    if (n > 0) {
+      peerResumeCountdown.value = n;
+      return;
+    }
+    cancelPeerResumeCountdown();
+  }, 1000);
+}
+
 /** The far side resumed a call they'd put us on hold. Their media unfreezes right away, but give
  *  US a 5s heads-up (visible countdown + a cue) before our camera/mic go live again, so we're not
  *  caught by surprise. Restores outgoing on `target` when the countdown hits zero — unless the
@@ -435,6 +467,7 @@ let graceTimer: ReturnType<typeof setTimeout> | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let durationTimer: ReturnType<typeof setInterval> | null = null;
 let resumeCountdownTimer: ReturnType<typeof setInterval> | null = null;
+let peerResumeCountdownTimer: ReturnType<typeof setInterval> | null = null; // spec 2013
 let lastBytes = { up: 0, down: 0, ts: 0 };
 let lastLoss = { lost: 0, recv: 0 };
 // After a swap/resume the active connection changes, so the cumulative byte counters jump to a
@@ -1143,6 +1176,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
 
   setState('ended');
   cancelResumeCountdown();
+  cancelPeerResumeCountdown(); // spec 2013
   resetCameraWatchdog();
   // Clear ALL call-waiting display state so a hung-up call can't leak its "on hold" UI into the
   // next call (the reported bug: a device that was on hold kept remoteHeld=true after the call
@@ -1800,6 +1834,7 @@ async function restoreHeldCall(): Promise<void> {
     if (stream) await set1to1Senders(slot.pc, stream);
     if (slot.meta.chatId && slot.meta.peerUserId) {
       void sendHoldResume('resume', slot.meta.chatId, slot.meta.peerUserId, slot.meta.callId);
+      beginPeerResumeCountdown(slot.meta.kind); // spec 2013: tell us their video resumes shortly (video only)
     }
   }
   callCue('resume');
@@ -1846,7 +1881,10 @@ export async function swapCalls(): Promise<void> {
     await slot.groupSession.resume(stream);
   } else if (slot.pc && stream) {
     await set1to1Senders(slot.pc, stream);
-    if (slot.meta.chatId && slot.meta.peerUserId) void sendHoldResume('resume', slot.meta.chatId, slot.meta.peerUserId, slot.meta.callId);
+    if (slot.meta.chatId && slot.meta.peerUserId) {
+      void sendHoldResume('resume', slot.meta.chatId, slot.meta.peerUserId, slot.meta.callId);
+      beginPeerResumeCountdown(slot.meta.kind); // spec 2013: tell us their video resumes shortly (video only)
+    }
   }
   // 3) The just-paused call is the new held slot.
   heldSlot = newHeld;
@@ -2790,6 +2828,7 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // both ways. (Applies to the ACTIVE 1:1 call; a held-call hold is an US2/US3 edge.)
       if (signal.type === 'hold' && pc) {
         cancelResumeCountdown(); // re-held mid-countdown → abort the pending go-live
+        cancelPeerResumeCountdown(); // spec 2013: and our mirror countdown for their video
         remoteHeld.value = true;
         await set1to1Senders(pc, null); // pause OUR outgoing too — no data while held
         return;
