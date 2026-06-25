@@ -22,6 +22,7 @@ import { CacheFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, markConnShown,
+  coalesceForShow, loadShownSummary,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { resubscribePush } from '@/services/sw-push';
@@ -129,16 +130,28 @@ async function showCall(): Promise<void> {
   });
 }
 
-/** Show the decrypted rich notes (one updating notification per conversation). */
+/** Format a note's title with its count, e.g. "Alice (3)". The count is the CUMULATIVE per-chat total
+ *  (spec 2017), not this pass's slice, so a burst shows one monotonic count. */
+const titleWithCount = (n: SwNote): string => {
+  const k = n.count ?? n.ids.length;
+  return k > 1 ? `${n.title} (${k})` : n.title;
+};
+
+/** Show the decrypted rich notes (one updating notification per conversation). Coalesces each note
+ *  against the persisted per-chat summary first (spec 2017) so the title count is the cumulative
+ *  backlog and overlapping burst wakes converge on ONE notification instead of a jumpy/duplicate pile.
+ *  Callers run this inside the serialize lock so the summary read→write can't interleave. */
 async function showNotes(notes: SwNote[]): Promise<void> {
-  for (const n of notes) {
+  const coalesced = await coalesceForShow(notes, Date.now());
+  for (const n of coalesced) {
     try {
-      await self.registration.showNotification(n.title, {
+      await self.registration.showNotification(titleWithCount(n), {
         body: n.body,
         icon: ICON,
         badge: ICON,
         tag: n.tag,
-        renotify: true, // a same-tag follow-up should re-alert, not update silently
+        renotify: true, // a genuinely-new message on this tag should re-alert (a silent re-assert
+        // for "nothing new" uses reassertFromSummary below, which sets renotify:false)
         data: { url: n.url },
       });
     } catch (e) {
@@ -164,28 +177,46 @@ async function closeByTag(tag: string): Promise<void> {
 // silent — iOS sees a showNotification call but the user gets no new alert. If nothing is showing,
 // show nothing: the mute / badge-only (`silenced`) path already returns from a push without any
 // showNotification in production, so this is an established, iOS-tolerated outcome. Best-effort.
-// Tags we must NOT re-assert: a live call ring ('ring-call') carries requireInteraction and re-showing
-// it on its tag would strip that and downgrade the ring (spec 2016 review); the others belong to other
-// push categories and re-surfacing them for a message wake is wrong. Only a MESSAGE notification (the
-// content note this burst already showed, or the generic) is safe to re-assert silently.
-const NON_MESSAGE_TAGS = new Set(['ring-call', 'ring:version', 'ring:post', 'ring:conn:req']);
-async function reassertForContract(): Promise<void> {
+// (spec 2017) Serialize ALL notification work across overlapping push wakes + straggler iterations.
+// The server fires one push per message, so a burst wakes the SW several times concurrently; without a
+// lock each wake (and each straggler iteration) independently reads the shown-ledger, decrypts, and
+// re-shows — producing the duplicate notification and the bouncing per-pass count the user saw. One
+// global chain makes each read→show→markShown atomic, so the first wake owns the burst (its straggler
+// catches the late frames) and later wakes find everything shown → they re-assert silently, no dup.
+let notifyChain: Promise<void> = Promise.resolve();
+function serializeNotify<T>(fn: () => Promise<T>): Promise<T> {
+  const run = notifyChain.then(fn, fn);
+  notifyChain = run.then(() => undefined, () => undefined); // never let a rejection break the chain
+  return run as Promise<T>;
+}
+
+/**
+ * (spec 2017) Honor the per-push notification contract on a "nothing new" wake by re-asserting the ONE
+ * authoritative coalesced notification from the persisted per-chat summary — silently (renotify:false),
+ * so iOS sees a showNotification call (no own-summary gap) and the user gets no new alert. Drives off
+ * the summary rather than getNotifications() (which is racy/empty on iOS during a burst). Only the
+ * freshest summary entry within the burst TTL is re-asserted, so a chat read a while ago isn't
+ * resurrected; if there's no fresh summary, shows nothing (the mute/badge-only outcome). Also closes a
+ * stranded generic placeholder, since a real per-chat notification supersedes it.
+ */
+async function reassertFromSummary(): Promise<void> {
   try {
-    const list = await self.registration.getNotifications();
-    const n = list.find((x) => !NON_MESSAGE_TAGS.has(x.tag));
-    if (!n) return; // nothing safe to re-assert → show nothing (mirrors the badge-only/silenced path)
-    await self.registration.showNotification(n.title, {
+    const list = await loadShownSummary(); // already TTL-filtered
+    if (!list.length) return; // nothing to re-assert → show nothing (mirrors the badge-only path)
+    const n = list.reduce((a, b) => (b.ts > a.ts ? b : a)); // freshest
+    const k = n.ids.length;
+    await self.registration.showNotification(k > 1 ? `${n.title} (${k})` : n.title, {
       body: n.body,
-      tag: n.tag, // same tag → updates the existing notification in place, no second banner
-      data: n.data,
-      icon: n.icon,
-      badge: n.badge,
-      requireInteraction: n.requireInteraction, // preserve the original's semantics defensively
-      renotify: false, // update silently — do NOT re-alert
+      icon: ICON,
+      badge: ICON,
+      tag: n.tag, // same tag → updates in place, no second banner
+      renotify: false, // silent re-assert — do NOT re-alert
       silent: true,
+      data: { url: n.url },
     });
+    await closeByTag(GENERIC_TAG); // a real per-chat notification supersedes any stranded placeholder
   } catch {
-    /* ignore — re-assert is best-effort; the badge below still updates */
+    /* ignore — re-assert is best-effort; the badge still updates */
   }
 }
 
@@ -331,6 +362,12 @@ async function showConnNotification(): Promise<void> {
  * timeout is UPGRADED to the rich preview when the full decrypt settles.
  */
 async function showMessageNotification(): Promise<void> {
+  // (spec 2017) Serialize only the critical read→show→markShown sections (NOT the straggler's sleeps),
+  // so overlapping burst wakes can't interleave and duplicate a notification or bounce the per-pass
+  // count — while a queued wake still gets the lock during another wake's sleep gaps and is never
+  // starved past iOS's per-push budget. The first wake's straggler catches the burst's late frames;
+  // later wakes find everything shown and re-assert silently. Delivery receipts are unaffected.
+  await serializeNotify(async () => {
   const preview = previewPending(); // started once; awaited twice (race, then settle)
   let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: false };
   let timedOut = false; // spec 2014: distinguish a slow cold start from a fetched-but-undecryptable result
@@ -358,12 +395,12 @@ async function showMessageNotification(): Promise<void> {
     await showGeneric(timedOut ? 'timeout' : result.reason);
     shownGeneric = true;
   } else if (isNothingNew(result)) {
-    // (spec 2016) Nothing genuinely new to announce — the relay queue was empty (`no-frames`) or every
-    // fetched frame was already shown (the burst straggler beat us). Showing a generic here is pure
-    // noise (the "New message / Tap to open" the user reported). Honor the per-push contract the way
-    // the `silenced` path already does: re-assert an already-showing notification silently (no new
-    // banner/sound) if one exists, otherwise show nothing. The badge below still stays accurate.
-    await reassertForContract();
+    // (spec 2016/2017) Nothing genuinely new — the relay queue was empty (`no-frames`) or every frame
+    // was already shown (a burst wake the first wake beat). A new generic here is pure noise. Re-assert
+    // the ONE authoritative coalesced notification from the persisted summary silently (spec 2017), so
+    // iOS sees a showNotification call (no own-summary gap) without a new alert; shows nothing only when
+    // there's no fresh summary (the mute/badge-only outcome). The badge below still stays accurate.
+    await reassertFromSummary();
   }
 
   // Settle the full preview (bounded) so its /relay/pending fetch lands (→ delivery)
@@ -396,6 +433,7 @@ async function showMessageNotification(): Promise<void> {
   // 0 and we badge from the stored unread alone rather than inventing a "+1" that
   // teaches a wrong count. A suppressed (notifications-off) push adds nothing.
   await updateAppBadge(result.suppressed ? 0 : pending);
+  }); // end the initial serialized section (release the lock before the straggler sleeps)
 
   // Catch stragglers from a rapid burst (see STRAGGLER_WINDOW_MS): re-fetch the
   // pending queue a few times within this wake so messages that arrived after the
@@ -404,19 +442,25 @@ async function showMessageNotification(): Promise<void> {
   // still-queued frames (idempotent); newly-decryptable notes are shown once.
   const deadline = Date.now() + STRAGGLER_WINDOW_MS;
   while (Date.now() < deadline) {
+    // Sleep UNLOCKED — never hold the global notify lock during the wait, or a queued push wake would
+    // be starved past iOS's budget (spec 2017 review). Only the fetch→show→mark below is serialized.
     await new Promise((r) => setTimeout(r, STRAGGLER_INTERVAL_MS));
-    let more: Awaited<ReturnType<typeof previewPending>>;
-    try {
-      more = await previewPending();
-    } catch {
-      break;
-    }
-    if (more.notes.length) {
-      await closeByTag(GENERIC_TAG);
-      await showNotes(more.notes);
-      await markShown(allIds(more.notes));
-      await updateAppBadge(more.suppressed ? 0 : more.pending);
-    }
+    const stop = await serializeNotify(async () => {
+      let more: Awaited<ReturnType<typeof previewPending>>;
+      try {
+        more = await previewPending();
+      } catch {
+        return true; // fetch failed → stop the straggler loop
+      }
+      if (more.notes.length) {
+        await closeByTag(GENERIC_TAG);
+        await showNotes(more.notes);
+        await markShown(allIds(more.notes));
+        await updateAppBadge(more.suppressed ? 0 : more.pending);
+      }
+      return false;
+    });
+    if (stop) break;
   }
 }
 

@@ -45,6 +45,10 @@ export interface SwNote {
   body: string;
   url: string;
   tag: string;
+  // (spec 2017) The count to render in the title (e.g. "Alice (3)"). Carried separately from `title`
+  // so the show path can make it CUMULATIVE across overlapping burst wakes (via the persisted
+  // per-chat summary) instead of a per-pass slice. Defaults to ids.length when unset.
+  count?: number;
 }
 
 /** Background-preview result. `notes` are the displayable notifications, `pending`
@@ -222,7 +226,7 @@ function noteForPayload(
 /** Merge notes that share a tag (same conversation / same requester) into one
  *  updating notification: the latest body, a count when more than one, and every
  *  underlying frame id so they all get marked shown. */
-function aggregate(raw: SwNote[]): SwNote[] {
+export function aggregate(raw: SwNote[]): SwNote[] {
   const order: string[] = [];
   const byTag = new Map<string, SwNote>();
   for (const n of raw) {
@@ -236,11 +240,65 @@ function aggregate(raw: SwNote[]): SwNote[] {
       cur.title = n.title;
     }
   }
+  // (spec 2017) Carry the count as a field rather than baking "(k)" into the title here. The show
+  // path makes it CUMULATIVE across overlapping burst wakes (via the persisted summary) and formats
+  // the title once, so the count reflects the true per-chat backlog, not this pass's unseen slice.
   return order.map((tag) => {
     const n = byTag.get(tag) as SwNote;
-    const k = n.ids.length;
-    return k > 1 ? { ...n, title: `${n.title} (${k})` } : n;
+    return { ...n, count: n.ids.length };
   });
+}
+
+/* ---- spec 2017: per-chat "last shown" summary, for coalescing a burst into ONE notification ---- */
+
+/** A small record of the last coalesced notification shown for a tag, so any SW wake can re-assert
+ *  the ONE authoritative notification (latest body + CUMULATIVE count) instead of a stale per-pass
+ *  slice or nothing. Bounded + short TTL (a burst window) so a chat read a while ago isn't
+ *  resurrected with a stale count. */
+export interface ShownSummary {
+  tag: string;
+  title: string; // base title (sender / group name), WITHOUT the "(n)" suffix
+  body: string; // latest message body shown
+  url: string;
+  ids: string[]; // cumulative frame ids folded into this notification (count = ids.length)
+  ts: number; // last update (epoch ms) — TTL'd so a stale summary doesn't re-assert forever
+}
+export const SUMMARY_KEY = 'swShownSummary'; // exported so the page can clear it on read (spec 2017)
+const SUMMARY_TTL_MS = 2 * 60 * 1000; // a burst window; older entries don't re-assert (FR-006)
+const SUMMARY_MAX = 100;
+
+export async function loadShownSummary(): Promise<ShownSummary[]> {
+  const raw = await setting<ShownSummary[]>(SUMMARY_KEY, []);
+  const cutoff = Date.now() - SUMMARY_TTL_MS;
+  return raw.filter((e) => e && typeof e.ts === 'number' && e.ts >= cutoff && Array.isArray(e.ids));
+}
+async function saveShownSummary(list: ShownSummary[]): Promise<void> {
+  await put<Setting<ShownSummary[]>>('settings', { key: SUMMARY_KEY, value: list.slice(-SUMMARY_MAX) });
+}
+
+/** (spec 2017) Fold a freshly-built note into the prior per-tag summary: UNION the frame ids (so the
+ *  count is the cumulative per-chat backlog, not this pass's slice), take the latest body/title/url,
+ *  stamp `now`. Pure → unit-tested. `prev` is the existing summary entry for this tag, if any. */
+export function mergeIntoSummary(prev: ShownSummary | undefined, note: SwNote, now: number): ShownSummary {
+  const ids = prev ? Array.from(new Set([...prev.ids, ...note.ids])) : [...note.ids];
+  return { tag: note.tag, title: note.title, body: note.body, url: note.url, ids, ts: now };
+}
+
+/** (spec 2017) Merge each note into the persisted summary and return the notes to actually SHOW, with
+ *  `count` set to the CUMULATIVE per-chat total (so a burst shows one monotonic count, not a bouncing
+ *  per-pass slice). Persists the updated summary. Serialized by the caller. */
+export async function coalesceForShow(notes: SwNote[], now: number): Promise<SwNote[]> {
+  if (!notes.length) return notes;
+  const list = await loadShownSummary();
+  const byTag = new Map(list.map((e) => [e.tag, e]));
+  const out: SwNote[] = [];
+  for (const n of notes) {
+    const merged = mergeIntoSummary(byTag.get(n.tag), n, now);
+    byTag.set(n.tag, merged);
+    out.push({ ...n, count: merged.ids.length });
+  }
+  await saveShownSummary(Array.from(byTag.values()));
+  return out;
 }
 
 /**
