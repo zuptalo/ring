@@ -9,7 +9,7 @@ import {
 
 /** Set up the common state: A↔B connected (1:1), then C calls A and A accepts-and-holds, so
  *  A↔C is ACTIVE and A↔B is HELD (B sees on hold). Returns the clients + a cleanup. */
-async function twoCalls(browser: Browser, tag: string): Promise<{ a: RingClient; b: RingClient; c: RingClient; close: () => Promise<void> }> {
+async function twoCalls(browser: Browser, tag: string, kind: 'audio' | 'video' = 'audio'): Promise<{ a: RingClient; b: RingClient; c: RingClient; close: () => Promise<void> }> {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const ctxC = await browser.newContext();
@@ -18,11 +18,11 @@ async function twoCalls(browser: Browser, tag: string): Promise<{ a: RingClient;
   const c = await createAccount(ctxC, `${tag}C`);
   await pair(a, b);
   await pair(a, c);
-  await startCall(a, b.id, 'audio');
+  await startCall(a, b.id, kind);
   await waitCallState(b, ['incoming']);
   await accept(b);
   await waitCallState(a, ['connected']);
-  await startCall(c, a.id, 'audio');
+  await startCall(c, a.id, kind);
   await a.page.waitForFunction(() => (window as any).__ringTest.hasSecondIncoming() === true, null, { timeout: 15_000 });
   await acceptAndHold(a);
   await waitCallState(a, ['connected']);
@@ -349,10 +349,10 @@ test('FR-010: a held-then-resumed call logs as ONE history entry (hold/swap/resu
   await ctxC.close();
 });
 
-test('the party coming off hold gets a resume countdown before going live again', async ({ browser }) => {
-  // A↔B connected; A takes a 2nd call from C (B held); A drops C → returns to B, which RESUMES B.
-  // B (the held party) should see a countdown before its camera/mic go live, then it clears.
-  const { a, b, c, close } = await twoCalls(browser, 'CWRC');
+test('a VIDEO call coming off hold gets a resume countdown before the camera goes live', async ({ browser }) => {
+  // A↔B VIDEO; A takes a 2nd call from C (B held); A drops C → returns to B, which RESUMES B.
+  // B (the held party) should see a countdown before its camera goes live again, then it clears.
+  const { a, b, c, close } = await twoCalls(browser, 'CWRC', 'video');
   // While A is on C, B is held: B's outgoing is paused and B is not yet counting down.
   expect(await resumeCountdown(b)).toBeNull();
   expect(await isRemoteHeld(b)).toBe(true);
@@ -370,6 +370,27 @@ test('the party coming off hold gets a resume countdown before going live again'
 
   // After the countdown elapses it clears and the call carries on connected.
   await b.page.waitForFunction(() => (window as any).__ringTest.resumeCountdown() === null, null, { timeout: 10_000 });
+  expect(await callState(b)).toBe('connected');
+  expect(await callState(a)).toBe('connected');
+
+  await hangup(a);
+  await close();
+});
+
+test('an AUDIO call coming off hold resumes immediately with no "on camera" countdown (spec 2012)', async ({ browser }) => {
+  // The resume countdown is a heads-up before the CAMERA goes live; an audio call has no camera, so
+  // it must resume immediately with no countdown.
+  const { a, b, c, close } = await twoCalls(browser, 'CWRA', 'audio');
+  expect(await resumeCountdown(b)).toBeNull();
+  expect(await isRemoteHeld(b)).toBe(true);
+
+  await hangup(a); // drop C → A returns to the held call (B), resuming it
+  await waitCallState(c, ['idle', 'ended']);
+
+  // B resumes: the held/blur state clears, and because it's AUDIO there is NO countdown — it stays
+  // connected. (Poll remoteHeld to know the resume landed, then assert the countdown never armed.)
+  await b.page.waitForFunction(() => (window as any).__ringTest.isRemoteHeld() === false, null, { timeout: 10_000 });
+  expect(await resumeCountdown(b)).toBeNull();
   expect(await callState(b)).toBe('connected');
   expect(await callState(a)).toBe('connected');
 
