@@ -18,7 +18,7 @@ Specs are grouped by category band; status moves
 | [0003](specs/0003-zero-knowledge-social/spec.md) | Zero-Knowledge Social Wall | 🟢 shipped |
 | [0004](specs/0004-group-call-reliability/spec.md) | Group call reliability, adaptive quality, caps, audio cues & busy signalling | 🔵 in-review |
 | [0005](specs/0005-call-waiting-hold/spec.md) | Call waiting — hold, swap & drop between two concurrent calls | 🔵 in-review |
-| [0007](specs/0007-adaptive-call-quality/spec.md) | Adaptive call quality — per-receiver, network- and screen-aware, with peer-reported health | 🟡 in-progress |
+| [0007](specs/0007-adaptive-call-quality/spec.md) | Adaptive call quality — per-receiver, network- and screen-aware, with peer-reported health | 🔵 in-review |
 
 ## ⚡ Ad-hoc (1001–1999)
 

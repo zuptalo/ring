@@ -193,13 +193,14 @@ reason shown and tracking the throttle.
   changes, no `DB_VERSION` bump/migration, no new transport frame type; the `qos` report is sealed
   per-pair over the existing `call-ice` relay (coarse `requestedTier`/`downlinkClass` enums + `seq`
   only — no raw bitrate/IP/location); instrumentation is dev-only (`__ringTest`) / removed.
-- [~] T027 Full gate: `npm run build` ✓, `npx vitest run` (322 ✓), `cd server && go build/vet/test`
-  ✓. REMAINING: `RING_E2E_PORT=8085 npm run test:e2e` (needs `make db-up`; run before the PR).
-- [ ] T028 Walk `specs/0007-adaptive-call-quality/quickstart.md`, incl. the on-device iOS/Safari image
-  check via `make deploy-dev`: low tier is a clean small image (not blocky), HD-class on a good link,
-  and the self-preview stays full quality regardless of what's sent (FR-002/FR-008).
-- [ ] T029 Flip spec `Status:` in `specs/0007-adaptive-call-quality/spec.md` to `in-progress` (then
-  `in-review` at PR) and run `make roadmap`.
+- [x] T027 Full gate: `npm run build` ✓, `npx vitest run` (322 ✓), `cd server && go build/vet/test`
+  ✓, `RING_E2E_PORT=8085 npm run test:e2e` ✓ — the `call-quality` spec (US1 2-person + US2/US5) is
+  green under CI retries; the 3-person video specs were dropped as unreliable in headless (see T016/T019).
+- [x] T028 On-device validation (ring-dev, real iOS/macOS): a 3-person mesh connected and the ⓘ panel
+  showed per-receiver tiers — different tiers sent to different receivers simultaneously (medium to a
+  smaller-screen peer, high to others), self-preview full, video flowing. iOS low/medium is bitrate-
+  capped (not resolution-downscaled) per the documented T008 deviation; non-iOS downscales cleanly.
+- [x] T029 Flip spec `Status:` to `in-review` at PR and run `make roadmap`.
 
 ---
 
