@@ -368,8 +368,14 @@ test('a VIDEO call coming off hold gets a resume countdown before the camera goe
   expect(n as number).toBeGreaterThan(0);
   expect(n as number).toBeLessThanOrEqual(5);
 
-  // After the countdown elapses it clears and the call carries on connected.
+  // (spec 2013) A — the swapper/resumer — sees the MIRROR countdown for B's video resuming, so it
+  // isn't left on a frozen frame with no explanation.
+  await a.page.waitForFunction(() => (window as any).__ringTest.peerResumeCountdown() !== null, null, { timeout: 5_000 });
+  expect(typeof (await a.page.evaluate(() => (window as any).__ringTest.peerResumeCountdown()))).toBe('number');
+
+  // Both countdowns clear and the call carries on connected.
   await b.page.waitForFunction(() => (window as any).__ringTest.resumeCountdown() === null, null, { timeout: 10_000 });
+  await a.page.waitForFunction(() => (window as any).__ringTest.peerResumeCountdown() === null, null, { timeout: 10_000 });
   expect(await callState(b)).toBe('connected');
   expect(await callState(a)).toBe('connected');
 
@@ -391,6 +397,8 @@ test('an AUDIO call coming off hold resumes immediately with no "on camera" coun
   // connected. (Poll remoteHeld to know the resume landed, then assert the countdown never armed.)
   await b.page.waitForFunction(() => (window as any).__ringTest.isRemoteHeld() === false, null, { timeout: 10_000 });
   expect(await resumeCountdown(b)).toBeNull();
+  // (spec 2013) A — the resumer — also sees no mirror countdown on an audio resume (no video to wait for).
+  expect(await a.page.evaluate(() => (window as any).__ringTest.peerResumeCountdown())).toBeNull();
   expect(await callState(b)).toBe('connected');
   expect(await callState(a)).toBe('connected');
 

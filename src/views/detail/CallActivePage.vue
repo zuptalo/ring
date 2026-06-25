@@ -46,6 +46,13 @@
           <div class="rc-num">{{ resumeCountdown }}</div>
           <div class="rc-text">You're back on camera…</div>
         </div>
+        <!-- (spec 2013) The mirror, shown to the party who RESUMED a held video call: the other side
+             is on its own "back on camera" heads-up, so tell us their video is about to return rather
+             than leaving us on a frozen frame. Only one of the two countdowns shows on a given device. -->
+        <div v-else-if="peerResumeCountdown !== null" class="resume-countdown" role="status" @click.stop>
+          <div class="rc-num">{{ peerResumeCountdown }}</div>
+          <div class="rc-text">{{ callMeta?.name ? callMeta.name + '’s video' : 'Their video' }} resuming…</div>
+        </div>
         <!-- Call waiting (spec 0005): a second call arriving over the active one offers
              Accept & hold / Decline; the call you already have on hold shows a bar; and when
              the other side has put US on hold a badge shows. -->
@@ -411,7 +418,7 @@ import {
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite,
   acceptCall, rejectCall, declineWithMessage,
-  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
+  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, peerResumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
   setGroupTileSize,
   type AudioRoute,
 } from '@/composables/useCall';
