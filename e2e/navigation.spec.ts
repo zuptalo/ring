@@ -94,3 +94,35 @@ test('switching tabs transitions the page after a drill-down + back', async ({ b
 
   await ctx.close();
 });
+
+/**
+ * Spec 2010 — navigation robustness. The installed iOS PWA's OS edge-swipe can't be disabled and, at
+ * history depth 1, underflows past start_url into a blank browser view. Two guarantees: (1) any path
+ * that doesn't match a real screen redirects to the main list (catch-all) — never a blank view; and
+ * (2) a back navigation at a tab root keeps the user on an in-app screen (the app stays mounted),
+ * thanks to the catch-all + the base-entry seed.
+ */
+test('unknown paths redirect into the app; back at a tab root stays in-app', async ({ browser }) => {
+  const ctx = await browser.newContext();
+  const a = await createAccount(ctx, 'NAVROBUST');
+  const AVATAR = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>';
+  await a.page.evaluate((av) => (window as any).__ringTest.setProfile('Nav', av), AVATAR);
+
+  // (1) Catch-all: an unknown path resolves to the main list, not a blank document.
+  await a.page.goto('/this/path/does/not/exist');
+  await a.page.waitForURL('**/tabs/chats');
+  expect(await a.page.evaluate(() => !!document.querySelector('ion-router-outlet'))).toBe(true);
+
+  // (2) From a tab root, a back navigation must stay in-app (an in-app route + the app still mounted),
+  // never about:blank / browser chrome.
+  await a.page.goto('/tabs/chats');
+  await a.page.waitForURL('**/tabs/chats');
+  expect(await a.page.evaluate(() => history.length)).toBeGreaterThanOrEqual(2);
+  await a.page.goBack();
+  await a.page.waitForTimeout(300);
+  expect(a.page.url()).not.toContain('about:blank');
+  expect(await a.page.evaluate(() => location.pathname)).not.toBe('');
+  expect(await a.page.evaluate(() => !!document.querySelector('ion-app, ion-router-outlet'))).toBe(true);
+
+  await ctx.close();
+});

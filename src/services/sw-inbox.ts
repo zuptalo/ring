@@ -257,10 +257,20 @@ export async function previewPending(): Promise<PreviewResult> {
     return { notes: [], pending: 0, suppressed: false, silenced: false };
   }
 
-  // Fetch the queue FIRST, before any decryption or settings gate. Fetching is
-  // what tells the server the device received these frames (→ "delivered"
-  // receipts), so it must happen even if we later withhold or can't decrypt.
-  // Bounded so a cold-start fetch can't hang the handler.
+  // Kick the device unlock NOW, IN PARALLEL with the fetch below (spec 2010
+  // root-cause c). attemptDeviceUnlock awaits libsodium's WASM init (`ready()`) then
+  // unwraps the device bundle — on a cold wake (evicted SW) that init + unwrap is
+  // pure CPU with no network, so overlapping it with the network round-trip hides its
+  // latency inside the fetch instead of paying it serially AFTER, which used to push
+  // the first decrypt past the GENERIC_AFTER_MS budget → a stranded generic. We still
+  // AWAIT it before any decrypt below, so correctness is unchanged (never decrypt
+  // before the key is ready).
+  const unlockReady = attemptDeviceUnlock().catch(() => false);
+
+  // Fetch the queue, before any decryption or settings gate. Fetching is what tells
+  // the server the device received these frames (→ "delivered" receipts), so it must
+  // happen even if we later withhold or can't decrypt. Bounded so a cold-start fetch
+  // can't hang the handler.
   let frames: MsgFrame[] = [];
   try {
     const ctrl = new AbortController();
@@ -294,8 +304,10 @@ export async function previewPending(): Promise<PreviewResult> {
 
   // Now decrypt for the rich preview. PIN/passkey-locked (no device key) → generic
   // (the frames were still fetched above, so the sender already got "delivered").
-  // Runs AFTER the fetch so a stalled libsodium init can't block delivery.
-  if (!(await attemptDeviceUnlock())) {
+  // Awaits the unlock kicked off in parallel above (its init overlapped the fetch),
+  // so a stalled libsodium init never blocks delivery and a cold start doesn't pay
+  // unlock latency serially after the fetch.
+  if (!(await unlockReady)) {
     console.warn('[sw-inbox] device unlock failed (PIN-locked?) → generic');
     // Can't tell a message from a request → let the caller show a generic, UNLESS
     // the user disabled message notifications (then stay silent rather than buzz).

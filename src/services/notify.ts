@@ -23,9 +23,10 @@ import router from '@/router';
 import { getSetting, isChatMuted, getChat } from '@/db/queries';
 import { subscribe } from '@/db/idb';
 import { notifyLocal } from '@/services/push';
-import { inAppGloballyEnabled, getChatNotifyPrefs, type ChatNotifyContent } from '@/services/notify-prefs';
+import { inAppGloballyEnabled, getChatNotifyPrefs } from '@/services/notify-prefs';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { playTone } from '@/services/sound';
+import { notificationOwner } from '@/services/notify-policy';
 
 /* ---- cached notification preferences ---- */
 
@@ -91,6 +92,13 @@ export interface IncomingNotice {
   avatar?: string; // optional; messages resolve the chat avatar if omitted
   icon?: string; // system notices: the ionicon shown in the banner (defaults applied)
   url?: string; // system notices: optional deep-link target (default: Contacts tab)
+  // This item is being surfaced because a push WOKE the page (ring:drain). Such an
+  // item must bypass the post-unlock settle window (it's a single woken delivery,
+  // not part of the unlock banner burst the window is meant to damp), and its
+  // OS-notification channel is owned by the SW (which already fired for the push),
+  // so the page must not double up via notifyLocal. Set by the drain path (App.vue
+  // arms markPushWake(); receiveIncoming reads it through pushWakeActive()).
+  pushWoken?: boolean;
 }
 
 /* ---- in-app notification banners (custom green overlay; see NotificationBanners.vue) ---- */
@@ -276,6 +284,46 @@ export function deferNotificationsFor(ms: number): void {
   settledUntil = Date.now() + ms;
 }
 
+/* ---- push-wake window + banner-presented hand-off (spec 2010 US2/US3) ---- */
+
+// A ring:drain push woke the page. For a brief window after, an arriving message is
+// treated as `pushWoken` so it (a) bypasses the settle window above and (b) does not
+// also fire notifyLocal — the SW already owns the OS notification for that push.
+// receiveIncoming (queries.ts) stamps `pushWoken` onto the notice from this window.
+let pushWakeUntil = 0;
+const PUSH_WAKE_WINDOW_MS = 12_000; // comfortably covers the SW fetch+decrypt+drain budget
+export function markPushWake(): void {
+  pushWakeUntil = Date.now() + PUSH_WAKE_WINDOW_MS;
+}
+export function pushWakeActive(): boolean {
+  return Date.now() < pushWakeUntil;
+}
+
+// The page<->SW hand-off ack must be tied to whether the page ACTUALLY rendered an
+// in-app banner for a drained message — not merely to "we're unlocked" (the old,
+// ambiguous gate that acked even when the settle window / visibility race then
+// dropped the banner, leaving NO alert at all). App.vue subscribes a callback for a
+// ring:drain's lifetime; notifyIncoming fires it the instant it presents a banner,
+// so the page acks (claims the alert) only when it truly showed something. If no
+// banner renders within the window, no ack → the SW deterministically owns it.
+type BannerPresentedCb = () => void;
+const bannerPresentedCbs = new Set<BannerPresentedCb>();
+/** Register a listener fired whenever notifyIncoming presents a visible in-app
+ *  banner for a message. Returns an unsubscribe. */
+export function onBannerPresented(cb: BannerPresentedCb): () => void {
+  bannerPresentedCbs.add(cb);
+  return () => bannerPresentedCbs.delete(cb);
+}
+function notifyBannerPresented(): void {
+  for (const cb of [...bannerPresentedCbs]) {
+    try {
+      cb();
+    } catch {
+      /* a listener error must never break alert presentation */
+    }
+  }
+}
+
 function appVisible(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'visible';
 }
@@ -307,76 +355,124 @@ async function inAppSoundAndHaptics(): Promise<void> {
   }
 }
 
-/** Decide and present the alerting for one incoming item. */
-export async function notifyIncoming(n: IncomingNotice): Promise<void> {
+/**
+ * Decide and present the alerting for one incoming item.
+ *
+ * Returns true iff the page presented a VISIBLE in-app banner/alert for it. The
+ * caller (App.vue's ring:drain hand-off) uses that to ack `ring:handled` only when
+ * the page truly showed something — so the SW deterministically owns the OS
+ * notification in every case where the page didn't (hidden / suppressed / a
+ * locked or settle-swallowed page). This is the core spec-2010 fix: the old code
+ * acked the moment it saw "unlocked", then often dropped the banner (settle window
+ * / visibility race), leaving no alert at all.
+ */
+export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
   // Never surface anything while the keystore is locked (behind the passcode gate).
-  if (!isUnlockedNow()) return;
-  // The settle window suppresses the message/request banner BURST right after landing
-  // (as the gate dismisses / queued messages drain). A 'system' notice (e.g. "X joined
-  // Ring") is a single gated event, not part of that burst, and it fires exactly once —
-  // so don't let the settle window silently swallow it.
-  if (n.kind !== 'system' && Date.now() < settledUntil) return;
-  // Per-chat mute suppresses all alerting for this chat (the message still arrives
-  // and grows the unread badge). Requests have no chat to mute.
-  if (n.chatId && (await isChatMuted(n.chatId))) return;
-  // Per-chat notification controls (spec 1015): content visibility + in-app toggle.
-  // A friend request / system notice has no chat, so it uses the defaults (web push
-  // on, in-app on, content full).
-  const chatPrefs = n.chatId ? await getChatNotifyPrefs(n.chatId) : null;
-  const content: ChatNotifyContent = chatPrefs?.content ?? 'full';
-  // content = 'none' → badge-only: reveal nothing, anywhere (no banner, no system
-  // notification, no lock-screen text). The badge still updates elsewhere (FR-024).
-  if (content === 'none') return;
-  // content = 'generic' → fire a placeholder with no message text (sender name is
-  // not message content, so it may still head the notice, matching showPreview=off).
-  const showFull = content === 'full';
+  if (!isUnlockedNow()) return false;
+
+  // ---- The 'message' kind: decide via the shared notify-policy predicate so the
+  // page and the SW reason about visibility / settle / per-chat prefs IDENTICALLY.
+  // (Requests / system notices have no chat and always-surface semantics — handled
+  // below the predicate, unchanged.)
+  if (n.kind === 'message') {
+    const p = await ensurePrefs();
+    if (!p.showMessages) return false; // the global "Show notifications" toggle
+    const [muted, chatPrefs, globalInApp] = await Promise.all([
+      n.chatId ? isChatMuted(n.chatId) : Promise.resolve(false),
+      n.chatId ? getChatNotifyPrefs(n.chatId) : Promise.resolve(null),
+      inAppGloballyEnabled(),
+    ]);
+    const content = chatPrefs?.content ?? 'full';
+    const owner = notificationOwner({
+      appVisible: appVisible(),
+      unlocked: true, // isUnlockedNow() was checked above
+      isActiveChat: !!n.chatId && n.chatId === activeChatId && appVisible(),
+      pushWoken: !!n.pushWoken,
+      inSettleWindow: Date.now() < settledUntil,
+      pref: {
+        webPush: chatPrefs?.webPush ?? true,
+        // In-app banners need BOTH the global master switch and the per-chat toggle.
+        inApp: globalInApp && (chatPrefs?.inApp ?? true),
+        content,
+        muted,
+      },
+    });
+
+    if (owner === 'suppress') {
+      // Viewing this chat while visible → still give a subtle sound (the user sees
+      // the message inline). Every other suppress reason (muted / content=none /
+      // in-app off / settle-swallowed) is fully silent.
+      if (n.chatId && n.chatId === activeChatId && appVisible()) await inAppSoundAndHaptics();
+      return false;
+    }
+    if (owner === 'sw-notification') {
+      // The SW owns the OS notification. For a PUSH-WOKEN drain the SW already fired
+      // for that push, so the page must NOT also notifyLocal (that double-up + the
+      // visibilityState race in notifyLocal were a source of the random "content vs
+      // nothing"). For a live, hidden, NON-woken delivery (connected tab, no push),
+      // the SW never ran, so the page still bridges it via notifyLocal — the
+      // connected-but-hidden gap the OS push doesn't cover.
+      // content='none' is badge-only (no OS text anywhere), so it never bridges via
+      // notifyLocal even though the predicate routes it through 'sw-notification'
+      // (the SW's own none-handling keeps it badge-only there).
+      if (!n.pushWoken && content !== 'none') {
+        const showFull = content === 'full' && p.showPreview;
+        void notifyLocal(n.name, showFull ? n.body : 'New message', targetUrl(n), n.chatId);
+      }
+      return false;
+    }
+
+    // owner === 'page-banner': show the in-app banner/alert.
+    const showFull = content === 'full' && p.showPreview;
+    await inAppSoundAndHaptics();
+    if (p.inappStyle === 'none') return false; // sound only; no visible surface
+    const url = targetUrl(n);
+    const bodyText = showFull ? n.body : 'New message';
+    const presented = await presentMessageBanner(n, bodyText, url, p.inappStyle);
+    if (presented) notifyBannerPresented(); // tell the drain hand-off we claimed it
+    return presented;
+  }
+
+  // ---- Requests / system notices: always-surface, no chat (defaults: content full,
+  // in-app on). The settle window still damps a request banner burst, but a 'system'
+  // notice (e.g. "X joined Ring") is a single gated event, so it isn't swallowed.
+  if (n.kind !== 'system' && Date.now() < settledUntil) return false;
   const p = await ensurePrefs();
-  // Backgrounded: hand off to an OS notification (covers the connected-but-hidden
-  // gap; truly-offline is covered by the server push). Requests always notify;
-  // message notifications respect "Show notifications".
+  const full = p.showPreview;
   if (!appVisible()) {
-    if (n.kind === 'message' && !p.showMessages) return;
-    const full = showFull && p.showPreview;
     let title: string;
     let body: string;
     if (n.kind === 'request') {
       title = 'Friend request';
       body = full ? `${n.name} ${n.body}` : 'New request';
-    } else if (n.kind === 'system') {
+    } else {
       title = 'Ring';
       body = `${n.name} ${n.body}`; // e.g. "Ada joined Ring"
-    } else {
-      title = n.name;
-      body = full ? n.body : 'New message';
     }
-    // Pass chatId so the page- and SW-shown notifications for one conversation
-    // share a tag and collapse instead of duplicating.
     void notifyLocal(title, body, targetUrl(n), n.chatId);
-    return;
+    return false;
   }
-
-  // Focused on the very chat this message belongs to → no banner; subtle sound.
-  if (n.kind === 'message' && n.chatId && n.chatId === activeChatId) {
-    await inAppSoundAndHaptics();
-    return;
-  }
-
-  // In-app banner path. Gated by the GLOBAL in-app master switch (FR-018; this also
-  // suppresses friend-request banners while leaving their web push intact) and by
-  // the PER-CHAT in-app toggle (FR-019). Both leave the badge + system push alone.
-  if (!(await inAppGloballyEnabled())) return;
-  if (chatPrefs && !chatPrefs.inApp) return;
-
-  const style = p.inappStyle;
+  // Visible: gated by the GLOBAL in-app master switch (FR-018; suppresses request
+  // banners while leaving their web push intact).
+  if (!(await inAppGloballyEnabled())) return false;
   await inAppSoundAndHaptics();
-  if (style === 'none') return;
-
-  const headline = n.kind === 'request' ? `${n.name} wants to connect` : n.name;
+  if (p.inappStyle === 'none') return false;
   const url = targetUrl(n);
-  // For a 'generic' chat, mask the message text in the banner/alert too (no preview).
-  const bodyText = showFull ? n.body : n.kind === 'message' ? 'New message' : '';
+  const bodyText = full ? n.body : '';
+  return presentMessageBanner(n, bodyText, url, p.inappStyle);
+}
 
+/** Present the visible banner/alert surface for one notice. Returns true once a
+ *  banner is shown (or an alert is presented). Factored out so notifyIncoming's
+ *  per-kind branches share one renderer (avatar resolution, alert vs banner style). */
+async function presentMessageBanner(
+  n: IncomingNotice,
+  bodyText: string,
+  url: string,
+  style: string,
+): Promise<boolean> {
   if (style === 'alerts') {
+    const headline = n.kind === 'request' ? `${n.name} wants to connect` : n.name;
     const a = await alertController.create({
       header: headline,
       message: n.kind === 'request' ? undefined : bodyText,
@@ -386,9 +482,8 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
       ],
     });
     await a.present();
-    return;
+    return true;
   }
-
   // Default: a banner showing the chat avatar (or an icon for requests / system
   // notices) + name + preview, auto-dismissing, tap to open (see
   // NotificationBanners.vue). Resolve the chat's avatar for a message; a request /
@@ -399,4 +494,5 @@ export async function notifyIncoming(n: IncomingNotice): Promise<void> {
   }
   const icon = n.icon ?? (n.kind === 'system' ? DEFAULT_SYSTEM_ICON : undefined);
   showBanner({ kind: n.kind, name: n.name, body: bodyText, avatar, icon, url, chatId: n.chatId });
+  return true;
 }

@@ -79,8 +79,16 @@ const GENERIC_TAG = 'ring-incoming';
 // before decryption we cannot know it without the server knowing it (which would
 // break E2EE). "New message" is the privacy-correct placeholder; the per-type
 // preview (notify-preview.ts) appears only once decryption succeeds and upgrades it.
-const GENERIC_AFTER_MS = 6000;
-const SETTLE_MAX_MS = 9000;
+// GENERIC_AFTER_MS: how long to wait for a decrypted preview before posting the
+// generic placeholder. SETTLE_MAX_MS: the outer window we keep awaiting so a late
+// preview UPGRADES that placeholder. SETTLE_MAX_MS must COMFORTABLY EXCEED
+// sw-inbox's PENDING_FETCH_TIMEOUT_MS (8000) — otherwise a decrypt that lands late
+// in the fetch budget (≥ GENERIC_AFTER_MS but the fetch only resolves near 8s) was
+// stranded as a permanent generic because the settle window closed before it could
+// upgrade (spec 2010 root-cause b). 12000 > 8000 leaves headroom for the decrypt +
+// the closeByTag/showNotes upgrade after the fetch resolves.
+const GENERIC_AFTER_MS = 7000;
+const SETTLE_MAX_MS = 12000;
 // Straggler catch-up after the first preview. In the background the page is
 // suspended, so a queued message only earns its 'delivered' receipt when the SW
 // fetches the pending queue (the server emits 'delivered' for every queued frame on
@@ -458,7 +466,12 @@ self.addEventListener('push', (event) => {
       }
       // Let a live, unlocked page own the notification (avoids a duplicate); the SW
       // shows it only when no page claims it within the window (closed/locked/frozen).
-      if (clients.length && (await pageWillNotify(clients, 1200))) return;
+      // The page now acks only once it ACTUALLY renders an in-app banner (spec 2010),
+      // which can trail a cold reconnect+decrypt, so wait a touch longer than the old
+      // 1200ms — comfortably above the page's own DRAIN_ACK_WINDOW so a page that will
+      // show a banner reliably claims it, while a hidden/locked/frozen page (which
+      // never acks) still falls through to the SW promptly enough.
+      if (clients.length && (await pageWillNotify(clients, 2200))) return;
       await showMessageNotification();
     })(),
   );
