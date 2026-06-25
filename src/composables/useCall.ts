@@ -339,6 +339,15 @@ function cancelResumeCountdown(): void {
  *  call moved on (torn down, re-held, or swapped) in the meantime. */
 function beginResumeCountdown(target: RTCPeerConnection): void {
   cancelResumeCountdown();
+  // (spec 2012) The countdown is a heads-up before our CAMERA goes back live ("You'll be on
+  // camera…"). On an audio call there is no camera, so the countdown is meaningless — resume the
+  // (audio) outgoing immediately with no countdown. Video calls keep the heads-up.
+  if (callMeta.value?.kind !== 'video') {
+    if (pc === target && !remoteHeld.value && localStream.value) {
+      void set1to1Senders(target, localStream.value);
+    }
+    return;
+  }
   let n = RESUME_COUNTDOWN_SEC;
   resumeCountdown.value = n;
   callCue('resuming'); // audible "you're about to be back" notification
@@ -1514,6 +1523,11 @@ function clearGroupIdleTimeout(): void {
 async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Promise<void> {
   const from = frame.from;
   if (!from || !frame.callId) return;
+
+  // (spec 2012) Duplicate incoming invite: the relay now retains the sealed offer and may re-deliver
+  // it (the recovery path — e.g. after the callee reconnects following a reload). If we're already
+  // ringing for this same callId, don't raise a second incoming screen.
+  if (callState.value === 'incoming' && callMeta.value?.callId === frame.callId) return;
 
   // Renegotiation of an in-progress call (e.g. the peer's ICE restart): same
   // call + peer and we're already connected/connecting → apply as offer/answer,
@@ -2859,7 +2873,11 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         return;
       }
       if (meta && meta.callId === frame.callId) {
-        await teardown(frame.reason === 'unavailable' ? 'unavailable' : 'remote');
+        // 'unreachable' (spec 2012 US2): the server tells the caller the callee's socket dropped mid-
+        // ring and didn't come back — surface it as the clear "unavailable" outcome, not a generic
+        // remote hang-up, so the caller knows the callee wasn't there (rather than 60s of false ring).
+        const unavailable = frame.reason === 'unavailable' || frame.reason === 'unreachable';
+        await teardown(unavailable ? 'unavailable' : 'remote');
       } else if (heldSlot && heldSlot.meta.callId === frame.callId) {
         // The HELD call's remote hung up → free the held slot; the active call is undisturbed
         // (spec 0005 FR-009).

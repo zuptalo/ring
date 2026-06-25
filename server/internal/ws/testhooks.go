@@ -30,6 +30,14 @@ func SetCallRecoveryGraceForTest(d time.Duration) func() {
 	return func() { callRecoveryGrace = prev }
 }
 
+// SetRingDropGraceForTest shrinks the US2 "callee unreachable" grace so tests don't wait the
+// production window; returns a restore func.
+func SetRingDropGraceForTest(d time.Duration) func() {
+	prev := ringDropGrace
+	ringDropGrace = d
+	return func() { ringDropGrace = prev }
+}
+
 // SetAudioMaxForTest overrides the audio participant cap, mirroring SetVideoMaxForTest.
 func SetAudioMaxForTest(n int) func() {
 	prev := call.AudioMax

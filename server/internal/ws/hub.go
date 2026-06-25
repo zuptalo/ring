@@ -159,6 +159,30 @@ type Hub struct {
 	// removed and the roster re-broadcast (call dropped, no auto-recall). Keyed "room\x00user".
 	evictMu     sync.Mutex
 	evictTimers map[string]*time.Timer
+	// Active 1:1 rings + the "callee went unreachable" grace timers behind US2 (honest
+	// ringing). activeRings tracks every in-flight 1:1 offer (caller↔callee↔callId) — unlike
+	// callRings (which only exists when the callee is push-rung) it's recorded for ALL offers,
+	// including an online/foregrounded callee, so a mid-ring reload of exactly that callee is
+	// covered. When a callee's LAST socket drops we start a short grace timer per active ring;
+	// if they reconnect and re-ack ringing within it (recovered offer re-flushes → re-ring →
+	// AckCallReachable) we cancel it, otherwise we tell the caller the callee is unreachable so
+	// it ends promptly instead of ringing into the void for the full no-answer window.
+	ringMu2     sync.Mutex
+	activeRings map[string]activeRing // callId → caller/callee
+	dropTimers  map[string]*time.Timer
+}
+
+// ringDropGrace is how long the caller keeps "ringing" after the callee's last socket drops,
+// before being told the callee is unreachable. Long enough for a fast reload to reconnect,
+// re-flush the recovered offer, re-ring, and re-ack (US2 scenario 2); short enough that a
+// genuinely-gone callee ends the caller's call in a few seconds, not the ~60s no-answer
+// backstop. var (not const) so tests can shrink it; production value is unchanged.
+var ringDropGrace = 8 * time.Second
+
+// activeRing is one in-flight 1:1 ring tracked for the US2 unreachable-callee teardown.
+type activeRing struct {
+	caller string
+	callee string
 }
 
 // callRecoveryGrace is how long a disconnected participant is held in a call room before
@@ -201,9 +225,12 @@ const (
 )
 
 // bufferedCall is a call offer held for a few seconds so a push-woken device
-// that reconnects still receives it (background ringing).
+// that reconnects still receives it (background ringing). callID (when known) lets
+// the buffer be cleared per-call once that call resolves, so a settled/declined
+// invite can't re-ring on a later reconnect (spec 2012 US1); empty for group invites.
 type bufferedCall struct {
 	payload []byte
+	callID  string
 	exp     time.Time
 }
 
@@ -228,6 +255,8 @@ func NewHub() *Hub {
 		callRings:   make(map[string]*callRing),
 		groupRings:  make(map[string]map[string]context.CancelFunc),
 		evictTimers: make(map[string]*time.Timer),
+		activeRings: make(map[string]activeRing),
+		dropTimers:  make(map[string]*time.Timer),
 	}
 }
 
@@ -363,6 +392,116 @@ func (h *Hub) AckCallReachable(callee string) {
 			h.Send(t.caller, payload)
 		}
 	}
+	// A fresh ring-ack from this callee means they're reachable again → cancel any pending
+	// "callee unreachable" grace for their rings, so a quick reload that re-rings within the
+	// grace doesn't falsely end the caller's call (spec 2012 US2 scenario 2).
+	h.cancelRingDropTimersForCallee(callee)
+}
+
+// trackRing records an in-flight 1:1 ring so the US2 drop-detection (cleanup) can find rings
+// where a vanished user is the callee. Recorded for EVERY 1:1 offer, including a live-delivered
+// one. Replaces any prior entry for the callId (idempotent re-offer).
+func (h *Hub) trackRing(caller, callee, callID string) {
+	if callID == "" || callee == "" {
+		return
+	}
+	h.ringMu2.Lock()
+	h.activeRings[callID] = activeRing{caller: caller, callee: callee}
+	h.ringMu2.Unlock()
+}
+
+// startRingDropTimer arms (or replaces) the grace timer for one ring after the callee's last
+// socket drops. On expiry — if nothing cancelled it (no re-ack within the grace) — it tells the
+// CALLER the callee is unreachable via a call-end{reason:"unreachable"} (a frame the caller
+// already tears down on while ringing), then forgets the ring. The lock is NOT held across the
+// timer callback; the callback re-locks only briefly to remove itself.
+func (h *Hub) startRingDropTimer(callID, caller string) {
+	if callID == "" {
+		return
+	}
+	h.ringMu2.Lock()
+	if old := h.dropTimers[callID]; old != nil {
+		old.Stop()
+	}
+	h.dropTimers[callID] = time.AfterFunc(ringDropGrace, func() {
+		h.ringMu2.Lock()
+		// Already cancelled/superseded? Then this fire is stale — do nothing.
+		if t := h.dropTimers[callID]; t == nil {
+			h.ringMu2.Unlock()
+			return
+		}
+		delete(h.dropTimers, callID)
+		delete(h.activeRings, callID)
+		h.ringMu2.Unlock()
+		// Grace elapsed without the callee re-acking → end the caller's call promptly with a
+		// clear outcome instead of the ~60s no-answer wait. Also stop the push ring loop so a
+		// backgrounded callee that returns later isn't buzzed for a call the caller has ended.
+		h.stopCallRing(callID)
+		if payload, err := json.Marshal(frame{T: "call-end", CallID: callID, Reason: "unreachable"}); err == nil {
+			h.Send(caller, payload)
+		}
+	})
+	h.ringMu2.Unlock()
+}
+
+// stopRingDropTimer cancels and forgets the grace timer + tracked ring for a callId (the call
+// resolved, or the callee re-acked). Safe if none exists.
+func (h *Hub) stopRingDropTimer(callID string) {
+	if callID == "" {
+		return
+	}
+	h.ringMu2.Lock()
+	if t := h.dropTimers[callID]; t != nil {
+		t.Stop()
+		delete(h.dropTimers, callID)
+	}
+	delete(h.activeRings, callID)
+	h.ringMu2.Unlock()
+}
+
+// cancelRingDropTimersForCallee cancels any pending grace timers whose callee just became
+// reachable again (re-acked ringing). Leaves the ring tracked (the call is still in-flight).
+func (h *Hub) cancelRingDropTimersForCallee(callee string) {
+	h.ringMu2.Lock()
+	for callID, r := range h.activeRings {
+		if r.callee != callee {
+			continue
+		}
+		if t := h.dropTimers[callID]; t != nil {
+			t.Stop()
+			delete(h.dropTimers, callID)
+		}
+	}
+	h.ringMu2.Unlock()
+}
+
+// ringDropOnCalleeGone is called from cleanup when a user's LAST socket drops: for every active
+// ring where they're the callee, start the grace timer. A still-connected callee (another
+// device) is unaffected. Snapshots under the lock, then arms timers (startRingDropTimer re-locks).
+func (h *Hub) ringDropOnCalleeGone(callee string) {
+	type pend struct{ callID, caller string }
+	var pending []pend
+	h.ringMu2.Lock()
+	for callID, r := range h.activeRings {
+		if r.callee == callee {
+			pending = append(pending, pend{callID, r.caller})
+		}
+	}
+	h.ringMu2.Unlock()
+	for _, p := range pending {
+		h.startRingDropTimer(p.callID, p.caller)
+	}
+}
+
+// stopAllRingDropTimers cancels every grace timer (hub shutdown / test cleanup) so no timer
+// goroutine leaks past the hub's life.
+func (h *Hub) stopAllRingDropTimers() {
+	h.ringMu2.Lock()
+	for callID, t := range h.dropTimers {
+		t.Stop()
+		delete(h.dropTimers, callID)
+	}
+	h.ringMu2.Unlock()
 }
 
 // ringMember rings ONE group-call invitee: the initial invite (live + buffered for a
@@ -376,7 +515,7 @@ func (c *Client) ringMember(roomID, member string, invite []byte) {
 		c.notifyAsync(member, true)
 	}
 	if !delivered {
-		c.hub.bufferCall(member, invite) // a push-woken reconnect still finds the invite
+		c.hub.bufferCall(member, "", invite) // a push-woken reconnect still finds the invite (group: cleared per-user)
 	}
 	c.hub.startGroupMemberRing(c.notifier, roomID, member, invite)
 }
@@ -497,8 +636,10 @@ func (h *Hub) forgetRingIfGone(userID string) {
 	h.ringMu.Unlock()
 }
 
-// bufferCall holds a call offer for `to` for a short TTL (expiring older ones).
-func (h *Hub) bufferCall(to string, payload []byte) {
+// bufferCall holds a call offer/ICE for `to` for a short TTL (expiring older ones).
+// callID tags the frame so the hold can later be cleared per-call when that call
+// resolves (empty for group invites, which are cleared per-user on join/leave/evict).
+func (h *Hub) bufferCall(to, callID string, payload []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := time.Now()
@@ -508,7 +649,7 @@ func (h *Hub) bufferCall(to string, payload []byte) {
 			kept = append(kept, b)
 		}
 	}
-	buf := append(kept, bufferedCall{payload: payload, exp: now.Add(callBufferTTL)})
+	buf := append(kept, bufferedCall{payload: payload, callID: callID, exp: now.Add(callBufferTTL)})
 	// Bound the hold (offer + trickled ICE) so a chatty/abusive caller can't grow it without
 	// limit; a normal call setup is well under this. Dropping the oldest first is acceptable.
 	if len(buf) > maxBufferedCallFrames {
@@ -540,6 +681,35 @@ func (h *Hub) clearBufferedCalls(userID string) {
 	h.mu.Lock()
 	delete(h.callBuf, userID)
 	h.mu.Unlock()
+}
+
+// clearBufferedCallID drops only the held frames (offer + trickled ICE) for ONE 1:1 callId,
+// leaving any unrelated held offer intact. Called when a 1:1 call resolves
+// (answered/declined/cancelled/ended) so its now-retained invite can't re-ring the callee on a
+// later reconnect (spec 2012 US1 FR-003). callId-scoped because a 1:1 offer is now buffered
+// even when delivered live; we must forget it precisely when the call settles, not the user's
+// whole buffer.
+func (h *Hub) clearBufferedCallID(userID, callID string) {
+	if callID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	bufs := h.callBuf[userID]
+	if len(bufs) == 0 {
+		return
+	}
+	kept := bufs[:0]
+	for _, b := range bufs {
+		if b.callID != callID {
+			kept = append(kept, b)
+		}
+	}
+	if len(kept) == 0 {
+		delete(h.callBuf, userID)
+	} else {
+		h.callBuf[userID] = kept
+	}
 }
 
 // SharesCallRoom reports whether a and b are currently in a common call room. Used by the
@@ -868,6 +1038,14 @@ func (c *Client) cleanup() {
 		for _, roomID := range c.hub.rooms.RoomsForUser(c.userID) {
 			c.hub.scheduleEviction(roomID, c.userID)
 		}
+	}
+	// Honest ringing (spec 2012 US2): if this was the user's LAST socket and they're the callee
+	// of an in-flight 1:1 ring, start the grace timer. A fast reload that reconnects, re-flushes
+	// the recovered offer, re-rings and re-acks within the grace cancels it; otherwise the caller
+	// is told the callee is unreachable so it ends promptly. A user with another live device is
+	// still reachable, so no timer is armed.
+	if !c.hub.hasAnyConn(c.userID) {
+		c.hub.ringDropOnCalleeGone(c.userID)
 	}
 	_ = c.conn.Close()
 	// Only a genuine online→offline transition is a presence change. A
@@ -1241,6 +1419,11 @@ func (c *Client) handleFrame(data []byte) {
 		if payload == nil {
 			return
 		}
+		// Track this ring (caller↔callee↔callId) for the US2 honest-ringing drop detection —
+		// recorded for ALL offers, including a live-delivered one, so a mid-ring reload of an
+		// online callee is covered (the common case the bug report hit). Cleared when the call
+		// resolves or the unreachable grace fires.
+		c.hub.trackRing(c.userID, f.To, f.CallID)
 		delivered := c.hub.Send(f.To, payload)
 		if delivered {
 			// The callee has a live socket and just received the offer → it's reachable.
@@ -1262,28 +1445,32 @@ func (c *Client) handleFrame(data []byte) {
 			// which flips the caller's UI to "Ringing". Cancelled on answer/decline/end.
 			c.hub.startCallRing(c.notifier, c.userID, f.To, f.CallID)
 		}
-		// No live socket at all → hold the offer briefly so a push-woken device
-		// that reconnects still rings. The caller keeps ringing; its own dial
-		// timeout ends the call if nobody answers.
-		if !delivered {
-			c.hub.bufferCall(f.To, payload)
-		}
+		// Retain the offer briefly so a CALLEE THAT RECONNECTS still rings — whether it was
+		// offline (push-woken cold start) OR online but reloaded mid-ring (e.g. tapped an app
+		// update from the incoming-call screen), which destroys its in-memory call state and the
+		// offer client-side (spec 2012 US1). We buffer regardless of `delivered`: a live delivery
+		// already rang it once, but flushBufferedCalls() on its next connect re-delivers this so a
+		// reloaded callee re-rings and can still answer. The hold is callId-tagged and cleared when
+		// the call resolves (clearBufferedCallID), so a settled/declined call never re-rings. The
+		// caller keeps ringing; its own dial timeout (or US2 unreachable drop) ends the call.
+		c.hub.bufferCall(f.To, f.CallID, payload)
 
 	case "call-ringing", "call-answer", "call-ice", "call-accept",
 		"call-reject", "call-cancel", "call-busy", "call-end",
 		"call-upgrade-request", "call-upgrade-accept", "call-upgrade-reject":
 		// Pure live relay of the remaining 1:1 signalling (incl. the consent-gated
 		// audio<->video upgrade). The sender is authoritative; SDP/ICE stay E2EE'd.
-		delivered := c.relayCall(f)
-		// A 1:1 caller trickles its ICE candidates right after the offer. If the callee is
-		// briefly offline (backgrounded long enough — ~30s — that iOS suspended its socket),
-		// those candidates would be lost while only the offer is buffered, so an answered
-		// call could never connect. Buffer undelivered 1:1 ICE too, flushed (after the offer,
-		// in arrival order) when the device reconnects. Mesh ICE (roomId) is group signalling
-		// between already-present peers and stays live-only.
-		if !delivered && f.T == "call-ice" && f.RoomID == "" && f.To != "" {
+		c.relayCall(f)
+		// A 1:1 caller trickles its ICE candidates right after the offer. Retain 1:1 ICE
+		// alongside the offer so a callee that reconnects — whether it was offline (iOS
+		// suspended its socket) or reloaded mid-ring (spec 2012 US1) — receives the candidates
+		// too (flushed after the offer, in arrival order), otherwise an answered call could never
+		// connect. Buffered regardless of `delivered` and callId-tagged, mirroring the offer, so
+		// the whole hold is cleared together when the call resolves. Mesh ICE (roomId) is group
+		// signalling between already-present peers and stays live-only.
+		if f.T == "call-ice" && f.RoomID == "" && f.To != "" {
 			if rp := c.forwardedCallPayload(f); rp != nil {
-				c.hub.bufferCall(f.To, rp)
+				c.hub.bufferCall(f.To, f.CallID, rp)
 			}
 		}
 		// Once the callee engages (ringing/answered) or the call resolves, stop the
@@ -1291,6 +1478,29 @@ func (c *Client) handleFrame(data []byte) {
 		switch f.T {
 		case "call-ringing", "call-answer", "call-accept", "call-reject", "call-cancel", "call-busy", "call-end":
 			c.hub.stopCallRing(f.CallID)
+		}
+		// A callee echoing call-ringing (in-app, the foregrounded-reload re-ack path) means it's
+		// reachable again → cancel any pending US2 unreachable grace for its rings, so a quick
+		// reload that re-rings within the grace doesn't falsely end the caller's call (US2
+		// scenario 2). The HTTP /v1/call/ack push path already does this via AckCallReachable.
+		if f.T == "call-ringing" && f.RoomID == "" {
+			c.hub.cancelRingDropTimersForCallee(c.userID)
+		}
+		// When a 1:1 call SETTLES (answered/declined/cancelled/ended), forget the retained
+		// invite for that callId so a later callee reconnect can't re-ring a call that's already
+		// over (spec 2012 US1 FR-003). Scope it by callId on both parties — whoever holds the
+		// buffer — since either side may send the resolving frame and a roomId means it's group
+		// signalling (handled separately, not a 1:1 invite). call-ringing is engagement, not a
+		// resolution, so it does NOT clear the invite (a reload after ringing must still recover).
+		if f.RoomID == "" && f.CallID != "" {
+			switch f.T {
+			case "call-answer", "call-reject", "call-cancel", "call-busy", "call-end":
+				c.hub.clearBufferedCallID(f.To, f.CallID)
+				c.hub.clearBufferedCallID(c.userID, f.CallID)
+				// A settled call also cancels any pending US2 "callee unreachable" grace timer for
+				// this callId, so a normal hangup never fires the unreachable teardown.
+				c.hub.stopRingDropTimer(f.CallID)
+			}
 		}
 		// A group-call recall "remove" (call-cancel carrying a roomId + target) → stop
 		// reminding that invitee; the relay above also tells their device to stop ringing.
