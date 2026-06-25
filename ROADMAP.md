@@ -55,4 +55,4 @@ Specs are grouped by category band; status moves
 | [2007](specs/2007-video-hd-sd/spec.md) | HD/SD video sends are transcoded for real on device | 🔵 in-review |
 | [2008](specs/2008-fast-first-call-connect/spec.md) | Make the first call connect as fast as a call-waiting second call | 🔵 in-review |
 | [2009](specs/2009-single-call-waiting-slot/spec.md) | Only one caller may wait in call-waiting; further callers get busy | 🔵 in-review |
-| [2010](specs/2010-nav-notification-robustness/spec.md) | Navigation & notification robustness | ⚪ planned |
+| [2010](specs/2010-nav-notification-robustness/spec.md) | Navigation & notification robustness | 🔵 in-review |
