@@ -59,4 +59,4 @@ Specs are grouped by category band; status moves
 | [2011](specs/2011-hold-ui-and-1to1-diag/spec.md) | Call on-hold visualization & 1:1 diagnostics | 🔵 in-review |
 | [2012](specs/2012-call-invite-recovery/spec.md) | Call invite recovery & honest ringing | 🔵 in-review |
 | [2013](specs/2013-peer-resume-countdown/spec.md) | Mirror the resume countdown for the swapper | 🔵 in-review |
-| [2014](specs/2014-notif-title-and-auth/spec.md) | Notification title tidy & generic-fallback diagnosis | ⚪ planned |
+| [2014](specs/2014-notif-title-and-auth/spec.md) | Notification title tidy & generic-fallback diagnosis | 🔵 in-review |
