@@ -28,13 +28,13 @@
 import { onMounted, onUnmounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { isAuthenticated } from '@/services/auth';
-import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
+import { isUnlocked } from '@/services/crypto/identity';
 import { warmAll, clearWarm } from '@/composables/warmStores';
 import { IonApp, IonRouterOutlet } from '@ionic/vue';
 import { alertCircleOutline } from 'ionicons/icons';
 import { inviteNeedsProfile } from '@/services/invites';
 import { appToast } from '@/services/toast';
-import { showActionBanner, dismissActionBanner } from '@/services/notify';
+import { showActionBanner, dismissActionBanner, markPushWake, onBannerPresented } from '@/services/notify';
 import { useViewportHeight } from '@/composables/useViewportHeight';
 import { useTheme } from '@/composables/useTheme';
 import { useAppBadge } from '@/composables/useAppBadge';
@@ -161,6 +161,24 @@ async function routeRelevant(url?: string): Promise<void> {
   router.push(unread ? `/chat/${unread.id}` : '/tabs/chats');
 }
 
+// How long to wait for a drained message's in-app banner to render before giving
+// up and letting the SW own the OS notification. Slightly above the SW's own
+// pageWillNotify wait (sw.ts) so a page that WILL show a banner reliably claims it
+// (a fast already-connected drain renders well within this), while a page that
+// won't (hidden / suppressed / locked) simply never acks → the SW shows it.
+const DRAIN_ACK_WINDOW_MS = 2000;
+function waitForBannerThenAck(reqId: string): void {
+  let unsub = (): void => {};
+  const timer = setTimeout(() => unsub(), DRAIN_ACK_WINDOW_MS);
+  unsub = onBannerPresented(() => {
+    clearTimeout(timer);
+    unsub();
+    // The page presented an in-app banner for this drain → claim it so the SW
+    // suppresses its own OS notification (no duplicate).
+    navigator.serviceWorker.controller?.postMessage({ type: 'ring:handled', reqId });
+  });
+}
+
 function onServiceWorkerMessage(ev: MessageEvent): void {
   const data = ev.data as { type?: string; url?: string; reqId?: string } | undefined;
   if (!data) return;
@@ -171,15 +189,16 @@ function onServiceWorkerMessage(ev: MessageEvent): void {
   } else if (data.type === 'ring:checkupdate') {
     checkForUpdate(true); // a version-announcement push woke us → check now (surfaces the update toast)
   } else if (data.type === 'ring:drain') {
+    markPushWake(); // a push woke us → arriving messages bypass the settle window
     nudgeReconnect(); // pull queued messages now
-    // We're a live page: if we're UNLOCKED we'll surface the message in-app
-    // (notifyIncoming → banner when visible / notifyLocal when hidden), so claim it
-    // back to the service worker so it suppresses its own OS notification (no
-    // duplicate). A locked page can't show decrypted content, so it stays silent and
-    // the SW shows the notification itself.
-    if (data.reqId && isUnlockedNow()) {
-      navigator.serviceWorker.controller?.postMessage({ type: 'ring:handled', reqId: data.reqId });
-    }
+    // Hand-off (spec 2010): ack `ring:handled` ONLY when the page actually presents
+    // an in-app banner for the drained message — not merely because we're unlocked.
+    // The old "unlocked → ack" was ambiguous: it claimed the alert, then the settle
+    // window / visibility race often dropped the banner, so neither the page nor the
+    // SW alerted. Now we register a one-shot listener for this drain: if a banner
+    // renders within the window, ack (the page owns it); otherwise stay silent so the
+    // SW deterministically owns the OS notification (hidden / suppressed / locked).
+    if (data.reqId) waitForBannerThenAck(data.reqId);
   }
 }
 

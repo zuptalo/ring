@@ -19,7 +19,7 @@ import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
-import { notifyIncoming, isChatActive } from '@/services/notify';
+import { notifyIncoming, isChatActive, pushWakeActive } from '@/services/notify';
 import { compressImage, compressVideo, achievedQuality } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
@@ -4067,6 +4067,10 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     // The notification spells out shared location / contact / poll (no icon to lean
     // on), unlike the terser `preview` used for the chats list above.
     body: isGroupMsg ? `${contact.name}: ${notifyPreview(payload)}` : notifyPreview(payload) || 'New message',
+    // A ring:drain push woke us to fetch this → bypass the post-unlock settle window
+    // and let the SW (which already fired for that push) own the OS notification, so
+    // a woken message is never swallowed AND never double-announced (spec 2010).
+    pushWoken: pushWakeActive(),
   }).catch(() => {});
 
   // Durably stored now → record so a duplicate re-send/redelivery is skipped. Marked
