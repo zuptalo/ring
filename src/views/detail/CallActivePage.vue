@@ -72,13 +72,20 @@
           </div>
         </div>
         <!-- The call you have parked: tap to swap back to it (the active call goes on hold). -->
+        <!-- (spec 2011) Switch-calls button: this is the action to swap the active call with the one
+             on hold, so make it read as a clear, prominent action (swap icon + "Switch to X") rather
+             than a tiny "On hold · X" label whose tappability wasn't obvious. -->
         <button
           v-else-if="heldCall"
-          class="cw-held"
-          :aria-label="`On hold: ${heldCall.name}. Tap to resume this call.`"
+          class="cw-held cw-swap"
+          :aria-label="`Switch to your other call with ${heldCall.name}, currently on hold.`"
           @click.stop="swapCalls"
         >
-          <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold · {{ heldCall.name }}</span>
+          <ion-icon :icon="swapHorizontalOutline" aria-hidden="true" />
+          <span class="cw-swap-text">
+            <strong>Switch to {{ heldCall.name }}</strong>
+            <small>On hold · tap to swap calls</small>
+          </span>
         </button>
         <!-- (spec 2011) The small active-call "On hold" pill used to live here; it's redundant with
              the centered blurred pause overlay on the stage (held-overlay), so it was removed for
@@ -391,7 +398,7 @@ import {
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
   cellularOutline, informationCircleOutline, personOutline, refreshOutline,
-  chatbubbleEllipsesOutline, pauseOutline,
+  chatbubbleEllipsesOutline, pauseOutline, swapHorizontalOutline,
 } from 'ionicons/icons';
 import { getSelfUserId } from '@/services/auth';
 import {
@@ -1331,6 +1338,33 @@ const diag = computed(() => {
 }
 .cw-held:active {
   transform: translateX(-50%) scale(0.97);
+}
+/* (spec 2011) Switch-calls button: larger, two-line, primary-tinted so it clearly reads as the
+   action to swap to the other call — not a passive "on hold" label. Swap icon leads; the name is the
+   emphasis, with a quiet hint that tapping swaps. */
+.cw-swap {
+  gap: 10px;
+  padding: 10px 16px;
+  font-size: 14px;
+  background: rgba(16, 185, 129, 0.92); /* primary green — this is an action */
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+}
+.cw-swap ion-icon {
+  font-size: 22px;
+  flex: 0 0 auto;
+}
+.cw-swap-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+}
+.cw-swap-text strong {
+  font-weight: 700;
+}
+.cw-swap-text small {
+  opacity: 0.85;
+  font-size: 11px;
 }
 /* On hold (spec 0005): the held peer's last frame is frozen, so blur it and dim it slightly —
    paired with the .held-overlay / .tile-onhold pause badge so it reads as paused, not broken. */

@@ -67,6 +67,27 @@ live status line that updates over time, not just "collecting…".
 
 ---
 
+---
+
+### User Story 3 - Switching to the other call is an obvious action (Priority: P2)
+
+While on one call with another parked (call waiting), the control to switch between them reads as a
+clear, prominent action — a swap icon with "Switch to {name}" — rather than a small passive "On hold ·
+{name}" label whose tappability and purpose weren't obvious.
+
+**Why this priority**: Switching calls is a deliberate, occasionally-urgent action; a tiny ambiguous
+label makes it easy to miss or mis-read.
+
+**Independent Test**: With a parked call, confirm the switch control shows a swap icon + "Switch to
+{name}", is visually prominent (action-tinted), and tapping it swaps the active and held calls.
+
+**Acceptance Scenarios**:
+
+1. **Given** an active call with another on hold, **When** viewing the call screen, **Then** the
+   switch control reads as an action (swap icon + "Switch to {name}"), not a passive on-hold label.
+2. **Given** that control, **When** tapped, **Then** the active and held calls swap (existing
+   `swapCalls` behavior, unchanged).
+
 ### Edge Cases
 
 - A held video call where OUR camera fills the screen (we swapped the PiP/main): the on-hold overlay
@@ -94,6 +115,8 @@ live status line that updates over time, not just "collecting…".
   regression).
 - **FR-007**: The 1:1 diagnostics MUST be client-local only (read from local getStats) — no new data
   leaves the device; the zero-knowledge boundary is unchanged.
+- **FR-008**: The call-waiting switch control MUST read as a clear, prominent action (swap icon +
+  "Switch to {name}") and, when tapped, swap the active and held calls (existing behavior unchanged).
 
 ## Success Criteria *(mandatory)*
 
