@@ -67,6 +67,11 @@ export interface PreviewResult {
   // so the badge keeps updating, and from a cold-start undecryptable frame (which
   // still gets a generic placeholder to honor the Web Push userVisibleOnly contract).
   silenced: boolean;
+  // (spec 2014 US2) When we end up with NO decrypted notes and fall back to the generic placeholder,
+  // why? — 'relay-<status>' / 'relay-error' (couldn't fetch the queue), 'locked' (device unlock
+  // failed), 'decrypt-failed' (frames fetched but none decryptable). Surfaced ONLY on the dev
+  // deployment to diagnose the "generic after a while" regression on-device; never shown in prod.
+  reason?: string;
 }
 
 async function setting<T>(key: string, fallback: T): Promise<T> {
@@ -286,14 +291,14 @@ export async function previewPending(): Promise<PreviewResult> {
     }
     if (!res.ok) {
       console.warn('[sw-inbox] /relay/pending not ok', res.status);
-      return { notes: [], pending: 0, suppressed: false, silenced: false };
+      return { notes: [], pending: 0, suppressed: false, silenced: false, reason: `relay-${res.status}` };
     }
     frames = ((await res.json()) as { frames?: MsgFrame[] }).frames ?? [];
   } catch (e) {
     console.warn('[sw-inbox] /relay/pending fetch failed', e);
-    return { notes: [], pending: 0, suppressed: false, silenced: false };
+    return { notes: [], pending: 0, suppressed: false, silenced: false, reason: 'relay-error' };
   }
-  if (!frames.length) return { notes: [], pending: 0, suppressed: false, silenced: false };
+  if (!frames.length) return { notes: [], pending: 0, suppressed: false, silenced: false, reason: 'no-frames' };
 
   // Queued message frames = the undelivered backlog → the app-icon badge. Known
   // from the fetch alone, so the badge is right even if we can't decrypt.
@@ -311,7 +316,7 @@ export async function previewPending(): Promise<PreviewResult> {
     console.warn('[sw-inbox] device unlock failed (PIN-locked?) → generic');
     // Can't tell a message from a request → let the caller show a generic, UNLESS
     // the user disabled message notifications (then stay silent rather than buzz).
-    return { notes: [], pending, suppressed: !showMessages, silenced: false };
+    return { notes: [], pending, suppressed: !showMessages, silenced: false, reason: 'locked' };
   }
 
   const showPreview = await setting<boolean>('notifications.showPreview', true);
@@ -359,7 +364,10 @@ export async function previewPending(): Promise<PreviewResult> {
   // decrypted (decryptFailed > 0) we can't know its chat, so we fall back to the
   // generic placeholder (userVisibleOnly) rather than silently dropping it.
   const silenced = notes.length === 0 && !suppressed && silencedMessage && decryptFailed === 0;
-  return { notes, pending, suppressed, silenced };
+  // (spec 2014 US2) If we'll fall back to the generic (no notes, not suppressed/silenced) because
+  // frames were fetched but none decrypted, tag it so the dev deployment can show why.
+  const reason = notes.length === 0 && !suppressed && !silenced && decryptFailed > 0 ? 'decrypt-failed' : undefined;
+  return { notes, pending, suppressed, silenced, reason };
 }
 
 /** Persist the frame ids we actually displayed, so they aren't re-shown on the next

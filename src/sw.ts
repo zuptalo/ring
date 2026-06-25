@@ -99,9 +99,17 @@ const SETTLE_MAX_MS = 12000;
 const STRAGGLER_WINDOW_MS = 9000;
 const STRAGGLER_INTERVAL_MS = 4500;
 
-async function showGeneric(): Promise<void> {
-  await self.registration.showNotification('Ring', {
-    body: 'New message',
+// (spec 2014) The dev deployment (ring-dev / localhost) surfaces the generic-fallback REASON in the
+// notification for on-device diagnosis; production (same build) never shows internal reason text.
+const DEV_HOST = /(^|\.)ring-dev\./.test(self.location.hostname) || self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
+
+async function showGeneric(reason?: string): Promise<void> {
+  // (spec 2014 US1) Title is the STATUS, not the literal app name: iOS already shows "Ring" as its
+  // forced app-name header, so titling this "Ring" too rendered the app name twice
+  // ("Ring › Ring › New message"). (US2) On the dev host only, the body carries why we fell back to
+  // generic so the "generic after a while" cause can be confirmed on a real device.
+  await self.registration.showNotification('New message', {
+    body: DEV_HOST && reason ? reason : 'Tap to open',
     icon: ICON,
     badge: ICON,
     tag: GENERIC_TAG,
@@ -294,12 +302,14 @@ async function showConnNotification(): Promise<void> {
 async function showMessageNotification(): Promise<void> {
   const preview = previewPending(); // started once; awaited twice (race, then settle)
   let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, suppressed: false, silenced: false };
+  let timedOut = false; // spec 2014: distinguish a slow cold start from a fetched-but-undecryptable result
   try {
     result = await Promise.race([
       preview,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('preview-timeout')), GENERIC_AFTER_MS)),
     ]);
   } catch {
+    timedOut = true;
     console.warn('[sw] preview slow/failed → generic fallback');
   }
 
@@ -314,7 +324,7 @@ async function showMessageNotification(): Promise<void> {
     // `silenced` (every pending message intentionally per-chat silenced: mute /
     // web-push-off / badge-only) shows NO placeholder — spec 1015 FR-022/FR-024 —
     // while the badge below still counts them.
-    await showGeneric();
+    await showGeneric(timedOut ? 'timeout' : result.reason);
     shownGeneric = true;
   }
 
