@@ -109,6 +109,15 @@ seedIfEmpty().finally(() => {
     // After mount, the Ionic web components are defined, so the clones upgrade
     // and hydrate before the first page transition.
     ensureClonedTransitionElements();
+    // Spec 2010: an installed iOS PWA gets its OWN OS edge-swipe back gesture that no web API can
+    // disable, and we deliberately land directly on a tab root at browser-history DEPTH 1 (the `/`
+    // redirect + 'replace' tab flattening). At depth 1 that swipe underflows PAST start_url into a
+    // blank browser view inside the app shell. Seed ONE base history entry at the same URL so the
+    // first OS-back pops to an in-app screen and the user stays in the app. This is a one-time base
+    // seed, NOT a gesture interceptor; the catch-all route bounces any popped-to path back in-app.
+    if (window.history.length <= 1) {
+      window.history.pushState(window.history.state, '', window.location.href);
+    }
   });
 });
 

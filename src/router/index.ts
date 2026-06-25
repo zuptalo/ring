@@ -163,6 +163,13 @@ const routes: RouteRecordRaw[] = [
     path: '/settings/:section',
     component: () => import('@/views/detail/SettingDetailPage.vue'),
   },
+  // Catch-all (spec 2010): any path that doesn't match a real screen redirects to the main list
+  // instead of rendering a blank view — so a stale/unknown URL (or a history entry the OS back-swipe
+  // pops to) always resolves to something in-app, never an empty document.
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/tabs/chats',
+  },
 ];
 
 const router = createRouter({
