@@ -54,6 +54,7 @@ import {
   requestedTierOf,
   tileTarget,
 } from '@/services/call/quality';
+import { setDiagSnapshot } from '@/services/call/diag';
 import { activeDurationSec, bankActive, startActive } from '@/services/call/duration';
 import type { CallFrame } from '@/services/transport';
 
@@ -855,15 +856,26 @@ async function pollStats(): Promise<void> {
   let down = 0;
   let lost = 0;
   let recv = 0;
+  // For the 1:1 ⓘ diagnostics line (spec 2011): the negotiated codec + round-trip time, read from
+  // the SAME local getStats — no new data leaves the device.
+  const codecs = new Map<string, string>();
+  let outCodecId: string | undefined;
+  let rtt: number | undefined;
   try {
     const report = await getStats;
-    report.forEach((s) => {
-      if (s.type === 'outbound-rtp' && typeof s.bytesSent === 'number') up += s.bytesSent;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    report.forEach((s: any) => {
+      if (s.type === 'codec') codecs.set(s.id, String(s.mimeType || '').replace(/^(audio|video)\//, ''));
+      if (s.type === 'outbound-rtp' && typeof s.bytesSent === 'number') {
+        up += s.bytesSent;
+        if (s.kind === 'video' || !outCodecId) outCodecId = s.codecId; // prefer the video codec
+      }
       if (s.type === 'inbound-rtp') {
         if (typeof s.bytesReceived === 'number') down += s.bytesReceived;
         if (typeof s.packetsLost === 'number') lost += s.packetsLost;
         if (typeof s.packetsReceived === 'number') recv += s.packetsReceived;
       }
+      if (s.type === 'remote-inbound-rtp' && typeof s.roundTripTime === 'number') rtt = s.roundTripTime;
     });
     // 1:1 adaptive outgoing quality (spec 0004 US4): the group path adapts per-leg inside
     // MeshSession; the 1:1 PC adapts here off the same sample.
@@ -897,6 +909,19 @@ async function pollStats(): Promise<void> {
   if (connectionWarning.value !== 'Reconnecting…') {
     if (lossRatio > 0.08) connectionWarning.value = 'Connection unstable';
     else if (lossRatio < 0.03) connectionWarning.value = null;
+  }
+
+  // Feed the ⓘ call-diag panel for a 1:1 call (spec 2011). The mesh owns the snapshot for group
+  // calls (setDiagSnapshot in mesh.ts), so only set it when this is a 1:1 PC and there's no group
+  // session — otherwise the panel sat at "collecting…" on 1:1 calls. Client-local getStats only.
+  if (pc && !groupSession) {
+    const codec = (outCodecId && codecs.get(outCodecId)) || '?';
+    const rttMs = rtt != null ? `${Math.round(rtt * 1000)}ms` : '–';
+    const kind = callMeta.value?.kind === 'video' ? 'video' : 'audio';
+    setDiagSnapshot([
+      `1:1 ${kind} · ${codec} · tier=${oneToOneQc.tier} · ${pc.connectionState}`,
+      `↑${kbpsUp}k ↓${kbpsDown}k · rtt=${rttMs} · loss=${(lossRatio * 100).toFixed(1)}%`,
+    ]);
   }
 }
 
@@ -1119,6 +1144,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   heldCall.value = null;
   incomingSecond.value = null;
   callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
+  setDiagSnapshot([]); // spec 2011: drop the 1:1 ⓘ line so it doesn't linger into the next call
   connectionWarning.value = null;
 
   // Reaching a busy peer holds the full-screen "Busy on another call" (with its own cue)

@@ -72,17 +72,24 @@
           </div>
         </div>
         <!-- The call you have parked: tap to swap back to it (the active call goes on hold). -->
+        <!-- (spec 2011) Switch-calls button: this is the action to swap the active call with the one
+             on hold, so make it read as a clear, prominent action (swap icon + "Switch to X") rather
+             than a tiny "On hold · X" label whose tappability wasn't obvious. -->
         <button
           v-else-if="heldCall"
-          class="cw-held"
-          :aria-label="`On hold: ${heldCall.name}. Tap to resume this call.`"
+          class="cw-held cw-swap"
+          :aria-label="`Switch to your other call with ${heldCall.name}, currently on hold.`"
           @click.stop="swapCalls"
         >
-          <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold · {{ heldCall.name }}</span>
+          <ion-icon :icon="swapHorizontalOutline" aria-hidden="true" />
+          <span class="cw-swap-text">
+            <strong>Switch to {{ heldCall.name }}</strong>
+            <small>On hold · tap to swap calls</small>
+          </span>
         </button>
-        <div v-if="remoteHeld" class="cw-onhold" role="status">
-          <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold</span>
-        </div>
+        <!-- (spec 2011) The small active-call "On hold" pill used to live here; it's redundant with
+             the centered blurred pause overlay on the stage (held-overlay), so it was removed for
+             both video and audio. The parked call-waiting bar above (cw-held) is unrelated and stays. -->
 
         <!-- Group call: every participant - each incoming feed AND our own outgoing
              feed - is an equally-sized floating tile. Tiles are centred and wrap;
@@ -179,9 +186,12 @@
             autoplay
             playsinline
           />
-          <!-- The other side put us on hold (spec 0005): their last frame is frozen, so blur it
-               (class above) and overlay a clear pause badge so it's obvious the call is paused. -->
-          <div v-if="remoteHeld && mainHasVideo && !mainIsLocal" class="held-overlay">
+          <!-- The other side put us on hold (spec 0005): their last video frame is frozen, so blur it
+               (class above) and overlay a clear pause badge so it's obvious the call is paused. Spec
+               2011: this is now the ONLY on-hold indicator (the small bottom pill was removed) and it
+               also covers AUDIO calls (over the blurred avatar stage below) — so drop the
+               mainHasVideo requirement; it stays anchored to the remote, not our own preview. -->
+          <div v-if="remoteHeld && !mainIsLocal" class="held-overlay">
             <ion-icon :icon="pauseOutline" />
             <span>On hold</span>
           </div>
@@ -194,7 +204,10 @@
           >
             <ion-icon :icon="cameraReverseOutline" />
           </button>
-          <div v-if="!mainHasVideo" class="audio-stage">
+          <!-- Audio call: the big avatar fills the stage. Spec 2011: when the other side puts us on
+               hold, blur it (held-frozen) so the centered pause overlay above reads the same as a held
+               video call, instead of the old tiny bottom pill. -->
+          <div v-if="!mainHasVideo" class="audio-stage" :class="{ 'held-frozen': remoteHeld && !mainIsLocal }">
             <ion-avatar class="big-avatar">
               <img v-if="callMeta" :src="callMeta.avatar" :alt="callMeta.name" />
             </ion-avatar>
@@ -385,7 +398,7 @@ import {
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
   cellularOutline, informationCircleOutline, personOutline, refreshOutline,
-  chatbubbleEllipsesOutline, pauseOutline,
+  chatbubbleEllipsesOutline, pauseOutline, swapHorizontalOutline,
 } from 'ionicons/icons';
 import { getSelfUserId } from '@/services/auth';
 import {
@@ -1236,8 +1249,7 @@ const diag = computed(() => {
 /* Call waiting (spec 0005): the second-incoming prompt + held-call / on-hold bars, anchored
    below the header so they don't cover the call controls. Built from the call view's palette. */
 .cw-prompt,
-.cw-held,
-.cw-onhold {
+.cw-held {
   /* Anchored ABOVE the call controls (not the top) so they never overlap the call name +
      status header or the self-tile (spec 0005). */
   position: absolute;
@@ -1309,8 +1321,7 @@ const diag = computed(() => {
   background: var(--ion-color-primary, #10b981);
   color: #fff;
 }
-.cw-held,
-.cw-onhold {
+.cw-held {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1328,11 +1339,32 @@ const diag = computed(() => {
 .cw-held:active {
   transform: translateX(-50%) scale(0.97);
 }
-.cw-onhold {
-  /* When BOTH a held bar and the remote-held badge could show, stack this one higher so they
-     don't overlap (both are bottom-anchored). */
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 152px);
-  background: rgba(120, 120, 128, 0.85);
+/* (spec 2011) Switch-calls button: larger, two-line, primary-tinted so it clearly reads as the
+   action to swap to the other call — not a passive "on hold" label. Swap icon leads; the name is the
+   emphasis, with a quiet hint that tapping swaps. */
+.cw-swap {
+  gap: 10px;
+  padding: 10px 16px;
+  font-size: 14px;
+  background: rgba(16, 185, 129, 0.92); /* primary green — this is an action */
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+}
+.cw-swap ion-icon {
+  font-size: 22px;
+  flex: 0 0 auto;
+}
+.cw-swap-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+}
+.cw-swap-text strong {
+  font-weight: 700;
+}
+.cw-swap-text small {
+  opacity: 0.85;
+  font-size: 11px;
 }
 /* On hold (spec 0005): the held peer's last frame is frozen, so blur it and dim it slightly —
    paired with the .held-overlay / .tile-onhold pause badge so it reads as paused, not broken. */
