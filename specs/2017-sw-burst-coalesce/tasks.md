@@ -36,7 +36,7 @@ cross-wake serialization + summary lifecycle (stale re-assert, ratchet/2015 unto
 - [x] T007 Zero-knowledge confirmation: no plaintext leaves the device; SW still only fetches sealed
   ciphertext; no server change; `swShownSummary` holds only already-decrypted-on-device previews
   (FR-008).
-- [ ] T008 Full gate: `npm run build`; `npx vitest run`; `cd server && go build/vet/test`;
+- [x] T008 Full gate: `npm run build`; `npx vitest run`; `cd server && go build/vet/test`;
   `RING_E2E_PORT=8085 npm run test:e2e` (notifications-inapp / sw-decrypt / calls — no regression).
-- [ ] T009 Flip spec `Status:` to `in-review` at PR and run `make roadmap`. On-device validation
+- [x] T009 Flip spec `Status:` to `in-review` at PR and run `make roadmap`. On-device validation
   (burst test on the real iPhone PWA) is the acceptance gate for the iOS UX; iterate from there.
