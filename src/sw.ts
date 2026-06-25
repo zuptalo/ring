@@ -21,7 +21,7 @@ import { registerRoute } from 'workbox-routing';
 import { CacheFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import {
-  previewPending, markShown, unreadCount, ackCall, previewConnections, markConnShown,
+  previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, markConnShown,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { resubscribePush } from '@/services/sw-push';
@@ -155,6 +155,37 @@ async function closeByTag(tag: string): Promise<void> {
     for (const n of list) n.close();
   } catch {
     /* ignore */
+  }
+}
+
+// (spec 2016) Honor the Web Push userVisibleOnly per-push contract on a "nothing new" wake WITHOUT
+// adding a noisy new "New message" banner. If a notification is already showing (e.g. the rich content
+// note a prior push displayed for this same burst), re-show it on its own tag with renotify:false +
+// silent — iOS sees a showNotification call but the user gets no new alert. If nothing is showing,
+// show nothing: the mute / badge-only (`silenced`) path already returns from a push without any
+// showNotification in production, so this is an established, iOS-tolerated outcome. Best-effort.
+// Tags we must NOT re-assert: a live call ring ('ring-call') carries requireInteraction and re-showing
+// it on its tag would strip that and downgrade the ring (spec 2016 review); the others belong to other
+// push categories and re-surfacing them for a message wake is wrong. Only a MESSAGE notification (the
+// content note this burst already showed, or the generic) is safe to re-assert silently.
+const NON_MESSAGE_TAGS = new Set(['ring-call', 'ring:version', 'ring:post', 'ring:conn:req']);
+async function reassertForContract(): Promise<void> {
+  try {
+    const list = await self.registration.getNotifications();
+    const n = list.find((x) => !NON_MESSAGE_TAGS.has(x.tag));
+    if (!n) return; // nothing safe to re-assert → show nothing (mirrors the badge-only/silenced path)
+    await self.registration.showNotification(n.title, {
+      body: n.body,
+      tag: n.tag, // same tag → updates the existing notification in place, no second banner
+      data: n.data,
+      icon: n.icon,
+      badge: n.badge,
+      requireInteraction: n.requireInteraction, // preserve the original's semantics defensively
+      renotify: false, // update silently — do NOT re-alert
+      silent: true,
+    });
+  } catch {
+    /* ignore — re-assert is best-effort; the badge below still updates */
   }
 }
 
@@ -301,7 +332,7 @@ async function showConnNotification(): Promise<void> {
  */
 async function showMessageNotification(): Promise<void> {
   const preview = previewPending(); // started once; awaited twice (race, then settle)
-  let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, suppressed: false, silenced: false };
+  let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: false };
   let timedOut = false; // spec 2014: distinguish a slow cold start from a fetched-but-undecryptable result
   try {
     result = await Promise.race([
@@ -318,14 +349,21 @@ async function showMessageNotification(): Promise<void> {
     await closeByTag(GENERIC_TAG); // clear any earlier generic before the rich note
     await showNotes(result.notes);
     await markShown(allIds(result.notes)); // only mark what we displayed
-  } else if (!result.suppressed && !result.silenced) {
-    // Nothing decryptable yet (cold start / PIN-locked) and the user didn't disable
-    // message notifications → keep the userVisibleOnly contract with a placeholder.
-    // `silenced` (every pending message intentionally per-chat silenced: mute /
-    // web-push-off / badge-only) shows NO placeholder — spec 1015 FR-022/FR-024 —
-    // while the badge below still counts them.
+  } else if (timedOut || (!result.suppressed && !result.silenced && result.newUnshown)) {
+    // Show the generic placeholder ONLY when there's a genuinely-new message we couldn't render: a
+    // slow cold-start decrypt still in flight at the deadline (timedOut), a fetched-but-undecryptable
+    // frame, a PIN-locked device with pending frames, or a failed relay fetch (all → newUnshown). The
+    // settle below upgrades it to the rich note if the decrypt lands. `suppressed` (notifications off)
+    // and `silenced` (mute / web-push-off / badge-only, spec 1015 FR-022/FR-024) show no placeholder.
     await showGeneric(timedOut ? 'timeout' : result.reason);
     shownGeneric = true;
+  } else if (isNothingNew(result)) {
+    // (spec 2016) Nothing genuinely new to announce — the relay queue was empty (`no-frames`) or every
+    // fetched frame was already shown (the burst straggler beat us). Showing a generic here is pure
+    // noise (the "New message / Tap to open" the user reported). Honor the per-push contract the way
+    // the `silenced` path already does: re-assert an already-showing notification silently (no new
+    // banner/sound) if one exists, otherwise show nothing. The badge below still stays accurate.
+    await reassertForContract();
   }
 
   // Settle the full preview (bounded) so its /relay/pending fetch lands (→ delivery)
