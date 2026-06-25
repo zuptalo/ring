@@ -274,5 +274,169 @@ func TestGroupCallSecondJoinDoesNotRering(t *testing.T) {
 	}
 }
 
+// spec 2012 US1: a 1:1 offer delivered LIVE to an online callee is ALSO retained, so a callee
+// that reloads mid-ring (its in-memory call state and the offer lost) re-rings on reconnect via
+// flushBufferedCalls() and can still answer.
+func TestCallOfferReDeliveredToReloadedCallee(t *testing.T) {
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	time.Sleep(50 * time.Millisecond)
+
+	// A calls B (online) → B gets it live, A flips to ringing.
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-offer", "to": "user-b", "callId": "c-reload", "kind": "video", "ciphertext": "SDP_A",
+	}); err != nil {
+		t.Fatalf("A call-offer: %v", err)
+	}
+	if got := readFrame(t, b); got["t"] != "call-offer" || got["callId"] != "c-reload" {
+		t.Fatalf("B expected live call-offer, got: %v", got)
+	}
+	if got := readFrame(t, a); got["t"] != "call-ringing" {
+		t.Fatalf("A expected call-ringing, got: %v", got)
+	}
+
+	// B reloads: drop its socket and reconnect (call still active).
+	b.Close()
+	time.Sleep(50 * time.Millisecond)
+	b2 := dial(t, srv, "tokB")
+	defer b2.Close()
+
+	// The retained offer is re-delivered → B's incoming-call screen comes back.
+	got := readFrame(t, b2)
+	if got["t"] != "call-offer" || got["callId"] != "c-reload" || got["from"] != "user-a" {
+		t.Fatalf("reloaded B expected the recovered call-offer, got: %v", got)
+	}
+	if got["ciphertext"] != "SDP_A" {
+		t.Fatalf("recovered offer must carry the same opaque ciphertext, got: %v", got["ciphertext"])
+	}
+}
+
+// spec 2012 US1 FR-003: once a 1:1 call RESOLVES (here, B answers), its retained invite is
+// cleared, so a later B reconnect does NOT re-ring a call that's already over (no ghost ring).
+func TestResolvedCallNotReDeliveredOnReconnect(t *testing.T) {
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	time.Sleep(50 * time.Millisecond)
+
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-offer", "to": "user-b", "callId": "c-done", "kind": "audio", "ciphertext": "SDP_A",
+	}); err != nil {
+		t.Fatalf("A call-offer: %v", err)
+	}
+	if got := readFrame(t, b); got["t"] != "call-offer" {
+		t.Fatalf("B expected live call-offer, got: %v", got)
+	}
+	if got := readFrame(t, a); got["t"] != "call-ringing" {
+		t.Fatalf("A expected call-ringing, got: %v", got)
+	}
+
+	// B answers → the call is settled; the retained invite must be cleared.
+	if err := b.WriteJSON(map[string]any{"t": "call-answer", "to": "user-a", "callId": "c-done", "ciphertext": "SDP_B"}); err != nil {
+		t.Fatalf("B call-answer: %v", err)
+	}
+	if got := readFrame(t, a); got["t"] != "call-answer" {
+		t.Fatalf("A expected call-answer, got: %v", got)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// B reconnects later → NO ghost incoming call for the settled c-done.
+	b.Close()
+	time.Sleep(50 * time.Millisecond)
+	b2 := dial(t, srv, "tokB")
+	defer b2.Close()
+	_ = b2.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+	if _, _, err := b2.ReadMessage(); err == nil {
+		t.Fatal("reconnecting B must NOT re-ring a call that was already answered")
+	}
+}
+
+// spec 2012 US2 FR-005: when the callee's socket drops mid-ring and they do NOT re-ack within
+// the grace, the caller is told the callee is unreachable (call-end{reason:"unreachable"}) so it
+// ends promptly instead of ringing out the full no-answer window.
+func TestCallerNotifiedWhenCalleeVanishes(t *testing.T) {
+	defer ws.SetRingDropGraceForTest(150 * time.Millisecond)()
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	time.Sleep(50 * time.Millisecond)
+
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-offer", "to": "user-b", "callId": "c-gone", "kind": "video", "ciphertext": "SDP_A",
+	}); err != nil {
+		t.Fatalf("A call-offer: %v", err)
+	}
+	if got := readFrame(t, b); got["t"] != "call-offer" {
+		t.Fatalf("B expected live call-offer, got: %v", got)
+	}
+	if got := readFrame(t, a); got["t"] != "call-ringing" {
+		t.Fatalf("A expected call-ringing, got: %v", got)
+	}
+
+	// B vanishes (closes and does NOT come back) → after the grace, A is told it's unreachable.
+	b.Close()
+	got := readFrame(t, a) // readFrame allows up to 2s; the 150ms grace fires well within it
+	if got["t"] != "call-end" || got["reason"] != "unreachable" || got["callId"] != "c-gone" {
+		t.Fatalf("A expected call-end{reason:unreachable} for c-gone, got: %v", got)
+	}
+}
+
+// spec 2012 US2 scenario 2 / FR-006: a callee that drops but reconnects, recovers the offer, and
+// re-acks ringing WITHIN the grace must NOT cause the caller's call to falsely end.
+func TestCallerNotEndedWhenCalleeReAcksWithinGrace(t *testing.T) {
+	defer ws.SetRingDropGraceForTest(700 * time.Millisecond)()
+	srv, _ := newRelayServer()
+	defer srv.Close()
+
+	a := dial(t, srv, "tokA")
+	defer a.Close()
+	b := dial(t, srv, "tokB")
+	time.Sleep(50 * time.Millisecond)
+
+	if err := a.WriteJSON(map[string]any{
+		"t": "call-offer", "to": "user-b", "callId": "c-flap", "kind": "video", "ciphertext": "SDP_A",
+	}); err != nil {
+		t.Fatalf("A call-offer: %v", err)
+	}
+	if got := readFrame(t, b); got["t"] != "call-offer" {
+		t.Fatalf("B expected live call-offer, got: %v", got)
+	}
+	if got := readFrame(t, a); got["t"] != "call-ringing" {
+		t.Fatalf("A expected the initial call-ringing, got: %v", got)
+	}
+
+	// B reloads: drop, reconnect, receive the recovered offer, and re-ack by echoing call-ringing
+	// (the foregrounded in-app re-ack path) — all within the grace.
+	b.Close()
+	time.Sleep(50 * time.Millisecond)
+	b2 := dial(t, srv, "tokB")
+	defer b2.Close()
+	if got := readFrame(t, b2); got["t"] != "call-offer" || got["callId"] != "c-flap" {
+		t.Fatalf("reloaded B expected the recovered offer, got: %v", got)
+	}
+	if err := b2.WriteJSON(map[string]any{"t": "call-ringing", "to": "user-a", "callId": "c-flap"}); err != nil {
+		t.Fatalf("B re-ack call-ringing: %v", err)
+	}
+	// A receives the re-acked call-ringing (still reachable) ...
+	if got := readFrame(t, a); got["t"] != "call-ringing" || got["callId"] != "c-flap" {
+		t.Fatalf("A expected the re-acked call-ringing, got: %v", got)
+	}
+	// ... and must NOT subsequently receive a terminal unreachable frame (grace was cancelled).
+	_ = a.SetReadDeadline(time.Now().Add(900 * time.Millisecond))
+	if _, data, err := a.ReadMessage(); err == nil {
+		t.Fatalf("A must NOT receive a terminal frame after a within-grace re-ack, got: %s", data)
+	}
+}
+
 // NOTE: the SFU-era call-key-request / call-streamid relays were removed with the SFU
 // (spec 0004 US6) — the mesh distributes nothing of the sort, so those tests are gone.
