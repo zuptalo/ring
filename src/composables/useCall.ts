@@ -34,7 +34,7 @@ import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
-  sendGroupLeave, sendGroupBusy, sendHoldResume,
+  sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
 import { syncState } from '@/composables/useSync';
@@ -50,6 +50,9 @@ import {
   nextTier,
   snapshotFromReport,
   clampForPin,
+  downlinkClassFrom,
+  requestedTierOf,
+  tileTarget,
 } from '@/services/call/quality';
 import { activeDurationSec, bankActive, startActive } from '@/services/call/duration';
 import type { CallFrame } from '@/services/transport';
@@ -377,8 +380,12 @@ export function groupAudioLevels(): Record<string, number> {
 
 /** Test/diagnostic: group-call video flow + per-leg tiers across the whole mesh (the 1:1
  *  inboundVideoFrames() can't see a mesh's per-peer connections). Empty when not in a group. */
-export function groupCallDiag(): Promise<{ inboundVideoFrames: number; tiers: Record<string, string> }> {
-  return groupSession?.meshDiag() ?? Promise.resolve({ inboundVideoFrames: 0, tiers: {} });
+export function groupCallDiag(): Promise<{
+  inboundVideoFrames: number;
+  tiers: Record<string, string>;
+  legs: Record<string, { tier: string; requestedByPeer?: string; downlink: string; limitation?: string }>;
+}> {
+  return groupSession?.meshDiag() ?? Promise.resolve({ inboundVideoFrames: 0, tiers: {}, legs: {} });
 }
 
 let pendingOffer: { sdp: string; sdpType: RTCSdpType } | null = null;
@@ -534,6 +541,51 @@ async function loadCallPrefs(): Promise<void> {
   lessDataCalls = lessData;
   callSoundsOn = sounds;
 }
+// Camera mute recovery (iOS, esp. iPhone 8). On iOS a live camera track can briefly MUTE on an
+// orientation/format reconfiguration; when it unmutes, the self-preview + encoder don't always pick
+// the frames back up. (The iPhone 8's PERMANENT mute is prevented in the view by the always-rendered
+// keep-alive <video> — WebKit bug 252465 / Apple Forums 667453.) We do NOT re-acquire on a stuck
+// mute: a second getUserMedia is itself a documented mute trigger (WebKit bug 179363). So we only
+// re-kick the preview + sender when the track unmutes.
+let watchedCamTrack: MediaStreamTrack | null = null;
+
+/** Hand the self-preview a FRESH MediaStream object so its <video> re-attaches + re-plays. iOS
+ *  Safari doesn't reliably render a track that resumed after a mute, so reassigning the ref is the
+ *  reliable kick. */
+function forceSelfPreviewReattach(): void {
+  const ls = localStream.value;
+  if (ls) localStream.value = new MediaStream(ls.getTracks());
+}
+
+/** After a camera mute resolves, the iOS sender can stay idle — re-assert the (live) video track on
+ *  the outgoing sender(s) to restart the encoder, without a second getUserMedia. */
+async function reassertOutgoingVideo(): Promise<void> {
+  const v = localStream.value?.getVideoTracks()[0];
+  if (v && v.readyState === 'live' && !v.muted) await replaceOutgoingVideo(v).catch(() => {});
+}
+
+/** Reset the camera watcher for a fresh call (called from teardown). */
+function resetCameraWatchdog(): void {
+  watchedCamTrack = null;
+}
+
+/** Watch one local camera track: on unmute, kick the self-preview + sender so iOS resumes frames.
+ *  Idempotent per track. */
+function instrumentCamTrack(v: MediaStreamTrack): void {
+  if (v === watchedCamTrack) return;
+  watchedCamTrack = v;
+  v.addEventListener('unmute', () => {
+    // iOS resumed the track but the self-preview + encoder may not pick the frames back up — kick both.
+    forceSelfPreviewReattach();
+    void reassertOutgoingVideo();
+  });
+}
+
+watch(localStream, (s) => {
+  const v = s?.getVideoTracks()[0] ?? null;
+  if (v) instrumentCamTrack(v);
+});
+
 // Cue "reconnecting" whenever the call enters the reconnecting state, from any of the
 // several places that set the warning (1:1 ICE blip, group leg failure). The cue's own
 // rate-limiter de-dupes if more than one fires at once.
@@ -582,7 +634,15 @@ function gumConstraints(kind: CallKind): MediaStreamConstraints {
   // (the default for video calls), where open-air feedback would otherwise howl.
   return {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    video: kind === 'video',
+    // Ask for the front camera but DO NOT impose a resolution/orientation. On the A11/iOS-16.7
+    // iPhone 8, naming any width/height makes WebKit start at the requested orientation, then flip to
+    // the perpendicular one and MUTE the track in the same instant — permanently (≈1fps, frozen
+    // self-view, black tile to the peer). It always flips AWAY from whatever we ask, so there is no
+    // "right" resolution to request; the only escape is to impose none and let WebKit open the sensor
+    // in its native format with nothing to reconfigure away from. We still pin a frameRate ideal (cheap,
+    // doesn't drive the orientation flip) and rely on the per-tier bitrate cap (not resolution) to keep
+    // the encoder sane. Newer phones already coped with an explicit size, so this only helps the iPhone 8.
+    video: kind === 'video' ? { facingMode: { ideal: 'user' }, frameRate: { ideal: 30 } } : false,
   };
 }
 
@@ -955,6 +1015,16 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   videoQuality.value = 'auto';
   lessDataCalls = false;
   oneToOneQc = initialController(); // next call starts low again
+  // spec 0007: reset 1:1 connection-health state so the next call starts clean.
+  oneToOneDownlink = 'hd';
+  oneToOneHealthSeq = 0;
+  oneToOneLastSentTier = null;
+  oneToOneLastSentAt = 0;
+  oneToOnePeerReq = null;
+  inPrevLost = 0;
+  inPrevRecv = 0;
+  inPrevFramesDropped = 0;
+  inPrevFramesReceived = 0;
   pendingIncomingForeground = false;
   upgradePending.value = false;
   upgradeRequest.value = false;
@@ -1039,6 +1109,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
 
   setState('ended');
   cancelResumeCountdown();
+  resetCameraWatchdog();
   // Clear ALL call-waiting display state so a hung-up call can't leak its "on hold" UI into the
   // next call (the reported bug: a device that was on hold kept remoteHeld=true after the call
   // dropped, so the next call opened showing the hold overlay).
@@ -2037,6 +2108,30 @@ let lessDataCalls = false;
 // 1:1 adaptive state, sampled in pollStats; reset per call.
 let oneToOneQc: ControllerState = initialController();
 
+// 1:1 connection-health (spec 0007 US2). We periodically tell the peer the max quality we want from
+// THEM (`requestedTier`, from our downlink + manual pin + view size), and apply the peer's report to
+// cap what WE send to them. All sealed `qos` over the existing call-ice frame; no server change.
+const HEALTH_INTERVAL_MS = 2000; // resend our report at least this often (FR: ~2s)
+const HEALTH_STALE_MS = 6000; // ignore a peer report older than this; fall back to send-side (FR-004)
+let oneToOneDownlink: Tier = 'hd'; // our self-assessed downlink class (hysteresis state)
+let oneToOneHealthSeq = 0; // monotonic seq for OUR outgoing reports
+let oneToOneLastSentTier: Tier | null = null; // last requestedTier we sent (to detect change)
+let oneToOneLastSentAt = 0; // when we last sent (to honor the ~2s cadence)
+let oneToOnePeerReq: { tier: Tier; seq: number; at: number } | null = null; // latest report FROM the peer
+// inbound deltas for downlink self-assessment (cumulative counters → per-interval rates)
+let inPrevLost = 0;
+let inPrevRecv = 0;
+let inPrevFramesDropped = 0;
+let inPrevFramesReceived = 0;
+
+/** The peer's fresh requested ceiling, or undefined if there's no report or it's stale (→ send-side
+ *  fallback, never a hang). `now` lets callers reuse one timestamp. */
+function oneToOnePeerCeiling(now: number): Tier | undefined {
+  if (!oneToOnePeerReq) return undefined;
+  if (now - oneToOnePeerReq.at > HEALTH_STALE_MS) return undefined;
+  return oneToOnePeerReq.tier;
+}
+
 /** The current upper-bound tier from the manual pin + data-saver. */
 function qualityClamp(): Tier {
   return clampForPin(videoQuality.value, lessDataCalls);
@@ -2046,6 +2141,11 @@ function qualityClamp(): Tier {
  *  every field, and there may be no sender yet on an audio call. */
 async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise<void> {
   if (!sender) return;
+  // iOS/WebKit: tier by BITRATE ONLY (`avoidEncoderScaling`) — never via scaleResolutionDownBy/
+  // maxFramerate, which stall the old iPhone H.264 encoder (spec 0005). maxBitrate alone is honored
+  // and safe (the iPhone-8 black-video bug was the camera-mute/​re-acquire, not the bitrate cap), so
+  // per-receiver + manual quality caps (spec 0007 US2/US3) still take effect on iOS. Non-iOS gets the
+  // full per-tier encoding (incl. a clean resolution downscale at low/medium).
   const params = sender.getParameters();
   if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
   const enc = tierEncoding(tier, isIOS());
@@ -2061,12 +2161,63 @@ async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise
   }
 }
 
-/** One 1:1 adaptive step from a fresh getStats report: step the controller toward the clamp
- *  and apply if the tier changed. Called from pollStats (~1s). */
+/** One 1:1 adaptive step from a fresh getStats report: step the controller toward the clamp —
+ *  bounded by the peer's fresh requested ceiling (spec 0007 US2) — and apply if the tier changed.
+ *  Also assess our own downlink from inbound stats and (rate-limited) report it to the peer. */
 async function adaptOneToOne(report: RTCStatsReport): Promise<void> {
+  const now = Date.now();
   const before = oneToOneQc.tier;
-  oneToOneQc = nextTier(oneToOneQc, snapshotFromReport(report), qualityClamp());
+  oneToOneQc = nextTier(oneToOneQc, snapshotFromReport(report), qualityClamp(), oneToOnePeerCeiling(now));
   if (oneToOneQc.tier !== before) await applySenderTier(videoSender(), oneToOneQc.tier);
+  await reportHealthToPeer(report, now);
+}
+
+/** Assess our own downlink for the 1:1 peer from this inbound sample and send a sealed `qos` report
+ *  when our requested ceiling changed, or at least every ~2s (spec 0007 US2). Coarse enums only. */
+async function reportHealthToPeer(report: RTCStatsReport, now: number): Promise<void> {
+  const meta = callMeta.value;
+  if (!meta?.chatId || !meta.peerUserId || meta.isGroup) return;
+  // Only report once the call is CONNECTED: before that there's no downlink to assess, and a qos
+  // seal/open competes for the same per-chat sessionMutex as the offer/ICE handshake — emitting it
+  // during setup delays ICE and can blow the connection timeout on a slow runner.
+  if (pc?.connectionState !== 'connected') return;
+  // Per-interval inbound video loss + frame drops → coarse downlink class (hysteretic).
+  let lost = 0;
+  let recv = 0;
+  let framesDropped = 0;
+  let framesReceived = 0;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  report.forEach((s: any) => {
+    if (s.type === 'inbound-rtp' && s.kind === 'video') {
+      lost += s.packetsLost ?? 0;
+      recv += s.packetsReceived ?? 0;
+      framesDropped += s.framesDropped ?? 0;
+      framesReceived += s.framesReceived ?? s.framesDecoded ?? 0;
+    }
+  });
+  const dLost = Math.max(0, lost - inPrevLost);
+  const dRecv = Math.max(0, recv - inPrevRecv);
+  const dDrop = Math.max(0, framesDropped - inPrevFramesDropped);
+  const dFrames = Math.max(0, framesReceived - inPrevFramesReceived);
+  inPrevLost = lost;
+  inPrevRecv = recv;
+  inPrevFramesDropped = framesDropped;
+  inPrevFramesReceived = framesReceived;
+  const fractionLost = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
+  oneToOneDownlink = downlinkClassFrom({ fractionLost, framesDropped: dDrop, framesReceived: dFrames }, oneToOneDownlink);
+  // requestedTier = min(downlink, manual pin/data-saver, view size). The 1:1 remote is shown
+  // (near-)fullscreen, so the tile target is HD here; US4 refines this with the real rendered size.
+  const requested = requestedTierOf(oneToOneDownlink, qualityClamp(), 'hd');
+  const changed = requested !== oneToOneLastSentTier;
+  if (!changed && now - oneToOneLastSentAt < HEALTH_INTERVAL_MS) return;
+  oneToOneLastSentTier = requested;
+  oneToOneLastSentAt = now;
+  oneToOneHealthSeq += 1;
+  void sendHealth(meta.chatId, meta.peerUserId, meta.callId, {
+    requestedTier: requested,
+    downlinkClass: oneToOneDownlink,
+    seq: oneToOneHealthSeq,
+  });
 }
 
 /** Re-evaluate outgoing quality after a manual change. Group: push the clamp to the mesh
@@ -2078,8 +2229,35 @@ async function applyOutgoingQuality(): Promise<void> {
     return;
   }
   const clampIdx = TIERS.indexOf(qualityClamp());
-  if (TIERS.indexOf(oneToOneQc.tier) > clampIdx) oneToOneQc = { tier: qualityClamp(), healthyStreak: 0 };
+  if (TIERS.indexOf(oneToOneQc.tier) > clampIdx) oneToOneQc = { tier: qualityClamp(), healthyStreak: 0, unhealthyStreak: 0 };
   await applySenderTier(videoSender(), oneToOneQc.tier);
+  // spec 0007 US3: a manual pin folds into what we ASK the peer for, so tell them now (not on the
+  // next ~2s tick) — a low/medium pin must cut INCOMING promptly, not just our outgoing.
+  sendHealthNow();
+}
+
+/** Recompute our 1:1 requested ceiling from the current downlink + manual pin + view size and send
+ *  it immediately (spec 0007 US3 — pin changes shouldn't wait for the next poll). No-op off a 1:1. */
+function sendHealthNow(): void {
+  const meta = callMeta.value;
+  if (!meta?.chatId || !meta.peerUserId || meta.isGroup) return;
+  if (pc?.connectionState !== 'connected') return; // don't emit qos during setup (see reportHealthToPeer)
+  const requested = requestedTierOf(oneToOneDownlink, qualityClamp(), 'hd');
+  oneToOneLastSentTier = requested;
+  oneToOneLastSentAt = Date.now();
+  oneToOneHealthSeq += 1;
+  void sendHealth(meta.chatId, meta.peerUserId, meta.callId, {
+    requestedTier: requested,
+    downlinkClass: oneToOneDownlink,
+    seq: oneToOneHealthSeq,
+  });
+}
+
+/** Spec 0007 US4: the view reports the rendered group-tile size (CSS px, larger dimension); we map it
+ *  to a tier and ask every peer for at most that — a small grid tile needs far less than fullscreen.
+ *  No-op off a group call. */
+export function setGroupTileSize(px: number): void {
+  groupSession?.setAllTileTargets(tileTarget(px));
 }
 
 /** Change the outgoing-video quality tier and apply it immediately. */
@@ -2400,6 +2578,7 @@ async function handleMeshSignal(
   // the offer/answer/ice handling — a peer paused/resumed their leg to us.
   if (signal.type === 'hold') await gs.onPeerHold(frame.from);
   else if (signal.type === 'resume') await gs.onPeerResume(frame.from);
+  else if (signal.type === 'qos' && signal.qos) gs.onPeerHealth(frame.from, signal.qos); // spec 0007 US2
   else if (type === 'offer') await gs.onPeerOffer(frame.from, signal);
   else if (type === 'answer') await gs.onPeerAnswer(frame.from, signal);
   else await gs.onPeerIce(frame.from, signal);
@@ -2578,6 +2757,15 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       if (signal.type === 'resume' && pc) {
         remoteHeld.value = false; // their video unfreezes immediately
         beginResumeCountdown(pc); // 5s heads-up + cue before WE become visible/audible again
+        return;
+      }
+      // Connection-health report (spec 0007 US2): the peer is telling us the max quality it wants
+      // from us. Keep only the newest (by seq) and apply it as a ceiling in adaptOneToOne.
+      if (signal.type === 'qos' && signal.qos) {
+        const q = signal.qos;
+        if (!oneToOnePeerReq || q.seq > oneToOnePeerReq.seq) {
+          oneToOnePeerReq = { tier: q.requestedTier, seq: q.seq, at: Date.now() };
+        }
         return;
       }
       if (signal.type !== 'ice' || !signal.candidate) return;

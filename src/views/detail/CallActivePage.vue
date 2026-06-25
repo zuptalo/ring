@@ -32,6 +32,14 @@
         </div>
       </div>
       <div ref="stageEl" class="stage" :class="{ 'chrome-hidden': chromeHidden }" @click="onStageClick">
+        <!-- iOS camera keep-alive (esp. iPhone 8). WebKit tears down / permanently MUTES a camera
+             capture that has no VISIBLE, PLAYING <video> rendering it (WebKit bug 252465 / Apple
+             Forums 667453). The main + PiP previews are `display:none` (v-show) until they already
+             have frames — a chicken-and-egg that mutes the camera before any frame can arrive. This
+             always-mounted element renders the local stream throughout a video call, hidden with
+             opacity (NOT display:none, which wouldn't count as a live renderer), so the capture stays
+             alive and unmuted. Off-screen-ish and pointer-inert; never user-visible. -->
+        <video v-if="isVideoCall" ref="keepAliveVideo" class="cam-keepalive" autoplay playsinline muted></video>
         <!-- Coming off hold (spec 0005): the other side resumed, so we get a 5s heads-up + cue
              before our camera/mic go live again, so we're not caught by surprise. -->
         <div v-if="resumeCountdown !== null" class="resume-countdown" role="status" @click.stop>
@@ -391,6 +399,7 @@ import {
   notJoining, busyMembers, recallMember, cancelInvite,
   acceptCall, rejectCall, declineWithMessage,
   heldCall, remoteHeld, groupHeldPeers, resumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
+  setGroupTileSize,
   type AudioRoute,
 } from '@/composables/useCall';
 import { useCallParticipants } from '@/composables/useCallParticipants';
@@ -404,6 +413,7 @@ import type { Contact } from '@/db/types';
 
 const mainVideo = ref<HTMLVideoElement | null>(null);
 const pipVideo = ref<HTMLVideoElement | null>(null);
+const keepAliveVideo = ref<HTMLVideoElement | null>(null); // iOS camera keep-alive renderer (see template)
 const stageEl = ref<HTMLElement | null>(null);
 
 // Full-screen incoming-call answer view (the consent line is shared with the banner).
@@ -745,6 +755,18 @@ const tileDims = computed(() => {
   return { w: Math.floor(best.w), h: Math.floor(best.h) };
 });
 
+// Spec 0007 US4: as the uniform group grid resizes (more/fewer peers, window/orientation change),
+// tell the call layer how big we're rendering each remote so it asks every peer for only the quality
+// that size is worth — a small grid tile needs far less than a fullscreen view. immediate:true so the
+// initial grid size is reported as soon as tiles appear.
+watch(
+  () => Math.max(tileDims.value.w, tileDims.value.h),
+  (px) => {
+    if (px > 0) setGroupTileSize(px);
+  },
+  { immediate: true },
+);
+
 // The route button reflects the LIVE route so the user can tell where audio is going.
 // Earpiece uses a phone-handset icon (clearly distinct from the loudspeaker).
 const routeIcon = computed(() =>
@@ -810,6 +832,10 @@ watch([mainVideo, mainStream, mainHasVideo], () =>
 watch([pipVideo, pipStream, pipHasVideo], () =>
   attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null),
 );
+// Keep-alive renderer: always render the LOCAL stream (whenever there is one) so iOS keeps the camera
+// capture alive even while both visible previews are still hidden (see the template comment). It only
+// ever shows the local camera, never the remote, and is invisible — so audio routing is unaffected.
+watch([keepAliveVideo, localStream], () => attach(keepAliveVideo.value, localStream.value));
 watch(audioOutputId, applySinkAll);
 watch(remoteStreams, (streams) => {
   const ids = streams.map((s) => s.id);
@@ -853,6 +879,7 @@ onMounted(() => {
   }
   attach(mainVideo.value, mainHasVideo.value ? mainStream.value : null);
   attach(pipVideo.value, pipHasVideo.value ? pipStream.value : null);
+  attach(keepAliveVideo.value, localStream.value); // iOS camera keep-alive (see template)
 });
 onUnmounted(() => {
   stageRO?.disconnect();
@@ -1451,6 +1478,23 @@ const diag = computed(() => {
   object-fit: contain;
   border-radius: 12px;
   background: #111;
+  display: block;
+}
+
+/* iOS camera keep-alive renderer (see template). MUST stay `display:block` and laid out with a real,
+   non-zero size and an actual paint — iOS only treats a genuinely-rendered, playing <video> as a live
+   renderer and keeps the camera unmuted. We make it invisible with opacity (not display:none /
+   visibility:hidden, which would un-render it), pin it to a corner under everything, and disable
+   pointer events so it can never be interacted with or affect layout meaningfully. */
+.cam-keepalive {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  opacity: 0.01;
+  pointer-events: none;
+  z-index: 0;
   display: block;
 }
 /* Flip-camera button overlaid on a local-video box (group self tile, 1:1 main, PiP). */

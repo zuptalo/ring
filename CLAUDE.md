@@ -263,5 +263,5 @@ but the subject is the real lever.)
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/2008-fast-first-call-connect/plan.md`
+`specs/0007-adaptive-call-quality/plan.md`
 <!-- SPECKIT END -->
