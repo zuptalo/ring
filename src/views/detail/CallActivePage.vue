@@ -80,9 +80,9 @@
         >
           <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold · {{ heldCall.name }}</span>
         </button>
-        <div v-if="remoteHeld" class="cw-onhold" role="status">
-          <ion-icon :icon="pauseOutline" aria-hidden="true" /><span>On hold</span>
-        </div>
+        <!-- (spec 2011) The small active-call "On hold" pill used to live here; it's redundant with
+             the centered blurred pause overlay on the stage (held-overlay), so it was removed for
+             both video and audio. The parked call-waiting bar above (cw-held) is unrelated and stays. -->
 
         <!-- Group call: every participant - each incoming feed AND our own outgoing
              feed - is an equally-sized floating tile. Tiles are centred and wrap;
@@ -179,9 +179,12 @@
             autoplay
             playsinline
           />
-          <!-- The other side put us on hold (spec 0005): their last frame is frozen, so blur it
-               (class above) and overlay a clear pause badge so it's obvious the call is paused. -->
-          <div v-if="remoteHeld && mainHasVideo && !mainIsLocal" class="held-overlay">
+          <!-- The other side put us on hold (spec 0005): their last video frame is frozen, so blur it
+               (class above) and overlay a clear pause badge so it's obvious the call is paused. Spec
+               2011: this is now the ONLY on-hold indicator (the small bottom pill was removed) and it
+               also covers AUDIO calls (over the blurred avatar stage below) — so drop the
+               mainHasVideo requirement; it stays anchored to the remote, not our own preview. -->
+          <div v-if="remoteHeld && !mainIsLocal" class="held-overlay">
             <ion-icon :icon="pauseOutline" />
             <span>On hold</span>
           </div>
@@ -194,7 +197,10 @@
           >
             <ion-icon :icon="cameraReverseOutline" />
           </button>
-          <div v-if="!mainHasVideo" class="audio-stage">
+          <!-- Audio call: the big avatar fills the stage. Spec 2011: when the other side puts us on
+               hold, blur it (held-frozen) so the centered pause overlay above reads the same as a held
+               video call, instead of the old tiny bottom pill. -->
+          <div v-if="!mainHasVideo" class="audio-stage" :class="{ 'held-frozen': remoteHeld && !mainIsLocal }">
             <ion-avatar class="big-avatar">
               <img v-if="callMeta" :src="callMeta.avatar" :alt="callMeta.name" />
             </ion-avatar>
@@ -1236,8 +1242,7 @@ const diag = computed(() => {
 /* Call waiting (spec 0005): the second-incoming prompt + held-call / on-hold bars, anchored
    below the header so they don't cover the call controls. Built from the call view's palette. */
 .cw-prompt,
-.cw-held,
-.cw-onhold {
+.cw-held {
   /* Anchored ABOVE the call controls (not the top) so they never overlap the call name +
      status header or the self-tile (spec 0005). */
   position: absolute;
@@ -1309,8 +1314,7 @@ const diag = computed(() => {
   background: var(--ion-color-primary, #10b981);
   color: #fff;
 }
-.cw-held,
-.cw-onhold {
+.cw-held {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1327,12 +1331,6 @@ const diag = computed(() => {
 }
 .cw-held:active {
   transform: translateX(-50%) scale(0.97);
-}
-.cw-onhold {
-  /* When BOTH a held bar and the remote-held badge could show, stack this one higher so they
-     don't overlap (both are bottom-anchored). */
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 152px);
-  background: rgba(120, 120, 128, 0.85);
 }
 /* On hold (spec 0005): the held peer's last frame is frozen, so blur it and dim it slightly —
    paired with the .held-overlay / .tile-onhold pause badge so it reads as paused, not broken. */
