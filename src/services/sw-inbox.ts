@@ -72,6 +72,13 @@ export interface PreviewResult {
   // failed), 'decrypt-failed' (frames fetched but none decryptable). Surfaced ONLY on the dev
   // deployment to diagnose the "generic after a while" regression on-device; never shown in prod.
   reason?: string;
+  // (spec 2016) Is there a GENUINELY-NEW message we couldn't render — a fetched-but-undecryptable
+  // frame, a locked device with pending frames, or a fetch we couldn't even make — so the caller
+  // SHOULD show the generic placeholder? FALSE when there was nothing genuinely new (the relay queue
+  // was empty, or every fetched frame was already shown): the caller must NOT show a new placeholder
+  // for those (pure noise — the burst extra-generic / `no-frames` toggle noise). Distinct from
+  // `reason`, which only labels WHY a fallback happened for the dev diagnostic.
+  newUnshown: boolean;
 }
 
 async function setting<T>(key: string, fallback: T): Promise<T> {
@@ -259,7 +266,9 @@ export async function previewPending(): Promise<PreviewResult> {
   const token = await readSessionToken();
   if (!token) {
     console.warn('[sw-inbox] no session token → generic');
-    return { notes: [], pending: 0, suppressed: false, silenced: false };
+    // Couldn't even authenticate to fetch the queue → uncertain; a real message likely woke us, so
+    // honor the placeholder (newUnshown) rather than silently dropping a possible message.
+    return { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: true };
   }
 
   // Kick the device unlock NOW, IN PARALLEL with the fetch below (spec 2010
@@ -291,14 +300,16 @@ export async function previewPending(): Promise<PreviewResult> {
     }
     if (!res.ok) {
       console.warn('[sw-inbox] /relay/pending not ok', res.status);
-      return { notes: [], pending: 0, suppressed: false, silenced: false, reason: `relay-${res.status}` };
+      return { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: true, reason: `relay-${res.status}` };
     }
     frames = ((await res.json()) as { frames?: MsgFrame[] }).frames ?? [];
   } catch (e) {
     console.warn('[sw-inbox] /relay/pending fetch failed', e);
-    return { notes: [], pending: 0, suppressed: false, silenced: false, reason: 'relay-error' };
+    return { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: true, reason: 'relay-error' };
   }
-  if (!frames.length) return { notes: [], pending: 0, suppressed: false, silenced: false, reason: 'no-frames' };
+  // No pending frames: the message was already drained (page / a prior straggler) or this push carried
+  // no queued message (a settings / own-data sync wake). Nothing genuinely new → no placeholder (2016).
+  if (!frames.length) return { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: false, reason: 'no-frames' };
 
   // Queued message frames = the undelivered backlog → the app-icon badge. Known
   // from the fetch alone, so the badge is right even if we can't decrypt.
@@ -316,7 +327,10 @@ export async function previewPending(): Promise<PreviewResult> {
     console.warn('[sw-inbox] device unlock failed (PIN-locked?) → generic');
     // Can't tell a message from a request → let the caller show a generic, UNLESS
     // the user disabled message notifications (then stay silent rather than buzz).
-    return { notes: [], pending, suppressed: !showMessages, silenced: false, reason: 'locked' };
+    // Locked but there ARE pending msg frames we couldn't decrypt → a genuinely-new message warrants
+    // the placeholder (newUnshown). If only non-msg frames are queued (pending === 0) there's nothing
+    // new to announce here.
+    return { notes: [], pending, suppressed: !showMessages, silenced: false, newUnshown: pending > 0, reason: 'locked' };
   }
 
   const showPreview = await setting<boolean>('notifications.showPreview', true);
@@ -367,7 +381,24 @@ export async function previewPending(): Promise<PreviewResult> {
   // (spec 2014 US2) If we'll fall back to the generic (no notes, not suppressed/silenced) because
   // frames were fetched but none decrypted, tag it so the dev deployment can show why.
   const reason = notes.length === 0 && !suppressed && !silenced && decryptFailed > 0 ? 'decrypt-failed' : undefined;
-  return { notes, pending, suppressed, silenced, reason };
+  // (spec 2016) A genuinely-new message we couldn't render = an UNSEEN frame that failed to decrypt.
+  // When every fetched frame was already shown (all-seen), decryptFailed === 0 and notes is empty →
+  // newUnshown is false → the caller shows NO new placeholder (kills the burst extra-generic).
+  const newUnshown = decryptFailed > 0;
+  return { notes, pending, suppressed, silenced, newUnshown, reason };
+}
+
+/**
+ * (spec 2016) Should this preview result NOT produce a new generic placeholder because there's nothing
+ * genuinely new to announce? True when we have no notes to show, the user didn't disable/silence
+ * notifications, AND there's no genuinely-new unrendered message — i.e. the relay queue was empty
+ * (`no-frames`) or every fetched frame was already shown. The caller honors the per-push contract for
+ * these by re-asserting an existing notification silently (or showing nothing), never a new "New
+ * message" banner. A slow cold-start that times out before the preview settles is handled separately
+ * by the caller (it shows the placeholder immediately, then upgrades/closes it on settle).
+ */
+export function isNothingNew(r: PreviewResult): boolean {
+  return r.notes.length === 0 && !r.suppressed && !r.silenced && !r.newUnshown;
 }
 
 /** Persist the frame ids we actually displayed, so they aren't re-shown on the next
