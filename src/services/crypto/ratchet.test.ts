@@ -9,6 +9,7 @@ import {
   x3dhResponder,
   ratchetInitAlice,
   ratchetInitBob,
+  ratchetDecryptPreview,
   type RatchetState,
 } from './ratchet';
 import { sealMessage, openMessage } from './message';
@@ -63,6 +64,28 @@ describe('Double Ratchet', () => {
     // Bob replies -> triggers a DH ratchet on Alice's side.
     expect(openMessage(alice, sealMessage(bob, msg('hey alice'), ad), ad).body).toBe('hey alice');
     expect(openMessage(bob, sealMessage(alice, msg('after ratchet'), ad), ad).body).toBe('after ratchet');
+  });
+
+  it('preview reports advancedDh: false within a chain, true across a DH ratchet (spec 2015 safety gate)', () => {
+    // The service-worker preview persists ONLY same-chain advances. A frame that triggers a DH
+    // ratchet (which would mint a fresh sending keypair) MUST be reported so previewPacket does NOT
+    // persist it — otherwise the SW could clobber the page's authoritative send-state. This asserts
+    // the flag that gate relies on.
+    const { alice, bob, ad } = setupPair();
+    // Establish Bob's receiving chain (Alice's FIRST message triggers Bob's initial DH ratchet, so
+    // it can't be the "same-chain" case). Open it authoritatively.
+    openMessage(bob, sealMessage(alice, msg('m0'), ad), ad);
+    // Alice's NEXT message is within the same sending chain → preview takes NO DH step.
+    const same = sealMessage(alice, msg('m1'), ad);
+    const r0 = ratchetDecryptPreview(bob, same.header, same.env, ad);
+    expect(JSON.parse(new TextDecoder().decode(r0.plaintext)).body).toBe('m1');
+    expect(r0.advancedDh).toBe(false);
+    // Make Alice ratchet: she receives a reply from Bob → her next message is a NEW chain.
+    openMessage(alice, sealMessage(bob, msg('reply'), ad), ad);
+    const dhStep = sealMessage(alice, msg('m2 new chain'), ad);
+    const r1 = ratchetDecryptPreview(bob, dhStep.header, dhStep.env, ad);
+    expect(JSON.parse(new TextDecoder().decode(r1.plaintext)).body).toBe('m2 new chain');
+    expect(r1.advancedDh).toBe(true);
   });
 
   it('handles out-of-order delivery (skipped message keys)', () => {
