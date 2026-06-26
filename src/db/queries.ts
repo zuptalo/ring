@@ -27,6 +27,7 @@ import { THUMB_TIERS } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview } from '@/services/link-preview';
 import { ensureHiddenLoaded, isRevealed } from '@/services/hidden-state';
+import { hiddenCallKeys } from '@/db/hidden-calls';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
   EditSignal, EraseSignal, LinkPreviewSignal,
@@ -1881,8 +1882,17 @@ export interface CallGroup extends Call {
 }
 
 /** Collapse consecutive same-contact calls (WhatsApp-style "(2)" grouping). */
+// Hidden calls (spec 1019, FR-019) are excluded from the Calls tab and the missed
+// badge ALWAYS (even while revealed): the reveal session surfaces hidden chats to
+// read, but the call history stays clean of any trace. `hiddenCallKeys` maps the
+// hidden chat set to the call `contactId`s to drop (see src/db/hidden-calls.ts).
 export async function listCallGroups(q = ''): Promise<CallGroup[]> {
-  const calls = await listCalls(q); // newest first
+  let calls = await listCalls(q); // newest first
+  const hidden = await ensureHiddenLoaded();
+  if (hidden.size > 0) {
+    const exclude = hiddenCallKeys(await getAll<Chat>('chats'), hidden);
+    calls = calls.filter((c) => !exclude.has(c.contactId));
+  }
   const groups: CallGroup[] = [];
   for (const call of calls) {
     const prev = groups[groups.length - 1];
@@ -3287,13 +3297,19 @@ export async function resolveAlert(id: string): Promise<void> {
 /* ---- badge counts ---- */
 
 export async function countUnread(): Promise<number> {
+  // Hidden chats (spec 1019) never contribute to the badge — always, even while
+  // revealed — so the count can't reveal or attribute a hidden chat's existence.
+  const hidden = await ensureHiddenLoaded();
   const chats = await getAll<Chat>('chats');
-  return chats.reduce((n, c) => n + (c.unread || 0), 0);
+  return chats.reduce((n, c) => n + (hidden.has(c.id) ? 0 : c.unread || 0), 0);
 }
 
 export async function countMissedUnseen(): Promise<number> {
   const calls = await getAll<Call>('calls');
-  return calls.filter((c) => c.missed && !c.seen).length;
+  const hidden = await ensureHiddenLoaded();
+  if (hidden.size === 0) return calls.filter((c) => c.missed && !c.seen).length;
+  const exclude = hiddenCallKeys(await getAll<Chat>('chats'), hidden);
+  return calls.filter((c) => c.missed && !c.seen && !exclude.has(c.contactId)).length;
 }
 
 export async function countPendingRequests(): Promise<number> {

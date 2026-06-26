@@ -20,7 +20,11 @@
  * the master-key-sealed set answers "is this hidden?"; the dedicated PIN authorizes
  * flipping the in-memory reveal session (held in `hidden-state.ts`).
  */
-import { getSetting, setSetting, createGroup } from '@/db/queries';
+// Deliberately depends ONLY on idb + crypto (no `queries.ts`): this module is
+// pulled into the service-worker bundle via `readHiddenSet`, and `queries.ts`
+// drags in DOM-heavy media code the SW can't (and shouldn't) load. The one
+// queries-dependent action, `startHiddenChat`, lives in `hidden-chats-start.ts`.
+import { get, put } from '@/db/idb';
 import { getMasterKey } from '@/services/crypto/identity';
 import {
   sealJson,
@@ -36,6 +40,16 @@ import {
   ensureHiddenLoaded,
   setHiddenIdsCache,
 } from '@/services/hidden-state';
+
+// Local settings get/put (same shape as queries.getSetting/setSetting) so this
+// module needs no `queries.ts` import.
+async function readSetting<T>(key: string, fallback: T): Promise<T> {
+  const s = await get<{ key: string; value: T }>('settings', key);
+  return s ? s.value : fallback;
+}
+function writeSetting<T>(key: string, value: T): Promise<void> {
+  return put('settings', { key, value });
+}
 
 const SET_KEY = 'privacy.hiddenChats';
 const PIN_KEY = 'privacy.hiddenPin';
@@ -65,7 +79,7 @@ function openSet(w: EncWrapper): string[] {
 
 /** Decrypt the stored set. Throws if locked (caller fails closed). */
 async function loadSet(): Promise<Set<string>> {
-  const raw = await getSetting<EncWrapper | undefined>(SET_KEY, undefined);
+  const raw = await readSetting<EncWrapper | undefined>(SET_KEY, undefined);
   if (!raw) return new Set();
   return new Set(openSet(raw));
 }
@@ -75,13 +89,27 @@ async function loadSet(): Promise<Set<string>> {
 registerHiddenLoader(loadSet);
 
 async function persist(ids: Set<string>): Promise<void> {
-  await setSetting<EncWrapper>(SET_KEY, sealSet([...ids]));
+  await writeSetting<EncWrapper>(SET_KEY, sealSet([...ids]));
   setHiddenIdsCache(ids);
 }
 
 /** The set of conversation ids hidden on this device (cached after first load). */
 export async function getHiddenSet(): Promise<Set<string>> {
   return ensureHiddenLoaded();
+}
+
+/**
+ * Direct (uncached, no side effects) read of the hidden set — for the service
+ * worker's notification path. Fails CLOSED to an empty set when locked; that's
+ * safe because a locked keystore also can't decrypt the message, so the SW
+ * already shows a generic, content-free notification in that case.
+ */
+export async function readHiddenSet(): Promise<Set<string>> {
+  try {
+    return await loadSet();
+  } catch {
+    return new Set();
+  }
 }
 
 export async function isHidden(chatId: string): Promise<boolean> {
@@ -106,7 +134,7 @@ export async function removeHidden(chatId: string): Promise<void> {
 /* ---- separate dedicated PIN ---- */
 
 export async function hasHiddenPin(): Promise<boolean> {
-  return (await getSetting<HiddenPinRec | undefined>(PIN_KEY, undefined)) != null;
+  return (await readSetting<HiddenPinRec | undefined>(PIN_KEY, undefined)) != null;
 }
 
 /** Set (or replace) the dedicated reveal PIN. */
@@ -114,12 +142,12 @@ export async function enableHiddenPin(pin: string): Promise<void> {
   const salt = randomBytes(ARGON_SALT_BYTES);
   const key = argon2id(pin, salt);
   const env = sealJson(key, PIN_MARKER, 'pin');
-  await setSetting<HiddenPinRec>(PIN_KEY, { salt: bytesToB64url(salt), env, length: pin.length });
+  await writeSetting<HiddenPinRec>(PIN_KEY, { salt: bytesToB64url(salt), env, length: pin.length });
 }
 
 /** Verify a reveal-PIN attempt. Returns false (no oracle) on any failure. */
 export async function verifyHiddenPin(pin: string): Promise<boolean> {
-  const rec = await getSetting<HiddenPinRec | undefined>(PIN_KEY, undefined);
+  const rec = await readSetting<HiddenPinRec | undefined>(PIN_KEY, undefined);
   if (!rec) return false;
   try {
     const key = argon2id(pin, b64urlToBytes(rec.salt));
@@ -137,20 +165,6 @@ export async function changeHiddenPin(oldPin: string, newPin: string): Promise<v
 }
 
 export async function hiddenPinLength(): Promise<number | null> {
-  const rec = await getSetting<HiddenPinRec | undefined>(PIN_KEY, undefined);
+  const rec = await readSetting<HiddenPinRec | undefined>(PIN_KEY, undefined);
   return rec ? rec.length : null;
-}
-
-/* ---- starting a distinct, coexisting hidden conversation (US2) ---- */
-
-/**
- * Start a NEW hidden conversation with a contact, modeled on the group mechanism
- * so it coexists with any normal 1:1 with the same person (a distinct id, its own
- * history). Reuses the existing sender-key crypto — no new scheme. Returns the
- * new conversation id, already added to the hidden set.
- */
-export async function startHiddenChat(contactId: string): Promise<string> {
-  const groupId = await createGroup('', [contactId]);
-  await addHidden(groupId);
-  return groupId;
 }

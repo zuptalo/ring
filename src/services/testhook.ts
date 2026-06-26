@@ -109,8 +109,8 @@ import {
   addHidden as hcAdd,
   removeHidden as hcRemove,
   getHiddenSet as hcGetSet,
-  startHiddenChat as hcStartChat,
 } from '@/services/hidden-chats';
+import { startHiddenChat as hcStartChat } from '@/services/hidden-chats-start';
 import { revealWithPin as hcReveal, relockHidden as hcRelock } from '@/composables/useHiddenChats';
 import { downloadBlob } from '@/services/media-transfer';
 import {

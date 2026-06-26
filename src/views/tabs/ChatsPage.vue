@@ -184,7 +184,8 @@ import { useChatFilters } from '@/services/chat-filters';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useConnect } from '@/composables/useConnect';
 import { useHiddenChats } from '@/composables/useHiddenChats';
-import { hiddenPinLength, startHiddenChat } from '@/services/hidden-chats';
+import { hiddenPinLength } from '@/services/hidden-chats';
+import { startHiddenChat } from '@/services/hidden-chats-start';
 import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
 import type { Chat, Contact } from '@/db/types';
 

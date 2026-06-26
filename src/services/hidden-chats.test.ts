@@ -9,18 +9,16 @@ import { ready, randomBytes } from './crypto/primitives';
 const h = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
   mk: { key: null as Uint8Array | null },
-  groups: [] as Array<{ name: string; members: string[] }>,
 }));
 
-vi.mock('@/db/queries', () => ({
-  getSetting: async (k: string, fb: unknown) => (h.settings.has(k) ? h.settings.get(k) : fb),
-  setSetting: async (k: string, v: unknown) => {
-    h.settings.set(k, v);
+// hidden-chats.ts persists via idb get/put on the 'settings' store directly; back
+// it with an in-memory map. `touch` is a no-op (no DOM bus in node).
+vi.mock('@/db/idb', () => ({
+  get: async (_store: string, key: string) => (h.settings.has(key) ? { key, value: h.settings.get(key) } : undefined),
+  put: async (_store: string, row: { key: string; value: unknown }) => {
+    h.settings.set(row.key, row.value);
   },
-  createGroup: async (name: string, members: string[]) => {
-    h.groups.push({ name, members });
-    return `grp-${members.join('-')}-${h.groups.length}`;
-  },
+  touch: () => {},
 }));
 
 vi.mock('@/services/crypto/identity', () => ({
@@ -29,9 +27,6 @@ vi.mock('@/services/crypto/identity', () => ({
     return h.mk.key;
   },
 }));
-
-// Keep the real hidden-state leaf, but stub idb.touch (no DOM bus in node).
-vi.mock('@/db/idb', () => ({ touch: () => {} }));
 
 import {
   getHiddenSet,
@@ -43,7 +38,6 @@ import {
   verifyHiddenPin,
   changeHiddenPin,
   hiddenPinLength,
-  startHiddenChat,
 } from './hidden-chats';
 import { clearHiddenState, isRevealed } from './hidden-state';
 
@@ -54,7 +48,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   h.settings.clear();
-  h.groups.length = 0;
   clearHiddenState();
 });
 
@@ -137,16 +130,6 @@ describe('separate dedicated PIN', () => {
     const b = (h.settings.get('privacy.hiddenPin') as { salt: string }).salt;
     expect(a).not.toEqual(b); // fresh random salt each time
   }, PIN_TIMEOUT);
-});
-
-describe('startHiddenChat (coexisting distinct conversation)', () => {
-  it('creates a distinct group and hides it, leaving any 1:1 untouched (FR-017)', async () => {
-    const id = await startHiddenChat('contact-1');
-    expect(h.groups).toHaveLength(1);
-    expect(h.groups[0].members).toEqual(['contact-1']); // 2-person group
-    expect(await isHidden(id)).toBe(true);
-    // We never created or touched a 1:1 chat record here.
-  });
 });
 
 describe('reveal flag isolation', () => {
