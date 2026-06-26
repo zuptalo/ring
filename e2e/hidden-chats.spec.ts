@@ -71,9 +71,11 @@ test('search-bar PIN reveals hidden chats in the UI (US3 reveal gesture)', async
   const b = await createAccount(await browser.newContext(), 'HIDDEN04');
   await pair(a, b);
 
-  // Create the 1:1, set a PIN, and hide it.
+  // Create the 1:1, enable the feature (so the reveal gesture is armed — FR-013a),
+  // set a PIN, and hide it.
   await ev(a, (id: string) => (window as any).__ringTest.startChat(id), b.id);
   const chat = await chatWith(a, b.id);
+  await ev(a, () => (window as any).__ringTest.setGlobalSetting('privacy.hiddenChatsEnabled', true));
   await ev(a, (pin: string) => (window as any).__ringTest.hiddenSetPin(pin), '4321');
   await ev(a, (id: string) => (window as any).__ringTest.hiddenAdd(id), chat);
 
