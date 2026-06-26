@@ -174,6 +174,7 @@ import { isUnlockedNow, rotateRecoveryCode, enableLock, disableLock, getPinLengt
 import { disablePasskey } from '@/services/crypto/passkey';
 import { syncRecoveryWrap } from '@/services/ownsync';
 import { hasHiddenPin, verifyHiddenPin, changeHiddenPin } from '@/services/hidden-chats';
+import { resetHiddenChats } from '@/services/hidden-chats-reset';
 import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
 import type { Setting } from '@/db/types';
 import {
@@ -431,6 +432,14 @@ const ACTIONS: Record<string, () => void | Promise<void>> = {
     if (next === null) return;
     await changeHiddenPin(current, next);
     notice('Hidden chats', 'Your PIN has been changed.');
+  },
+  'hidden-reset': async () => {
+    // The destructive confirm is enforced by runAction (schema `confirm`). Wipe the
+    // hidden chats locally + block re-sync, then clear the PIN/feature so the user
+    // starts fresh.
+    const { wiped } = await resetHiddenChats();
+    await setSetting('privacy.hiddenChatsEnabled', false);
+    notice('Hidden chats', wiped.length ? `${wiped.length} hidden chat(s) deleted on this device.` : 'Hidden chats reset.');
   },
   invite: async () => {
     const data = { title: 'Ring', text: 'Join me on Ring', url: location.origin };

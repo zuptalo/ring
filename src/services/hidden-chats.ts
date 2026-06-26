@@ -24,7 +24,7 @@
 // pulled into the service-worker bundle via `readHiddenSet`, and `queries.ts`
 // drags in DOM-heavy media code the SW can't (and shouldn't) load. The one
 // queries-dependent action, `startHiddenChat`, lives in `hidden-chats-start.ts`.
-import { get, put } from '@/db/idb';
+import { get, put, remove } from '@/db/idb';
 import { getMasterKey } from '@/services/crypto/identity';
 import {
   sealJson,
@@ -167,4 +167,13 @@ export async function changeHiddenPin(oldPin: string, newPin: string): Promise<v
 export async function hiddenPinLength(): Promise<number | null> {
   const rec = await readSetting<HiddenPinRec | undefined>(PIN_KEY, undefined);
   return rec ? rec.length : null;
+}
+
+/** Erase the hidden set + PIN material from storage and the in-memory cache.
+ *  Used by the destructive PIN reset (the conversation wipe lives in
+ *  `hidden-chats-reset.ts`). */
+export async function clearHiddenStorage(): Promise<void> {
+  await remove('settings', SET_KEY);
+  await remove('settings', PIN_KEY);
+  setHiddenIdsCache(new Set());
 }

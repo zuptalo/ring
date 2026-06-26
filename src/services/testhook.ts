@@ -111,6 +111,7 @@ import {
   getHiddenSet as hcGetSet,
 } from '@/services/hidden-chats';
 import { startHiddenChat as hcStartChat } from '@/services/hidden-chats-start';
+import { resetHiddenChats as hcReset } from '@/services/hidden-chats-reset';
 import { revealWithPin as hcReveal, relockHidden as hcRelock } from '@/composables/useHiddenChats';
 import { downloadBlob } from '@/services/media-transfer';
 import {
@@ -388,6 +389,8 @@ export function installTestHook(): void {
     hiddenRelock: () => {
       hcRelock();
     },
+    /** Reset: wipe hidden chats locally + block re-sync. Returns the wiped ids. */
+    hiddenReset: () => hcReset(),
     /** Visible chat ids right now (what `listChats` returns) — for exclusion asserts. */
     visibleChatIds: async (): Promise<string[]> => (await listChats()).map((c) => c.id),
 

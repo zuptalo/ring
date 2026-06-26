@@ -315,6 +315,19 @@ export const SETTINGS: Record<string, SettingNode> = {
         items: [{ type: 'choice', key: 'privacy.hiddenChatsGrace', default: '1m', options: HIDDEN_GRACE }],
         footer: 'How long revealed chats stay visible when you briefly switch apps. A full app close always re-locks immediately.',
       },
+      {
+        items: [
+          {
+            type: 'action',
+            title: 'Reset PIN & delete hidden chats',
+            action: 'hidden-reset',
+            danger: true,
+            confirm:
+              'This permanently deletes every hidden chat on this device and cannot be undone — they will not come back from the server. Continue?',
+          },
+        ],
+        footer: 'Forgot your PIN? Resetting permanently deletes the hidden chats on this device so they can never be exposed.',
+      },
     ],
   },
   'privacy-last-seen': {

@@ -89,3 +89,24 @@ test('search-bar PIN reveals hidden chats in the UI (US3 reveal gesture)', async
   await search.fill('4321');
   await expect.poll(() => visibleIds(a), { timeout: 15_000 }).toContain(chat);
 });
+
+test('PIN reset wipes hidden chats and blocks re-sync (US7)', async ({ browser }) => {
+  test.setTimeout(90_000);
+  const a = await createAccount(await browser.newContext(), 'HIDDEN05');
+  const b = await createAccount(await browser.newContext(), 'HIDDEN06');
+  await pair(a, b);
+
+  await ev(a, (id: string) => (window as any).__ringTest.startChat(id), b.id);
+  const chat = await chatWith(a, b.id);
+  await ev(a, (pin: string) => (window as any).__ringTest.hiddenSetPin(pin), '1357');
+  await ev(a, (id: string) => (window as any).__ringTest.hiddenAdd(id), chat);
+  expect(await hiddenIds(a)).toContain(chat);
+
+  // Reset → the hidden set is empty, the conversation is gone, and the old PIN no
+  // longer reveals anything.
+  const res = await ev(a, () => (window as any).__ringTest.hiddenReset());
+  expect(res.wiped).toContain(chat);
+  expect(await hiddenIds(a)).toEqual([]);
+  await expect.poll(() => visibleIds(a)).not.toContain(chat); // wiped, not merely hidden
+  expect(await ev(a, (p: string) => (window as any).__ringTest.hiddenReveal(p), '1357')).toBe(false);
+});
