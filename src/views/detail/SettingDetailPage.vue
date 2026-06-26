@@ -173,6 +173,8 @@ import { clearToken } from '@/services/auth';
 import { isUnlockedNow, rotateRecoveryCode, enableLock, disableLock, getPinLength } from '@/services/crypto/identity';
 import { disablePasskey } from '@/services/crypto/passkey';
 import { syncRecoveryWrap } from '@/services/ownsync';
+import { hasHiddenPin, verifyHiddenPin, changeHiddenPin } from '@/services/hidden-chats';
+import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
 import type { Setting } from '@/db/types';
 import {
   ICONS, settingNode, linkSummary, type SettingItem,
@@ -413,6 +415,23 @@ const ACTIONS: Record<string, () => void | Promise<void>> = {
   },
   'reset-network': () => setSetting('network.resetAt', Date.now()),
   'clear-all-media': () => clearAllMedia(),
+  'hidden-set-pin': async () => {
+    // No PIN yet → create one (also flips the feature on). Existing PIN → change
+    // it, requiring the current PIN first.
+    if (!(await hasHiddenPin())) {
+      if (await ensureHiddenPin()) await setSetting('privacy.hiddenChatsEnabled', true);
+      return;
+    }
+    const current = await promptPin('Enter your current Hidden Chats PIN');
+    if (current === null) return;
+    if (!(await verifyHiddenPin(current))) {
+      return notice('Hidden chats', 'That PIN is incorrect.');
+    }
+    const next = await promptPin('Enter a new PIN (4+ digits)', true);
+    if (next === null) return;
+    await changeHiddenPin(current, next);
+    notice('Hidden chats', 'Your PIN has been changed.');
+  },
   invite: async () => {
     const data = { title: 'Ring', text: 'Join me on Ring', url: location.origin };
     if (navigator.share) {
@@ -434,6 +453,38 @@ async function notice(header: string, message: string) {
     buttons: ['OK'],
   });
   await a.present();
+}
+
+// Prompt for a numeric PIN. With `confirm`, requires a matching second entry and
+// 4+ digits (used for setting a NEW PIN); otherwise just returns the entry (used
+// for verifying the current PIN). Resolves null on cancel.
+async function promptPin(header: string, confirm = false): Promise<string | null> {
+  return new Promise((resolve) => {
+    const inputs = [
+      { name: 'pin', type: 'password' as const, attributes: { inputmode: 'numeric' }, placeholder: 'PIN' },
+      ...(confirm
+        ? [{ name: 'confirm', type: 'password' as const, attributes: { inputmode: 'numeric' }, placeholder: 'Confirm PIN' }]
+        : []),
+    ];
+    void alertController
+      .create({
+        header,
+        inputs,
+        buttons: [
+          { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
+          {
+            text: 'OK',
+            handler: (data: { pin?: string; confirm?: string }) => {
+              const pin = (data.pin ?? '').trim();
+              if (confirm && (!/^\d{4,}$/.test(pin) || pin !== (data.confirm ?? '').trim())) return false;
+              resolve(pin);
+              return true;
+            },
+          },
+        ],
+      })
+      .then((a) => a.present());
+  });
 }
 
 // Present the freshly-rotated recovery code with a copy action. The code goes in

@@ -55,6 +55,12 @@ export async function ensureHiddenLoaded(): Promise<Set<string>> {
   try {
     ids = await loader();
     loaded = true; // cache only on a successful decrypt — see below
+    // On a reload the warm chat list can paint before the keystore unlocks, so
+    // the first load attempt fails closed (unloaded). Once it finally succeeds,
+    // nudge the lists to re-query with the now-known set so any chat that was
+    // briefly shown gets excluded. Deferred to a microtask to avoid re-entering
+    // the in-flight query.
+    queueMicrotask(refreshLists);
   } catch {
     // Locked / corrupt: do NOT mark loaded (so we retry once unlocked) and keep
     // the last-known set rather than an empty one. This fails closed — a
