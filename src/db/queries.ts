@@ -26,6 +26,7 @@ import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deri
 import { THUMB_TIERS } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview } from '@/services/link-preview';
+import { ensureHiddenLoaded, isRevealed } from '@/services/hidden-state';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
   EditSignal, EraseSignal, LinkPreviewSignal,
@@ -53,9 +54,14 @@ function chatOrder(a: Chat, b: Chat): number {
 
 export async function listChats(q = ''): Promise<Chat[]> {
   // The main list hides pending requests, archived chats, and locked chats (the
-  // last two have their own views). Pinned-first, then most-recent.
+  // last two have their own views). Hidden chats (spec 1019) are also excluded
+  // unless a reveal session is active — this is the single choke point every
+  // filter chip composes over, so excluding here covers them all. Pinned-first,
+  // then most-recent.
+  const hidden = await ensureHiddenLoaded();
+  const showHidden = isRevealed();
   const chats = (await getAll<Chat>('chats')).filter(
-    (c) => !c.pending && !c.archived && !c.locked,
+    (c) => !c.pending && !c.archived && !c.locked && (showHidden || !hidden.has(c.id)),
   );
   const filtered = q
     ? chats.filter((c) => matches(c.name, q) || matches(c.lastMessage, q))
