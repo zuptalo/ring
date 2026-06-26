@@ -5,7 +5,27 @@
  * hang the send pipeline, so each call resolves on a timeout with whatever it has.
  */
 import { createLimiter } from '@/utils/concurrency';
-import { THUMB_TIERS } from '@/utils/thumbs';
+import { THUMB_TIERS, THUMB_MAX_BYTES, chooseJpegQuality, dataUrlBytes } from '@/utils/thumbs';
+
+/** Encode a canvas to a JPEG data URL at the crispest quality within the poster byte budget
+ *  (spec 1018). Re-encodes per quality step via toDataURL; the chosen step's URL is the last one
+ *  measured, so we keep it. Used for the on-wire video poster. */
+function jpegDataUrlUnderBudget(c: HTMLCanvasElement): string {
+  let chosen = '';
+  chooseJpegQuality((q) => {
+    chosen = c.toDataURL('image/jpeg', q);
+    return dataUrlBytes(chosen);
+  });
+  return chosen;
+}
+
+/** Encode a canvas to a JPEG Blob at the crispest quality within the poster byte budget (spec 1018).
+ *  The quality is chosen from cheap toDataURL size estimates, then encoded once as a Blob (smaller
+ *  than a data URL on the wire). Used for the on-wire image poster + derived tiers. */
+function jpegBlobUnderBudget(c: HTMLCanvasElement): Promise<Blob | undefined> {
+  const { quality } = chooseJpegQuality((q) => dataUrlBytes(c.toDataURL('image/jpeg', q)));
+  return new Promise<Blob | undefined>((res) => c.toBlob((b) => res(b ?? undefined), 'image/jpeg', quality));
+}
 export interface VideoMeta {
   width?: number;
   height?: number;
@@ -77,7 +97,7 @@ const posterLimiter = createLimiter(2);
  *
  *  Runs through a shared concurrency limiter so that, however many videos need a
  *  poster at once, only a couple decode simultaneously (spec 2002). */
-export function generateVideoPoster(blob: Blob, maxEdge = 480, timeoutMs = 10000): Promise<string | undefined> {
+export function generateVideoPoster(blob: Blob, maxEdge = THUMB_TIERS.bubble, timeoutMs = 10000): Promise<string | undefined> {
   return posterLimiter(() => generateVideoPosterUnlimited(blob, maxEdge, timeoutMs));
 }
 
@@ -121,7 +141,8 @@ function generateVideoPosterUnlimited(blob: Blob, maxEdge: number, timeoutMs: nu
         const cx = c.getContext('2d');
         if (!cx) return finish();
         cx.drawImage(v, 0, 0, c.width, c.height);
-        finish(c.toDataURL('image/jpeg', 0.6));
+        // spec 1018: 512px poster at the crispest quality that stays within the ~40KB wire budget.
+        finish(jpegDataUrlUnderBudget(c));
       } catch {
         finish();
       }
@@ -167,11 +188,11 @@ function generateVideoPosterUnlimited(blob: Blob, maxEdge: number, timeoutMs: nu
  *  image as rows recycle (the big driver of media-heavy scroll jank). Returns
  *  undefined if the image is already within `maxEdge` or decoding fails — the caller
  *  then just uses the full image. Bounded by the shared limiter like video posters. */
-export function generateImageThumb(blob: Blob, maxEdge = 400, quality = 0.7): Promise<Blob | undefined> {
-  return posterLimiter(() => generateImageThumbUnlimited(blob, maxEdge, quality));
+export function generateImageThumb(blob: Blob, maxEdge = THUMB_TIERS.bubble): Promise<Blob | undefined> {
+  return posterLimiter(() => generateImageThumbUnlimited(blob, maxEdge));
 }
 
-async function generateImageThumbUnlimited(blob: Blob, maxEdge: number, quality: number): Promise<Blob | undefined> {
+async function generateImageThumbUnlimited(blob: Blob, maxEdge: number): Promise<Blob | undefined> {
   try {
     const bmp = await createImageBitmap(blob);
     const big = Math.max(bmp.width, bmp.height);
@@ -190,7 +211,9 @@ async function generateImageThumbUnlimited(blob: Blob, maxEdge: number, quality:
     }
     cx.drawImage(bmp, 0, 0, c.width, c.height);
     bmp.close?.();
-    return await new Promise<Blob | undefined>((res) => c.toBlob((b) => res(b ?? undefined), 'image/jpeg', quality));
+    // spec 1018: step JPEG quality down only as needed to stay within the ~40KB wire budget,
+    // so a busy photo degrades quality rather than bloating the sealed message.
+    return await jpegBlobUnderBudget(c);
   } catch {
     return undefined;
   }
@@ -204,8 +227,8 @@ const imageThumbLimiter = createLimiter(3);
 
 /** Downscale an image Blob to `maxEdge` (image-thumb limiter), returning undefined when the source is
  *  already within `maxEdge` (the caller falls back to the larger tier). Spec 1014. */
-export function makeImageThumb(blob: Blob, maxEdge: number, quality = 0.7): Promise<Blob | undefined> {
-  return imageThumbLimiter(() => generateImageThumbUnlimited(blob, maxEdge, quality));
+export function makeImageThumb(blob: Blob, maxEdge: number): Promise<Blob | undefined> {
+  return imageThumbLimiter(() => generateImageThumbUnlimited(blob, maxEdge));
 }
 
 /** Derive the GRID (320) and STRIP (128) thumbnail tiers from the already-generated/received bubble
