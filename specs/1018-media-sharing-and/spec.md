@@ -111,6 +111,11 @@ A person taps a photo or video to view it full-screen — either from a message 
 - **FR-012**: Zoom state MUST reset to fit-to-screen when navigating between items in a multi-item viewer.
 - **FR-013**: Gesture handling MUST disambiguate zoom/pan from item-to-item navigation and from dismissing the viewer, so gestures do not trigger the wrong action.
 
+**Privacy / zero-knowledge (cross-cutting)**
+
+- **FR-014**: Client-side re-encoding and thumbnail generation MUST minimize embedded metadata: the outgoing video, image, and thumbnail MUST NOT carry capture metadata that isn't required to render them (e.g. GPS location, device/camera identifiers, capture timestamps). Orientation MUST be applied as pixels, not preserved as exposable metadata.
+- **FR-015**: The higher-quality thumbnail MUST remain solely an element inside the sealed message payload; it MUST NOT become a separately server-fetchable or independently cacheable resource. No media plaintext or media-describing metadata beyond what relaying physically requires may be sent to the server.
+
 ### Key Entities *(include if feature involves data)*
 
 - **Media message**: A chat message carrying an image or video. Relevant attributes (conceptual): the encrypted full media, an embedded preview thumbnail, and orientation/aspect information needed to render correctly.
@@ -128,6 +133,7 @@ A person taps a photo or video to view it full-screen — either from a message 
 - **SC-005**: In the full-screen viewer, pinch-zoom and pan hold 60fps with no dropped frames on typical devices during normal use, and bounds/inertia behave consistently across repeated trials; on old/low-memory devices the experience degrades gracefully without crashing or severe stutter.
 - **SC-006**: Users can zoom into a shared photo to inspect detail and return to fit-to-screen using only intuitive gestures (pinch, drag, double-tap) without on-screen controls or instructions.
 - **SC-007**: No regression: previously sent media (old thumbnails/encodings) still render correctly for both sender and recipient.
+- **SC-008**: Outgoing media and thumbnails carry no capture metadata beyond what is needed to render them (no GPS, device id, or original capture timestamp), verifiable by inspecting a sent media's metadata; the server receives only ciphertext and opaque blob ids.
 
 ## Assumptions
 

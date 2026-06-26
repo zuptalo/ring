@@ -123,6 +123,7 @@ fluid with rubber-band + inertia; paging resets zoom; a pinch never pages/dismis
 ## Phase 6: Polish & Cross-Cutting Concerns
 
 - [ ] T024 Run `/speckit-checklist` (REQUIRED for Principle I — touches the E2EE media payload) and resolve any findings before implementation sign-off.
+- [ ] T024a Enforce metadata minimization (FR-014/FR-015/SC-008): confirm the client re-encode in `src/services/media-video-webcodecs.ts` / `src/services/media-video-ffmpeg.ts` and thumbnail generation in `src/utils/media-meta.ts` strip capture metadata (GPS, device id, timestamps) and bake orientation as pixels; verify the crisper poster stays inside the sealed payload only (not a server-fetchable/cacheable resource — e.g. not matched by the `/v1/emoji/` runtime cache route). Add an assertion/inspection step to the relevant unit test.
 - [ ] T025 Full gate pass: `npm run build`, `npm run test:unit`, `npm run test:e2e` (with `make db-up`); confirm no regression to existing media send/transfer behavior (SC-007).
 - [ ] T026 Real-device validation sweep per `quickstart.md` across US1 (orientation), US2 (crispness/budget), US3 (zoom feel); record results.
 - [ ] T027 Write user-facing commit subjects as plain-language release notes (Principle VII), e.g. `fix(media): shared videos no longer arrive sideways`, `feat(media): sharper photo & video previews`, `feat(media): smoother pinch-to-zoom when viewing photos`.
