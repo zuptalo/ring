@@ -350,19 +350,70 @@ const zoomStyle = computed(() => ({
   transition: gesturing.value ? 'none' : 'transform 0.22s ease',
 }));
 function resetZoom(): void {
+  cancelMomentum();
   gesturing.value = false;
   zoom.scale = 1;
   zoom.tx = 0;
   zoom.ty = 0;
 }
-function clampPan(): void {
+/** Max pan offset in each axis at the current scale (content edge flush with the viewport edge). */
+function panBounds(): { mx: number; my: number } {
   const el = track.value;
   const w = el?.clientWidth ?? 0;
   const h = el?.clientHeight ?? 0;
-  const mx = Math.max(0, ((zoom.scale - 1) * w) / 2);
-  const my = Math.max(0, ((zoom.scale - 1) * h) / 2);
+  return { mx: Math.max(0, ((zoom.scale - 1) * w) / 2), my: Math.max(0, ((zoom.scale - 1) * h) / 2) };
+}
+/** Hard clamp — used by the final settle and the desktop wheel/mouse paths. */
+function clampPan(): void {
+  const { mx, my } = panBounds();
   zoom.tx = Math.min(mx, Math.max(-mx, zoom.tx));
   zoom.ty = Math.min(my, Math.max(-my, zoom.ty));
+}
+/** Rubber-band a value past a symmetric bound: motion past the edge is allowed but resisted
+ *  (spec 1018 FR-010), so a drag/pinch can briefly overscroll and then settle back. */
+function rubber(v: number, max: number): number {
+  if (max <= 0) return v * 0.3; // unzoomed axis: heavy resistance toward 0
+  if (v > max) return max + (v - max) * 0.3;
+  if (v < -max) return -max + (v + max) * 0.3;
+  return v;
+}
+/** Soft (rubber-band) clamp applied live during a pinch/pan gesture. */
+function softClampPan(): void {
+  const { mx, my } = panBounds();
+  zoom.tx = rubber(zoom.tx, mx);
+  zoom.ty = rubber(zoom.ty, my);
+}
+/** Animate the pan back to its hard bounds (re-enables the CSS transition for a smooth snap). */
+function settlePan(): void {
+  cancelMomentum();
+  gesturing.value = false;
+  clampPan();
+}
+// Momentum/inertia (spec 1018 FR-009): on a flick release while zoomed, keep translating with
+// friction until it slows or reaches a bound, then settle. rAF-driven (transform only) for 60fps.
+let momentumRaf = 0;
+function cancelMomentum(): void {
+  if (momentumRaf) cancelAnimationFrame(momentumRaf);
+  momentumRaf = 0;
+}
+function startMomentum(): void {
+  cancelMomentum();
+  const FRICTION = 0.94;
+  const step = (): void => {
+    vx *= FRICTION;
+    vy *= FRICTION;
+    zoom.tx += vx;
+    zoom.ty += vy;
+    const { mx, my } = panBounds();
+    const past = zoom.tx > mx || zoom.tx < -mx || zoom.ty > my || zoom.ty < -my;
+    // Stop and snap back once it crosses a bound or the fling has nearly stopped.
+    if (past || (Math.abs(vx) < 0.4 && Math.abs(vy) < 0.4)) {
+      settlePan();
+      return;
+    }
+    momentumRaf = requestAnimationFrame(step);
+  };
+  momentumRaf = requestAnimationFrame(step);
 }
 function toggleZoom(): void {
   if (zoom.scale > 1) resetZoom();
@@ -382,6 +433,18 @@ let sx = 0;
 let sy = 0;
 let panTx = 0;
 let panTy = 0;
+// Pinch focal point (relative to the viewport centre) + the translation when the pinch began, so
+// the zoom stays centred on where the fingers are rather than snapping to the middle (FR-009).
+let focalX = 0;
+let focalY = 0;
+let startTx = 0;
+let startTy = 0;
+// Pan velocity sampling for momentum (px per ~frame) and the last sampled point/time.
+let vx = 0;
+let vy = 0;
+let lastMoveX = 0;
+let lastMoveY = 0;
+let lastMoveT = 0;
 let moved = false;
 let dir: 'v' | 'h' | null = null;
 let lastTapAt = 0;
@@ -391,11 +454,24 @@ let tapTimer: ReturnType<typeof setTimeout> | undefined;
 const touchDist = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
 
 function onTouchStart(e: TouchEvent): void {
+  cancelMomentum(); // a new touch interrupts any in-flight fling
   if (e.touches.length >= 2) {
     mode = 'pinch';
     gesturing.value = true;
     startDist = touchDist(e.touches) || 1;
     startScale = zoom.scale;
+    startTx = zoom.tx;
+    startTy = zoom.ty;
+    // Focal point = pinch midpoint relative to the viewport centre, so the zoom grows toward it.
+    const r = track.value?.getBoundingClientRect();
+    if (r) {
+      const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      focalX = midX - (r.left + r.width / 2);
+      focalY = midY - (r.top + r.height / 2);
+    } else {
+      focalX = focalY = 0;
+    }
     moved = true;
     return;
   }
@@ -410,6 +486,10 @@ function onTouchStart(e: TouchEvent): void {
     gesturing.value = true;
     panTx = zoom.tx;
     panTy = zoom.ty;
+    vx = vy = 0;
+    lastMoveX = t.clientX;
+    lastMoveY = t.clientY;
+    lastMoveT = e.timeStamp || performance.now();
   } else {
     mode = 'free';
   }
@@ -417,8 +497,14 @@ function onTouchStart(e: TouchEvent): void {
 function onTouchMove(e: TouchEvent): void {
   if (mode === 'pinch') {
     if (e.touches.length < 2) return;
-    zoom.scale = Math.min(5, Math.max(1, (startScale * touchDist(e.touches)) / startDist));
-    clampPan();
+    const s1 = Math.min(5, Math.max(1, (startScale * touchDist(e.touches)) / startDist));
+    // Keep the focal point fixed under the fingers while scaling (FR-009): solve for the
+    // translation that holds focal = t + s*o constant as s goes startScale → s1.
+    const ratio = s1 / startScale;
+    zoom.scale = s1;
+    zoom.tx = focalX - ratio * (focalX - startTx);
+    zoom.ty = focalY - ratio * (focalY - startTy);
+    softClampPan();
     if (e.cancelable) e.preventDefault();
     return;
   }
@@ -427,7 +513,17 @@ function onTouchMove(e: TouchEvent): void {
     zoom.tx = panTx + (t.clientX - sx);
     zoom.ty = panTy + (t.clientY - sy);
     if (Math.abs(t.clientX - sx) > 4 || Math.abs(t.clientY - sy) > 4) moved = true;
-    clampPan();
+    // Sample velocity (px/frame) for the release fling.
+    const now = e.timeStamp || performance.now();
+    const dt = now - lastMoveT;
+    if (dt > 0) {
+      vx = ((t.clientX - lastMoveX) / dt) * 16;
+      vy = ((t.clientY - lastMoveY) / dt) * 16;
+      lastMoveX = t.clientX;
+      lastMoveY = t.clientY;
+      lastMoveT = now;
+    }
+    softClampPan();
     if (e.cancelable) e.preventDefault();
     return;
   }
@@ -453,14 +549,16 @@ function onTouchMove(e: TouchEvent): void {
 function onTouchEnd(): void {
   lastTouchAt = Date.now();
   if (mode === 'pinch') {
-    gesturing.value = false;
     if (zoom.scale <= 1.02) resetZoom();
+    else settlePan(); // snap any pinch overscroll back to bounds
     mode = 'none';
     return;
   }
   if (mode === 'pan') {
-    gesturing.value = false;
     mode = 'none';
+    // Fling with momentum if released with speed while zoomed; otherwise just settle to bounds.
+    if (zoom.scale > 1 && (Math.abs(vx) > 0.6 || Math.abs(vy) > 0.6)) startMomentum();
+    else settlePan();
     return;
   }
   if (dir === 'v' && Math.abs(dragY.value) > 90 && cur.value) {
@@ -573,9 +671,12 @@ function onMediaDblClick(): void {
 watch(() => props.start, (s) => {
   if (props.open) index.value = s;
 });
-// Closing the viewer stops any playing video (FR-006).
+// Closing the viewer stops any playing video (FR-006) and cancels any in-flight zoom momentum.
 watch(() => props.open, (o) => {
-  if (!o) for (const api of videoApis.values()) api.pauseSilent();
+  if (!o) {
+    cancelMomentum();
+    for (const api of videoApis.values()) api.pauseSilent();
+  }
 });
 // The item set can shrink while the viewer is open (a message deleted, or its media
 // cleared to free space). Clamp the index back into range — don't rely on the scroll

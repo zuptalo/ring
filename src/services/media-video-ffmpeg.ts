@@ -72,11 +72,17 @@ export async function ffmpegTranscode(
   try {
     await ff.exec([
       '-i', input,
+      // spec 1018 US1: do NOT pass -noautorotate. ffmpeg auto-applies the source display matrix,
+      // baking the upright orientation into the pixels (and clearing the matrix), so the recipient
+      // sees portrait clips upright — matching the WebCodecs path which rotates the canvas itself.
       // Fit within maxEdge×maxEdge keeping aspect; force even dimensions for H.264.
       '-vf', `scale=${preset.maxEdge}:${preset.maxEdge}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
       '-c:v', 'libx264', '-preset', 'veryfast', '-b:v', `${preset.bitrate}`, '-maxrate', `${preset.bitrate}`,
       '-bufsize', `${preset.bitrate * 2}`, '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-b:a', '128k',
+      // spec 1018 FR-014: drop all source container metadata (GPS location, device id, creation
+      // time) — ffmpeg copies it by default. The re-encoded clip carries only what's needed to play.
+      '-map_metadata', '-1',
       '-movflags', '+faststart',
       output,
     ], FFMPEG_TIMEOUT_MS);
