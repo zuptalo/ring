@@ -23,6 +23,7 @@ import {
   trashOutline,
   archiveOutline,
   eyeOutline,
+  eyeOffOutline,
   timeOutline,
   imageOutline,
   documentOutline,
@@ -56,6 +57,7 @@ export const ICONS: Record<string, string> = {
   trash: trashOutline,
   archive: archiveOutline,
   eye: eyeOutline,
+  eyeOff: eyeOffOutline,
   time: timeOutline,
   image: imageOutline,
   document: documentOutline,
@@ -159,6 +161,13 @@ const APP_LOCK_TIMEOUT: ChoiceOption[] = [
   { value: '1h', label: '1 hour' },
   { value: '8h', label: '8 hours' },
   { value: '24h', label: '24 hours' },
+];
+
+// Hidden Chats reveal grace window (spec 1019, FR-020). Default '1m'.
+const HIDDEN_GRACE: ChoiceOption[] = [
+  { value: 'immediately', label: 'Immediately' },
+  { value: '1m', label: 'After 1 minute' },
+  { value: '5m', label: 'After 5 minutes' },
 ];
 
 /** A backend-dependent screen we keep in the IA but can't implement yet. */
@@ -274,6 +283,7 @@ export const SETTINGS: Record<string, SettingNode> = {
         items: [
           { type: 'link', id: 'privacy-app-lock', title: 'App lock', icon: 'key' },
           { type: 'link', id: 'privacy-chat-lock', title: 'Chat lock', icon: 'lock' },
+          { type: 'link', id: 'privacy-hidden-chats', title: 'Hidden chats', icon: 'eyeOff' },
         ],
       },
       {
@@ -285,6 +295,38 @@ export const SETTINGS: Record<string, SettingNode> = {
           { type: 'link', id: 'privacy-advanced', title: 'Advanced', icon: 'shield' },
           { type: 'link', id: 'privacy-checkup', title: 'Privacy checkup', icon: 'shield' },
         ],
+      },
+    ],
+  },
+  'privacy-hidden-chats': {
+    id: 'privacy-hidden-chats',
+    title: 'Hidden chats',
+    groups: [
+      {
+        items: [{ type: 'toggle', title: 'Enable hidden chats', key: 'privacy.hiddenChatsEnabled', default: false }],
+        footer:
+          'Hide chats behind a separate PIN. A hidden chat is removed from your chat list, search, calls, and notification previews until you type the PIN into the chat search bar. Hiding stays on this device only — it never leaves your phone.',
+      },
+      {
+        items: [{ type: 'action', title: 'Set or change PIN', action: 'hidden-set-pin', icon: 'key' }],
+      },
+      {
+        header: 'Re-lock hidden chats',
+        items: [{ type: 'choice', key: 'privacy.hiddenChatsGrace', default: '1m', options: HIDDEN_GRACE }],
+        footer: 'How long revealed chats stay visible when you briefly switch apps. A full app close always re-locks immediately.',
+      },
+      {
+        items: [
+          {
+            type: 'action',
+            title: 'Reset PIN & delete hidden chats',
+            action: 'hidden-reset',
+            danger: true,
+            confirm:
+              'This permanently deletes every hidden chat on this device and cannot be undone — they will not come back from the server. Continue?',
+          },
+        ],
+        footer: 'Forgot your PIN? Resetting permanently deletes the hidden chats on this device so they can never be exposed.',
       },
     ],
   },

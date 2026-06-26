@@ -13,7 +13,7 @@
         <ion-searchbar
           :value="search"
           placeholder="Search"
-          @ion-input="search = $event.detail.value ?? ''"
+          @ion-input="onSearchInput($event.detail.value ?? '')"
         />
       </ion-toolbar>
       <ion-toolbar>
@@ -39,6 +39,12 @@
         <ion-item v-if="hasLocked" button :detail="true" @click="router.push('/chats/locked')">
           <ion-icon slot="start" :icon="lockClosedOutline" color="medium" />
           <ion-label>Locked chats</ion-label>
+        </ion-item>
+        <!-- Reveal-session affordance: only present WHILE revealed, so it leaks no
+             signal otherwise. Tapping re-hides immediately (spec 1019, FR-006/US3). -->
+        <ion-item v-if="revealed" button :detail="false" lines="full" @click="relock">
+          <ion-icon slot="start" :icon="eyeOffOutline" color="medium" />
+          <ion-label>Hide hidden chats</ion-label>
         </ion-item>
 
         <ChatListItem
@@ -122,6 +128,15 @@
             <ion-icon slot="start" :icon="personAddOutline" color="primary" />
             <ion-label>Add contact</ion-label>
           </ion-item>
+          <!-- New hidden chat (spec 1019, US2): a distinct conversation that
+               coexists with any normal 1:1 with the same person. Only shown when
+               the feature is enabled. -->
+          <ion-item v-if="hiddenEnabled" button :detail="false" @click="hiddenMode = !hiddenMode">
+            <ion-icon slot="start" :icon="eyeOffOutline" :color="hiddenMode ? 'primary' : 'medium'" />
+            <ion-label :color="hiddenMode ? 'primary' : undefined">
+              {{ hiddenMode ? 'Pick a contact for the hidden chat…' : 'New hidden chat' }}
+            </ion-label>
+          </ion-item>
         </ion-list>
         <ion-list>
           <ion-list-header><ion-label>Contacts</ion-label></ion-list-header>
@@ -147,7 +162,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
@@ -156,6 +171,7 @@ import {
 } from '@ionic/vue';
 import {
   createOutline, personAddOutline, peopleOutline, archiveOutline, lockClosedOutline,
+  eyeOffOutline,
 } from 'ionicons/icons';
 import ChatListItem from '@/components/ChatListItem.vue';
 import ChatActionsHost from '@/components/ChatActionsHost.vue';
@@ -163,16 +179,42 @@ import ChatFilterBar from '@/components/ChatFilterBar.vue';
 import ChatListsSheet from '@/components/ChatListsSheet.vue';
 import EditChatTabsModal from '@/components/EditChatTabsModal.vue';
 import NewListModal from '@/components/NewListModal.vue';
-import { listArchivedChats, listLockedChats, listContacts, startDirectChat } from '@/db/queries';
+import { listArchivedChats, listLockedChats, listContacts, startDirectChat, getSetting } from '@/db/queries';
 import { useChatFilters } from '@/services/chat-filters';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useConnect } from '@/composables/useConnect';
+import { useHiddenChats } from '@/composables/useHiddenChats';
+import { hiddenPinLength } from '@/services/hidden-chats';
+import { startHiddenChat } from '@/services/hidden-chats-start';
+import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
 import type { Chat, Contact } from '@/db/types';
 
 const router = useRouter();
 const search = ref('');
 const actions = ref<InstanceType<typeof ChatActionsHost> | null>(null);
 const { connect, requireProfile } = useConnect();
+
+// Hidden Chats reveal gesture (spec 1019, US3): typing the dedicated PIN into the
+// chat search bar reveals hidden chats — the only entry point, so it leaks nothing
+// when unused. A non-matching query behaves as ordinary search.
+const { revealed, reveal, relock } = useHiddenChats();
+const pinLen = ref<number | null>(null);
+const hiddenEnabled = ref(false);
+const hiddenMode = ref(false); // New-chat modal: next contact tap starts a hidden chat
+onMounted(async () => {
+  pinLen.value = await hiddenPinLength();
+  hiddenEnabled.value = await getSetting<boolean>('privacy.hiddenChatsEnabled', false);
+});
+async function onSearchInput(val: string): Promise<void> {
+  search.value = val;
+  if (revealed.value) return;
+  if (!hiddenEnabled.value) return; // FR-013a: disabled → the reveal gesture is inert
+  if (!/^\d{4,}$/.test(val)) return; // only attempt on a numeric, PIN-shaped query
+  if (pinLen.value == null) pinLen.value = await hiddenPinLength(); // PIN may have been set this session
+  if (pinLen.value && val.length === pinLen.value && (await reveal(val))) {
+    search.value = ''; // clear the PIN so the revealed list shows, not a filtered-by-PIN view
+  }
+}
 
 // Filtered chat list + chips (All / Unread / Favorites / Groups + lists).
 const { chats, activeFilter, setActive, chips, lists, tabFilters, allChats, loaded } = useChatFilters(search);
@@ -241,6 +283,15 @@ const pickContacts = useLiveQuery(
 
 async function startChat(person: Contact) {
   if (!(await requireProfile())) return;
+  if (hiddenMode.value) {
+    // Start a distinct hidden conversation that coexists with any normal 1:1.
+    if (!(await ensureHiddenPin())) return; // need a PIN to ever reveal it
+    const id = await startHiddenChat(person.id);
+    hiddenMode.value = false;
+    newOpen.value = false;
+    router.push(`/chat/${id}`); // open by id works regardless of hidden state
+    return;
+  }
   const chatId = await startDirectChat(person);
   newOpen.value = false;
   router.push(`/chat/${chatId}`);

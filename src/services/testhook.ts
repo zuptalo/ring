@@ -104,6 +104,15 @@ import {
   listCloseFriends as dbListCloseFriends,
   listFriends as dbListFriends,
 } from '@/db/queries';
+import {
+  enableHiddenPin as hcEnablePin,
+  addHidden as hcAdd,
+  removeHidden as hcRemove,
+  getHiddenSet as hcGetSet,
+} from '@/services/hidden-chats';
+import { startHiddenChat as hcStartChat } from '@/services/hidden-chats-start';
+import { resetHiddenChats as hcReset } from '@/services/hidden-chats-reset';
+import { revealWithPin as hcReveal, relockHidden as hcRelock } from '@/composables/useHiddenChats';
 import { downloadBlob } from '@/services/media-transfer';
 import {
   chatMatchesFilter,
@@ -363,6 +372,27 @@ export function installTestHook(): void {
     /** The VISIBLE (non-pending) 1:1 chat id for a peer, or '' if hidden/none. */
     visibleChatWith: async (peerId: string): Promise<string> =>
       (await listChats()).find((c) => !c.isGroup && c.participantIds[0] === peerId)?.id ?? '',
+
+    /* ---- hidden chats (spec 1019) ---- */
+    /** Set/replace the dedicated Hidden Chats PIN. */
+    hiddenSetPin: (pin: string) => hcEnablePin(pin),
+    /** Hide / unhide a conversation by id. */
+    hiddenAdd: (chatId: string) => hcAdd(chatId),
+    hiddenRemove: (chatId: string) => hcRemove(chatId),
+    /** The hidden-set ids on this device. */
+    hiddenIds: async (): Promise<string[]> => [...(await hcGetSet())],
+    /** Start a distinct hidden chat with a contact; returns the new chat id. */
+    hiddenStartChat: (contactId: string) => hcStartChat(contactId),
+    /** Reveal (verify PIN → start session). Returns whether the PIN was correct. */
+    hiddenReveal: (pin: string) => hcReveal(pin),
+    /** End the reveal session. */
+    hiddenRelock: () => {
+      hcRelock();
+    },
+    /** Reset: wipe hidden chats locally + block re-sync. Returns the wiped ids. */
+    hiddenReset: () => hcReset(),
+    /** Visible chat ids right now (what `listChats` returns) — for exclusion asserts. */
+    visibleChatIds: async (): Promise<string[]> => (await listChats()).map((c) => c.id),
 
     /* ---- account lifecycle: termination ("Ghosted") + blocking ---- */
     /** Terminate THIS account server-side (drives the peer's ghost detection). */

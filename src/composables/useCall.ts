@@ -27,7 +27,13 @@ import {
   sendMessage,
   getSetting,
 } from '@/db/queries';
-import { groupAvatar } from '@/db/avatars';
+import { groupAvatar, initialsAvatar } from '@/db/avatars';
+import { isHidden } from '@/services/hidden-chats';
+
+// Pre-answer identity for a call whose conversation is hidden (spec 1019, FR-019):
+// the incoming surface must reveal nothing identifying. A neutral name + avatar.
+const HIDDEN_CALL_NAME = 'Private caller';
+const hiddenCallAvatar = (): string => initialsAvatar('•');
 import { capitalizeFirst } from '@/utils/text';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
@@ -1461,6 +1467,7 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
   // A real group chat lends its name/avatar; an ad-hoc room has none, so derive a title
   // from the people involved (server stays blind to it).
   const chat = await getChat(roomId);
+  const hiddenRoom = await isHidden(roomId); // FR-019: hidden group → generic pre-answer identity
   callMeta.value = {
     callId: roomId,
     isGroup: true,
@@ -1471,8 +1478,8 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
     // roster once we join.
     roster: [...new Set([frame.from, ...(frame.members ?? [])])],
     invited: participants,
-    name: chat?.name || (await deriveGroupCallTitle(participants)),
-    avatar: chat?.avatar || groupAvatar(roomId),
+    name: hiddenRoom ? HIDDEN_CALL_NAME : chat?.name || (await deriveGroupCallTitle(participants)),
+    avatar: hiddenRoom ? hiddenCallAvatar() : chat?.avatar || groupAvatar(roomId),
   };
   setState('incoming');
   presentIncoming(); // full-screen if the app is being opened for this call; else the banner
@@ -1660,6 +1667,7 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
   }
 
   const kind: CallKind = signal.kind ?? 'audio';
+  const hiddenCall = await isHidden(chatId); // FR-019: no identity on the pre-answer surface
   callMeta.value = {
     callId: frame.callId,
     isGroup: false,
@@ -1668,8 +1676,8 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
     peerUserId: from,
     chatId,
     roster: [from],
-    name: contact.name,
-    avatar: contact.avatar,
+    name: hiddenCall ? HIDDEN_CALL_NAME : contact.name,
+    avatar: hiddenCall ? hiddenCallAvatar() : contact.avatar,
   };
   pendingOffer = { sdp: signal.sdp, sdpType: signal.sdpType ?? 'offer' };
   await createCall({ callId: frame.callId, contactId: from, direction: 'incoming', video: kind === 'video' });

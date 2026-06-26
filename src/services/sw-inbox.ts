@@ -19,6 +19,7 @@
  */
 import { attemptDeviceUnlock } from './crypto/identity';
 import { previewPacket } from './messaging';
+import { readHiddenSet } from './hidden-chats';
 import { readSessionToken } from './session';
 import { get, getAll, put } from '@/db/idb';
 import { notifyPreview } from '@/utils/notify-preview';
@@ -135,13 +136,16 @@ async function loadShown(): Promise<string[]> {
  *  frame carries nothing to alert on (reactions, votes, silent membership/profile
  *  side effects). Mirrors db/queries.ts `receiveIncoming` + the notifyIncoming
  *  calls it makes: requests/invites always notify; plain messages honor showMessages. */
-function noteForPayload(
+// Exported for unit tests (spec 1019 hidden-chat generic rendering, spec 1015
+// content prefs). Otherwise internal to `previewPending`.
+export function noteForPayload(
   f: MsgFrame,
   payload: MessagePayload,
   chats: Chat[],
   contacts: Contact[],
   showMessages: boolean,
   showPreview: boolean,
+  hidden: Set<string> = new Set(),
 ): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
@@ -196,6 +200,16 @@ function noteForPayload(
   // marks this as an INTENTIONAL per-chat silence, so the caller shows no generic
   // placeholder (vs. a cold-start undecryptable frame, which still needs one) — the
   // badge still counts it.
+  // Hidden chat (spec 1019, FR-007/FR-008): a content-free notification with no
+  // sender, avatar, or body, and a tap that lands on the Chats tab (never the
+  // hidden chat). The per-chat tag stays internal (not user-visible) so bursts
+  // still coalesce. This wins over per-chat content prefs — hidden overrides them.
+  if (chat && hidden.has(chat.id)) {
+    return {
+      note: { ids: [f.id as string], title: 'Ring', body: 'New message', url: '/tabs/chats', tag: `ring:${chat.id}` },
+      wasMessage: true,
+    };
+  }
   if (chat?.mutedUntil && chat.mutedUntil > Date.now()) return { note: null, wasMessage: true, silenced: true };
   // Per-chat web push off (spec 1015 FR-022): suppress the system notification for
   // the closed app — the server still sent the content-free tickle (it can't know
@@ -392,10 +406,11 @@ export async function previewPending(): Promise<PreviewResult> {
   }
 
   const showPreview = await setting<boolean>('notifications.showPreview', true);
-  const [chats, contacts, shown] = await Promise.all([
+  const [chats, contacts, shown, hidden] = await Promise.all([
     getAll<Chat>('chats'),
     getAll<Contact>('contacts'),
     loadShown(),
+    readHiddenSet(), // spec 1019: hidden chats get a generic, content-free notification
   ]);
   const seen = new Set(shown);
 
@@ -414,7 +429,7 @@ export async function previewPending(): Promise<PreviewResult> {
       continue; // can't decrypt this one (session not reachable yet) → leave it for the page
     }
     seen.add(f.id);
-    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview);
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden);
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;

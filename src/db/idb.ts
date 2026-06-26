@@ -364,6 +364,16 @@ function notify(name: StoreName): void {
   listeners.get(name)?.forEach((cb) => cb());
 }
 
+/**
+ * Manually fire the change bus for a store without writing to it. Used when a
+ * derived, in-memory view that `useLiveQuery` depends on changes (e.g. the
+ * hidden-chats reveal toggle flips which chats `listChats` returns) so the UI
+ * re-queries even though no stored row actually changed.
+ */
+export function touch(name: StoreName): void {
+  notify(name);
+}
+
 /** Subscribe to changes on any of the given stores. Returns an unsubscribe fn. */
 export function subscribe(names: StoreName[], cb: () => void): () => void {
   for (const n of names) {

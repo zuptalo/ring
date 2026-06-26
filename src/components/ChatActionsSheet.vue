@@ -30,6 +30,10 @@
           <ion-icon slot="start" :icon="chat.locked ? lockOpenOutline : lockClosedOutline" />
           <ion-label>{{ chat.locked ? 'Unlock chat' : 'Lock chat' }}</ion-label>
         </ion-item>
+        <ion-item v-if="hiddenEnabled || hidden" button :detail="false" @click="toggleHidden">
+          <ion-icon slot="start" :icon="hidden ? eyeOutline : eyeOffOutline" />
+          <ion-label>{{ hidden ? 'Unhide chat' : 'Hide chat' }}</ion-label>
+        </ion-item>
         <ion-item button :detail="false" @click="toggleFavorite">
           <ion-icon slot="start" :icon="chat.favorite ? heart : heartOutline" />
           <ion-label>{{ chat.favorite ? 'Remove from Favorites' : 'Add to Favorites' }}</ion-label>
@@ -62,14 +66,18 @@ import {
 import {
   closeOutline, notificationsOffOutline, notificationsOutline, informationCircleOutline,
   heart, heartOutline, listOutline, closeCircleOutline, exitOutline, trashOutline,
-  lockClosedOutline, lockOpenOutline,
+  lockClosedOutline, lockOpenOutline, eyeOffOutline, eyeOutline,
 } from 'ionicons/icons';
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   setChatMute, toggleChatFavorite, clearChat, deleteChat, leaveGroup, setChatLocked,
+  getSetting,
 } from '@/db/queries';
 import { lockConfigured } from '@/services/chat-lock';
+import { addHidden, removeHidden } from '@/services/hidden-chats';
+import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
+import { isHiddenId } from '@/services/hidden-state';
 import type { Chat } from '@/db/types';
 
 const props = defineProps<{ chat: Chat | null; isOpen: boolean }>();
@@ -78,6 +86,34 @@ const emit = defineEmits<{ (e: 'dismiss'): void; (e: 'addToList', chat: Chat): v
 const router = useRouter();
 const HOUR = 60 * 60 * 1000;
 const muted = computed(() => !!props.chat?.mutedUntil && props.chat.mutedUntil > Date.now());
+
+// Hidden Chats (spec 1019). The "Hide chat" entry point only shows when the
+// feature is enabled (FR-013a); "Unhide" always shows for an already-hidden chat
+// (reachable while revealed). `hidden` reflects the local hidden set.
+const hidden = computed(() => (props.chat ? isHiddenId(props.chat.id) : false));
+const hiddenEnabled = ref(false);
+watch(
+  () => props.isOpen,
+  async (open) => {
+    if (open) hiddenEnabled.value = await getSetting<boolean>('privacy.hiddenChatsEnabled', false);
+  },
+);
+
+async function toggleHidden(): Promise<void> {
+  const c = props.chat;
+  if (!c) return;
+  if (isHiddenId(c.id)) {
+    await removeHidden(c.id); // permanent unhide → returns to the normal list
+    emit('dismiss');
+    return;
+  }
+  if (!(await ensureHiddenPin())) {
+    emit('dismiss'); // user cancelled PIN creation
+    return;
+  }
+  await addHidden(c.id);
+  emit('dismiss');
+}
 
 async function openMute(): Promise<void> {
   const id = props.chat?.id;

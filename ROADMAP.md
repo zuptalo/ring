@@ -42,6 +42,7 @@ Specs are grouped by category band; status moves
 | [1016](specs/1016-9-am-local/spec.md) | 9-AM-Local Version-Announcement Push (Per-Device, Behind-Only) | 🟢 shipped |
 | [1017](specs/1017-cache-reusable-assets/spec.md) | Cache reusable assets (animated emoji + avatars) so they aren't refetched | 🔵 in-review |
 | [1018](specs/1018-media-sharing-and/spec.md) | Media Sharing & Viewer Improvements | 🔵 in-review |
+| [1019](specs/1019-hidden-chats-pin/spec.md) | Hidden Chats Locked Behind a PIN | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
