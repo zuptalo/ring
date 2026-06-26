@@ -62,7 +62,7 @@ that playback orientation, aspect ratio, and thumbnail all match A (SC-001/SC-00
 - [ ] T005 [US1] Ensure the **display (oriented)** dimensions propagate to `mediaWidth`/`mediaHeight` and the poster: check `readVideoMeta` in `src/utils/media-meta.ts`, the orchestration in `src/services/media-video.ts`, and where dims are stored in `src/db/queries.ts` (~L1574-1589). Bubble/grid layout must use upright dims (FR-002).
 - [ ] T006 [P] [US1] Verify the ffmpeg fallback in `src/services/media-video-ffmpeg.ts` (~L76) still bakes correct orientation (default auto-rotate); add a guard/assertion test so a future flag change can't silently regress it.
 - [ ] T007 [P] [US1] Confirm `src/components/VideoPlayer.vue` applies **no** extra rotation (plays the already-oriented bytes faithfully); add a brief code comment documenting the invariant.
-- [ ] T008 [US1] Add a `drive/scenarios/media-1018-orientation.mjs` (or extend an e2e media spec) reproduction note + a real-device checklist entry in `quickstart.md` for portrait/landscape/upside-down send→receive (headless fake-media can't fully exercise capture orientation).
+- [ ] T008 [US1] Extend an `e2e/` media spec (e.g. `e2e/media-orientation.spec.ts`) to assert a video message **round-trips** (sender → recipient sees a video message with a poster and correct stored display dimensions). Per Principle III this is the required `e2e/` coverage for the user-facing change; the **actual rotated-pixels** check (which headless fake-media cannot exercise) is a documented **real-device** item in `quickstart.md` (portrait/landscape/upside-down). Add a `drive/scenarios/media-1018-orientation.mjs` for the visual send→receive screenshot.
 - [ ] T009 [US1] Make T002 pass; run `npm run build` + `npm run test:unit`; confirm 0°/no-matrix sources are untouched and old (pre-1018) videos still render (FR-008/SC-007).
 
 **Checkpoint**: Portrait videos arrive upright for the recipient — US1 independently shippable.
@@ -87,7 +87,7 @@ high-DPI capture — no visible pixelation (SC-003) and poster ≤ ~40KB (SC-004
 - [ ] T012 [US2] Raise `generateVideoPoster` in `src/utils/media-meta.ts` (~L80) from `maxEdge=480, quality=0.6` to ~512px / ~0.8 with the same ~40KB cap (keep the 0.2s frame skip + decoder concurrency limit).
 - [ ] T013 [US2] Reconcile the tier definitions in `src/utils/thumbs.ts` (bubble 512 / grid 320 / strip 128) with the new generation params so the wire poster is consistently the 512px bubble tier and grid/strip derive from it.
 - [ ] T014 [P] [US2] Confirm rendering paths consume the crisper poster without change and old low-res posters still display: `src/views/detail/ChatDetailPage.vue` (~L254-259) and `src/views/detail/AllMediaPage.vue` (~L36-42); add a regression note/test for FR-008.
-- [ ] T015 [P] [US2] Add `drive/scenarios/media-1018-thumbnails.mjs`: send photos + a video, screenshot the chat list, message bubble, and media grid for crispness review (SC-003).
+- [ ] T015 [P] [US2] Add `drive/scenarios/media-1018-thumbnails.mjs`: send photos + a video, screenshot the chat list, message bubble, and media grid for crispness review (SC-003). Also extend an `e2e/` media spec to assert a sent photo/video produces a **rendered thumbnail** in the recipient's bubble and media grid (Principle III e2e coverage for the user-facing change; pixel-level crispness on Retina stays a real-device check).
 - [ ] T016 [US2] Make T010 pass; run `npm run build` + `npm run test:unit`; spot-check a typical photo poster stays ≤ ~40KB with no noticeable send/sync slowdown (SC-004).
 
 **Checkpoint**: Thumbnails are crisp within budget — US2 independently shippable.
@@ -114,7 +114,7 @@ fluid with rubber-band + inertia; paging resets zoom; a pinch never pages/dismis
 - [ ] T020 [US3] Add **momentum/inertia** on pan release: capture velocity and decay translation in a `requestAnimationFrame` loop with friction, settling within bounds (interacts with T019's rubber-band).
 - [ ] T021 [US3] Guarantee zoom resets to `{ scale:1, tx:0, ty:0 }` on current-item change (FR-012), and confirm the existing limits (max ~5× pinch ~L420; double-tap ~2.5× ~L475) match FR-009.
 - [ ] T022 [US3] Verify gesture disambiguation (FR-013): a two-finger pinch never triggers horizontal item-paging or vertical swipe-to-dismiss; drive transforms off rAF and keep the CSS transition disabled during active gestures (~L350-351) so motion stays at 60fps (SC-005).
-- [ ] T023 [US3] Make T017 pass; run `npm run build` + `npm run test:e2e`; real-device pass for the 60fps/feel checks per `quickstart.md`.
+- [ ] T023 [US3] Make T017 pass; run `npm run build` + `npm run test:e2e`; assert SC-006 (zoom in and return to fit-to-screen achievable with gestures alone — no on-screen zoom controls/instructions present in the viewer DOM); real-device pass for the 60fps/feel checks per `quickstart.md`.
 
 **Checkpoint**: Viewer feels native — US3 independently shippable.
 
@@ -122,7 +122,7 @@ fluid with rubber-band + inertia; paging resets zoom; a pinch never pages/dismis
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T024 Run `/speckit-checklist` (REQUIRED for Principle I — touches the E2EE media payload) and resolve any findings before implementation sign-off.
+- [x] T024 Run `/speckit-checklist` (REQUIRED for Principle I — touches the E2EE media payload) and resolve any findings before implementation sign-off. DONE: `checklists/zero-knowledge.md` (25 items); surfaced the metadata-stripping gap → closed via FR-014/FR-015/SC-008 + T024a.
 - [ ] T024a Enforce metadata minimization (FR-014/FR-015/SC-008): confirm the client re-encode in `src/services/media-video-webcodecs.ts` / `src/services/media-video-ffmpeg.ts` and thumbnail generation in `src/utils/media-meta.ts` strip capture metadata (GPS, device id, timestamps) and bake orientation as pixels; verify the crisper poster stays inside the sealed payload only (not a server-fetchable/cacheable resource — e.g. not matched by the `/v1/emoji/` runtime cache route). Add an assertion/inspection step to the relevant unit test.
 - [ ] T025 Full gate pass: `npm run build`, `npm run test:unit`, `npm run test:e2e` (with `make db-up`); confirm no regression to existing media send/transfer behavior (SC-007).
 - [ ] T026 Real-device validation sweep per `quickstart.md` across US1 (orientation), US2 (crispness/budget), US3 (zoom feel); record results.
