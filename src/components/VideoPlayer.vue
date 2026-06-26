@@ -1,7 +1,11 @@
 <template>
   <!-- Custom video player. Standalone it draws its own scrubber; `embedded` (in the
        media viewer) hides that row so the viewer can host the scrubber ABOVE its action
-       bar, and a tap on the video toggles the viewer chrome instead of play/pause. -->
+       bar, and a tap on the video toggles the viewer chrome instead of play/pause.
+       spec 1018 US1 invariant: this plays the bytes as-is and applies NO rotation of its
+       own (no CSS transform / image-orientation). Orientation is baked upright by the
+       sender's transcode (media-video-webcodecs/ffmpeg), so adding rotation here would
+       double-correct. Keep it transform-free. -->
   <div class="vid" @click="onSurfaceClick">
     <video
       ref="el"

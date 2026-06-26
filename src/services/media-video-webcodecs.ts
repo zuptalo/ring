@@ -26,6 +26,32 @@ export function webCodecsSupported(): boolean {
   );
 }
 
+/**
+ * Derive the upright rotation (0/90/180/270) a video should be displayed at, from its MP4 track
+ * display matrix (tkhd `matrix`, as mp4box exposes it: 9 raw fixed-point ints [a b u c d v x y w]).
+ * Rotation is encoded in the top-left 2×2 (a=matrix[0], b=matrix[1]); the angle is atan2(b, a), and
+ * since atan2 uses only the ratio the fixed-point scale is irrelevant. A missing/degenerate matrix
+ * means "already upright" → 0, so an un-rotated source is never double-corrected (spec 1018 FR-003).
+ */
+export function rotationFromMatrix(matrix?: number[] | null): 0 | 90 | 180 | 270 {
+  if (!matrix || matrix.length < 5) return 0;
+  const a = matrix[0];
+  const b = matrix[1];
+  if (a === 0 && b === 0) return 0;
+  let deg = Math.round((Math.atan2(b, a) * 180) / Math.PI / 90) * 90;
+  deg = ((deg % 360) + 360) % 360;
+  return deg === 90 || deg === 180 || deg === 270 ? deg : 0;
+}
+
+/** Read the upright display rotation for a track from its tkhd matrix (best-effort → 0). */
+function trackRotation(file: any, trackId: number): 0 | 90 | 180 | 270 {
+  try {
+    return rotationFromMatrix(file.getTrackById(trackId)?.tkhd?.matrix);
+  } catch {
+    return 0;
+  }
+}
+
 /** Pull the codec config (avcC/hvcC/…) bytes for a track, for the decoder. */
 function trackDescription(file: any, trackId: number): Uint8Array | undefined {
   const trak = file.getTrackById(trackId);
@@ -114,8 +140,16 @@ export async function webcodecsTranscode(
   const sw = vTrack.video.width;
   const sh = vTrack.video.height;
   const scale = Math.min(1, preset.maxEdge / Math.max(sw, sh));
+  // Scaled CODED dimensions (the decoder emits frames at the coded orientation).
   const tw = Math.max(2, Math.round((sw * scale) / 2) * 2);
   const th = Math.max(2, Math.round((sh * scale) / 2) * 2);
+  // spec 1018 US1: bake the track's display rotation into the output pixels so the recipient
+  // sees it upright regardless of player metadata support. For 90°/270° the displayed frame is
+  // portrait, so the OUTPUT (canvas/encoder/muxer) dimensions are the coded ones swapped.
+  const rotation = trackRotation(file, vTrack.id);
+  const swapWH = rotation === 90 || rotation === 270;
+  const outW = swapWH ? th : tw; // display (upright) width
+  const outH = swapWH ? tw : th; // display (upright) height
 
   const muxer = new Muxer({
     target: new ArrayBufferTarget(),
@@ -126,7 +160,7 @@ export async function webcodecsTranscode(
     // and macOS are lenient — which is why this only showed up on the iPhone). This also
     // makes the compressed clip play for iOS *recipients*, not just the sender (spec 2007).
     firstTimestampBehavior: 'cross-track-offset',
-    video: { codec: 'avc', width: tw, height: th },
+    video: { codec: 'avc', width: outW, height: outH },
     audio: aTrack
       ? { codec: 'aac', sampleRate: aTrack.audio.sample_rate, numberOfChannels: aTrack.audio.channel_count }
       : undefined,
@@ -135,7 +169,8 @@ export async function webcodecsTranscode(
   console.info('[webcodecs] tracks', {
     video: vTrack.codec,
     src: `${sw}x${sh}`,
-    target: `${tw}x${th}`,
+    target: `${outW}x${outH}`,
+    rotation,
     audio: aTrack?.codec,
   });
 
@@ -144,7 +179,7 @@ export async function webcodecsTranscode(
   // reports/handles High (avc1.64*) the least reliably (spec 2007; w3c/webcodecs#686/#492).
   // Level 4.0 covers the top tier (Full HD / 1080p); isConfigSupported filters out any
   // profile/level the device + target resolution can't do.
-  const base = { width: tw, height: th, bitrate: preset.bitrate, framerate: vTrack.video?.frame_rate || 30 };
+  const base = { width: outW, height: outH, bitrate: preset.bitrate, framerate: vTrack.video?.frame_rate || 30 };
   const candidates = ['avc1.4d0028', 'avc1.42e028', 'avc1.42001f', 'avc1.42e01e', 'avc1.640028'];
   let encoderConfig: VideoEncoderConfig | null = null;
   for (const codec of candidates) {
@@ -182,13 +217,24 @@ export async function webcodecsTranscode(
   encoder.configure(encoderConfig);
   console.info('[webcodecs] encoder configured', encoderConfig.codec);
 
-  const canvas = new OffscreenCanvas(tw, th);
+  const canvas = new OffscreenCanvas(outW, outH);
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('no 2d context');
+  const rad = (rotation * Math.PI) / 180;
   let n = 0;
   const decoder = new VideoDecoder({
     output: (frame) => {
-      ctx.drawImage(frame, 0, 0, tw, th);
+      if (rotation === 0) {
+        ctx.drawImage(frame, 0, 0, tw, th);
+      } else {
+        // Rotate the scaled coded frame (tw×th) about the output centre so it fills outW×outH
+        // upright. translate→rotate→draw-centred bakes the orientation into the encoded pixels.
+        ctx.save();
+        ctx.translate(outW / 2, outH / 2);
+        ctx.rotate(rad);
+        ctx.drawImage(frame, -tw / 2, -th / 2, tw, th);
+        ctx.restore();
+      }
       const out = new VideoFrame(canvas, { timestamp: frame.timestamp, duration: frame.duration ?? undefined });
       encoder.encode(out, { keyFrame: n % 150 === 0 });
       out.close();
