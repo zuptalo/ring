@@ -32,6 +32,6 @@
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`.
-- Two areas are intentionally deferred to `/speckit-clarify` as parametric decisions rather than blockers:
-  the concrete thumbnail size/quality budget (FR-007/SC-004) and the maximum zoom level / double-tap zoom
-  target (FR-009). Both have reasonable working defaults documented in Assumptions, so they do not block planning.
+- `/speckit-clarify` (Session 2026-06-26) resolved the three parametric decisions: thumbnail budget
+  (~512px longest edge, ~40KB → FR-005/FR-007/SC-003/SC-004), zoom ceiling + double-tap (~3–5×, fit↔2.5×
+  → FR-009), and the smoothness target (60fps, no dropped frames → SC-005). No open clarifications remain.

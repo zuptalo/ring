@@ -13,6 +13,14 @@
 
 **Input**: User description: "Media sharing and media viewer improvements. Three threads: (1) BUG — portrait-ratio videos play upright for the sender but are rendered rotated 90° to the left on the receiver; (2) image and video message thumbnails are low resolution / pixelated and should be crisper while staying mindful of the encrypted payload size; (3) image/video viewing — individually and from the chat's media section — should offer pinch-to-zoom and panning as smooth as native iOS/iPadOS. All processing stays strictly client-side (zero-knowledge)."
 
+## Clarifications
+
+### Session 2026-06-26
+
+- Q: Thumbnail quality vs. encrypted-payload-size budget? → A: Crisp on high-density (Retina) screens with a modest cap — longest edge ~512px, ~40KB target — favoring a clear visual win with negligible payload/sync growth over maximum sharpness.
+- Q: Maximum zoom level in the full-screen viewer and double-tap behavior? → A: iOS-style — pinch up to ~3–5× the fit-to-screen size; double-tap toggles fit ↔ ~2.5× centered on the tap point.
+- Q: Testable definition of "smooth as iOS" (SC-005)? → A: Pinch/pan hold 60fps with no dropped frames on typical devices in normal use; degrade gracefully (no crash/severe stutter) on old or low-memory devices.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Shared videos appear upright for everyone (Priority: P1)
@@ -90,14 +98,14 @@ A person taps a photo or video to view it full-screen — either from a message 
 
 **Thumbnail quality (US2)**
 
-- **FR-005**: Image and video message thumbnails MUST render without visible pixelation at the sizes they are displayed in the chat list, message bubbles, and media grid, including on high-density displays.
+- **FR-005**: Image and video message thumbnails MUST render without visible pixelation at the sizes they are displayed in the chat list, message bubbles, and media grid, including on high-density (Retina) displays. Target generation parameters: longest edge ~512px.
 - **FR-006**: Thumbnail data MUST remain inside the encrypted message payload (no separate plaintext thumbnail leaves the device).
-- **FR-007**: The per-message thumbnail size MUST stay within a defined budget so that send and sync performance is not noticeably degraded relative to today.
+- **FR-007**: The per-message thumbnail size MUST stay within a target budget of ~40KB so that send and sync performance is not noticeably degraded relative to today.
 - **FR-008**: Messages created before this change MUST continue to display their existing thumbnails without error.
 
 **Media viewer zoom & pan (US3)**
 
-- **FR-009**: The full-screen media viewer MUST support pinch-to-zoom centered on the gesture, smooth panning while zoomed, double-tap to toggle zoom, and momentum/inertia on pan release.
+- **FR-009**: The full-screen media viewer MUST support pinch-to-zoom centered on the gesture (up to ~3–5× the fit-to-screen size), smooth panning while zoomed, double-tap to toggle between fit-to-screen and ~2.5× (centered on the tap), and momentum/inertia on pan release.
 - **FR-010**: Panning MUST be bounded to the content with a rubber-band/overscroll effect that settles back to the edge on release.
 - **FR-011**: The zoom/pan experience MUST behave identically whether the viewer is opened from a message bubble or from the chat's media section/grid.
 - **FR-012**: Zoom state MUST reset to fit-to-screen when navigating between items in a multi-item viewer.
@@ -115,9 +123,9 @@ A person taps a photo or video to view it full-screen — either from a message 
 
 - **SC-001**: 100% of test videos (portrait, landscape, 180°, and both sideways orientations) display with matching orientation and aspect ratio on sender and recipient devices.
 - **SC-002**: Zero reports of "received video is sideways/rotated" for newly sent videos after release (down from the current reproducible failure).
-- **SC-003**: Image and video thumbnails show no visible pixelation at their displayed sizes on a high-density display, as confirmed by side-by-side review against the source.
-- **SC-004**: The increase in average media-message payload size from higher-quality thumbnails stays within the agreed budget, with no measurable regression in send/sync time for a typical photo message.
-- **SC-005**: In the full-screen viewer, pinch-zoom and pan track the user's fingers fluidly with no perceptible lag during normal use, and bounds/inertia behave consistently across repeated trials.
+- **SC-003**: Image and video thumbnails show no visible pixelation at their displayed sizes on a high-density display, as confirmed by side-by-side review against the source (target: longest edge ~512px).
+- **SC-004**: Higher-quality thumbnails stay within a ~40KB per-message target, keeping the increase in average media-message payload small enough that there is no measurable regression in send/sync time for a typical photo message.
+- **SC-005**: In the full-screen viewer, pinch-zoom and pan hold 60fps with no dropped frames on typical devices during normal use, and bounds/inertia behave consistently across repeated trials; on old/low-memory devices the experience degrades gracefully without crashing or severe stutter.
 - **SC-006**: Users can zoom into a shared photo to inspect detail and return to fit-to-screen using only intuitive gestures (pinch, drag, double-tap) without on-screen controls or instructions.
 - **SC-007**: No regression: previously sent media (old thumbnails/encodings) still render correctly for both sender and recipient.
 
@@ -125,7 +133,7 @@ A person taps a photo or video to view it full-screen — either from a message 
 
 - **Zero-knowledge boundary is non-negotiable**: all transcoding, thumbnail generation, and orientation handling happen on the client; the server only ever relays/stores opaque ciphertext (per the project constitution).
 - **Scope of zoom/pan**: applies to the full-screen media viewer reached from both individual messages and the media grid; pinching the grid of thumbnails itself (to resize the grid) is out of scope.
-- **Thumbnail size budget**: a concrete size/quality target will be settled during clarify/plan; the working assumption is "visibly crisp at display size on high-density screens" balanced against keeping typical thumbnails small enough not to slow send/sync.
+- **Thumbnail size budget** (settled in Clarifications): thumbnails target a longest edge of ~512px and a ~40KB per-message cap — crisp on high-density screens while keeping payload growth negligible.
 - **No re-processing of historical media**: the fixes apply to newly sent media and to rendering of existing media; the system does not retroactively re-encode or re-thumbnail already-sent messages.
 - **Primary target is touch devices** (the installable PWA on phones/tablets), where the iOS/iPadOS-smooth feel matters most; pointer/trackpad zoom is a nice-to-have, not a requirement.
 - **Existing media send/transfer pipeline is reused**: this feature changes how media is encoded/oriented and previewed and how the viewer handles gestures, not the underlying encrypted-transfer mechanism.
