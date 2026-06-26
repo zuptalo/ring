@@ -208,6 +208,7 @@ onMounted(async () => {
 async function onSearchInput(val: string): Promise<void> {
   search.value = val;
   if (revealed.value) return;
+  if (!hiddenEnabled.value) return; // FR-013a: disabled → the reveal gesture is inert
   if (!/^\d{4,}$/.test(val)) return; // only attempt on a numeric, PIN-shaped query
   if (pinLen.value == null) pinLen.value = await hiddenPinLength(); // PIN may have been set this session
   if (pinLen.value && val.length === pinLen.value && (await reveal(val))) {
