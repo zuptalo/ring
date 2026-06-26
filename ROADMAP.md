@@ -41,6 +41,7 @@ Specs are grouped by category band; status moves
 | [1015](specs/1015-reliable-push-notifications/spec.md) | Reliable Push & Redesigned In-App Notifications | 🟢 shipped |
 | [1016](specs/1016-9-am-local/spec.md) | 9-AM-Local Version-Announcement Push (Per-Device, Behind-Only) | 🟢 shipped |
 | [1017](specs/1017-cache-reusable-assets/spec.md) | Cache reusable assets (animated emoji + avatars) so they aren't refetched | 🔵 in-review |
+| [1018](specs/1018-media-sharing-and/spec.md) | Media Sharing & Viewer Improvements | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
