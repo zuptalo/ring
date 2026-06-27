@@ -49,6 +49,13 @@ export interface NotifyInput {
     content: 'full' | 'generic' | 'none';
     /** Chat is muted. */
     muted: boolean;
+    /** This message @mentions the user (or a validated @everyone) AND the chat's
+     *  "Notify for mentions even when muted" pref is on (spec 1020). When true, the
+     *  alert escalates past the per-chat silencers — mute, in-app-off, content=none,
+     *  web-push-off, and the settle window — while the structural gates (locked,
+     *  active-chat) and the GLOBAL "Show notifications" master + OS DND (enforced by
+     *  the caller before this runs) still hold. Computed by each caller (page + SW). */
+    isMention?: boolean;
   };
 }
 
@@ -61,13 +68,19 @@ export interface NotifyInput {
 export function notificationOwner(i: NotifyInput): NotifyOwner {
   const { appVisible, unlocked, isActiveChat, pushWoken, inSettleWindow, pref } = i;
 
-  // Muted → never alert (the badge still counts it elsewhere). Highest-priority
-  // gate: a muted chat is silent whether the app is open or closed.
-  if (pref.muted) return 'suppress';
+  // An escalated @mention (spec 1020) pierces the per-chat SILENCERS below — mute,
+  // in-app-off, content=none, web-push-off, and the settle window — so being called
+  // out reaches you even in a muted/quiet chat. The structural gates (locked,
+  // active-chat) and the GLOBAL master + OS DND (enforced by the caller) still hold.
+  const mention = !!pref.isMention;
+
+  // Muted → never alert, UNLESS it's an escalated mention.
+  if (pref.muted && !mention) return 'suppress';
 
   // While locked the page can't decrypt/show content, and must NOT claim the alert
   // (otherwise it would swallow the message and the SW would stay silent). Hand off
   // to the SW, which shows a generic placeholder per its userVisibleOnly contract.
+  // (A mention can't be known here yet — detection requires a successful decrypt.)
   if (!unlocked) return 'sw-notification';
 
   // App is foregrounded and unlocked → the page is the natural owner.
@@ -75,16 +88,15 @@ export function notificationOwner(i: NotifyInput): NotifyOwner {
     // Viewing this very chat → the user already sees the message; at most a subtle
     // sound (handled by the caller). No banner, and the SW stays out of it.
     if (isActiveChat) return 'suppress';
-    // The settle window damps the unlock banner BURST, but a push-woken delivery is
-    // a single discrete event and must not be swallowed — only suppress a non-woken
-    // item that lands inside the window.
-    if (inSettleWindow && !pushWoken) return 'suppress';
-    // In-app banners turned off for this chat (or globally) → no banner. The page
-    // doesn't claim it; since the app is visible the SW also won't fire (its own
-    // closed-app gate), so this is effectively suppressed on the page side.
-    if (!pref.inApp) return 'suppress';
-    // content==='none' is badge-only: reveal nothing anywhere, not even a banner.
-    if (pref.content === 'none') return 'suppress';
+    // The settle window damps the unlock banner BURST, but a push-woken delivery (or
+    // an escalated mention) is a single discrete event and must not be swallowed.
+    if (inSettleWindow && !pushWoken && !mention) return 'suppress';
+    // In-app banners turned off for this chat (or globally) → no banner, UNLESS it's
+    // an escalated mention the user opted to be pinged about.
+    if (!pref.inApp && !mention) return 'suppress';
+    // content==='none' is badge-only — UNLESS escalated: a mention may show who
+    // called you out (the caller composes "X mentioned you" past the content level).
+    if (pref.content === 'none' && !mention) return 'suppress';
     // Otherwise the page shows the in-app banner (content 'full' or 'generic';
     // 'generic' masks the text but may still head with the sender name).
     return 'page-banner';
@@ -92,9 +104,10 @@ export function notificationOwner(i: NotifyInput): NotifyOwner {
 
   // App is hidden/closed → the OS notification is the only channel. The SW owns it
   // (the page's notifyLocal hand-off is removed in favor of the SW per spec 2010).
-  // Per-chat web-push-off → no OS notification (the SW enforces this as badge-only).
-  if (!pref.webPush) return 'suppress';
+  // Per-chat web-push-off → no OS notification, UNLESS it's an escalated mention.
+  if (!pref.webPush && !mention) return 'suppress';
   // content==='none' stays 'sw-notification' so the SW runs its existing none-handling
-  // (no banner, badge only) rather than us second-guessing it here.
+  // (no banner, badge only) rather than us second-guessing it here; a mention upgrades
+  // the SW's note text via its own isMention check.
   return 'sw-notification';
 }

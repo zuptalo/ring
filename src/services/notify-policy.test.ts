@@ -70,4 +70,39 @@ describe('notificationOwner', () => {
   it("generic content still yields a page-banner when visible (text is masked, not the banner)", () => {
     expect(notificationOwner(input({ pref: { content: 'generic' } }))).toBe('page-banner');
   });
+
+  // spec 1020: an escalated @mention (isMention true = mentioned AND notifyMentions on)
+  // pierces the per-chat silencers, but not the structural gates or the global master.
+  describe('mention escalation', () => {
+    it('mention pierces a muted chat (visible → banner, hidden → SW)', () => {
+      expect(notificationOwner(input({ pref: { muted: true, isMention: true } }))).toBe('page-banner');
+      expect(notificationOwner(input({ appVisible: false, pref: { muted: true, isMention: true } }))).toBe('sw-notification');
+    });
+
+    it('mention pierces content=none (visible → banner; the caller names the mentioner)', () => {
+      expect(notificationOwner(input({ pref: { content: 'none', isMention: true } }))).toBe('page-banner');
+      expect(notificationOwner(input({ appVisible: false, pref: { content: 'none', isMention: true } }))).toBe('sw-notification');
+    });
+
+    it('mention pierces in-app-off and web-push-off', () => {
+      expect(notificationOwner(input({ pref: { inApp: false, isMention: true } }))).toBe('page-banner');
+      expect(notificationOwner(input({ appVisible: false, pref: { webPush: false, isMention: true } }))).toBe('sw-notification');
+    });
+
+    it('mention bypasses the settle window even when not push-woken', () => {
+      expect(notificationOwner(input({ inSettleWindow: true, pushWoken: false, pref: { isMention: true } }))).toBe('page-banner');
+    });
+
+    it('a mention in the chat you are viewing is still suppressed (you already see it)', () => {
+      expect(notificationOwner(input({ isActiveChat: true, pref: { muted: true, isMention: true } }))).toBe('suppress');
+    });
+
+    it('a locked page still hands a mention to the SW (detection needs a decrypt)', () => {
+      expect(notificationOwner(input({ unlocked: false, pref: { muted: true, isMention: true } }))).toBe('sw-notification');
+    });
+
+    it('NOT escalated (notifyMentions off → isMention false) behaves like a normal muted chat', () => {
+      expect(notificationOwner(input({ pref: { muted: true, isMention: false } }))).toBe('suppress');
+    });
+  });
 });

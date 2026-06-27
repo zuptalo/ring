@@ -128,6 +128,15 @@ export interface Chat {
   // the unread affordance and matches the Unread filter; cleared when the chat is
   // opened or a message is sent.
   manualUnread?: boolean;
+  // @mentions (spec 1020, groups). Count of unseen messages that mention me — SEPARATE
+  // from `unread` — drives the "@" row marker + count; cleared with `unread` on read.
+  unreadMentions?: number;
+  // Per-chat "Notify for mentions even when muted" (default true when unset): when off,
+  // a mention does NOT escalate past this chat's normal (muted/quiet) behavior.
+  notifyMentions?: boolean;
+  // Group owner = creator. v1 "admin" for @everyone gating (no roles system yet): only
+  // the owner may broadcast @everyone, and recipients re-validate the sender against it.
+  createdBy?: string;
 }
 
 /** A user-defined chat filter list (e.g. "Stockholmian"): a named set of chats.
@@ -308,6 +317,10 @@ export interface Message {
   // delivered E2EE). Absent until the deferred attach lands; the UI falls back to
   // a fetch-free domain-only card in the meantime.
   linkPreview?: import('@/services/crypto/message').LinkPreview;
+  // @mentions (spec 1020): member ids this message tags (mirror of the payload), and
+  // a validated admin/owner @everyone flag — for rendering the chip + detecting "me".
+  mentions?: string[];
+  mentionsEveryone?: boolean;
   updatedAt: number;
 }
 
