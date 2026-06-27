@@ -22,7 +22,7 @@ import { CacheFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, markConnShown,
-  coalesceForShow, loadShownSummary,
+  coalesceForShow, loadShownSummary, setting,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { resubscribePush } from '@/services/sw-push';
@@ -566,7 +566,11 @@ self.addEventListener('push', (event) => {
         // via useSync), so the SW shows a generic notification only when the app is
         // fully CLOSED. Nudge any live client to pull the post.
         for (const client of clients) client.postMessage({ type: 'ring:posts' });
-        if (!clients.length) await showPostNotification();
+        // Honor the Wall notifications toggle (the foreground banner is already gated
+        // by notifyNewPost; this gates the app-closed system notification to match).
+        if (!clients.length && (await setting('notifications.wall.show', true))) {
+          await showPostNotification();
+        }
         return;
       }
       if (kind === 'version') {

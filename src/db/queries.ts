@@ -14,6 +14,7 @@ import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
+import { autoSaveIncomingMedia } from '@/services/media-autosave';
 import { buildPost, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
 import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
@@ -4035,6 +4036,15 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     return;
   }
 
+  // "Block unknown account messages" (privacy.blockUnknown): when on, drop a message
+  // from someone who is neither already a contact nor an accepted connection — a
+  // stranger must connect with you first. Connection REQUESTS travel over a separate
+  // server channel (not this E2EE message path), so this never stops someone from
+  // reaching out to connect; it only blocks unsolicited message content.
+  if (await getSetting<boolean>('privacy.blockUnknown', false)) {
+    if (!(await getContact(from)) && !(await isPeerConnected(from))) return;
+  }
+
   let contact = await getContact(from);
   if (!contact) {
     await addContactWithId(from, '');
@@ -4169,6 +4179,15 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
             updatedAt: now(),
           });
           await applyThumbTiers(mediaId, await bubbleFromDataUrl(payload.mediaRef.poster)); // spec 1014
+          // "Save to Photos": best-effort auto-save of freshly-received media to the
+          // device when the app is in the foreground (chats.saveToPhotos). Fire-and-forget.
+          void autoSaveIncomingMedia({
+            blob,
+            kind,
+            mime: payload.mediaRef.mime,
+            name: payload.mediaRef.name,
+            sentAt: payload.timestamp ?? ts,
+          });
         } else {
           pendingMedia = payload.mediaRef;
         }
