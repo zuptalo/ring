@@ -681,6 +681,22 @@
     </ion-content>
 
     <ion-footer id="chat-footer">
+      <!-- @-mention autocomplete (spec 1020): group members (+ owner-only @everyone)
+           matching the @token being typed; tap to insert. -->
+      <div v-if="mentionCandidates.length" class="mention-pop">
+        <button
+          v-for="c in mentionCandidates"
+          :key="c.everyone ? '@everyone' : c.id"
+          type="button"
+          class="mention-row"
+          @pointerdown.prevent
+          @click="pickMention(c)"
+        >
+          <ion-icon v-if="c.everyone" :icon="megaphoneOutline" class="mention-row-ico" />
+          <span class="mention-row-name">{{ c.everyone ? 'Everyone' : c.name }}</span>
+          <span v-if="!c.everyone" class="mention-row-handle">@{{ c.username }}</span>
+        </button>
+      </div>
       <!-- Reply preview: the message being replied to, with a cancel button. -->
       <ion-toolbar v-if="replyingTo && !chat?.pending" class="reply-bar">
         <div class="reply-preview">
@@ -935,7 +951,7 @@ import {
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
   callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline,
-  timeOutline, checkmark, checkmarkDone, addOutline, happyOutline, cameraOutline,
+  timeOutline, checkmark, checkmarkDone, addOutline, happyOutline, cameraOutline, megaphoneOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
@@ -1560,6 +1576,56 @@ function bodyParts(m: Message): BodySeg[] {
 function openMentionedContact(id: string): void {
   if (id && id !== selfId) router.push(`/contact/${id}`);
 }
+
+// ---- composer @-mention autocomplete (spec 1020) ----
+const mentionQuery = ref<string | null>(null); // the @query being typed, or null when inactive
+const isGroupOwner = computed(() => chat.value?.isGroup === true && chat.value.createdBy === selfId);
+// Group members (id/name/username) for the picker — excludes self.
+const groupMembers = computed(() => {
+  if (!chat.value?.isGroup) return [] as Array<{ id: string; name: string; username: string }>;
+  const ids = new Set(chat.value.participantIds ?? []);
+  return contacts.value
+    .filter((c) => ids.has(c.id) && c.id !== selfId && c.username)
+    .map((c) => ({ id: c.id, name: c.name, username: c.username as string }));
+});
+interface MentionCandidate { id?: string; name: string; username: string; everyone?: boolean }
+const mentionCandidates = computed<MentionCandidate[]>(() => {
+  const q = mentionQuery.value;
+  if (q === null) return [];
+  const ql = q.toLowerCase();
+  const list: MentionCandidate[] = groupMembers.value
+    .filter((m) => m.name.toLowerCase().includes(ql) || m.username.toLowerCase().includes(ql))
+    .map((m) => ({ ...m }));
+  // Owner-only @everyone broadcast (spec 1020), offered when it matches the query.
+  if (isGroupOwner.value && 'everyone'.startsWith(ql)) list.unshift({ name: 'Everyone', username: 'everyone', everyone: true });
+  return list.slice(0, 8);
+});
+// An "@token" at the end of the draft (assumed cursor position) starts an autocomplete.
+function updateMentionQuery(): void {
+  if (!chat.value?.isGroup) { mentionQuery.value = null; return; }
+  const m = /(?:^|\s)@([a-zA-Z0-9_]*)$/.exec(draft.value);
+  mentionQuery.value = m ? m[1] : null;
+}
+function pickMention(c: MentionCandidate): void {
+  draft.value = draft.value.replace(/(^|\s)@([a-zA-Z0-9_]*)$/, `$1@${c.username} `);
+  mentionQuery.value = null;
+  void composerEl.value?.$el?.setFocus?.();
+}
+// Resolve a body's @tokens to mentioned member ids + an honored (owner-only) @everyone.
+function resolveMentions(text: string): { mentions: string[]; everyone: boolean } {
+  const byU = new Map(groupMembers.value.map((m) => [m.username.toLowerCase(), m.id]));
+  const ids = new Set<string>();
+  let everyone = false;
+  for (const mm of text.matchAll(/(?:^|\s)@([a-zA-Z0-9_]+)/g)) {
+    const h = mm[1].toLowerCase();
+    if (h === 'everyone' && isGroupOwner.value) everyone = true;
+    else {
+      const id = byU.get(h);
+      if (id) ids.add(id);
+    }
+  }
+  return { mentions: [...ids], everyone };
+}
 // An all-emoji message of up to 3 emoji renders larger.
 function emojiBig(body: string): boolean {
   const n = emojiOnlyCount(body);
@@ -2125,6 +2191,7 @@ function onComposerInput(e: CustomEvent): void {
   draft.value = (e.detail as { value?: string | null }).value ?? '';
   if (draft.value.trim()) startActivity('typing');
   else stopActivity('typing'); // cleared the draft → no longer typing
+  updateMentionQuery(); // spec 1020: open/refresh the @-mention autocomplete
   const host = composerEl.value?.$el;
   if (host) requestAnimationFrame(() => { host.scrollTop = host.scrollHeight; });
 }
@@ -3134,10 +3201,13 @@ async function send() {
   }
 
   draft.value = '';
+  mentionQuery.value = null; // close the autocomplete
+  // @mentions (spec 1020): resolve the body's @tokens to member ids + an honored @everyone.
+  const { mentions, everyone } = resolveMentions(text);
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
-  await sendMessage(chatId, text, reply);
+  await sendMessage(chatId, text, reply, mentions, everyone);
   await scrollToNewest();
 }
 
@@ -4407,6 +4477,40 @@ function cancelRecording() {
 }
 .mention.everyone {
   cursor: default;
+}
+/* @-mention autocomplete popover above the composer. */
+.mention-pop {
+  max-height: 40vh;
+  overflow-y: auto;
+  background: var(--ion-background-color);
+  border-top: 1px solid var(--app-hairline, rgba(128, 128, 128, 0.25));
+}
+.mention-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--app-hairline, rgba(128, 128, 128, 0.12));
+  text-align: start;
+  font-size: 15px;
+  color: var(--ion-text-color);
+}
+.mention-row:active {
+  background: var(--ion-color-step-100, rgba(128, 128, 128, 0.12));
+}
+.mention-row-ico {
+  font-size: 20px;
+  color: var(--ion-color-primary);
+}
+.mention-row-name {
+  font-weight: 600;
+}
+.mention-row-handle {
+  color: var(--app-text-muted);
+  font-size: 13px;
 }
 .deleted-msg {
   font-style: italic;
