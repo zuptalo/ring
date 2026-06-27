@@ -8,6 +8,7 @@
 import { computed, ref, watch, type Ref, type ComputedRef } from 'vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { warmChats, warmChatsLoaded, warmWhenIdle } from '@/composables/warmStores';
+import { isUnlocked } from '@/services/crypto/identity';
 import { listChats, listChatLists, getSetting, setSetting, chatIsUnread } from '@/db/queries';
 import type { Chat, ChatList } from '@/db/types';
 
@@ -103,7 +104,11 @@ export function useChatFilters(search: Ref<string>): {
     () => listChats(search.value),
     ['chats', 'messages', 'chatlists'],
     [] as Chat[],
-    () => search.value,
+    // Re-run on search changes AND on unlock: at cold open listChats fails CLOSED
+    // (returns []) while the keystore is still locked, so we must re-query the moment
+    // it unlocks to replace that transient empty with the real list. The Chats page
+    // gates its empty state on this fresh resolution (see its `ready`).
+    () => [search.value, isUnlocked.value],
     warmWhenIdle(warmChats, warmChatsLoaded, search),
   );
   const lists = useLiveQuery(() => listChatLists(), ['chatlists'], [] as ChatList[]);

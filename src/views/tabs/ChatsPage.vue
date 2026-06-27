@@ -59,7 +59,7 @@
       <!-- Empty states. With no chats at all, a hint row points to Contacts to
            start a conversation (mirrors the Contacts "Browse user directory" row);
            a filtered view that happens to be empty just says so. -->
-      <ion-list v-if="loaded && activeFilter === 'all' && allChats.length === 0" class="hint-list">
+      <ion-list v-if="ready && activeFilter === 'all' && allChats.length === 0" class="hint-list">
         <!-- router.replace (not push): switching to a tab is terminal, like tapping
              the tab bar — it must not grow history (see navigation.spec). -->
         <ion-item button :detail="true" lines="full" @click="router.replace('/tabs/contacts')">
@@ -70,7 +70,7 @@
           </ion-label>
         </ion-item>
       </ion-list>
-      <div v-else-if="loaded && chats.length === 0" class="empty">
+      <div v-else-if="ready && chats.length === 0" class="empty">
         <ion-note>{{ emptyMessage }}</ion-note>
       </div>
 
@@ -128,15 +128,11 @@
             <ion-icon slot="start" :icon="personAddOutline" color="primary" />
             <ion-label>Add contact</ion-label>
           </ion-item>
-          <!-- New hidden chat (spec 1019, US2): a distinct conversation that
-               coexists with any normal 1:1 with the same person. Only shown when
-               the feature is enabled. -->
-          <ion-item v-if="hiddenEnabled" button :detail="false" @click="hiddenMode = !hiddenMode">
-            <ion-icon slot="start" :icon="eyeOffOutline" :color="hiddenMode ? 'primary' : 'medium'" />
-            <ion-label :color="hiddenMode ? 'primary' : undefined">
-              {{ hiddenMode ? 'Pick a contact for the hidden chat…' : 'New hidden chat' }}
-            </ion-label>
-          </ion-item>
+          <!-- Deliberately NO "New hidden chat" entry here (spec 1019): surfacing it
+               in the New-chat sheet would advertise the feature to anyone who opens
+               it, undercutting the plausible deniability the whole design rests on.
+               A hidden chat is only ever created by hiding an existing conversation
+               (the swipe → More → "Hide chat" action). -->
         </ion-list>
         <ion-list>
           <ion-list-header><ion-label>Contacts</ion-label></ion-list-header>
@@ -162,7 +158,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
@@ -185,8 +181,7 @@ import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useConnect } from '@/composables/useConnect';
 import { useHiddenChats } from '@/composables/useHiddenChats';
 import { hiddenPinLength } from '@/services/hidden-chats';
-import { startHiddenChat } from '@/services/hidden-chats-start';
-import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
+import { isUnlocked } from '@/services/crypto/identity';
 import type { Chat, Contact } from '@/db/types';
 
 const router = useRouter();
@@ -200,7 +195,6 @@ const { connect, requireProfile } = useConnect();
 const { revealed, reveal, relock } = useHiddenChats();
 const pinLen = ref<number | null>(null);
 const hiddenEnabled = ref(false);
-const hiddenMode = ref(false); // New-chat modal: next contact tap starts a hidden chat
 onMounted(async () => {
   pinLen.value = await hiddenPinLength();
   hiddenEnabled.value = await getSetting<boolean>('privacy.hiddenChatsEnabled', false);
@@ -218,6 +212,19 @@ async function onSearchInput(val: string): Promise<void> {
 
 // Filtered chat list + chips (All / Unread / Favorites / Groups + lists).
 const { chats, activeFilter, setActive, chips, lists, tabFilters, allChats, loaded } = useChatFilters(search);
+// Don't render an empty state until the list has settled on a result we can trust.
+// At cold open the query can resolve to [] while the keystore is still locked
+// (listChats fails CLOSED until the hidden set is known — see queries.ts), and that
+// transient empty must NOT be read as "you have no chats" and flash the
+// "Start a conversation" hint before the real chats load. Gating on isUnlocked alone
+// isn't enough: there's a sub-frame window where the keystore is unlocked but the
+// list hasn't re-queried yet, so allChats still holds the stale []. We therefore flip
+// `ready` only when a query RESOLVES while unlocked — i.e. allChats changes after
+// unlock — at which point allChats holds the real result and the checks below are
+// consistent with what we render. A re-lock resets it so we wait again.
+const ready = ref(false);
+watch(isUnlocked, (u) => { if (!u) ready.value = false; });
+watch(allChats, () => { if (isUnlocked.value) ready.value = true; }, { immediate: true });
 const listsSheetOpen = ref(false);
 const editTabsOpen = ref(false);
 const newListOpen = ref(false);
@@ -283,15 +290,6 @@ const pickContacts = useLiveQuery(
 
 async function startChat(person: Contact) {
   if (!(await requireProfile())) return;
-  if (hiddenMode.value) {
-    // Start a distinct hidden conversation that coexists with any normal 1:1.
-    if (!(await ensureHiddenPin())) return; // need a PIN to ever reveal it
-    const id = await startHiddenChat(person.id);
-    hiddenMode.value = false;
-    newOpen.value = false;
-    router.push(`/chat/${id}`); // open by id works regardless of hidden state
-    return;
-  }
   const chatId = await startDirectChat(person);
   newOpen.value = false;
   router.push(`/chat/${chatId}`);

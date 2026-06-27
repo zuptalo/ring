@@ -33,7 +33,9 @@ function setAppBadge(total: number): void {
 }
 
 export function useBadges() {
-  const chats = useLiveQuery(() => countUnread(), ['chats'], 0);
+  // 'settings' too: the hidden-chats badge mode (privacy.hiddenChatsBadge) changes
+  // what counts, so the badge should react the moment that preference is changed.
+  const chats = useLiveQuery(() => countUnread(), ['chats', 'settings'], 0);
   const calls = useLiveQuery(() => countMissedUnseen(), ['calls'], 0);
   // Contacts badge = group invites + legacy db requests (countPendingRequests) PLUS
   // incoming friend requests, which live in the connections store (server-driven,

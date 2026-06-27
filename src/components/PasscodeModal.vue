@@ -9,11 +9,8 @@
 
       <!-- SET, step 1: choose 4 or 6 digits (auto-verify needs a fixed length). -->
       <div v-if="variant === 'set' && step === 'pick'" class="pc-pick ion-text-center">
-        <p class="pc-title">Set a passcode</p>
-        <p class="pc-desc">
-          You'll enter it each time you open Ring. While a passcode is set, background
-          notifications won't show message previews.
-        </p>
+        <p class="pc-title">{{ pickTitle }}</p>
+        <p class="pc-desc">{{ pickDesc }}</p>
         <ion-segment v-model="lenChoice" class="pc-seg">
           <ion-segment-button value="4"><ion-label>4 digits</ion-label></ion-segment-button>
           <ion-segment-button value="6"><ion-label>6 digits</ion-label></ion-segment-button>
@@ -57,8 +54,22 @@ const props = withDefaults(
     length?: number;
     busy?: boolean;
     error?: string;
+    /** Copy overrides so the same pad can set/verify things other than the app
+     *  passcode (e.g. the Hidden Chats PIN), with fitting wording. */
+    pickTitle?: string;
+    pickDesc?: string;
+    noun?: string; // the thing being entered, used in the pad titles ("Enter {noun}")
   }>(),
-  { variant: 'set', length: undefined, busy: false, error: '' },
+  {
+    variant: 'set',
+    length: undefined,
+    busy: false,
+    error: '',
+    pickTitle: 'Set a passcode',
+    pickDesc:
+      "You'll enter it each time you open Ring. While a passcode is set, background notifications won't show message previews.",
+    noun: 'passcode',
+  },
 );
 
 const step = ref<'pick' | 'choose' | 'confirm'>(props.variant === 'set' ? 'pick' : 'choose');
@@ -72,11 +83,11 @@ const attempt = ref(0); // bump to clear the pad
 const activeLen = computed(() => (props.variant === 'verify' ? props.length : chosenLen.value));
 
 const padTitle = computed(() => {
-  if (props.variant === 'verify') return 'Enter passcode';
-  return step.value === 'confirm' ? 'Confirm passcode' : 'Choose a passcode';
+  if (props.variant === 'verify') return `Enter ${props.noun}`;
+  return step.value === 'confirm' ? `Confirm ${props.noun}` : `Choose a ${props.noun}`;
 });
 const padDesc = computed(() =>
-  props.variant === 'set' && step.value === 'choose' ? `Enter a ${chosenLen.value}-digit passcode.` : '',
+  props.variant === 'set' && step.value === 'choose' ? `Enter a ${chosenLen.value}-digit ${props.noun}.` : '',
 );
 
 function onSubmit(code: string): void {

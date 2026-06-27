@@ -74,6 +74,18 @@ export function hiddenIdsSync(): Set<string> {
   return ids;
 }
 
+/**
+ * Whether the hidden set is DEFINITIVELY known (a successful load, or no hidden
+ * set configured at all — both leave `loaded` true). False means we couldn't
+ * decrypt it yet (keystore still locked at open), so callers must NOT trust the
+ * empty cache as "nothing hidden": they fail closed until this flips true. The
+ * load's success path nudges the lists to re-query (see `ensureHiddenLoaded`), so
+ * the fail-closed window lasts only until the keystore unlocks.
+ */
+export function isHiddenKnown(): boolean {
+  return loaded;
+}
+
 /** True if `id` is currently hidden (per the cache). */
 export function isHiddenId(id: string): boolean {
   return ids.has(id);

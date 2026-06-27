@@ -39,7 +39,7 @@ import {
   changeHiddenPin,
   hiddenPinLength,
 } from './hidden-chats';
-import { clearHiddenState, isRevealed } from './hidden-state';
+import { clearHiddenState, isRevealed, isHiddenKnown } from './hidden-state';
 
 beforeAll(async () => {
   await ready();
@@ -86,6 +86,39 @@ describe('hidden set (membership)', () => {
     const saved = h.mk.key;
     h.mk.key = null; // simulate locked
     expect([...(await getHiddenSet())]).toEqual([]); // no leak, no throw
+    h.mk.key = saved;
+  });
+});
+
+// `isHiddenKnown()` is the signal the chat/call-list choke points use to fail
+// CLOSED on startup: an empty cache could mean "nothing hidden" OR "couldn't
+// decrypt yet" (keystore still locked behind the unlock gate). Conflating them is
+// what caused the flash of hidden chats before they were filtered, so the lists
+// must show nothing until this flips true.
+describe('isHiddenKnown (startup fail-closed signal)', () => {
+  it('is false until loaded, stays false while a configured set is locked, true after it decrypts', async () => {
+    clearHiddenState();
+    expect(isHiddenKnown()).toBe(false); // nothing loaded yet
+
+    await addHidden('chat-A'); // writes the (sealed) SET_KEY
+    clearHiddenState(); // forget the cache → simulate a fresh page load
+    const saved = h.mk.key;
+    h.mk.key = null; // keystore locked at open
+    expect([...(await getHiddenSet())]).toEqual([]); // fails closed (empty)
+    expect(isHiddenKnown()).toBe(false); // ...and NOT mistaken for "nothing hidden"
+
+    h.mk.key = saved; // unlock → the next read decrypts and the set becomes known
+    expect([...(await getHiddenSet())]).toEqual(['chat-A']);
+    expect(isHiddenKnown()).toBe(true);
+  });
+
+  it('is known (true) even while locked when no hidden set was ever configured', async () => {
+    clearHiddenState();
+    h.settings.clear(); // no SET_KEY at all → nothing to decrypt
+    const saved = h.mk.key;
+    h.mk.key = null; // locked, but irrelevant with no set
+    expect([...(await getHiddenSet())]).toEqual([]);
+    expect(isHiddenKnown()).toBe(true); // definitively empty → lists render normally, no blank flash
     h.mk.key = saved;
   });
 });

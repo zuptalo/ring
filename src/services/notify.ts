@@ -25,6 +25,7 @@ import { subscribe } from '@/db/idb';
 import { notifyLocal } from '@/services/push';
 import { inAppGloballyEnabled, getChatNotifyPrefs } from '@/services/notify-prefs';
 import { isUnlockedNow } from '@/services/crypto/identity';
+import { ensureHiddenLoaded, isRevealed } from '@/services/hidden-state';
 import { playTone } from '@/services/sound';
 import { notificationOwner } from '@/services/notify-policy';
 
@@ -375,6 +376,24 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
   // (Requests / system notices have no chat and always-surface semantics — handled
   // below the predicate, unchanged.)
   if (n.kind === 'message') {
+    // Hidden chats (spec 1019): a LOCKED hidden chat must leave no foreground trace —
+    // never a banner, sound, or a name/content notification. (When revealed, the user
+    // is actively in hidden mode → fall through to the normal policy.)
+    if (n.chatId && !isRevealed() && (await ensureHiddenLoaded()).has(n.chatId)) {
+      if (appVisible()) {
+        // Foreground: stay completely silent (no banner, no sound). Claim it so a
+        // co-arriving push doesn't make the SW fire its own notification either. The
+        // unread badge still reflects it (counted separately in useBadges/countUnread).
+        notifyBannerPresented();
+        return true;
+      }
+      // Backgrounded but connected via WS (no push woke us): the OS push didn't cover
+      // this, so bridge a GENERIC, content-free notification — NEVER the sender name or
+      // message text — mirroring the SW's hidden-chat handling. A push-woken drain
+      // leaves the (already-generic) OS notification to the SW.
+      if (!n.pushWoken) void notifyLocal('Ring', 'New message', '/tabs/chats', undefined);
+      return false;
+    }
     const p = await ensurePrefs();
     if (!p.showMessages) return false; // the global "Show notifications" toggle
     const [muted, chatPrefs, globalInApp] = await Promise.all([

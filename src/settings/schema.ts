@@ -143,18 +143,15 @@ const TIMER: ChoiceOption[] = [
   { value: 'off', label: 'Off' },
 ];
 // App-lock grace period: how long Ring can sit in the background before it asks
-// for the passcode/passkey again. 'instant' = always; the longest is 24h. There is
-// deliberately NO 'Never': a lock that never engages just lulls you into forgetting
-// the passcode, then locks you out the moment it does engage (a relaunch, or after
-// you change this setting), and you can't turn the lock off without the passcode.
-// To stop locking, turn App lock OFF entirely while you still know your passcode.
+// for the passcode/passkey again. 'never' never re-locks while the app stays alive
+// (backgrounded included) — but a FULL app close still locks at rest, so reopening
+// Ring always asks for the passcode. Tradeoff to be aware of: a 'never' user who
+// forgets the passcode is fine until the next relaunch, then is locked out and can't
+// turn the lock off without it. To stop locking entirely, turn App lock OFF while
+// you still know your passcode.
 const APP_LOCK_TIMEOUT: ChoiceOption[] = [
-  { value: 'instant', label: 'Immediately' },
-  { value: '30s', label: '30 seconds' },
+  { value: 'never', label: 'Never' },
   { value: '1m', label: '1 minute' },
-  { value: '2m', label: '2 minutes' },
-  { value: '3m', label: '3 minutes' },
-  { value: '4m', label: '4 minutes' },
   { value: '5m', label: '5 minutes' },
   { value: '15m', label: '15 minutes' },
   { value: '30m', label: '30 minutes' },
@@ -168,6 +165,14 @@ const HIDDEN_GRACE: ChoiceOption[] = [
   { value: 'immediately', label: 'Immediately' },
   { value: '1m', label: 'After 1 minute' },
   { value: '5m', label: 'After 5 minutes' },
+];
+
+// Whether messages in hidden chats add to the unread badge. Default 'always' so a new
+// hidden message is never missed; 'never' keeps the badge from ever hinting one exists.
+const HIDDEN_BADGE: ChoiceOption[] = [
+  { value: 'always', label: 'Always' },
+  { value: 'revealed', label: 'Only while revealed' },
+  { value: 'never', label: 'Never (most private)' },
 ];
 
 /** A backend-dependent screen we keep in the IA but can't implement yet. */
@@ -316,6 +321,12 @@ export const SETTINGS: Record<string, SettingNode> = {
         footer: 'How long revealed chats stay visible when you briefly switch apps. A full app close always re-locks immediately.',
       },
       {
+        header: 'Unread badge',
+        items: [{ type: 'choice', key: 'privacy.hiddenChatsBadge', default: 'always', options: HIDDEN_BADGE }],
+        footer:
+          'Whether messages in hidden chats add to the unread badge. “Always” means you never miss one, but the count can hint a hidden chat exists. “Never” keeps the badge from ever revealing hidden activity. Hidden chats never show a notification preview or play a sound, regardless of this setting.',
+      },
+      {
         items: [
           {
             type: 'action',
@@ -425,7 +436,7 @@ export const SETTINGS: Record<string, SettingNode> = {
         header: 'Require passcode after being away for',
         items: [{ type: 'choice', key: 'privacy.appLock.timeout', default: '1m', options: APP_LOCK_TIMEOUT }],
         footer:
-          'When a passcode is set and Ring has been in the background longer than this, it asks for your passcode again on return.',
+          'When a passcode is set and Ring has been in the background longer than this, it asks for your passcode again on return. “Never” skips that on-return prompt — but fully closing and reopening Ring still asks for your passcode.',
       },
     ],
   },
