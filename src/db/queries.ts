@@ -175,6 +175,24 @@ export async function setChatArchived(chatId: string, archived: boolean): Promis
   await put('chats', chat);
 }
 
+/** Archive every chat currently in the main list (the "Archive all chats" action).
+ *  Mirrors listChats' scope: skips pending requests, locked chats, and hidden chats
+ *  (those have their own views and must not be swept here). Returns the count. */
+export async function archiveAllChats(): Promise<number> {
+  const hidden = await ensureHiddenLoaded();
+  const chats = await getAll<Chat>('chats');
+  let n = 0;
+  for (const chat of chats) {
+    if (chat.pending || chat.archived || chat.locked || hidden.has(chat.id)) continue;
+    chat.archived = true;
+    delete chat.pinned;
+    chat.updatedAt = now();
+    await put('chats', chat);
+    n += 1;
+  }
+  return n;
+}
+
 /** Lock/unlock a chat (moves it in/out of the auth-gated Locked chats view). */
 export async function setChatLocked(chatId: string, locked: boolean): Promise<void> {
   const chat = await getChat(chatId);
@@ -4266,6 +4284,11 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     const active = isChatActive(targetChatId);
     chat.unread = active ? 0 : (chat.unread ?? 0) + 1;
     if (selfMentioned && !active) chat.unreadMentions = (chat.unreadMentions ?? 0) + 1;
+    // A new message pulls an archived chat back to the main list, UNLESS the user has
+    // "Keep chats archived" on (chats.keepArchived). Locked chats stay put regardless.
+    if (chat.archived && !chat.locked && !(await getSetting<boolean>('chats.keepArchived', false))) {
+      delete chat.archived;
+    }
     chat.updatedAt = now();
     await put('chats', chat);
   }

@@ -163,7 +163,7 @@ import {
   alertController, modalController, onIonViewWillLeave, onIonViewDidEnter,
 } from '@ionic/vue';
 import { getAll, clearStore, STORES } from '@/db/idb';
-import { setSetting, clearAllMedia } from '@/db/queries';
+import { setSetting, clearAllMedia, archiveAllChats } from '@/db/queries';
 import { previewTone } from '@/services/sound';
 import { deleteAccount } from '@/services/api';
 import PushStatus from '@/components/PushStatus.vue';
@@ -429,7 +429,10 @@ const ACTIONS: Record<string, () => void | Promise<void>> = {
     await clearStore('messages');
     await clearStore('chats');
   },
-  'archive-all': () => notice('Archive all chats', 'Archiving isn’t available in this build yet.'),
+  'archive-all': async () => {
+    const n = await archiveAllChats();
+    notice('Archive all chats', n ? `${n} chat${n === 1 ? '' : 's'} archived.` : 'No chats to archive.');
+  },
   'reset-autodownload': async () => {
     for (const [k, v] of Object.entries(AUTO_DOWNLOAD_DEFAULTS)) {
       await setSetting(k, v);
