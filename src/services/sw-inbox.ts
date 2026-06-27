@@ -86,7 +86,10 @@ export interface PreviewResult {
   newUnshown: boolean;
 }
 
-async function setting<T>(key: string, fallback: T): Promise<T> {
+/** Read a settings-store value from the service worker (no keystore needed; settings
+ *  are stored in the clear). Exported so the SW push handler can honor notification
+ *  toggles like `notifications.wall.show`. */
+export async function setting<T>(key: string, fallback: T): Promise<T> {
   const s = await get<Setting<T>>('settings', key);
   return s ? s.value : fallback;
 }

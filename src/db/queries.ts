@@ -14,6 +14,7 @@ import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
+import { autoSaveIncomingMedia } from '@/services/media-autosave';
 import { buildPost, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
 import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
@@ -172,6 +173,24 @@ export async function setChatArchived(chatId: string, archived: boolean): Promis
   } else delete chat.archived;
   chat.updatedAt = now();
   await put('chats', chat);
+}
+
+/** Archive every chat currently in the main list (the "Archive all chats" action).
+ *  Mirrors listChats' scope: skips pending requests, locked chats, and hidden chats
+ *  (those have their own views and must not be swept here). Returns the count. */
+export async function archiveAllChats(): Promise<number> {
+  const hidden = await ensureHiddenLoaded();
+  const chats = await getAll<Chat>('chats');
+  let n = 0;
+  for (const chat of chats) {
+    if (chat.pending || chat.archived || chat.locked || hidden.has(chat.id)) continue;
+    chat.archived = true;
+    delete chat.pinned;
+    chat.updatedAt = now();
+    await put('chats', chat);
+    n += 1;
+  }
+  return n;
 }
 
 /** Lock/unlock a chat (moves it in/out of the auth-gated Locked chats view). */
@@ -3676,6 +3695,20 @@ export async function addContact(name: string, phone: string): Promise<string> {
  * Find an existing 1:1 chat with a contact, or create one. Returns the chat id.
  * Used by the "New chat" entry surface to start/open a direct conversation.
  */
+/** The global default disappearing-message timer (privacy.messageTimer) in ms, or
+ *  null when off. Applied to NEW 1:1 chats so they start with disappearing on — the
+ *  expiry then rides inside each sent message's sealed payload (stampExpiry), so the
+ *  messages you send self-destruct for everyone. Existing chats are never touched. */
+async function defaultTimerMs(): Promise<number | null> {
+  const DAY = 24 * 60 * 60 * 1000;
+  switch (await getSetting<string>('privacy.messageTimer', 'off')) {
+    case '24h': return DAY;
+    case '7d': return 7 * DAY;
+    case '90d': return 90 * DAY;
+    default: return null;
+  }
+}
+
 export async function startDirectChat(contact: Contact): Promise<string> {
   const chats = await getAll<Chat>('chats');
   // NEVER resolve to a hidden chat (spec 1019): starting a chat from the contact must
@@ -3705,6 +3738,7 @@ export async function startDirectChat(contact: Contact): Promise<string> {
   }
   const ts = now();
   const id = uid();
+  const ttl = await defaultTimerMs();
   await put<Chat>('chats', {
     id,
     name: contact.name,
@@ -3715,6 +3749,7 @@ export async function startDirectChat(contact: Contact): Promise<string> {
     lastMessageTime: ts,
     unread: 0,
     updatedAt: ts,
+    ...(ttl ? { defaultTtlMs: ttl } : {}),
   });
   return id;
 }
@@ -4019,6 +4054,15 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     return;
   }
 
+  // "Block unknown account messages" (privacy.blockUnknown): when on, drop a message
+  // from someone who is neither already a contact nor an accepted connection — a
+  // stranger must connect with you first. Connection REQUESTS travel over a separate
+  // server channel (not this E2EE message path), so this never stops someone from
+  // reaching out to connect; it only blocks unsolicited message content.
+  if (await getSetting<boolean>('privacy.blockUnknown', false)) {
+    if (!(await getContact(from)) && !(await isPeerConnected(from))) return;
+  }
+
   let contact = await getContact(from);
   if (!contact) {
     await addContactWithId(from, '');
@@ -4153,6 +4197,15 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
             updatedAt: now(),
           });
           await applyThumbTiers(mediaId, await bubbleFromDataUrl(payload.mediaRef.poster)); // spec 1014
+          // "Save to Photos": best-effort auto-save of freshly-received media to the
+          // device when the app is in the foreground (chats.saveToPhotos). Fire-and-forget.
+          void autoSaveIncomingMedia({
+            blob,
+            kind,
+            mime: payload.mediaRef.mime,
+            name: payload.mediaRef.name,
+            sentAt: payload.timestamp ?? ts,
+          });
         } else {
           pendingMedia = payload.mediaRef;
         }
@@ -4231,6 +4284,11 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     const active = isChatActive(targetChatId);
     chat.unread = active ? 0 : (chat.unread ?? 0) + 1;
     if (selfMentioned && !active) chat.unreadMentions = (chat.unreadMentions ?? 0) + 1;
+    // A new message pulls an archived chat back to the main list, UNLESS the user has
+    // "Keep chats archived" on (chats.keepArchived). Locked chats stay put regardless.
+    if (chat.archived && !chat.locked && !(await getSetting<boolean>('chats.keepArchived', false))) {
+      delete chat.archived;
+    }
     chat.updatedAt = now();
     await put('chats', chat);
   }

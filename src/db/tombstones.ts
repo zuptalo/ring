@@ -10,7 +10,7 @@
  * may still be wanted). A `localOnly` tombstone is honored by the ingest check
  * but excluded from `listTombstones()` so it is never uploaded.
  */
-import { get, getAll, put, type StoreName } from './idb';
+import { get, getAll, put, remove, type StoreName } from './idb';
 
 export interface Tombstone {
   id: string; // `${store}:${recordId}`
@@ -45,6 +45,23 @@ export async function isTombstoned(
 ): Promise<boolean> {
   const t = await get<Tombstone>('tombstones', key(store, recordId));
   return !!t && t.deletedAt >= updatedAt;
+}
+
+/** True if ANY tombstone exists for this record, regardless of timestamp. Used by
+ *  the directory mirror, where the incoming record's `updatedAt` is the peer's
+ *  unrelated profile-edit time, NOT a delete-vs-edit race on OUR timeline: a peer
+ *  bumping their profile after we deleted them must not resurrect the contact. A
+ *  deletion is intentional and absolute until an explicit re-add lifts it (see
+ *  `clearTombstone`), so here we treat the mere presence of a tombstone as "gone". */
+export async function hasTombstone(store: string, recordId: string): Promise<boolean> {
+  return !!(await get<Tombstone>('tombstones', key(store, recordId)));
+}
+
+/** Lift a tombstone — the record is intentionally being brought back (e.g. re-adding
+ *  a previously-deleted contact). Without this, the directory mirror's `hasTombstone`
+ *  guard would keep skipping the re-add forever. */
+export async function clearTombstone(store: StoreName, recordId: string): Promise<void> {
+  await remove('tombstones', key(store, recordId));
 }
 
 /** All UPLOADABLE tombstones — excludes localOnly (device-local) markers so a

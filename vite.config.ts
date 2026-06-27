@@ -98,7 +98,9 @@ export default defineConfig({
       strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',
-      includeAssets: ['favicon.ico', 'favicon.svg', 'apple-touch-icon.png', 'safari-pinned-tab.svg', 'browserconfig.xml'],
+      // badge-96.png is the Android notification badge shown by the SW push handler;
+      // precache it so the notification icon resolves even when the device is offline.
+      includeAssets: ['favicon.ico', 'favicon.svg', 'apple-touch-icon.png', 'safari-pinned-tab.svg', 'browserconfig.xml', 'badge-96.png'],
       // The main bundle embeds libsodium (sumo) for E2EE crypto, which pushes it
       // past workbox's 2 MiB default precache ceiling. Raise the limit so the
       // service worker precaches the app shell (otherwise the SW build fails).

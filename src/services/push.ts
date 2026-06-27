@@ -112,7 +112,9 @@ export async function notifyLocal(title: string, body: string, url?: string, cha
     await reg.showNotification(title, {
       body,
       icon: '/pwa-192x192.png',
-      badge: '/pwa-192x192.png',
+      // Monochrome transparent silhouette: Android tints the badge by alpha, so a
+      // full-colour square shows as a blank box. See the BADGE note in sw.ts.
+      badge: '/badge-96.png',
       // Per-chat tag (matching the service worker's preview) so the page- and
       // SW-shown notes for one conversation COLLAPSE into a single notification
       // instead of stacking, and a follow-up re-alerts (renotify).
