@@ -37,7 +37,6 @@ import {
   removeMember as dbRemoveMember,
   renameGroup as dbRenameGroup,
   setGroupAvatar as dbSetGroupAvatar,
-  updateContactProfile as dbUpdateContactProfile,
   leaveGroup as dbLeaveGroup,
   sendMessage as dbSendMessage,
   editMessage as dbEditMessage,
@@ -334,7 +333,7 @@ export function installTestHook(): void {
     /** Ids of current (non-pending) contacts. */
     contactIds: async (): Promise<string[]> => (await listContacts()).map((c) => c.id),
     /** Set a known contact's display name (the name you'd have saved locally). */
-    setContactName: (id: string, name: string) => dbUpdateContactProfile(id, name, ''),
+    setContactName: (id: string, name: string) => dbSetContactLocalProfile(id, { name }),
 
     /* ---- group chat ---- */
     createGroup: (name: string, memberIds: string[]) => dbCreateGroup(name, memberIds),
