@@ -85,6 +85,12 @@ self.addEventListener('activate', (event) => {
 });
 
 const ICON = '/pwa-192x192.png';
+// Android masks the notification BADGE (the small status-bar icon) by its alpha and
+// tints it with the system accent colour. A full-colour square (the old value) has no
+// transparency, so it renders as a solid blank box on many Android builds. `badge-96`
+// is a flat white shield silhouette on a transparent background — the correct format.
+// (iOS/desktop ignore `badge`; they only use `icon`, which stays the full-colour app icon.)
+const BADGE = '/badge-96.png';
 const GENERIC_TAG = 'ring-incoming';
 
 // Slow-cold-start fallback timings (see showMessageNotification). GENERIC_AFTER_MS:
@@ -129,7 +135,7 @@ async function showGeneric(reason?: string): Promise<void> {
   await self.registration.showNotification('New message', {
     body: DEV_HOST && reason ? reason : 'Tap to open',
     icon: ICON,
-    badge: ICON,
+    badge: BADGE,
     tag: GENERIC_TAG,
     data: { url: '/tabs/chats' },
   });
@@ -139,7 +145,7 @@ async function showCall(): Promise<void> {
   await self.registration.showNotification('Incoming call', {
     body: 'Tap to answer',
     icon: ICON,
-    badge: ICON,
+    badge: BADGE,
     tag: 'ring-call',
     renotify: true, // each repeated ring push re-alerts (a single updating notification)
     requireInteraction: true, // a ring shouldn't auto-dismiss before it's seen
@@ -165,7 +171,7 @@ async function showNotes(notes: SwNote[]): Promise<void> {
       await self.registration.showNotification(titleWithCount(n), {
         body: n.body,
         icon: ICON,
-        badge: ICON,
+        badge: BADGE,
         tag: n.tag,
         renotify: true, // a genuinely-new message on this tag should re-alert (a silent re-assert
         // for "nothing new" uses reassertFromSummary below, which sets renotify:false)
@@ -225,7 +231,7 @@ async function reassertFromSummary(): Promise<void> {
     await self.registration.showNotification(k > 1 ? `${n.title} (${k})` : n.title, {
       body: n.body,
       icon: ICON,
-      badge: ICON,
+      badge: BADGE,
       tag: n.tag, // same tag → updates in place, no second banner
       renotify: false, // silent re-assert — do NOT re-alert
       silent: true,
@@ -303,7 +309,7 @@ async function showVersionNotification(): Promise<void> {
   await self.registration.showNotification(title, {
     body,
     icon: ICON,
-    badge: ICON,
+    badge: BADGE,
     tag: 'ring:version',
     data: { url: '/' },
   });
@@ -318,7 +324,7 @@ async function showPostNotification(): Promise<void> {
   await self.registration.showNotification('Ring', {
     body: 'New activity on your Wall',
     icon: ICON,
-    badge: ICON,
+    badge: BADGE,
     tag: 'ring:post',
     data: { url: '/tabs/wall' },
   });
@@ -331,7 +337,7 @@ async function showConnNotes(notes: ConnNote[]): Promise<void> {
       await self.registration.showNotification(n.title, {
         body: n.body,
         icon: ICON,
-        badge: ICON,
+        badge: BADGE,
         tag: n.tag,
         renotify: true,
         data: { url: n.url },
@@ -366,7 +372,7 @@ async function showConnNotification(): Promise<void> {
   await self.registration.showNotification('Ring', {
     body: 'New friend request',
     icon: ICON,
-    badge: ICON,
+    badge: BADGE,
     tag: 'ring:conn:req',
     data: { url: '/tabs/contacts' },
   });
