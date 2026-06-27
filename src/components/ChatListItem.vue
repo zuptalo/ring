@@ -17,7 +17,7 @@
       </ion-item-option>
     </ion-item-options>
 
-    <ion-item button :detail="false" @click="$emit('open', chat.id)">
+    <ion-item button :detail="false" :class="{ 'hidden-row': isHidden }" @click="$emit('open', chat.id)">
       <div class="avatar-wrap" slot="start">
         <ion-avatar>
           <img :src="chat.avatar" :alt="chat.name" />
@@ -25,7 +25,7 @@
         <span v-if="isOnline" class="presence-dot" aria-hidden="true" />
       </div>
       <ion-label>
-        <h2>{{ capitalizeFirst(chat.name) }}</h2>
+        <h2>{{ chat.name }}</h2>
         <p class="preview-row">
           <template v-if="activityLabel">
             <span class="preview activity">{{ activityLabel }}</span>
@@ -44,6 +44,7 @@
       <div class="meta" slot="end">
         <ion-note :class="{ unread: unread }">{{ formatTime(chat.lastMessageTime) }}</ion-note>
         <div class="meta-icons">
+          <ion-icon v-if="isHidden" :icon="eyeOffOutline" class="meta-ico hidden-ico" aria-label="Hidden chat" />
           <ion-icon v-if="muted" :icon="notificationsOffOutline" class="meta-ico" aria-hidden="true" />
           <ion-icon v-if="chat.locked" :icon="lockClosedOutline" class="meta-ico" aria-hidden="true" />
           <ion-icon v-if="chat.pinned" :icon="pinOutline" class="meta-ico pin" aria-hidden="true" />
@@ -75,7 +76,7 @@ import {
 } from '@ionic/vue';
 import {
   pinOutline, archiveOutline, ellipsisHorizontal, mailOpenOutline, mailUnreadOutline,
-  notificationsOffOutline, lockClosedOutline,
+  notificationsOffOutline, lockClosedOutline, eyeOffOutline,
   cameraOutline, videocamOutline, micOutline, documentOutline, imagesOutline,
   locationOutline, barChartOutline, personOutline, musicalNotesOutline, callOutline,
 } from 'ionicons/icons';
@@ -83,10 +84,10 @@ import {
   markChatRead, markChatUnread, setChatPinned, setChatArchived, MAX_PINNED_CHATS,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
+import { isHiddenId } from '@/services/hidden-state';
 import { peerPresence } from '@/composables/usePresence';
 import { activityFor, activityKindLabel } from '@/composables/useTyping';
 import { formatTime } from '@/utils/time';
-import { capitalizeFirst } from '@/utils/text';
 import type { Chat } from '@/db/types';
 
 const props = defineProps<{ chat: Chat }>();
@@ -105,6 +106,10 @@ const PREVIEW_ICONS: Record<NonNullable<Chat['lastKind']>, string | null> = {
 };
 const previewIcon = computed(() => (props.chat.lastKind ? PREVIEW_ICONS[props.chat.lastKind] : null));
 
+// A hidden chat only ever appears in the list during an active reveal session
+// (listChats excludes it otherwise), so membership here is enough to mark it. Keyed
+// on the chat id so it re-evaluates when the list re-queries on reveal/relock/hide.
+const isHidden = computed(() => isHiddenId(props.chat.id));
 const unread = computed(() => props.chat.unread > 0 || !!props.chat.manualUnread);
 const muted = computed(() => !!props.chat.mutedUntil && props.chat.mutedUntil > Date.now());
 const isOnline = computed(
@@ -165,6 +170,15 @@ function more(): void {
 .meta-ico.pin {
   transform: rotate(45deg);
 }
+/* Revealed hidden chat: a faint tint on the whole row + an eye-off marker, so it's
+   easy to tell apart from normal chats during a reveal session. Only renders while
+   revealed (the row isn't in the list otherwise), so it leaks nothing when locked. */
+.hidden-row {
+  --background: var(--ring-hidden-tint, rgba(var(--ion-color-medium-rgb, 146, 148, 156), 0.1));
+}
+.hidden-ico {
+  color: var(--ion-color-medium);
+}
 .unread-dot {
   width: 11px;
   height: 11px;
@@ -219,8 +233,11 @@ ion-item-option ion-icon {
   text-align: start;
 }
 ion-label h2 {
+  /* Keep correct bidi CHARACTER order for RTL/mixed names (plaintext), but always
+     LEFT-align the name in the chats list (incl. RTL names + group names), rather than
+     start-aligning (which would right-align RTL). */
   unicode-bidi: plaintext;
-  text-align: start;
+  text-align: left;
 }
 .avatar-wrap {
   position: relative;

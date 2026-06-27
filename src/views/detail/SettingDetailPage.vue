@@ -173,9 +173,9 @@ import { clearToken } from '@/services/auth';
 import { isUnlockedNow, rotateRecoveryCode, enableLock, disableLock, getPinLength } from '@/services/crypto/identity';
 import { disablePasskey } from '@/services/crypto/passkey';
 import { syncRecoveryWrap } from '@/services/ownsync';
-import { hasHiddenPin, verifyHiddenPin, changeHiddenPin } from '@/services/hidden-chats';
+import { hasHiddenPin, verifyHiddenPin, changeHiddenPin, hiddenPinLength } from '@/services/hidden-chats';
 import { resetHiddenChats } from '@/services/hidden-chats-reset';
-import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
+import { ensureHiddenPin, presentHiddenPinPad } from '@/composables/hiddenPinPrompt';
 import type { Setting } from '@/db/types';
 import {
   ICONS, settingNode, linkSummary, type SettingItem,
@@ -228,7 +228,28 @@ async function onToggle(key: string, checked: boolean): Promise<void> {
     await onAppLockToggle(checked);
     return;
   }
+  if (key === 'privacy.hiddenChatsEnabled') {
+    await onHiddenChatsToggle(checked);
+    return;
+  }
   await setSetting(key, checked);
+}
+
+// Enabling hidden chats is meaningless without a reveal PIN — there'd be no way to
+// ever get a hidden chat back. So turning it on prompts to create the PIN up front
+// (ensureHiddenPin no-ops if one already exists), and a cancel reverts the toggle
+// to off rather than leaving the feature half-armed. Turning it off just persists;
+// the PIN/hidden set stay put (use "Reset PIN & delete hidden chats" to wipe them).
+async function onHiddenChatsToggle(enable: boolean): Promise<void> {
+  if (!enable) {
+    await setSetting('privacy.hiddenChatsEnabled', false);
+    return;
+  }
+  if (!(await ensureHiddenPin())) {
+    await setSetting('privacy.hiddenChatsEnabled', false); // cancelled → stay off
+    return;
+  }
+  await setSetting('privacy.hiddenChatsEnabled', true);
 }
 
 // Ring auto-unlocks without a passcode by default (the device key keeps the keys
@@ -423,12 +444,12 @@ const ACTIONS: Record<string, () => void | Promise<void>> = {
       if (await ensureHiddenPin()) await setSetting('privacy.hiddenChatsEnabled', true);
       return;
     }
-    const current = await promptPin('Enter your current Hidden Chats PIN');
+    const current = await presentHiddenPinPad('verify', (await hiddenPinLength()) ?? undefined);
     if (current === null) return;
     if (!(await verifyHiddenPin(current))) {
       return notice('Hidden chats', 'That PIN is incorrect.');
     }
-    const next = await promptPin('Enter a new PIN (4+ digits)', true);
+    const next = await presentHiddenPinPad('set');
     if (next === null) return;
     await changeHiddenPin(current, next);
     notice('Hidden chats', 'Your PIN has been changed.');
@@ -462,38 +483,6 @@ async function notice(header: string, message: string) {
     buttons: ['OK'],
   });
   await a.present();
-}
-
-// Prompt for a numeric PIN. With `confirm`, requires a matching second entry and
-// 4+ digits (used for setting a NEW PIN); otherwise just returns the entry (used
-// for verifying the current PIN). Resolves null on cancel.
-async function promptPin(header: string, confirm = false): Promise<string | null> {
-  return new Promise((resolve) => {
-    const inputs = [
-      { name: 'pin', type: 'password' as const, attributes: { inputmode: 'numeric' }, placeholder: 'PIN' },
-      ...(confirm
-        ? [{ name: 'confirm', type: 'password' as const, attributes: { inputmode: 'numeric' }, placeholder: 'Confirm PIN' }]
-        : []),
-    ];
-    void alertController
-      .create({
-        header,
-        inputs,
-        buttons: [
-          { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
-          {
-            text: 'OK',
-            handler: (data: { pin?: string; confirm?: string }) => {
-              const pin = (data.pin ?? '').trim();
-              if (confirm && (!/^\d{4,}$/.test(pin) || pin !== (data.confirm ?? '').trim())) return false;
-              resolve(pin);
-              return true;
-            },
-          },
-        ],
-      })
-      .then((a) => a.present());
-  });
 }
 
 // Present the freshly-rotated recovery code with a copy action. The code goes in

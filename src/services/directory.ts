@@ -18,7 +18,7 @@ import {
 } from './api';
 import { getSelfUserId } from './auth';
 import { get, put } from '@/db/idb';
-import { isPeerBlocked, getSetting, downscaleAvatar, listContacts } from '@/db/queries';
+import { isPeerBlocked, getSetting, downscaleAvatar, listContacts, updateContactProfile } from '@/db/queries';
 import { getSecret } from '@/db/secrets';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { initialsAvatar } from '@/db/avatars';
@@ -40,30 +40,51 @@ export async function upsertDirectoryContact(u: DirectoryUser): Promise<void> {
   const avatar = u.avatar || existing?.avatar || initialsAvatar(name);
   const about = u.about ?? existing?.about ?? '';
 
-  // Skip the write when nothing the directory owns has changed, avoids churning
-  // the contacts store (and its reactive subscribers) on every poll.
-  if (
-    existing &&
-    existing.name === name &&
-    existing.username === u.username &&
-    existing.avatar === avatar &&
-    existing.about === about
-  ) {
-    return; // nothing the directory owns changed
+  if (!existing) {
+    // New contact: apply the directory profile directly (nothing to prompt about yet).
+    // Mirror the PROFILE only — this does not make them a friend (set by the accept flow).
+    await put('contacts', {
+      id: u.id,
+      name,
+      username: u.username,
+      avatar,
+      phone: '',
+      about,
+      remoteName: name,
+      remoteAvatar: avatar,
+      updatedAt: u.profileAt || Date.now(),
+    });
+    return;
   }
 
-  const contact: Contact = {
-    id: u.id,
-    name,
-    username: u.username,
-    avatar,
-    phone: existing?.phone ?? '',
-    about,
-    updatedAt: u.profileAt || Date.now(),
-  };
-  // Mirror the PROFILE only — this does not make them a friend. Friendship is set
-  // (markContactConnected) by the accept flow; the server gate enforces it.
-  await put('contacts', contact);
+  // Existing contact: update the directory-owned, non-prompting fields (username/about)
+  // directly; route the DISPLAY name/avatar through updateContactProfile so a real change
+  // is staged for the user's adopt/dismiss decision and any local override is preserved.
+  if (existing.username !== u.username || (existing.about ?? '') !== about) {
+    existing.username = u.username;
+    existing.about = about;
+    existing.updatedAt = u.profileAt || Date.now();
+    await put('contacts', existing);
+  }
+  await updateContactProfile(u.id, name, avatar);
+}
+
+/**
+ * Drop a contact's local name/photo override and re-pull their CURRENT profile from the
+ * directory, applying it DIRECTLY (no adopt prompt) — what "Reset to their name & photo"
+ * does. Falls back to the last-known remote values offline (handled by the queries layer
+ * before this runs). Best-effort: a network failure leaves the optimistic revert in place.
+ */
+export async function refetchContactProfile(id: string): Promise<void> {
+  try {
+    const u = await fetchDirectoryUser(id);
+    if (!u) return;
+    const name = (u.displayName || u.username || '').trim();
+    const avatar = u.avatar || '';
+    await updateContactProfile(id, name, avatar, true); // force-apply the server's current profile
+  } catch {
+    /* offline / not found → keep the optimistic local revert the caller already applied */
+  }
 }
 
 /** Pull the whole directory and mirror it into contacts. Paged; best-effort

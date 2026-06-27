@@ -18,6 +18,7 @@
           <ion-note slot="end">
             {{ formatTime(message.timestamp) }}
             <ion-icon
+              v-if="isOutgoingMsg"
               class="tick"
               :icon="statusIcon(message.status)"
               :color="seenReceiptsOn && message.status === 'seen' ? 'primary' : undefined"
@@ -26,10 +27,39 @@
         </ion-item>
       </ion-list>
 
+      <!-- Media facts (quality · resolution · size · format · duration). Shown for
+           media in BOTH directions — the metadata that used to sit on the bubble. -->
+      <ion-list :inset="true" v-if="message && hasMediaMeta">
+        <ion-list-header>
+          <ion-icon :icon="informationCircleOutline" />
+          <ion-label>Media</ion-label>
+        </ion-list-header>
+        <ion-item v-if="formatLabel" lines="inset">
+          <ion-label>Format</ion-label>
+          <ion-note slot="end">{{ formatLabel }}</ion-note>
+        </ion-item>
+        <ion-item v-if="resolution" lines="inset">
+          <ion-label>Resolution</ion-label>
+          <ion-note slot="end">{{ resolution }}</ion-note>
+        </ion-item>
+        <ion-item v-if="durationText" lines="inset">
+          <ion-label>Duration</ion-label>
+          <ion-note slot="end">{{ durationText }}</ion-note>
+        </ion-item>
+        <ion-item v-if="qualityText" lines="inset">
+          <ion-label>Quality</ion-label>
+          <ion-note slot="end">{{ qualityText }}</ion-note>
+        </ion-item>
+        <ion-item v-if="sizeText" lines="none">
+          <ion-label>Size</ion-label>
+          <ion-note slot="end">{{ sizeText }}</ion-note>
+        </ion-item>
+      </ion-list>
+
       <!-- Group: per-member Seen by / Delivered / Not yet delivered, covering every
            member of the roster (spec 1010 FR-006). Each tier shows a capped avatar
            stack (5 + "+N") plus the members' names. -->
-      <template v-if="isGroup">
+      <template v-if="isGroup && isOutgoingMsg">
         <!-- Seen by — suppressed entirely when "Seen receipts" is off (reciprocity:
              you don't get to see others' seen on your own messages). -->
         <ion-list :inset="true" v-if="seenReceiptsOn">
@@ -90,8 +120,8 @@
         </ion-list>
       </template>
 
-      <!-- 1:1: simple status timeline -->
-      <ion-list :inset="true" v-else-if="message">
+      <!-- 1:1: simple status timeline (outgoing only — receipts don't apply to received). -->
+      <ion-list :inset="true" v-else-if="message && isOutgoingMsg">
         <ion-item v-if="seenReceiptsOn && reached('seen')">
           <ion-icon slot="start" :icon="checkmarkDone" color="primary" />
           <ion-label>Seen</ion-label>
@@ -120,11 +150,14 @@ import {
   IonContent, IonList, IonListHeader, IonItem, IonAvatar, IonLabel,
   IonNote, IonIcon,
 } from '@ionic/vue';
-import { checkmark, checkmarkDone, timeOutline } from 'ionicons/icons';
+import { checkmark, checkmarkDone, timeOutline, informationCircleOutline } from 'ionicons/icons';
 import { getMessage, getChat, listContacts, getSetting } from '@/db/queries';
+import { get } from '@/db/idb';
 import { initialsAvatar } from '@/db/avatars';
-import type { Chat, Contact, Message, MessageStatus } from '@/db/types';
+import type { Chat, Contact, Media, Message, MessageStatus } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { isPreservedImageMime, qualityLabel } from '@/services/media-encode';
+import { fileSizeLabel } from '@/utils/media-meta';
 import { formatTime } from '@/utils/time';
 
 const route = useRoute();
@@ -138,6 +171,47 @@ const message = useLiveQuery<Message | undefined>(
 );
 const chat = useLiveQuery<Chat | undefined>(() => getChat(chatId), ['chats'], undefined);
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+
+// The on-device media record (for the MIME type → format label + preserved check).
+// Re-runs once the message resolves and we learn its mediaId.
+const media = useLiveQuery<Media | undefined>(
+  () => (message.value?.mediaId ? get<Media>('media', message.value.mediaId) : Promise.resolve(undefined)),
+  ['media'],
+  undefined,
+  () => message.value?.mediaId,
+);
+
+const isOutgoingMsg = computed(() => message.value?.outgoing === true);
+
+// Media facts (formerly a badge on the bubble) — shown here for media in BOTH
+// directions, so received media's quality/resolution/size is inspectable too.
+const formatLabel = computed(() => {
+  const mime = media.value?.mime;
+  if (!mime) return '';
+  const sub = mime.split('/')[1] ?? '';
+  const friendly: Record<string, string> = { jpeg: 'JPEG', 'svg+xml': 'SVG', mpeg: 'MP3', quicktime: 'MOV', 'octet-stream': '' };
+  return friendly[sub] ?? (sub ? sub.toUpperCase() : '');
+});
+const resolution = computed(() =>
+  message.value?.mediaWidth && message.value?.mediaHeight ? `${message.value.mediaWidth}×${message.value.mediaHeight}` : '',
+);
+const durationText = computed(() => {
+  const s = message.value?.durationSec;
+  if (!s) return '';
+  const t = Math.round(s);
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+});
+// GIF/WebP are always sent untouched, so "Original" is noise — drop it for those.
+const qualityText = computed(() => {
+  const q = message.value?.mediaQuality;
+  const mime = media.value?.mime;
+  if (!q || (mime && isPreservedImageMime(mime))) return '';
+  return qualityLabel(q);
+});
+const sizeText = computed(() => fileSizeLabel(message.value?.mediaSize));
+const hasMediaMeta = computed(
+  () => !!(formatLabel.value || resolution.value || durationText.value || qualityText.value || sizeText.value),
+);
 
 // "Seen receipts" privacy preference (default on), reactive. Reciprocity DISPLAY
 // gate (spec 1010 FR-009): when off, we don't render the seen tier on our own

@@ -34,7 +34,6 @@ import { isHidden } from '@/services/hidden-chats';
 // the incoming surface must reveal nothing identifying. A neutral name + avatar.
 const HIDDEN_CALL_NAME = 'Private caller';
 const hiddenCallAvatar = (): string => initialsAvatar('•');
-import { capitalizeFirst } from '@/utils/text';
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
@@ -1433,7 +1432,7 @@ async function deriveGroupCallTitle(ids: string[]): Promise<string> {
   let unknown = 0;
   for (const id of ids) {
     const c = await getContact(id);
-    if (c?.name) names.push(capitalizeFirst(c.name));
+    if (c?.name) names.push(c.name);
     else unknown++;
   }
   if (names.length === 0) return 'Group call';

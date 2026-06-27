@@ -32,7 +32,7 @@
         <ion-icon slot="start" :icon="happyOutline" />
         <ion-label>Reactions ({{ reactionCount }})</ion-label>
       </ion-item>
-      <ion-item v-if="isOutgoing" button :detail="false" @click="choose('info')">
+      <ion-item v-if="canInfo ?? isOutgoing" button :detail="false" @click="choose('info')">
         <ion-icon slot="start" :icon="informationCircleOutline" />
         <ion-label>Message info</ion-label>
       </ion-item>
@@ -61,6 +61,7 @@ import {
 
 defineProps<{
   isOutgoing: boolean;
+  canInfo?: boolean; // show "Message info" — outgoing (receipts) or any media (metadata, both directions)
   canCopy: boolean;
   canView?: boolean; // image/video/album: offer "View" (open the full-screen viewer)
   canEdit?: boolean; // own, not-deleted text message: offer "Edit"

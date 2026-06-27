@@ -16,17 +16,14 @@ import { onMounted, onUnmounted } from 'vue';
 import { getSetting, setSetting } from '@/db/queries';
 import { isUnlockedNow, lock, isLockEnabled } from '@/services/crypto/identity';
 
-// Setting value → grace period in ms. 'instant' = lock on any return. There is no
-// 'never': a never-locking passcode just risks a forgotten-passcode lockout (you
-// can't disable the lock without the passcode), so to stop locking you turn the
-// lock OFF. Any stale 'never' from before falls back to '1m' below.
+// Setting value → grace period in ms used on a foreground return. 'never' = Infinity,
+// so the app is never re-locked while it stays alive (backgrounded included); only a
+// full close re-locks (the keystore is PIN-wrapped at rest, so a relaunch always
+// gates regardless). Any value no longer offered falls back to '1m' below; onMounted
+// also migrates stale picks to the nearest current option.
 const TIMEOUT_MS: Record<string, number> = {
-  instant: 0,
-  '30s': 30_000,
+  never: Infinity,
   '1m': 60_000,
-  '2m': 120_000,
-  '3m': 180_000,
-  '4m': 240_000,
   '5m': 300_000,
   '15m': 900_000,
   '30m': 1_800_000,
@@ -56,12 +53,13 @@ export function useAutoLock(): void {
 
   onMounted(async () => {
     document.addEventListener('visibilitychange', onVisibilityChange);
-    // One-time migration: the removed 'Never' option becomes '24h' (the gentlest
-    // finite grace), so an existing 'never' user gets a real-but-rare lock and the
-    // picker shows a valid selection instead of nothing.
-    if ((await getSetting<string>('privacy.appLock.timeout', '1m')) === 'never') {
-      await setSetting('privacy.appLock.timeout', '24h');
-    }
+    // One-time normalization: the picker was trimmed (Immediately/30s/2-4m removed,
+    // Never (re)added), so map any stored value no longer offered to the nearest
+    // current option — otherwise the picker shows no selection. 'never' is now a
+    // valid choice and is preserved.
+    const cur = await getSetting<string>('privacy.appLock.timeout', '1m');
+    const remap: Record<string, string> = { instant: '1m', '30s': '1m', '2m': '5m', '3m': '5m', '4m': '5m' };
+    if (remap[cur]) await setSetting('privacy.appLock.timeout', remap[cur]);
   });
   onUnmounted(() => document.removeEventListener('visibilitychange', onVisibilityChange));
 }

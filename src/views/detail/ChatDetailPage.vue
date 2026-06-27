@@ -43,7 +43,7 @@
             <img :src="chat.avatar" :alt="chat.name" />
           </ion-avatar>
           <span class="chat-header-text">
-            <span class="chat-header-name">{{ capitalizeFirst(chat.name) }}</span>
+            <span class="chat-header-name">{{ chat.name }}</span>
             <span v-if="statusLine" class="chat-header-status">{{ statusLine }}</span>
           </span>
         </button>
@@ -244,10 +244,17 @@
               <!-- Tap the image → open the viewer directly; tap the empty/footer area
                    of the bubble → the action menu. -->
               <div v-if="m.kind === 'image' && m.mediaId" class="media-wrap" @click.stop="openMediaViewer(m.id)">
-                <img v-if="mediaInfo[m.mediaId]?.posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId]!.posterUrl" alt="photo" loading="lazy" decoding="async" />
-                <ion-skeleton-text v-else :animated="true" class="media-skel" />
-                <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
-              </div>
+                <!-- Animated GIF / WebP: play the moving original while it's visible
+                     on screen (freezes to the poster off-screen). Needs the full blob
+                     resolved; if it was freed from the LRU, fall through to the poster. -->
+                <AnimatedImage
+                  v-if="mediaInfo[m.mediaId]?.animated && mediaInfo[m.mediaId]?.url"
+                  :animated-url="mediaInfo[m.mediaId]!.url"
+                  :poster-url="mediaInfo[m.mediaId]!.posterUrl"
+                  alt="gif"
+                />
+                <img v-else-if="mediaInfo[m.mediaId]?.posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId]!.posterUrl" alt="photo" loading="lazy" decoding="async" />
+                <ion-skeleton-text v-else :animated="true" class="media-skel" />              </div>
               <!-- Video: a still thumbnail with a play button. Tapping the poster opens the
                    action menu (whole bubble is the hit target); the play button is the
                    direct affordance to the full-screen viewer. The sender-embedded
@@ -264,9 +271,7 @@
                 <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 <!-- Visual play affordance only; a tap anywhere on the poster opens
                      the viewer via the bubble's tap handler. -->
-                <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />
-                <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
-              </div>
+                <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />              </div>
 
               <!-- Non-square media (round note / voice / audio card / file chip) stays gated
                    on mediaInfo: these are text-height cards with no fixed-square frame, so
@@ -330,9 +335,7 @@
                 <span class="dl-btn">
                   <ion-spinner v-if="downloadingVideo[m.id]" name="crescent" />
                   <ion-icon v-else :icon="downloadOutline" />
-                </span>
-                <span v-if="mediaMetaLabel(m)" class="video-meta">{{ mediaMetaLabel(m) }}</span>
-              </div>
+                </span>              </div>
 
               <!-- Media removed from THIS device to free space: a placeholder so the
                    chat still shows something was here (distinct from a sender-deleted
@@ -418,6 +421,8 @@
                   <span class="job-num">{{ jobPct(m.id, 'upload') }}</span>
                 </div>
               </div>
+              <!-- Media facts (quality · resolution · size) live in Message info now
+                   (long-press → Message info), not on the bubble. -->
               <!-- Direction-aware foot: react button opposite the timestamp; sent →
                    time+tick right / react left, received → time left / react right. -->
               <div class="msg-foot" :class="m.outgoing ? 'out' : 'in'">
@@ -948,6 +953,7 @@ import QuickReactBar from '@/components/QuickReactBar.vue';
 import ReactionDetails from '@/components/ReactionDetails.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
 import VideoNote from '@/components/VideoNote.vue';
+import AnimatedImage from '@/components/AnimatedImage.vue';
 import VideoNoteRecorder from '@/components/VideoNoteRecorder.vue';
 import MediaViewer from '@/components/MediaViewer.vue';
 import { saveMessagesMedia } from '@/services/media-save';
@@ -967,12 +973,12 @@ import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import { segmentEmoji, emojiOnlyCount } from '@/utils/emoji';
 import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
-import { type Quality, availableQualities, qualityLabel } from '@/services/media-encode';
+import { type Quality, availableQualities, qualityLabel, isPreservedImageMime } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
-import { resolutionLabel, fileSizeLabel, generateVideoPoster, generateImageThumb, readImageMeta, readVideoMeta } from '@/utils/media-meta';
+import { generateVideoPoster, generateImageThumb, isAnimatedImage, readImageMeta, readVideoMeta } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
 import { selectEvictions } from '@/utils/lru';
-import { normalizeOutgoing, capitalizeFirst } from '@/utils/text';
+import { normalizeOutgoing } from '@/utils/text';
 import { vEnterSend } from '@/directives/enter-send';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
@@ -1121,25 +1127,6 @@ async function downloadVideo(id: string): Promise<void> {
   }
 }
 
-// Badge on a photo/video bubble (same facts both sides), e.g. for a video
-// "HD · 720p · 0:34 · 4.2 MB", for a photo "Full HD · 1.2 MB".
-function mediaMetaLabel(m: Message): string {
-  const parts: string[] = [];
-  if (m.mediaQuality) parts.push(qualityLabel(m.mediaQuality));
-  if (m.kind === 'video') {
-    const res = resolutionLabel(m.mediaWidth, m.mediaHeight);
-    if (res) parts.push(res);
-    if (m.durationSec) {
-      const t = Math.round(m.durationSec);
-      parts.push(`${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
-    }
-  } else if (m.kind === 'image' && m.mediaWidth && m.mediaHeight) {
-    parts.push(`${m.mediaWidth}×${m.mediaHeight}`);
-  }
-  const size = fileSizeLabel(m.mediaSize);
-  if (size) parts.push(size);
-  return parts.filter(Boolean).join(' · ');
-}
 
 // Encode / upload progress as a "42%" string for the in-flight bars.
 function jobPct(id: string, phase: 'compress' | 'upload'): string {
@@ -1438,11 +1425,16 @@ async function openMenu(m: Message, ev: Event) {
   const canSave = !canSaveAll && SAVE_KINDS.includes(m.kind) && (!!m.mediaId || !!m.pendingMedia);
   // Media is reachable by tapping it, but "View" stays in the menu as a fallback.
   const canView = (m.kind === 'image' || m.kind === 'video') && !m.videoNote && !!m.mediaId;
+  // Message info is offered for every outgoing message (receipts) AND for any media
+  // message in either direction (so the metadata — quality/resolution/size — is
+  // reachable on received media too, not just your own).
+  const hasMedia = !!m.mediaId && ['image', 'video', 'file', 'audio', 'voice'].includes(m.kind);
   const popover = await popoverController.create({
     component: MessageActions,
     cssClass: 'reaction-popover',
     componentProps: {
       isOutgoing: m.outgoing,
+      canInfo: m.outgoing || hasMedia,
       canCopy: !!m.body,
       canView,
       canEdit: m.outgoing && m.kind === 'text' && !m.deleted,
@@ -2096,15 +2088,66 @@ function onComposerEnter(e: KeyboardEvent): void {
    and are revoked on remove/send/unmount. */
 const pendingImages = ref<{ blob: File; url: string }[]>([]);
 
+// A bare image URL (single token, ends in a known image extension, query/hash allowed).
+const IMAGE_URL_RE = /^https?:\/\/[^\s]+\.(?:gif|webp|png|jpe?g|jfif|avif|bmp|svg)(?:[?#][^\s]*)?$/i;
+function isImageUrl(s: string): boolean {
+  return !!s && !/\s/.test(s) && IMAGE_URL_RE.test(s);
+}
+
 function onComposerPaste(e: ClipboardEvent): void {
   const images = Array.from(e.clipboardData?.items ?? [])
     .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
     .map((it) => it.getAsFile())
     .filter((f): f is File => !!f);
-  if (!images.length) return; // plain text paste → default textarea behavior
-  // Don't also insert the image's file name/uri as text.
-  e.preventDefault();
-  for (const f of images) pendingImages.value.push({ blob: f, url: URL.createObjectURL(f) });
+  if (images.length) {
+    // Don't also insert the image's file name/uri as text.
+    e.preventDefault();
+    for (const f of images) pendingImages.value.push({ blob: f, url: URL.createObjectURL(f) });
+    return;
+  }
+  // No image file on the clipboard, but the pasted text is a bare image URL → fetch it
+  // on THIS client and attach it as a normal media message. Fetching here (not on the
+  // server) keeps the zero-knowledge boundary intact: the bytes are encrypted client-side
+  // like any attachment; the server only ever relays the sealed blob.
+  const text = e.clipboardData?.getData('text/plain')?.trim() ?? '';
+  if (isImageUrl(text)) {
+    e.preventDefault();
+    void attachImageFromUrl(text);
+  }
+  // else: ordinary text paste — let the textarea handle it.
+}
+
+// Best-effort fetch of a remote image URL into a pending attachment. Many third-party
+// CDNs block cross-origin reads (CORS) or fail offline; in that case we can't read the
+// bytes, so we fall back to pasting the link as text rather than losing the paste.
+async function attachImageFromUrl(url: string): Promise<void> {
+  try {
+    const res = await fetch(url, { mode: 'cors', credentials: 'omit', redirect: 'follow' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (!blob.type.startsWith('image/')) throw new Error(`not an image (${blob.type || 'unknown'})`);
+    const name = imageNameFromUrl(url, blob.type);
+    pendingImages.value.push({ blob: new File([blob], name, { type: blob.type }), url: URL.createObjectURL(blob) });
+  } catch {
+    // CORS-blocked / offline / not an image: don't swallow the paste — put the link in
+    // the draft and tell the user why it wasn't attached.
+    draft.value = draft.value ? `${draft.value} ${url}` : url;
+    void appToast({ message: 'Couldn’t fetch that image (the site blocks it) — pasted the link instead.', duration: 2600 });
+  }
+}
+
+// Derive a filename (with a sane extension) from the URL + actual MIME.
+function imageNameFromUrl(url: string, mime: string): string {
+  let base = 'image';
+  try {
+    const path = new URL(url).pathname;
+    const last = path.split('/').pop() || '';
+    base = decodeURIComponent(last.split('.').slice(0, -1).join('.') || last) || 'image';
+  } catch {
+    /* keep default */
+  }
+  const ext = (mime.split('/')[1] || 'img').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+  return /\.[a-z0-9]+$/i.test(base) ? base : `${base}.${ext}`;
 }
 
 function removePendingImage(i: number): void {
@@ -2602,6 +2645,7 @@ interface MediaInfo {
   posterUrl?: string; // bubble tier (≤512) — chat bubble + viewer main fallback
   gridUrl?: string; // grid tier (≤320) — album grid cells (spec 1014)
   stripUrl?: string; // strip tier (≤128) — viewer bottom thumbnail strip (spec 1014)
+  animated?: boolean; // GIF / animated WebP → bubble plays the moving original while visible
   mime: string;
   name: string;
 }
@@ -2712,6 +2756,17 @@ async function resolveMediaFor(list: Message[]): Promise<void> {
         } catch {
           /* best-effort cache */
         }
+      });
+    }
+    // Images: flag animated GIF / animated WebP so the bubble renders the moving
+    // original (autoplaying while visible) instead of a static poster (spec: GIFs
+    // autoplay in chat). Static images/photos keep the lightweight poster path.
+    if (m.kind === 'image' && media.blob) {
+      const blob = media.blob;
+      const mid = m.mediaId;
+      const mime = media.mime;
+      void isAnimatedImage(mime, blob).then((animated) => {
+        if (animated && mediaInfo.value[mid]) mediaInfo.value[mid] = { ...mediaInfo.value[mid], animated: true };
       });
     }
     // Audio (shared music): pull embedded cover art for the track card.
@@ -2982,11 +3037,20 @@ async function send() {
   // Pasted images go out with the typed text as the caption (on the first image
   // when several were pasted — they share an album grid like the picker flow).
   if (pendingImages.value.length) {
-    const longEdge = await maxSourceLongEdge(
-      pendingImages.value.map((p) => ({ blob: p.blob, kind: 'image' as const })),
-    );
-    const quality = await pickQuality(longEdge);
-    if (quality === null) return; // cancelled: keep the images and the draft
+    // GIF / WebP are always sent untouched (animation/alpha preserved), so a quality
+    // prompt would be a no-op — skip it when every pending image is one of those. A
+    // mixed batch still asks, since the JPEG/PNG items genuinely have tiers to choose.
+    let quality: Quality;
+    if (pendingImages.value.every((p) => isPreservedImageMime(p.blob.type))) {
+      quality = 'original';
+    } else {
+      const longEdge = await maxSourceLongEdge(
+        pendingImages.value.map((p) => ({ blob: p.blob, kind: 'image' as const })),
+      );
+      const picked = await pickQuality(longEdge);
+      if (picked === null) return; // cancelled: keep the images and the draft
+      quality = picked;
+    }
     const images = pendingImages.value.slice();
     pendingImages.value = [];
     draft.value = '';
@@ -3211,10 +3275,15 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
   let replyLeft = reply; // the quote attaches to the first item sent
 
   if (otherFiles.length) {
-    // Photos/videos can be sent at HD/SD/Original; ask once for the whole batch.
-    const hasMedia = otherFiles.some((f) => kindOf(f) === 'image' || kindOf(f) === 'video');
+    // Photos/videos can be sent at HD/SD/Original; ask once for the whole batch — but
+    // only when something in it actually has tiers to choose. GIF/WebP are always sent
+    // untouched, so a batch of only those (no other photos/videos) skips the prompt.
+    const needsQuality = otherFiles.some((f) => {
+      const k = kindOf(f);
+      return (k === 'image' || k === 'video') && !isPreservedImageMime(f.type);
+    });
     let quality: Quality = 'original';
-    if (hasMedia) {
+    if (needsQuality) {
       const longEdge = await maxSourceLongEdge(
         otherFiles.map((f) => ({ blob: f, kind: kindOf(f) as 'image' | 'video' | 'file' })),
       );
@@ -4174,20 +4243,6 @@ function cancelRecording() {
 .dl-btn ion-spinner {
   width: 26px;
   height: 26px;
-}
-/* Resolution · length · size badge on a video thumbnail (both sides). */
-.video-meta {
-  position: absolute;
-  left: 6px;
-  bottom: 6px;
-  display: inline-block;
-  padding: 2px 7px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
 }
 /* Link preview card (privacy-safe: domain + icon, no remote fetch). */
 .link-card {

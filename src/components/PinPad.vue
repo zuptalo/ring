@@ -126,17 +126,38 @@ const keys: Cell[] = [
   { k: 'ok', t: 'ok' },
 ];
 
+// The tap that completes a PIN runs on `pointerdown`; the browser still synthesizes a
+// `click` ~300ms later. If this submit closes the pad's overlay (the unlock gate or a
+// PasscodeModal), that click lands on whatever is now under the finger — e.g. a chat
+// row — and "ghost-taps" it. Arm a one-shot capture-phase swallow on `window` (not the
+// component, so it survives the pad unmounting) to eat exactly that next click.
+function armClickSwallow(): void {
+  let timer = 0;
+  const swallow = (e: Event) => {
+    e.stopPropagation();
+    e.preventDefault();
+    window.clearTimeout(timer);
+    window.removeEventListener('click', swallow, true);
+  };
+  window.addEventListener('click', swallow, true);
+  timer = window.setTimeout(() => window.removeEventListener('click', swallow, true), 800);
+}
+function fireSubmit(): void {
+  armClickSwallow();
+  emit('submit', code.value);
+}
+
 function press(d: string): void {
   if (props.busy || code.value.length >= maxLen.value) return;
   code.value += d;
   // Auto-verify the instant the fixed length is reached (no confirm tap).
-  if (autoSubmit.value && code.value.length === props.length) emit('submit', code.value);
+  if (autoSubmit.value && code.value.length === props.length) fireSubmit();
 }
 function backspace(): void {
   if (!props.busy) code.value = code.value.slice(0, -1);
 }
 function submit(): void {
-  if (!props.busy && code.value.length >= minLen.value) emit('submit', code.value);
+  if (!props.busy && code.value.length >= minLen.value) fireSubmit();
 }
 
 // Hardware keyboard (desktop / external keyboards): digits append, Backspace

@@ -8,7 +8,7 @@
  * out of production builds entirely.
  */
 import { register, getSelfUserId, getSelfUsername } from '@/services/auth';
-import { syncDirectory, importDirectoryUser, searchDirectory, publishOwnProfile } from '@/services/directory';
+import { syncDirectory, importDirectoryUser, searchDirectory, publishOwnProfile, refetchContactProfile } from '@/services/directory';
 import { previewPending } from '@/services/sw-inbox';
 import { disconnectTransport, nudgeReconnect, forceReconnect, sendDownloadedReceipts, sendSeenReceipts, applySeenPref } from '@/composables/useSync';
 import {
@@ -37,7 +37,6 @@ import {
   removeMember as dbRemoveMember,
   renameGroup as dbRenameGroup,
   setGroupAvatar as dbSetGroupAvatar,
-  updateContactProfile as dbUpdateContactProfile,
   leaveGroup as dbLeaveGroup,
   sendMessage as dbSendMessage,
   editMessage as dbEditMessage,
@@ -103,6 +102,10 @@ import {
   setCloseFriend as dbSetCloseFriend,
   listCloseFriends as dbListCloseFriends,
   listFriends as dbListFriends,
+  countUnread as dbCountUnread,
+  setContactLocalProfile as dbSetContactLocalProfile,
+  resetContactToRemote as dbResetContactToRemote,
+  adoptContactProfile as dbAdoptContactProfile,
 } from '@/db/queries';
 import {
   enableHiddenPin as hcEnablePin,
@@ -330,7 +333,7 @@ export function installTestHook(): void {
     /** Ids of current (non-pending) contacts. */
     contactIds: async (): Promise<string[]> => (await listContacts()).map((c) => c.id),
     /** Set a known contact's display name (the name you'd have saved locally). */
-    setContactName: (id: string, name: string) => dbUpdateContactProfile(id, name, ''),
+    setContactName: (id: string, name: string) => dbSetContactLocalProfile(id, { name }),
 
     /* ---- group chat ---- */
     createGroup: (name: string, memberIds: string[]) => dbCreateGroup(name, memberIds),
@@ -393,6 +396,8 @@ export function installTestHook(): void {
     hiddenReset: () => hcReset(),
     /** Visible chat ids right now (what `listChats` returns) — for exclusion asserts. */
     visibleChatIds: async (): Promise<string[]> => (await listChats()).map((c) => c.id),
+    /** The unread badge total (countUnread) — for hidden-chat badge-mode asserts. */
+    unreadBadge: (): Promise<number> => dbCountUnread(),
 
     /* ---- account lifecycle: termination ("Ghosted") + blocking ---- */
     /** Terminate THIS account server-side (drives the peer's ghost detection). */
@@ -554,6 +559,20 @@ export function installTestHook(): void {
       const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
       await dbSendMediaMessage(chatId, 'image', blob, name, undefined, { quality: 'original' });
     },
+    /** Send a raw image (base64 bytes + MIME) through the real send pipeline — used to
+     *  exercise GIF / animated-WebP handling, which the canvas helpers above can't make.
+     *  Pass a non-'original' quality to prove animated formats survive compression. */
+    sendImageData: async (
+      chatId: string,
+      base64: string,
+      mime: string,
+      name: string,
+      quality: 'sd' | 'hd' | 'fhd' | 'original' = 'hd',
+    ): Promise<void> => {
+      const bytes = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+      const blob = new Blob([bytes], { type: mime });
+      await dbSendMediaMessage(chatId, 'image', blob, name, undefined, { quality });
+    },
     /** Seed a REAL, decodable image as a Media record with NO thumbnail tiers (mimicking media
      *  that predates spec 1014) so the on-open backfill (T011) can be exercised. */
     seedLegacyImage: async (chatId: string, w = 1024, h = 768): Promise<string> => {
@@ -694,6 +713,15 @@ export function installTestHook(): void {
     /** A contact's display name (to verify profiles propagated), or '' if none.
      *  Reads the contact record directly (listContacts hides ghosted ones). */
     contactName: async (id: string): Promise<string> => (await dbGetContact(id))?.name ?? '',
+    /** Set a LOCAL name/avatar override for a contact. */
+    setContactLocalProfile: (id: string, name?: string, avatar?: string) => dbSetContactLocalProfile(id, { name, avatar }),
+    /** Reset a contact to the peer's CURRENT name/photo (revert + re-pull from directory). */
+    resetContactProfile: async (id: string): Promise<void> => {
+      await dbResetContactToRemote(id);
+      await refetchContactProfile(id);
+    },
+    /** Adopt a staged remote name/avatar change. */
+    adoptContactProfile: (id: string) => dbAdoptContactProfile(id),
     /** Ids of incoming pending friend requests (to accept). */
     pendingRequestIds: async (): Promise<string[]> => {
       const reqs = await getAll<FriendRequest>('requests');

@@ -192,6 +192,29 @@ export function generateImageThumb(blob: Blob, maxEdge = THUMB_TIERS.bubble): Pr
   return posterLimiter(() => generateImageThumbUnlimited(blob, maxEdge));
 }
 
+/**
+ * Whether an image is animated, so the chat bubble knows to render the moving
+ * original (autoplaying while visible) rather than a static poster. All GIFs are
+ * treated as animated — a single-frame GIF rendered as an `<img>` is identical to a
+ * still anyway, and GIFs are small. WebP is only animated when its RIFF container
+ * carries an `ANIM` chunk (the extended VP8X animation header), so static WebP photos
+ * keep the lightweight static-poster path. Cheap: sniffs only the file header.
+ */
+export async function isAnimatedImage(mime: string, blob: Blob): Promise<boolean> {
+  if (mime === 'image/gif') return true;
+  if (mime === 'image/webp') {
+    try {
+      const head = new Uint8Array(await blob.slice(0, 64).arrayBuffer());
+      let sig = '';
+      for (const b of head) sig += String.fromCharCode(b);
+      return sig.includes('ANIM'); // animated WebP carries an ANIM chunk near the header
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 async function generateImageThumbUnlimited(blob: Blob, maxEdge: number): Promise<Blob | undefined> {
   try {
     const bmp = await createImageBitmap(blob);

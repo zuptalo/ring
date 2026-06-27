@@ -39,6 +39,7 @@ import { useViewportHeight } from '@/composables/useViewportHeight';
 import { useTheme } from '@/composables/useTheme';
 import { useAppBadge } from '@/composables/useAppBadge';
 import { useAutoLock } from '@/composables/useAutoLock';
+import { useContactProfilePrompts } from '@/composables/useContactProfilePrompts';
 import KeyGuard from '@/components/KeyGuard.vue';
 import InstallGuard from '@/components/InstallGuard.vue';
 import IncomingCallOverlay from '@/components/IncomingCallOverlay.vue';
@@ -232,6 +233,9 @@ useTheme();
 // Re-lock the keystore after the app has been backgrounded longer than the
 // configured grace period (Privacy, App lock), when a passkey is enrolled.
 useAutoLock();
+
+// Offer to adopt a contact's new name/photo when the peer changes it (in-app prompt).
+useContactProfilePrompts();
 </script>
 
 <style>

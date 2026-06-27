@@ -89,7 +89,6 @@ import { startAdHocGroupCall } from '@/composables/useCall';
 import { VIDEO_MAX, AUDIO_MAX } from '@/services/call/types';
 import { appToast } from '@/services/toast';
 import { ensureProfile } from '@/composables/useProfileGate';
-import { capitalizeFirst } from '@/utils/text';
 
 const router = useRouter();
 const search = ref('');
@@ -128,7 +127,7 @@ function toggle(id: string): void {
 // callees see a generic "Group call" since the room has no chat behind it.
 const selectedContacts = computed(() => contacts.value.filter((c) => selected.value.has(c.id)));
 const selectedNames = computed(() => {
-  const names = selectedContacts.value.map((c) => capitalizeFirst(c.name));
+  const names = selectedContacts.value.map((c) => c.name);
   if (names.length <= 1) return names.join('');
   if (names.length === 2) return `${names[0]} and ${names[1]}`;
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
