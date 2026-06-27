@@ -393,7 +393,7 @@
                 </span>
               </a>
               <span v-if="m.body" class="text" dir="auto" :class="{ 'emoji-only': emojiBig(m.body) }"><template
-                v-for="(p, pi) in bodyParts(m.body)"
+                v-for="(p, pi) in bodyParts(m)"
                 :key="pi"
               ><a
                   v-if="p.url"
@@ -402,7 +402,15 @@
                   target="_blank"
                   rel="noopener noreferrer"
                   @click.stop.prevent="openExternal(p.url)"
-                >{{ p.text }}</a><animated-emoji
+                >{{ p.text }}</a><span
+                  v-else-if="p.mention"
+                  class="mention"
+                  :class="{ me: p.mention.me }"
+                  @click.stop="openMentionedContact(p.mention.id)"
+                >@{{ p.mention.name }}</span><span
+                  v-else-if="p.everyone"
+                  class="mention everyone"
+                >@everyone</span><animated-emoji
                   v-else-if="p.emoji"
                   :emoji="p.emoji"
                   :animate="animEmoji"
@@ -947,7 +955,7 @@ import {
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
 import { groupProgress } from '@/services/message-status';
-import { getSelfUserId } from '@/services/auth';
+import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
 import QuickReactBar from '@/components/QuickReactBar.vue';
 import ReactionDetails from '@/components/ReactionDetails.vue';
@@ -1487,19 +1495,70 @@ const linkDomain = (s: string) => {
 };
 // Split body text into plain runs and clickable URL runs (to linkify messages).
 // Split a body into render segments: links, emoji (Noto-animated), and text.
-function bodyParts(body: string): Array<{ text?: string; url?: string; emoji?: string }> {
-  const out: Array<{ text?: string; url?: string; emoji?: string }> = [];
-  for (const p of linkParts(body)) {
+// A group's members by @username → { id, current display name } (spec 1020), so a
+// mention token in a body resolves to a member and renders with their CURRENT name.
+// Includes self (so "@myhandle" highlights as me). Empty for 1:1 chats.
+const mentionByUsername = computed(() => {
+  const map = new Map<string, { id: string; name: string }>();
+  if (!chat.value?.isGroup) return map;
+  const ids = new Set([selfId, ...(chat.value.participantIds ?? [])]);
+  for (const c of contacts.value) {
+    if (ids.has(c.id) && c.username) map.set(c.username.toLowerCase(), { id: c.id, name: c.name });
+  }
+  const su = getSelfUsername();
+  if (su) map.set(su.toLowerCase(), { id: selfId, name: 'You' });
+  return map;
+});
+
+interface BodySeg {
+  text?: string;
+  url?: string;
+  emoji?: string;
+  mention?: { id: string; name: string; me: boolean };
+  everyone?: boolean;
+}
+const MENTION_RE = /@([a-zA-Z0-9_]+)/g;
+
+// Split a message body into render segments. @mentions (spec 1020): an "@handle" token
+// becomes a mention chip ONLY when it resolves to a member this message actually mentions
+// (m.mentions by id), and "@everyone" when m.mentionsEveryone was honored — otherwise the
+// "@word" stays plain text. Mentions interleave with the existing link/emoji segmentation.
+function bodyParts(m: Message): BodySeg[] {
+  const out: BodySeg[] = [];
+  const mentioned = new Set(m.mentions ?? []);
+  const members = mentionByUsername.value;
+  const emit = (t: string): void => {
+    for (const seg of segmentEmoji(t)) {
+      if (seg.emoji) out.push({ emoji: seg.emoji });
+      else if (seg.text) out.push({ text: seg.text });
+    }
+  };
+  for (const p of linkParts(m.body)) {
     if (p.url) {
       out.push({ text: p.text, url: p.url });
       continue;
     }
-    for (const seg of segmentEmoji(p.text ?? '')) {
-      if (seg.emoji) out.push({ emoji: seg.emoji });
-      else if (seg.text) out.push({ text: seg.text });
+    const text = p.text ?? '';
+    let last = 0;
+    let mm: RegExpExecArray | null;
+    MENTION_RE.lastIndex = 0;
+    while ((mm = MENTION_RE.exec(text))) {
+      const handle = mm[1].toLowerCase();
+      const isEveryone = handle === 'everyone' && !!m.mentionsEveryone;
+      const member = members.get(handle);
+      const isMember = !!member && mentioned.has(member.id);
+      if (!isEveryone && !isMember) continue; // plain "@word", leave in text
+      if (mm.index > last) emit(text.slice(last, mm.index));
+      if (isEveryone) out.push({ everyone: true });
+      else out.push({ mention: { id: member!.id, name: member!.name, me: member!.id === selfId } });
+      last = mm.index + mm[0].length;
     }
+    if (last < text.length) emit(text.slice(last));
   }
   return out;
+}
+function openMentionedContact(id: string): void {
+  if (id && id !== selfId) router.push(`/contact/${id}`);
 }
 // An all-emoji message of up to 3 emoji renders larger.
 function emojiBig(body: string): boolean {
@@ -4332,6 +4391,22 @@ function cancelRecording() {
   color: var(--ion-color-primary);
   text-decoration: underline;
   word-break: break-all;
+}
+/* @mention chip (spec 1020): a highlighted, tappable name. A mention of ME is
+   emphasized (filled pill) so "this is about me" pops at a glance. */
+.mention {
+  color: var(--ion-color-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+.mention.me {
+  background: var(--ion-color-primary);
+  color: #fff;
+  border-radius: 6px;
+  padding: 0 4px;
+}
+.mention.everyone {
+  cursor: default;
 }
 .deleted-msg {
   font-style: italic;
