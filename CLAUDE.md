@@ -263,5 +263,5 @@ but the subject is the real lever.)
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/1019-hidden-chats-pin/plan.md`
+`specs/1020-mentions-group-chats/plan.md`
 <!-- SPECKIT END -->
