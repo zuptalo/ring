@@ -19,6 +19,7 @@ import {
 import { getSelfUserId } from './auth';
 import { get, put } from '@/db/idb';
 import { isPeerBlocked, getSetting, downscaleAvatar, listContacts, updateContactProfile } from '@/db/queries';
+import { hasTombstone, clearTombstone } from '@/db/tombstones';
 import { getSecret } from '@/db/secrets';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { initialsAvatar } from '@/db/avatars';
@@ -33,6 +34,11 @@ export async function upsertDirectoryContact(u: DirectoryUser): Promise<void> {
   // server already hides mutual blocks, but a one-directional block we set should
   // also win locally).
   if (await isPeerBlocked(u.id)) return;
+  // Never resurrect a contact the user deleted. `syncDirectory`/`refreshContactProfiles`
+  // mirror EVERY directory member into contacts on each connect, so without this a
+  // deleted contact silently reappears on the next sync. The tombstone is absolute
+  // here (see `hasTombstone`); an explicit re-add lifts it via `importDirectoryUser`.
+  if (await hasTombstone('contacts', u.id)) return;
   const existing = await get<Contact>('contacts', u.id);
   if (existing?.ghosted || existing?.blocked) return;
 
@@ -195,7 +201,18 @@ export async function importDirectoryUser(userId: string): Promise<string | null
   try {
     const u = await fetchDirectoryUser(userId);
     if (!u) return null;
+    // Intentional add/re-add: lift any prior delete tombstone FIRST, otherwise the
+    // `hasTombstone` guard in upsertDirectoryContact would keep skipping the re-add.
+    await clearTombstone('contacts', userId);
     await upsertDirectoryContact(u);
+    // Stamp the restored record as fresh so it out-dates the deletion: own-data sync
+    // pushes it back as alive (winning last-write-wins over the server's tombstone
+    // record), so a later pull can't silently re-delete the contact we just re-added.
+    const c = await get<Contact>('contacts', u.id);
+    if (c) {
+      c.updatedAt = Date.now();
+      await put('contacts', c);
+    }
     return u.id;
   } catch {
     return null;
