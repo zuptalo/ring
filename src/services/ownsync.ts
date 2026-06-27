@@ -36,14 +36,13 @@ const PAGE = 500;
 const PROFILE_STORE = 'profile';
 const SYNCED_PREF_KEYS: string[] = [
   'privacy.lastSeen', 'privacy.online', 'privacy.profilePhoto', 'privacy.about',
-  'privacy.groups', 'privacy.status', 'privacy.statusSharing', 'privacy.messageTimer',
-  'privacy.blockUnknown', 'privacy.protectIp', 'privacy.disableLinkPreviews',
+  'privacy.groups', 'privacy.messageTimer',
+  'privacy.blockUnknown', 'privacy.disableLinkPreviews',
   'notifications.message.show', 'notifications.message.reactions', 'notifications.message.sound',
   'notifications.group.show', 'notifications.group.reactions', 'notifications.group.sound',
-  'notifications.status.show', 'notifications.status.reactions', 'notifications.status.sound',
-  'notifications.reminders', 'notifications.showPreview', 'notifications.badge',
+  'notifications.wall.show', 'notifications.showPreview', 'notifications.badge',
   'notifications.inapp.enabled', 'notifications.inapp.style', 'notifications.inapp.sounds', 'notifications.inapp.vibrate',
-  'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters',
+  'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters', 'chats.saveToPhotos', 'chats.keepArchived',
 ];
 
 interface ProfileSnapshot {

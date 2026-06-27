@@ -175,26 +175,6 @@ const HIDDEN_BADGE: ChoiceOption[] = [
   { value: 'never', label: 'Never (most private)' },
 ];
 
-/** A backend-dependent screen we keep in the IA but can't implement yet. */
-function placeholder(id: string, title: string, text?: string): SettingNode {
-  return {
-    id,
-    title,
-    groups: [
-      {
-        items: [
-          {
-            type: 'note',
-            text:
-              text ??
-              'This feature needs a connected server and isn’t available in this build yet.',
-          },
-        ],
-      },
-    ],
-  };
-}
-
 /* ---- the tree ---- */
 
 export const SETTINGS: Record<string, SettingNode> = {
@@ -205,14 +185,11 @@ export const SETTINGS: Record<string, SettingNode> = {
     groups: [
       {
         items: [
-          { type: 'link', id: 'account-security', title: 'Security notifications', icon: 'shield' },
           { type: 'link', id: 'account-recovery', title: 'Recovery key', icon: 'key' },
-          { type: 'link', id: 'account-passkeys', title: 'Passkeys', icon: 'key' },
         ],
       },
       {
         items: [
-          { type: 'link', id: 'account-request-info', title: 'Request account info', icon: 'info' },
           {
             type: 'action',
             title: 'Delete account',
@@ -226,7 +203,6 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
     ],
   },
-  'account-security': placeholder('account-security', 'Security notifications'),
   'account-recovery': {
     id: 'account-recovery',
     title: 'Recovery key',
@@ -247,8 +223,6 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
     ],
   },
-  'account-passkeys': placeholder('account-passkeys', 'Passkeys'),
-  'account-request-info': placeholder('account-request-info', 'Request account info'),
 
   /* ===== PRIVACY ===== */
   privacy: {
@@ -262,7 +236,6 @@ export const SETTINGS: Record<string, SettingNode> = {
           { type: 'link', id: 'privacy-about', title: 'About', icon: 'info' },
           { type: 'link', id: 'privacy-groups', title: 'Groups', icon: 'people' },
           { type: 'route', title: 'Close friends', path: '/settings/close-friends', icon: 'people' },
-          { type: 'link', id: 'privacy-status', title: 'Status', icon: 'time' },
         ],
       },
       {
@@ -287,18 +260,12 @@ export const SETTINGS: Record<string, SettingNode> = {
       {
         items: [
           { type: 'link', id: 'privacy-app-lock', title: 'App lock', icon: 'key' },
-          { type: 'link', id: 'privacy-chat-lock', title: 'Chat lock', icon: 'lock' },
           { type: 'link', id: 'privacy-hidden-chats', title: 'Hidden chats', icon: 'eyeOff' },
         ],
       },
       {
-        items: [{ type: 'toggle', title: 'Allow camera effects', key: 'privacy.cameraEffects', default: true }],
-        footer: 'Use effects in the camera and video calls.',
-      },
-      {
         items: [
           { type: 'link', id: 'privacy-advanced', title: 'Advanced', icon: 'shield' },
-          { type: 'link', id: 'privacy-checkup', title: 'Privacy checkup', icon: 'shield' },
         ],
       },
     ],
@@ -386,31 +353,6 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
     ],
   },
-  'privacy-status': {
-    id: 'privacy-status',
-    title: 'Status',
-    groups: [
-      {
-        header: 'Who can see my status updates',
-        items: [
-          {
-            type: 'choice',
-            key: 'privacy.status',
-            default: 'contacts',
-            options: [
-              { value: 'contacts', label: 'My contacts' },
-              { value: 'except', label: 'My contacts except…' },
-              { value: 'only', label: 'Only share with…' },
-            ],
-          },
-        ],
-      },
-      {
-        items: [{ type: 'toggle', title: 'Allow sharing', key: 'privacy.statusSharing', default: true }],
-        footer: 'Let people who can see your status reshare and forward it.',
-      },
-    ],
-  },
   'privacy-message-timer': {
     id: 'privacy-message-timer',
     title: 'Default message timer',
@@ -440,12 +382,6 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
     ],
   },
-  'privacy-chat-lock': placeholder(
-    'privacy-chat-lock',
-    'Chat lock',
-    'Chat lock keeps your chats locked and hidden. This needs a connected server and isn’t available in this build yet.',
-  ),
-  'privacy-checkup': placeholder('privacy-checkup', 'Privacy checkup'),
   'privacy-advanced': {
     id: 'privacy-advanced',
     title: 'Advanced',
@@ -453,12 +389,7 @@ export const SETTINGS: Record<string, SettingNode> = {
       {
         items: [{ type: 'toggle', title: 'Block unknown account messages', key: 'privacy.blockUnknown', default: false }],
         footer:
-          'To protect your account and improve device performance, messages from unknown accounts will be blocked if they exceed a certain volume.',
-      },
-      {
-        items: [{ type: 'toggle', title: 'Protect IP address in calls', key: 'privacy.protectIp', default: false }],
-        footer:
-          'To make it harder for people to infer your location, calls on this device will be securely relayed. This will reduce call quality.',
+          'Block messages from people who aren’t in your contacts. They’ll need to send you a contact request first.',
       },
       {
         items: [{ type: 'toggle', title: 'Disable link previews', key: 'privacy.disableLinkPreviews', default: false }],
@@ -473,24 +404,17 @@ export const SETTINGS: Record<string, SettingNode> = {
     id: 'chats',
     title: 'Chats',
     groups: [
-      { items: [{ type: 'link', id: 'chats-theme', title: 'Default chat theme', icon: 'palette' }] },
       {
         items: [{ type: 'link', id: 'chats-animations', title: 'Animations', icon: 'palette' }],
         footer: 'Choose whether emoji and GIFs move automatically.',
       },
       {
         items: [{ type: 'toggle', title: 'Save to Photos', key: 'chats.saveToPhotos', default: false }],
-        footer: 'Automatically save photos and videos you receive to Photos.',
-      },
-      {
-        items: [
-          { type: 'link', id: 'chats-backup', title: 'Chat backup', icon: 'sync' },
-          { type: 'link', id: 'chats-export', title: 'Export chat', icon: 'document' },
-        ],
+        footer: 'Automatically save photos and videos you receive to your device.',
       },
       {
         items: [{ type: 'toggle', title: 'Keep chats archived', key: 'chats.keepArchived', default: false }],
-        footer: 'Archived chats will remain archived when you receive a new message.',
+        footer: 'Archived chats stay archived when a new message arrives. When off, a new message brings the chat back to your main list.',
       },
       {
         items: [
@@ -501,9 +425,6 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
     ],
   },
-  'chats-theme': placeholder('chats-theme', 'Default chat theme', 'Chat wallpaper and themes are not part of this build.'),
-  'chats-backup': placeholder('chats-backup', 'Chat backup'),
-  'chats-export': placeholder('chats-export', 'Export chat'),
   'chats-animations': {
     id: 'chats-animations',
     title: 'Animations',
@@ -538,7 +459,6 @@ export const SETTINGS: Record<string, SettingNode> = {
     title: 'Appearance',
     groups: [
       { items: [{ type: 'link', id: 'appearance-theme', title: 'Theme', icon: 'palette' }] },
-      { items: [{ type: 'link', id: 'chats-theme', title: 'Default chat theme', icon: 'palette' }] },
       {
         items: [{ type: 'link', id: 'chats-animations', title: 'Animations', icon: 'palette' }],
         footer: 'Choose whether emoji and GIFs move automatically.',
@@ -589,14 +509,6 @@ export const SETTINGS: Record<string, SettingNode> = {
         ],
       },
       {
-        header: 'Status notifications',
-        items: [
-          { type: 'toggle', title: 'Show notifications', key: 'notifications.status.show', default: true },
-          { type: 'link', id: 'notifications-status-sound', title: 'Sound', icon: 'music' },
-          { type: 'toggle', title: 'Reaction notifications', key: 'notifications.status.reactions', default: true },
-        ],
-      },
-      {
         header: 'Wall notifications',
         items: [
           { type: 'toggle', title: 'Show notifications', key: 'notifications.wall.show', default: true },
@@ -609,10 +521,6 @@ export const SETTINGS: Record<string, SettingNode> = {
           { type: 'toggle', title: 'In-call sounds', key: 'notifications.callSounds', default: true },
         ],
         footer: 'Subtle cues during a call — connecting, reconnecting, mute/unmute, camera on/off, and a quiet tone for a message that arrives while you’re on a call.',
-      },
-      {
-        items: [{ type: 'toggle', title: 'Reminders', key: 'notifications.reminders', default: true }],
-        footer: 'Get occasional reminders about messages, calls or status updates you haven’t seen.',
       },
       {
         header: 'Home screen notifications',
@@ -634,11 +542,6 @@ export const SETTINGS: Record<string, SettingNode> = {
     id: 'notifications-group-sound',
     title: 'Sound',
     groups: [{ header: 'Alert tones', items: [{ type: 'choice', key: 'notifications.group.sound', default: 'note', options: TONES }] }],
-  },
-  'notifications-status-sound': {
-    id: 'notifications-status-sound',
-    title: 'Sound',
-    groups: [{ header: 'Alert tones', items: [{ type: 'choice', key: 'notifications.status.sound', default: 'note', options: TONES }] }],
   },
   'notifications-badge': {
     id: 'notifications-badge',
@@ -774,13 +677,6 @@ export const SETTINGS: Record<string, SettingNode> = {
     id: 'help',
     title: 'Help',
     groups: [
-      {
-        items: [
-          { type: 'link', id: 'help-faq', title: 'Help center', icon: 'help' },
-          { type: 'link', id: 'help-contact', title: 'Contact us', icon: 'chat' },
-          { type: 'link', id: 'help-terms', title: 'Terms and privacy policy', icon: 'document' },
-        ],
-      },
       { items: [{ type: 'stat', title: 'Version', value: '0.1.0' }] },
       {
         header: 'Developer',
@@ -789,9 +685,6 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
     ],
   },
-  'help-faq': placeholder('help-faq', 'Help center', 'Help articles open in your browser once a server is connected.'),
-  'help-contact': placeholder('help-contact', 'Contact us', 'Support contact is available once a server is connected.'),
-  'help-terms': placeholder('help-terms', 'Terms and privacy policy', 'The terms and privacy policy open in your browser once a server is connected.'),
 };
 
 export function settingNode(id: string): SettingNode | undefined {
