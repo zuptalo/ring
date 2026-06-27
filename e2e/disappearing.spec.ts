@@ -56,3 +56,27 @@ test('disappearing messages: TTL syncs to the peer and both sides sweep', async 
   expect(await bodies(a, aChat)).toContain('keep');
   expect(await bodies(b, bChat)).toContain('keep');
 });
+
+/**
+ * Default message timer (privacy.messageTimer): turning it on makes every NEW 1:1
+ * chat you start begin with disappearing messages set to that duration. Existing
+ * chats are untouched; this pins the inheritance on a freshly-created chat.
+ */
+test('default message timer: a new 1:1 chat inherits privacy.messageTimer', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'TTLDEF1');
+  const b = await createAccount(ctxB, 'TTLDEF2');
+
+  // Turn the default on BEFORE the chat is created (pair() starts the chat at its end).
+  await ev(a, () => (window as any).__ringTest.setSetting('privacy.messageTimer', '24h'), null);
+  await pair(a, b);
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const aChat = (await chatWith(a, b.id)) as string;
+  expect(aChat).toBeTruthy();
+  expect(await ev(a, (id: string) => (window as any).__ringTest.chatTtl(id), aChat)).toBe(DAY);
+
+  await ctxA.close();
+  await ctxB.close();
+});

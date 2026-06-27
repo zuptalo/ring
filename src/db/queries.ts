@@ -3676,6 +3676,20 @@ export async function addContact(name: string, phone: string): Promise<string> {
  * Find an existing 1:1 chat with a contact, or create one. Returns the chat id.
  * Used by the "New chat" entry surface to start/open a direct conversation.
  */
+/** The global default disappearing-message timer (privacy.messageTimer) in ms, or
+ *  null when off. Applied to NEW 1:1 chats so they start with disappearing on — the
+ *  expiry then rides inside each sent message's sealed payload (stampExpiry), so the
+ *  messages you send self-destruct for everyone. Existing chats are never touched. */
+async function defaultTimerMs(): Promise<number | null> {
+  const DAY = 24 * 60 * 60 * 1000;
+  switch (await getSetting<string>('privacy.messageTimer', 'off')) {
+    case '24h': return DAY;
+    case '7d': return 7 * DAY;
+    case '90d': return 90 * DAY;
+    default: return null;
+  }
+}
+
 export async function startDirectChat(contact: Contact): Promise<string> {
   const chats = await getAll<Chat>('chats');
   // NEVER resolve to a hidden chat (spec 1019): starting a chat from the contact must
@@ -3705,6 +3719,7 @@ export async function startDirectChat(contact: Contact): Promise<string> {
   }
   const ts = now();
   const id = uid();
+  const ttl = await defaultTimerMs();
   await put<Chat>('chats', {
     id,
     name: contact.name,
@@ -3715,6 +3730,7 @@ export async function startDirectChat(contact: Contact): Promise<string> {
     lastMessageTime: ts,
     unread: 0,
     updatedAt: ts,
+    ...(ttl ? { defaultTtlMs: ttl } : {}),
   });
   return id;
 }
