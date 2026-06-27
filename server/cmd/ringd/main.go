@@ -411,11 +411,22 @@ func run() error {
 	// the app host's :443 here, and this listener also answers TLS-ALPN-01 challenges.
 	var tlsSrv *http.Server
 	if certMgr != nil {
+		// Force HTTP/1.1 (disable HTTP/2). iOS Safari/WKWebView is prone to dropping
+		// HTTP/2 connections mid-request — "the network connection was lost"
+		// (NSURLErrorNetworkConnectionLost, -1005) — which manifests here as larger
+		// media POSTs failing the upload and notification cold-starts showing Safari's
+		// "can't open the page" interstitial. HTTP/1.1 is markedly more reliable for
+		// these clients, and the WebSocket relay (/v1/ws) requires HTTP/1.1 anyway.
+		// We keep "acme-tls/1" so TLS-ALPN-01 cert issuance/renewal still works.
+		tlsConf := certMgr.TLSConfig()
+		tlsConf.NextProtos = []string{"http/1.1", "acme-tls/1"} // drop "h2"
 		tlsSrv = &http.Server{
 			Addr:              ":" + cfg.TLSPort,
 			Handler:           handler,
-			TLSConfig:         certMgr.TLSConfig(),
+			TLSConfig:         tlsConf,
 			ReadHeaderTimeout: 10 * time.Second,
+			// Empty (non-nil) map disables net/http's automatic HTTP/2 handler.
+			TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 		}
 		go func() {
 			slog.Info("listening (https/acme)", "addr", tlsSrv.Addr)

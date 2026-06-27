@@ -16,8 +16,8 @@
  * dismisses stale notifications when it foregrounds (useAppBadge), and consistent
  * per-chat tags collapse the page- and SW-shown notes so there's never a duplicate.
  */
-import { precacheAndRoute } from 'workbox-precaching';
-import { registerRoute } from 'workbox-routing';
+import { precacheAndRoute, createHandlerBoundToURL } from 'workbox-precaching';
+import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { CacheFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import {
@@ -34,6 +34,23 @@ declare const self: ServiceWorkerGlobalScope & {
 
 // App-shell precache (manifest injected at build time).
 precacheAndRoute(self.__WB_MANIFEST);
+
+// SPA app-shell navigation fallback: serve the precached index.html for ALL page
+// navigations (any deep link), so a cold start — notably tapping a push notification,
+// which opens the app at /chat/<id> — loads instantly FROM CACHE instead of fetching
+// the document over the network. On iOS that first cold network request often fails
+// with "the network connection was lost" (NSURLErrorNetworkConnectionLost), which is
+// the "Safari can't open the page" interstitial users hit on notification taps. The
+// SPA router then resolves the deep link client-side. API/relay/WS/blob paths are
+// denylisted so only document navigations are served the shell. Dev is served by Vite
+// (index.html isn't precached there), so this is production-only.
+if (!import.meta.env.DEV) {
+  registerRoute(
+    new NavigationRoute(createHandlerBoundToURL('/index.html'), {
+      denylist: [/^\/v1\//, /^\/healthz\b/, /^\/relay\//],
+    }),
+  );
+}
 
 // Reusable-asset runtime cache (spec 1017): a given animated emoji's Noto Lottie is immutable and
 // served from our own first-party proxy, so cache-first it persistently across sessions — a repeat
