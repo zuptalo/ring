@@ -65,10 +65,24 @@ const IMAGE_PRESETS: Record<Tier, ImagePreset> = {
   fhd: { maxEdge: 1920, quality: 0.8 },
 };
 
+// Formats we NEVER re-encode on send. Re-encoding goes through a canvas + JPEG export,
+// which flattens an animated GIF / animated WebP to a single static frame (and drops
+// WebP's alpha + already-efficient compression). Passing the original bytes through
+// keeps animation intact for the recipient and preserves transparency. WebP is already
+// well-compressed, so skipping the JPEG re-encode costs little even for static ones.
+const PRESERVED_IMAGE_MIME = new Set(['image/gif', 'image/webp']);
+
+/** Whether outgoing media of this MIME type must be sent untouched (animation/alpha). */
+export function isPreservedImageMime(mime: string): boolean {
+  return PRESERVED_IMAGE_MIME.has(mime);
+}
+
 /** Re-encode a photo to the SD/HD preset (downscaled JPEG). Returns the original
- *  blob for 'original', if the re-encode would be larger, or on any error. */
+ *  blob for 'original', for animated/efficient formats (GIF/WebP), if the re-encode
+ *  would be larger, or on any error. */
 export async function compressImage(blob: Blob, quality: Quality): Promise<Blob> {
   if (quality === 'original') return blob;
+  if (isPreservedImageMime(blob.type)) return blob; // keep GIF/WebP animation + alpha
   const preset = IMAGE_PRESETS[quality];
   if (!preset) return blob;
   try {

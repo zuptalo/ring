@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { achievedQuality, availableQualities, qualityLabel } from './media-encode';
+import { achievedQuality, availableQualities, qualityLabel, compressImage, isPreservedImageMime } from './media-encode';
 
 // spec 2007 — the badge must reflect the quality actually sent, never the one
 // requested. achievedQuality() is the single source of truth for that invariant.
@@ -44,6 +44,29 @@ describe('availableQualities (picker suitability)', () => {
 
   it('offers all tiers when the source size is unknown (honest labeling demotes later)', () => {
     expect(availableQualities(undefined)).toEqual(['sd', 'hd', 'fhd', 'original']);
+  });
+});
+
+// Animated/efficient formats must never be re-encoded on send: the canvas+JPEG path
+// would flatten a GIF/animated-WebP to one static frame (and drop WebP alpha). compressImage
+// returns the ORIGINAL blob untouched for these, so animation survives to the recipient.
+describe('compressImage preserves animated/efficient formats', () => {
+  it('flags GIF and WebP as preserved, others not', () => {
+    expect(isPreservedImageMime('image/gif')).toBe(true);
+    expect(isPreservedImageMime('image/webp')).toBe(true);
+    expect(isPreservedImageMime('image/jpeg')).toBe(false);
+    expect(isPreservedImageMime('image/png')).toBe(false);
+  });
+
+  it('returns the original GIF/WebP blob unchanged even at a non-original tier', async () => {
+    const gif = new Blob([new Uint8Array([0x47, 0x49, 0x46])], { type: 'image/gif' });
+    const webp = new Blob([new Uint8Array([0x52, 0x49, 0x46, 0x46])], { type: 'image/webp' });
+    // hd would normally re-encode to JPEG; for these it must hand back the SAME blob.
+    expect(await compressImage(gif, 'hd')).toBe(gif);
+    expect(await compressImage(webp, 'sd')).toBe(webp);
+    // 'original' is a passthrough for everything, as before.
+    const png = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    expect(await compressImage(png, 'original')).toBe(png);
   });
 });
 
