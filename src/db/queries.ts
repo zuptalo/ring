@@ -1108,6 +1108,7 @@ function groupCard(
     avatar: chat.customAvatar ? chat.avatar : undefined, // only propagate custom photos
     members: roster,
     at,
+    createdBy: chat.createdBy, // carry the owner so members can validate @everyone (spec 1020)
   };
 }
 
@@ -1154,6 +1155,7 @@ export async function createGroup(name: string, memberIds: string[]): Promise<st
     name: custom,
     members: roster,
     at: ts,
+    createdBy: self, // tell members who the owner is (for @everyone validation, spec 1020)
   });
   return groupId;
 }
@@ -3911,6 +3913,7 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
     existing.customAvatar = !!card.avatar;
     existing.participantIds = participantIds;
     existing.rosterAt = card.at;
+    if (card.createdBy) existing.createdBy = card.createdBy; // owner, for @everyone validation (spec 1020)
     existing.updatedAt = now();
     await put('chats', existing);
   } else {
@@ -3926,6 +3929,7 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
       rosterAt: card.at,
       autoName,
       customAvatar: !!card.avatar,
+      createdBy: card.createdBy, // owner, for @everyone validation (spec 1020)
       updatedAt: now(),
     });
   }

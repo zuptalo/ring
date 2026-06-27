@@ -48,6 +48,10 @@
           </span>
         </button>
         <ion-buttons slot="end">
+          <!-- spec 1020: jump to where I was @mentioned (the most recent one loaded). -->
+          <ion-button v-if="lastMentionId" aria-label="Jump to mention" @click="jumpToMention">
+            <ion-icon slot="icon-only" :icon="atOutline" />
+          </ion-button>
           <!-- Group size gates the call type (spec 0004 US3): no video past 4 participants,
                no group call at all past 8. 1:1 chats always show both. -->
           <ion-button
@@ -951,7 +955,7 @@ import {
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
   callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline,
-  timeOutline, checkmark, checkmarkDone, addOutline, happyOutline, cameraOutline, megaphoneOutline,
+  timeOutline, checkmark, checkmarkDone, addOutline, happyOutline, cameraOutline, megaphoneOutline, atOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
@@ -2690,6 +2694,21 @@ const renderItems = computed<RenderItem[]>(() => {
   return out;
 });
 const itemTime = (it: RenderItem) => (it.kind === 'msg' ? it.message.timestamp : it.messages[0].timestamp);
+
+// spec 1020: the most recent loaded message that @mentions me (for the header
+// jump-to-mention button). Incoming only — you don't "jump to" your own message.
+const lastMentionId = computed<string | null>(() => {
+  if (!chat.value?.isGroup) return null;
+  const list = visibleMessages.value;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i];
+    if (!m.outgoing && (m.mentions?.includes(selfId) || m.mentionsEveryone)) return m.id;
+  }
+  return null;
+});
+function jumpToMention(): void {
+  if (lastMentionId.value) void scrollToMessage(lastMentionId.value);
+}
 
 // First 4 cells of an album, plus the "+N more" overlay count on the 4th.
 const albumCells = (msgs: Message[]) => msgs.slice(0, 4);

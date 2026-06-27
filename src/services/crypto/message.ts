@@ -150,6 +150,7 @@ export interface GroupCard {
   members: GroupMember[]; // full roster (incl. the sender)
   at: number; // version (epoch ms) for last-write-wins
   inviter?: string; // 'invite' only: the inviter's user id (for the invitee's UI)
+  createdBy?: string; // group owner (creator) — v1 "admin" for @everyone gating (spec 1020)
 }
 
 /**

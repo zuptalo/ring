@@ -48,6 +48,9 @@
           <ion-icon v-if="muted" :icon="notificationsOffOutline" class="meta-ico" aria-hidden="true" />
           <ion-icon v-if="chat.locked" :icon="lockClosedOutline" class="meta-ico" aria-hidden="true" />
           <ion-icon v-if="chat.pinned" :icon="pinOutline" class="meta-ico pin" aria-hidden="true" />
+          <!-- spec 1020: a distinct "@" marker when this chat has an unread @mention,
+               separate from the normal unread count beside it. -->
+          <ion-badge v-if="chat.unreadMentions" color="primary" class="mention-badge" aria-label="You were mentioned">@</ion-badge>
           <ion-badge v-if="chat.unread" color="primary">{{ chat.unread }}</ion-badge>
           <span v-else-if="chat.manualUnread" class="unread-dot" aria-hidden="true" />
         </div>
@@ -169,6 +172,17 @@ function more(): void {
 }
 .meta-ico.pin {
   transform: rotate(45deg);
+}
+/* "@" mention marker: a circular badge so it reads as a symbol, not a count. */
+.mention-badge {
+  min-width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-weight: 700;
 }
 /* Revealed hidden chat: a faint tint on the whole row + an eye-off marker, so it's
    easy to tell apart from normal chats during a reveal session. Only renders while

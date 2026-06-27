@@ -72,10 +72,17 @@
               In-app banners
             </ion-toggle>
           </ion-item>
-          <ion-item button :detail="false" lines="none" @click="chooseContent">
+          <ion-item button :detail="false" @click="chooseContent">
             <ion-icon slot="start" :icon="documentTextOutline" />
             <ion-label>Show content</ion-label>
             <ion-note slot="end">{{ contentLabel }}</ion-note>
+          </ion-item>
+          <!-- spec 1020: let an @mention break through even when this group is muted. -->
+          <ion-item lines="none">
+            <ion-icon slot="start" :icon="atOutline" />
+            <ion-toggle :checked="notifyMentions" @ion-change="setMentions($event.detail.checked)">
+              Notify for mentions even when muted
+            </ion-toggle>
           </ion-item>
         </ion-list>
 
@@ -146,7 +153,7 @@ import {
 } from '@ionic/vue';
 import {
   personAddOutline, exitOutline, createOutline, cameraOutline, ellipsisHorizontal,
-  imagesOutline, searchOutline, notificationsOutline, notificationsOffOutline, starOutline, timerOutline,
+  imagesOutline, searchOutline, notificationsOutline, notificationsOffOutline, starOutline, timerOutline, atOutline,
   chatbubbleOutline, documentTextOutline,
 } from 'ionicons/icons';
 import {
@@ -177,6 +184,7 @@ const muteLabel = computed(() => {
 // Per-chat notification controls (spec 1015), identical to 1:1 chats.
 const notifyWebPush = computed(() => chat.value?.notifyWebPush ?? true);
 const notifyInApp = computed(() => chat.value?.notifyInApp ?? true);
+const notifyMentions = computed(() => chat.value?.notifyMentions ?? true);
 const notifyContent = computed<ChatNotifyContent>(() => chat.value?.notifyContent ?? 'full');
 const CONTENT_LABELS: Record<ChatNotifyContent, string> = {
   full: 'Message content',
@@ -187,6 +195,9 @@ const contentLabel = computed(() => CONTENT_LABELS[notifyContent.value]);
 
 async function setWebPush(on: boolean): Promise<void> {
   await setChatNotifyPrefs(chatId, { webPush: on });
+}
+async function setMentions(on: boolean): Promise<void> {
+  await setChatNotifyPrefs(chatId, { mentions: on });
 }
 async function setInApp(on: boolean): Promise<void> {
   await setChatNotifyPrefs(chatId, { inApp: on });
