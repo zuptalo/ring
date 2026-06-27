@@ -218,7 +218,13 @@ import { peerPresence } from '@/composables/usePresence';
 const PAGE = 15;
 const router = useRouter();
 const open = (id: string) => router.push(`/contact/${id}`);
-const removeContact = (id: string) => deleteContact(id);
+const removeContact = async (id: string): Promise<void> => {
+  try {
+    await deleteContact(id);
+  } catch {
+    void appToast({ message: 'Could not delete. Try again.', duration: 1500, color: 'danger' });
+  }
+};
 
 // Shared add-contact flow (also used by the New-chat modal).
 const { connect } = useConnect();
