@@ -26,7 +26,7 @@ import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deri
 import { THUMB_TIERS } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview } from '@/services/link-preview';
-import { ensureHiddenLoaded, isRevealed } from '@/services/hidden-state';
+import { ensureHiddenLoaded, isRevealed, isHiddenKnown } from '@/services/hidden-state';
 import { hiddenCallKeys } from '@/db/hidden-calls';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
@@ -61,12 +61,31 @@ export async function listChats(q = ''): Promise<Chat[]> {
   // then most-recent.
   const hidden = await ensureHiddenLoaded();
   const showHidden = isRevealed();
+  // Fail CLOSED while the hidden set is still unknown (the keystore can be briefly
+  // locked when the app opens — the list query may run behind the unlock gate). An
+  // empty cache then is "we don't know yet", NOT "nothing hidden", so showing chats
+  // would flash hidden ones before they're filtered. Return nothing until the set
+  // loads; its success nudges a re-query (hidden-state), so this lasts only until
+  // unlock. Users with no hidden set load an empty set even while locked → known →
+  // unaffected.
+  if (!showHidden && !isHiddenKnown()) return [];
   const chats = (await getAll<Chat>('chats')).filter(
     (c) => !c.pending && !c.archived && !c.locked && (showHidden || !hidden.has(c.id)),
   );
   const filtered = q
     ? chats.filter((c) => matches(c.name, q) || matches(c.lastMessage, q))
     : chats;
+  // During a reveal session, surface the just-revealed hidden chats at the VERY top
+  // (above pins) so they're easy to find for the short time they're visible; the
+  // rest keep their normal pinned-then-recent order. Outside a reveal, hidden chats
+  // aren't in the list at all, so this is a no-op.
+  if (showHidden) {
+    return filtered.sort((a, b) => {
+      const ah = hidden.has(a.id), bh = hidden.has(b.id);
+      if (ah !== bh) return ah ? -1 : 1;
+      return chatOrder(a, b);
+    });
+  }
   return filtered.sort(chatOrder);
 }
 
@@ -1889,6 +1908,10 @@ export interface CallGroup extends Call {
 export async function listCallGroups(q = ''): Promise<CallGroup[]> {
   let calls = await listCalls(q); // newest first
   const hidden = await ensureHiddenLoaded();
+  // Fail closed while the hidden set is unknown (locked at open): an empty cache is
+  // "not loaded yet", not "nothing hidden", so showing calls could flash a hidden
+  // chat's call history. Re-queries once the set loads (see listChats).
+  if (!isHiddenKnown()) return [];
   if (hidden.size > 0) {
     const exclude = hiddenCallKeys(await getAll<Chat>('chats'), hidden);
     calls = calls.filter((c) => !exclude.has(c.contactId));
@@ -3102,27 +3125,110 @@ async function setChatPending(chatId: string, pending: boolean): Promise<void> {
   await put('chats', chat);
 }
 
-export async function updateContactProfile(id: string, name: string, avatar: string): Promise<void> {
-  const c = await getContact(id);
-  if (!c) return;
-  c.name = name || c.name;
-  c.avatar = avatar || c.avatar;
-  c.updatedAt = now();
-  await put('contacts', c);
-
-  // The 1:1 chat keeps its own name/avatar snapshot (taken at creation, when the
-  // contact was still a placeholder); refresh it so the chat list + header show
-  // the peer's real name/photo from their contact card.
+// Mirror a contact's display name/avatar onto its paired 1:1 chat (the chat keeps its
+// own snapshot, taken at creation when the contact was still a placeholder), so the
+// chat list + header reflect the current name/photo.
+async function syncChatFromContact(id: string, name: string, avatar: string): Promise<void> {
   const chats = await getAll<Chat>('chats');
   const chat = chats.find(
     (ch) => !ch.isGroup && ch.participantIds.length === 1 && ch.participantIds[0] === id,
   );
-  if (chat) {
-    chat.name = c.name;
-    chat.avatar = c.avatar;
+  if (chat && (chat.name !== name || chat.avatar !== avatar)) {
+    chat.name = name;
+    chat.avatar = avatar;
     chat.updatedAt = now();
     await put('chats', chat);
   }
+}
+
+/**
+ * Ingest a peer's published profile (name/avatar) from a contact card or the directory.
+ * The FIRST profile we learn is applied directly; any later CHANGE is STAGED (pending)
+ * and the user is asked whether to adopt it (so a peer can't silently relabel themselves,
+ * and a user's local override is preserved). A re-send of an unchanged (incl. previously
+ * dismissed) profile is a no-op — `remoteName`/`remoteAvatar` track the last seen value,
+ * so a dismissed change never re-prompts until the peer changes it again.
+ */
+export async function updateContactProfile(id: string, name: string, avatar: string, force = false): Promise<void> {
+  const c = await getContact(id);
+  if (!c) return;
+  const newName = (name || '').trim() || c.remoteName || c.name;
+  const newAvatar = avatar || c.remoteAvatar || c.avatar;
+  const hadRemote = c.remoteName != null || c.remoteAvatar != null;
+  if (!force && hadRemote && c.remoteName === newName && c.remoteAvatar === newAvatar) return; // unchanged
+  c.remoteName = newName;
+  c.remoteAvatar = newAvatar;
+  if (force || (!hadRemote && !c.localProfile)) {
+    // Apply directly (no prompt): the FIRST profile we learn, or a forced refetch when
+    // the user resets a local override back to the peer's own name/photo.
+    c.name = newName;
+    c.avatar = newAvatar;
+    delete c.pendingName;
+    delete c.pendingAvatar;
+    if (force) delete c.localProfile; // a reset/refetch drops the override
+    c.updatedAt = now();
+    await put('contacts', c);
+    await syncChatFromContact(id, newName, newAvatar);
+    return;
+  }
+  // A genuine change to a known profile → stage it; the user adopts/dismisses via the
+  // in-app prompt (useContactProfilePrompts). The displayed name/avatar are untouched.
+  c.pendingName = newName;
+  c.pendingAvatar = newAvatar;
+  c.updatedAt = now();
+  await put('contacts', c);
+}
+
+/** Adopt a staged remote name/avatar change (the user said yes to the prompt). */
+export async function adoptContactProfile(id: string): Promise<void> {
+  const c = await getContact(id);
+  if (!c || (c.pendingName == null && c.pendingAvatar == null)) return;
+  if (c.pendingName != null) c.name = c.pendingName;
+  if (c.pendingAvatar != null) c.avatar = c.pendingAvatar;
+  delete c.pendingName;
+  delete c.pendingAvatar;
+  delete c.localProfile; // adopting the peer's profile clears any local override
+  c.updatedAt = now();
+  await put('contacts', c);
+  await syncChatFromContact(id, c.name, c.avatar);
+}
+
+/** Decline a staged remote change. It won't re-prompt until the peer changes again
+ *  (remoteName/remoteAvatar already hold the new value). */
+export async function dismissContactProfile(id: string): Promise<void> {
+  const c = await getContact(id);
+  if (!c || (c.pendingName == null && c.pendingAvatar == null)) return;
+  delete c.pendingName;
+  delete c.pendingAvatar;
+  c.updatedAt = now();
+  await put('contacts', c);
+}
+
+/** Set a LOCAL override of a contact's display name and/or avatar (takes precedence
+ *  over the peer's; future remote changes still prompt). */
+export async function setContactLocalProfile(id: string, opts: { name?: string; avatar?: string }): Promise<void> {
+  const c = await getContact(id);
+  if (!c) return;
+  if (opts.name != null && opts.name.trim()) c.name = opts.name.trim();
+  if (opts.avatar) c.avatar = opts.avatar;
+  c.localProfile = true;
+  c.updatedAt = now();
+  await put('contacts', c);
+  await syncChatFromContact(id, c.name, c.avatar);
+}
+
+/** Revert a local override back to the peer's current name/avatar. */
+export async function resetContactToRemote(id: string): Promise<void> {
+  const c = await getContact(id);
+  if (!c) return;
+  if (c.remoteName) c.name = c.remoteName;
+  if (c.remoteAvatar) c.avatar = c.remoteAvatar;
+  delete c.localProfile;
+  delete c.pendingName;
+  delete c.pendingAvatar;
+  c.updatedAt = now();
+  await put('contacts', c);
+  await syncChatFromContact(id, c.name, c.avatar);
 }
 
 /** Add a peer by Ring id and send them a friend request (our name + photo).
@@ -3297,16 +3403,26 @@ export async function resolveAlert(id: string): Promise<void> {
 /* ---- badge counts ---- */
 
 export async function countUnread(): Promise<number> {
-  // Hidden chats (spec 1019) never contribute to the badge — always, even while
-  // revealed — so the count can't reveal or attribute a hidden chat's existence.
-  const hidden = await ensureHiddenLoaded();
+  // How hidden chats (spec 1019) affect the unread badge is user-chosen
+  // (privacy.hiddenChatsBadge):
+  //   'always'   (default) — hidden chats count, so you always know something is
+  //               waiting (the badge can hint a hidden chat exists; the user opted in).
+  //   'revealed' — hidden chats count only during an active reveal session.
+  //   'never'    — hidden chats never contribute, so the badge can't betray one.
+  const mode = await getSetting<string>('privacy.hiddenChatsBadge', 'always');
   const chats = await getAll<Chat>('chats');
-  return chats.reduce((n, c) => n + (hidden.has(c.id) ? 0 : c.unread || 0), 0);
+  if (mode === 'always') return chats.reduce((n, c) => n + (c.unread || 0), 0);
+  // 'never' / 'revealed' need the hidden set to know what to exclude.
+  const hidden = await ensureHiddenLoaded();
+  if (!isHiddenKnown()) return 0; // unknown set (locked at open) → fail closed
+  const countHidden = mode === 'revealed' && isRevealed();
+  return chats.reduce((n, c) => n + (!countHidden && hidden.has(c.id) ? 0 : c.unread || 0), 0);
 }
 
 export async function countMissedUnseen(): Promise<number> {
   const calls = await getAll<Call>('calls');
   const hidden = await ensureHiddenLoaded();
+  if (!isHiddenKnown()) return 0; // unknown set (locked at open) → fail closed so a hidden missed call can't leak into the badge
   if (hidden.size === 0) return calls.filter((c) => c.missed && !c.seen).length;
   const exclude = hiddenCallKeys(await getAll<Chat>('chats'), hidden);
   return calls.filter((c) => c.missed && !c.seen && !exclude.has(c.contactId)).length;
