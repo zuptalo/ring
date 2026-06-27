@@ -111,9 +111,10 @@ export function getChat(id: string): Promise<Chat | undefined> {
  *  manual "marked unread" flag. */
 export async function markChatRead(chatId: string): Promise<void> {
   const chat = await getChat(chatId);
-  if (chat && (chat.unread || chat.manualUnread)) {
+  if (chat && (chat.unread || chat.manualUnread || chat.unreadMentions)) {
     chat.unread = 0;
     delete chat.manualUnread;
+    chat.unreadMentions = 0; // @mentions seen when the chat is read (spec 1020)
     chat.updatedAt = now();
     await put('chats', chat);
   }
@@ -308,10 +309,19 @@ export async function countChatMessages(chatId: string): Promise<number> {
 
 /** Append a locally-authored message (starts `pending`) and update the chat.
  *  `replyTo` quotes another message above this one. */
-export async function sendMessage(chatId: string, body: string, replyTo?: ReplyRef): Promise<void> {
+export async function sendMessage(
+  chatId: string,
+  body: string,
+  replyTo?: ReplyRef,
+  mentions?: string[],
+  mentionsEveryone?: boolean,
+): Promise<void> {
   const ts = now();
   const chat = await getChat(chatId);
   await guardOutbound(chat);
+  // @mentions are a GROUP concept only (spec 1020); ignore them in a 1:1.
+  const ment = chat?.isGroup && mentions && mentions.length ? [...new Set(mentions)] : undefined;
+  const everyone = chat?.isGroup && mentionsEveryone ? true : undefined;
   const message: Message = {
     id: uid(),
     chatId,
@@ -326,6 +336,8 @@ export async function sendMessage(chatId: string, body: string, replyTo?: ReplyR
       ? chat.participantIds.map((contactId) => ({ contactId }))
       : undefined,
     replyTo,
+    mentions: ment,
+    mentionsEveryone: everyone,
     updatedAt: ts,
   };
   await put('messages', message);
@@ -342,7 +354,7 @@ export async function sendMessage(chatId: string, body: string, replyTo?: ReplyR
 
   // Seal the message (E2EE) and hand it to the sync engine; receipts advance the
   // status. Group chats fan out to each member over their 1:1 session.
-  const payload: MessagePayload = { body, kind: 'text', timestamp: ts, reply: replyTo };
+  const payload: MessagePayload = { body, kind: 'text', timestamp: ts, reply: replyTo, mentions: ment, mentionsEveryone: everyone };
   if (chat?.isGroup) await sealAndEnqueueGroup(chat, message.id, payload);
   else await sealAndEnqueue(chat, message.id, payload);
 
@@ -1132,6 +1144,7 @@ export async function createGroup(name: string, memberIds: string[]): Promise<st
     rosterAt: ts,
     autoName: !custom,
     customAvatar: false,
+    createdBy: self, // group owner — v1 "admin" for @everyone gating (spec 1020)
     updatedAt: ts,
   });
   linkGroupMembers(memberIds); // connect to co-members so fan-out works under the gate
@@ -3064,9 +3077,12 @@ export interface ChatNotifyPrefs {
   webPush: boolean;
   inApp: boolean;
   content: ChatNotifyContent;
+  // @mentions (spec 1020): "Notify for mentions even when muted" — when off, a mention
+  // gets no escalation. Default true. Group chats only.
+  mentions: boolean;
 }
 
-const CHAT_NOTIFY_DEFAULTS: ChatNotifyPrefs = { webPush: true, inApp: true, content: 'full' };
+const CHAT_NOTIFY_DEFAULTS: ChatNotifyPrefs = { webPush: true, inApp: true, content: 'full', mentions: true };
 
 /** Read a chat's notification controls with defaults applied. A missing chat (or
  *  any absent field) yields the defaults, so callers never special-case undefined. */
@@ -3076,6 +3092,7 @@ export async function getChatNotifyPrefs(chatId: string): Promise<ChatNotifyPref
     webPush: chat?.notifyWebPush ?? CHAT_NOTIFY_DEFAULTS.webPush,
     inApp: chat?.notifyInApp ?? CHAT_NOTIFY_DEFAULTS.inApp,
     content: chat?.notifyContent ?? CHAT_NOTIFY_DEFAULTS.content,
+    mentions: chat?.notifyMentions ?? CHAT_NOTIFY_DEFAULTS.mentions,
   };
 }
 
@@ -3097,6 +3114,10 @@ export async function setChatNotifyPrefs(chatId: string, patch: Partial<ChatNoti
   if (patch.content !== undefined) {
     if (patch.content === CHAT_NOTIFY_DEFAULTS.content) delete chat.notifyContent;
     else chat.notifyContent = patch.content;
+  }
+  if (patch.mentions !== undefined) {
+    if (patch.mentions === CHAT_NOTIFY_DEFAULTS.mentions) delete chat.notifyMentions;
+    else chat.notifyMentions = patch.mentions;
   }
   chat.updatedAt = now();
   await put('chats', chat);
@@ -4153,6 +4174,8 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     contact: payload.contact,
     audio: payload.audio,
     linkPreview: payload.linkPreview, // present only on the rare fast-enough inline send
+    mentions: payload.mentions, // @mentions (spec 1020): member ids tagged in this message
+    mentionsEveryone: payload.mentionsEveryone, // honored only if the sender is the group owner (validated below)
     expiresAt: payload.expiresAt, // disappearing messages: same expiry as the sender's copy
     mediaWidth: payload.mediaRef?.width,
     mediaHeight: payload.mediaRef?.height,
@@ -4176,6 +4199,15 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
             ? payload.audio?.title || mediaPreview('audio', durationSec, payload.mediaRef?.name)
             : payload.body || mediaPreview(kind, durationSec, undefined, payload.videoNote);
   const chat = await getChat(targetChatId);
+  // @mentions (spec 1020): am I called out in this group message? Individual mention by
+  // id, or an @everyone that the sender is actually the group OWNER of (re-validated on
+  // receive so a non-owner can't forge a broadcast). Drives the unread-mention count + a
+  // notification escalation. Self-sent messages never count (outgoing === false here).
+  const selfId = getSelfUserId() ?? '';
+  const selfMentioned =
+    isGroupMsg &&
+    (!!payload.mentions?.includes(selfId) ||
+      (!!payload.mentionsEveryone && !!chat?.createdBy && from === chat.createdBy));
   if (chat) {
     // Group previews show the sender's first name (WhatsApp-style).
     chat.lastMessage = isGroupMsg ? `${contact.name.split(' ')[0]}: ${preview}` : preview;
@@ -4184,7 +4216,9 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     chat.interactions = (chat.interactions ?? 0) + 1;
     // If the user is actively viewing this chat, the message is seen on arrival
     // (the open chat sends the read receipt), so don't grow the unread badge.
-    chat.unread = isChatActive(targetChatId) ? 0 : (chat.unread ?? 0) + 1;
+    const active = isChatActive(targetChatId);
+    chat.unread = active ? 0 : (chat.unread ?? 0) + 1;
+    if (selfMentioned && !active) chat.unreadMentions = (chat.unreadMentions ?? 0) + 1;
     chat.updatedAt = now();
     await put('chats', chat);
   }
@@ -4205,6 +4239,9 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     // The notification spells out shared location / contact / poll (no icon to lean
     // on), unlike the terser `preview` used for the chats list above.
     body: isGroupMsg ? `${contact.name}: ${notifyPreview(payload)}` : notifyPreview(payload) || 'New message',
+    // @mentions (spec 1020): a mention escalates past mute/quiet and names the mentioner.
+    mention: selfMentioned,
+    mentionName: contact.name,
     // A ring:drain push woke us to fetch this → bypass the post-unlock settle window
     // and let the SW (which already fired for that push) own the OS notification, so
     // a woken message is never swallowed AND never double-announced (spec 2010).

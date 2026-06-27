@@ -349,6 +349,11 @@ export function installTestHook(): void {
     setGroupAvatar: (chatId: string, dataUrl: string) => dbSetGroupAvatar(chatId, dataUrl),
     leaveGroup: (chatId: string) => dbLeaveGroup(chatId),
     sendChatMessage: (chatId: string, body: string) => dbSendMessage(chatId, body),
+    /** Send a group message that @mentions the given member ids (spec 1020). */
+    sendWithMentions: (chatId: string, body: string, mentions: string[], everyone = false) =>
+      dbSendMessage(chatId, body, undefined, mentions, everyone),
+    /** A chat's unread-MENTIONS count (separate from unread). */
+    unreadMentions: async (chatId: string): Promise<number> => (await dbGetChat(chatId))?.unreadMentions ?? 0,
     editChatMessage: (messageId: string, body: string) => dbEditMessage(messageId, body),
     deleteForEveryone: (messageId: string, trace: boolean) => dbDeleteMessageForEveryone(messageId, trace),
     setChatTtl: (chatId: string, ms: number | null) => dbSetChatTtl(chatId, ms),

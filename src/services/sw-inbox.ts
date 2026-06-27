@@ -20,7 +20,7 @@
 import { attemptDeviceUnlock } from './crypto/identity';
 import { previewPacket } from './messaging';
 import { readHiddenSet } from './hidden-chats';
-import { readSessionToken } from './session';
+import { readSessionToken, readSessionUserId } from './session';
 import { get, getAll, put } from '@/db/idb';
 import { notifyPreview } from '@/utils/notify-preview';
 import type { Chat, Contact, Setting } from '@/db/types';
@@ -146,6 +146,7 @@ export function noteForPayload(
   showMessages: boolean,
   showPreview: boolean,
   hidden: Set<string> = new Set(),
+  selfId = '',
 ): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
@@ -207,6 +208,28 @@ export function noteForPayload(
   if (chat && hidden.has(chat.id)) {
     return {
       note: { ids: [f.id as string], title: 'Ring', body: 'New message', url: '/tabs/chats', tag: `ring:${chat.id}` },
+      wasMessage: true,
+    };
+  }
+  // @mentions (spec 1020): a message that @mentions me (individually, or an @everyone
+  // from the actual group OWNER) escalates past the per-chat silencers below (mute,
+  // web-push-off, content=none), and names the mentioner — UNLESS the chat turned the
+  // "mentions even when muted" pref off. (Hidden chats above still win — a hidden chat
+  // never escalates.) The global "Show notifications" master is honored above.
+  const selfMentioned =
+    isGroup &&
+    (!!payload.mentions?.includes(selfId) ||
+      (!!payload.mentionsEveryone && !!chat?.createdBy && from === chat.createdBy));
+  if (selfMentioned && chat?.notifyMentions !== false) {
+    const showText = (chat?.notifyContent ?? 'full') === 'full' && showPreview;
+    return {
+      note: {
+        ids: [f.id as string],
+        title: groupChat?.name || 'Group',
+        body: showText ? `${senderName} mentioned you: ${notifyPreview(payload)}` : `${senderName} mentioned you`,
+        url: chat?.id ? `/chat/${chat.id}` : '/tabs/chats',
+        tag: chat?.id ? `ring:${chat.id}` : `ring:from:${from}`,
+      },
       wasMessage: true,
     };
   }
@@ -406,11 +429,12 @@ export async function previewPending(): Promise<PreviewResult> {
   }
 
   const showPreview = await setting<boolean>('notifications.showPreview', true);
-  const [chats, contacts, shown, hidden] = await Promise.all([
+  const [chats, contacts, shown, hidden, selfId] = await Promise.all([
     getAll<Chat>('chats'),
     getAll<Contact>('contacts'),
     loadShown(),
     readHiddenSet(), // spec 1019: hidden chats get a generic, content-free notification
+    readSessionUserId(), // spec 1020: needed to detect "am I @mentioned?" in the SW
   ]);
   const seen = new Set(shown);
 
@@ -429,7 +453,7 @@ export async function previewPending(): Promise<PreviewResult> {
       continue; // can't decrypt this one (session not reachable yet) → leave it for the page
     }
     seen.add(f.id);
-    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden);
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '');
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;
