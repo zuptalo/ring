@@ -33,6 +33,32 @@
           </ion-button>
         </div>
 
+        <!-- Local name/photo override + a staged remote change to adopt. -->
+        <ion-list v-if="!contact.ghosted" :inset="true">
+          <ion-item v-if="contact.pendingName != null || contact.pendingAvatar != null" lines="full">
+            <ion-icon slot="start" :icon="personOutline" color="primary" />
+            <ion-label class="ion-text-wrap">
+              <p>They updated their profile</p>
+              <h2>{{ contact.pendingName ?? contact.name }}</h2>
+            </ion-label>
+            <ion-button slot="end" size="small" fill="clear" @click="dismissPending">Not now</ion-button>
+            <ion-button slot="end" size="small" @click="adoptPending">Use it</ion-button>
+          </ion-item>
+          <ion-item button :detail="false" @click="editName">
+            <ion-icon slot="start" :icon="createOutline" />
+            <ion-label>Edit name</ion-label>
+          </ion-item>
+          <ion-item button :detail="false" @click="photoInput?.click()">
+            <ion-icon slot="start" :icon="cameraOutline" />
+            <ion-label>Change photo</ion-label>
+          </ion-item>
+          <ion-item v-if="contact.localProfile" button :detail="false" @click="resetProfile">
+            <ion-icon slot="start" :icon="refreshOutline" color="medium" />
+            <ion-label>Reset to their name &amp; photo</ion-label>
+          </ion-item>
+        </ion-list>
+        <input ref="photoInput" type="file" accept="image/*" hidden @change="onPickPhoto" />
+
         <ion-list v-if="!contact.ghosted && contact.about" :inset="true">
           <ion-item lines="none">
             <ion-label class="ion-text-wrap">
@@ -126,13 +152,16 @@ import {
 import {
   chatbubbleOutline, searchOutline, banOutline, imagesOutline,
   notificationsOutline, notificationsOffOutline, starOutline, timerOutline, eyeOutline, documentTextOutline,
+  createOutline, cameraOutline, refreshOutline, personOutline,
 } from 'ionicons/icons';
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import {
   getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl,
   getPresenceOverrides, setPresenceOverride, setChatNotifyPrefs, type ChatNotifyContent,
+  setContactLocalProfile, resetContactToRemote, adoptContactProfile, dismissContactProfile, downscaleAvatar,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
+import { refetchContactProfile } from '@/services/directory';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { forceReconnect } from '@/composables/useSync';
 import type { Contact, Chat } from '@/db/types';
@@ -142,6 +171,57 @@ import { peerPresence, presenceLabel } from '@/composables/usePresence';
 const route = useRoute();
 const router = useRouter();
 const contactId = route.params.id as string;
+const photoInput = ref<HTMLInputElement | null>(null);
+
+// ---- local name/photo override + adopt a staged remote change ----
+async function editName(): Promise<void> {
+  const a = await alertController.create({
+    header: 'Edit name',
+    message: 'This name is stored only on your device.',
+    inputs: [{ name: 'name', type: 'text', value: contact.value?.name ?? '', placeholder: 'Name' }],
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Save',
+        handler: async (d: { name?: string }) => {
+          const n = (d.name ?? '').trim();
+          if (n) await setContactLocalProfile(contactId, { name: n });
+        },
+      },
+    ],
+  });
+  await a.present();
+}
+async function onPickPhoto(e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = ''; // allow re-picking the same file
+  if (!file) return;
+  try {
+    const dataUrl = await new Promise<string>((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result as string);
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(file);
+    });
+    const avatar = await downscaleAvatar(dataUrl);
+    await setContactLocalProfile(contactId, { avatar });
+  } catch {
+    await appToast({ message: "Couldn't use that image.", color: 'danger' });
+  }
+}
+async function resetProfile(): Promise<void> {
+  // Optimistic: drop the override + revert to the last-known remote (works offline),
+  // then re-pull the peer's CURRENT name/photo from the directory and apply it.
+  await resetContactToRemote(contactId);
+  await refetchContactProfile(contactId);
+}
+async function adoptPending(): Promise<void> {
+  await adoptContactProfile(contactId);
+}
+async function dismissPending(): Promise<void> {
+  await dismissContactProfile(contactId);
+}
 
 const contact = useLiveQuery<Contact | undefined>(
   () => getContact(contactId),

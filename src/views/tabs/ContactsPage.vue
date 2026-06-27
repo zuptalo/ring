@@ -131,7 +131,7 @@
                 <span v-if="peerPresence(person.id)?.online" class="presence-dot" aria-hidden="true" />
               </div>
               <ion-label>
-                <h2>{{ capitalizeFirst(person.name) }}</h2>
+                <h2>{{ person.name }}</h2>
                 <p>{{ person.about }}</p>
               </ion-label>
             </ion-item>
@@ -161,7 +161,7 @@
               <img :src="person.avatar" :alt="person.name" />
             </ion-avatar>
             <ion-label>
-              <h2>{{ capitalizeFirst(person.name) }}</h2>
+              <h2>{{ person.name }}</h2>
               <p>Blocked</p>
             </ion-label>
             <ion-icon slot="end" :icon="banOutline" color="medium" />
@@ -214,7 +214,6 @@ import { useLiveQuery } from '@/composables/useLiveQuery';
 import { warmContacts, warmContactsLoaded, warmWhenIdle } from '@/composables/warmStores';
 import { useConnect } from '@/composables/useConnect';
 import { peerPresence } from '@/composables/usePresence';
-import { capitalizeFirst } from '@/utils/text';
 
 const PAGE = 15;
 const router = useRouter();

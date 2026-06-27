@@ -32,6 +32,18 @@ export interface Contact {
   // so it cannot tell the "all friends" tier from "close friends"). Distinct from the
   // per-CHAT `Chat.favorite` pin.
   closeFriend?: boolean;
+  // Local name/avatar override + remote-change tracking. `name`/`avatar` stay the
+  // DISPLAYED values (a local override or the last-adopted remote). `remoteName`/
+  // `remoteAvatar` mirror the latest profile the peer published — used to DETECT a
+  // change and as the source when the user adopts it. `pendingName`/`pendingAvatar`
+  // stage a remote change awaiting the user's adopt/dismiss decision (drives the
+  // in-app prompt). `localProfile` marks that the user set their own override, so we
+  // can offer "reset to their name & photo".
+  remoteName?: string;
+  remoteAvatar?: string;
+  pendingName?: string;
+  pendingAvatar?: string;
+  localProfile?: boolean;
   updatedAt: number;
 }
 
