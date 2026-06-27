@@ -137,6 +137,15 @@
             <ion-label color="danger">Block contact</ion-label>
           </ion-item>
         </ion-list>
+
+        <!-- An explicit, tap-only Delete (the Contacts-list swipe gesture is easy to
+             miss and unreliable on iOS); available for ghosted contacts too. -->
+        <ion-list :inset="true">
+          <ion-item button :detail="false" class="danger" @click="confirmDelete">
+            <ion-icon slot="start" :icon="trashOutline" color="danger" />
+            <ion-label color="danger">Delete contact</ion-label>
+          </ion-item>
+        </ion-list>
       </template>
     </ion-content>
   </ion-page>
@@ -152,13 +161,14 @@ import {
 import {
   chatbubbleOutline, searchOutline, banOutline, imagesOutline,
   notificationsOutline, notificationsOffOutline, starOutline, timerOutline, eyeOutline, documentTextOutline,
-  createOutline, cameraOutline, refreshOutline, personOutline,
+  createOutline, cameraOutline, refreshOutline, personOutline, trashOutline,
 } from 'ionicons/icons';
 import { computed, ref } from 'vue';
 import {
   getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl,
   getPresenceOverrides, setPresenceOverride, setChatNotifyPrefs, type ChatNotifyContent,
   setContactLocalProfile, resetContactToRemote, adoptContactProfile, dismissContactProfile, downscaleAvatar,
+  deleteContact,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
 import { refetchContactProfile } from '@/services/directory';
@@ -392,6 +402,33 @@ async function block() {
               await blockContact(contactId);
             } catch {
               void appToast({ message: 'Could not block. Try again.', duration: 1500, color: 'danger' });
+            }
+          })();
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
+
+async function confirmDelete() {
+  const alert = await alertController.create({
+    header: 'Delete contact?',
+    message:
+      'This removes them from your contacts and deletes this conversation on this device. It cannot be undone.',
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Delete',
+        role: 'destructive',
+        handler: () => {
+          void (async () => {
+            try {
+              await deleteContact(contactId);
+              // The contact (and its page) no longer exist → return to the list.
+              router.replace('/tabs/contacts');
+            } catch {
+              void appToast({ message: 'Could not delete. Try again.', duration: 1500, color: 'danger' });
             }
           })();
         },

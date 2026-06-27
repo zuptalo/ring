@@ -460,3 +460,45 @@ func TestProtectedRoutesRequireAuth(t *testing.T) {
 		t.Fatalf("bad-token status = %d, want 401", rr.Code)
 	}
 }
+
+// TestDeleteMe: DELETE /v1/me deletes the account (and requires auth). Afterwards a
+// peer sees the user as "terminated" via /v1/status — the Ghost signal clients use.
+func TestDeleteMe(t *testing.T) {
+	srv := newTestServer()
+	aliceTok, aliceID := registerUser(t, srv)
+	bobTok, _ := registerUser(t, srv)
+
+	// Unauthenticated delete is rejected.
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodDelete, "/v1/me", nil))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("no-token delete = %d, want 401", rr.Code)
+	}
+
+	// Alice deletes her own account → 204.
+	rr = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer "+aliceTok)
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d, want 204, body = %s", rr.Code, rr.Body.String())
+	}
+
+	// Bob now sees Alice as terminated.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/v1/status", strings.NewReader(`{"ids":["`+aliceID+`"]}`))
+	req.Header.Set("Authorization", "Bearer "+bobTok)
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Statuses map[string]string `json:"statuses"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if resp.Statuses[aliceID] != "terminated" {
+		t.Fatalf("alice status = %q, want terminated", resp.Statuses[aliceID])
+	}
+}
