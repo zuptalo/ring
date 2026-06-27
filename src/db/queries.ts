@@ -3678,22 +3678,30 @@ export async function addContact(name: string, phone: string): Promise<string> {
  */
 export async function startDirectChat(contact: Contact): Promise<string> {
   const chats = await getAll<Chat>('chats');
+  // NEVER resolve to a hidden chat (spec 1019): starting a chat from the contact must
+  // not open a PIN-locked hidden conversation — that would reveal it without the PIN.
+  // A hidden chat coexists with a normal one; this path only ever uses/creates the
+  // normal (non-hidden) chat, creating a fresh one when the sole match is hidden.
+  const hiddenSet = await ensureHiddenLoaded();
   const matches = chats.filter(
-    (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === contact.id,
+    (c) =>
+      !c.isGroup &&
+      c.participantIds.length === 1 &&
+      c.participantIds[0] === contact.id &&
+      !hiddenSet.has(c.id),
   );
-  // Prefer a real (visible) chat over a hidden one, e.g. a group session-carrier
-  // chat or an unaccepted-request placeholder.
+  // Prefer a real (visible) chat over an unaccepted-request placeholder.
   const visible = matches.find((c) => !c.pending);
   if (visible) return visible.id;
-  const hidden = matches[0];
-  if (hidden) {
+  const placeholder = matches[0];
+  if (placeholder) {
     // Opening a chat with an already-accepted friend → make it visible.
-    if (hidden.pending && (await isPeerConnected(contact.id))) {
-      hidden.pending = false;
-      hidden.updatedAt = now();
-      await put('chats', hidden);
+    if (placeholder.pending && (await isPeerConnected(contact.id))) {
+      placeholder.pending = false;
+      placeholder.updatedAt = now();
+      await put('chats', placeholder);
     }
-    return hidden.id;
+    return placeholder.id;
   }
   const ts = now();
   const id = uid();
