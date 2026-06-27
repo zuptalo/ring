@@ -432,6 +432,7 @@
                   class="react-btn"
                   aria-label="React"
                   @click.stop="openQuickReact(m, $event)"
+                  @pointerdown.prevent
                 >
                   <ion-icon :icon="happyOutline" />
                 </button>
@@ -578,6 +579,7 @@
                   class="react-btn"
                   aria-label="React"
                   @click.stop="openQuickReact(item.messages[0], $event)"
+                  @pointerdown.prevent
                 >
                   <ion-icon :icon="happyOutline" />
                 </button>
@@ -810,6 +812,7 @@
             :spellcheck="true"
             enterkeyhint="enter"
             @ion-input="onComposerInput"
+            @ion-focus="onComposerFocus"
             @ion-blur="onComposerBlur"
             @keydown.enter="onComposerEnter"
             @paste="onComposerPaste"
@@ -1405,6 +1408,7 @@ async function openQuickReact(m: Message, ev: Event): Promise<void> {
     side: popoverSide(ev),
     alignment: 'center',
     showBackdrop: false, // don't dim the chat behind the popover
+    keyboardClose: false, // reacting must NOT dismiss the keyboard if the composer is focused
   });
   openPopover = popover;
   await popover.present();
@@ -2072,6 +2076,18 @@ function onComposerInput(e: CustomEvent): void {
 
 function onComposerBlur(): void {
   stopActivity('typing'); // blurring the field ends typing (not a recording)
+}
+
+// Focusing the composer raises the keyboard. The ResizeObserver re-pins to newest on
+// the viewport shrink, but on Android the keyboard-resize settles in steps and that
+// single observation can fire before the layout is final, leaving the last message
+// partially behind the composer. Re-assert scroll-to-newest a few times after focus —
+// but only while the user is already at the bottom (stickBottom), so it never yanks
+// someone out of reading history.
+function onComposerFocus(): void {
+  if (!stickBottom) return;
+  void scrollToNewest();
+  for (const ms of [150, 350, 600]) setTimeout(() => { if (stickBottom) void scrollToNewest(); }, ms);
 }
 
 // Block Return while the composer is empty (or only whitespace) so a message can't
