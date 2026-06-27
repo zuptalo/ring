@@ -150,6 +150,7 @@ export interface GroupCard {
   members: GroupMember[]; // full roster (incl. the sender)
   at: number; // version (epoch ms) for last-write-wins
   inviter?: string; // 'invite' only: the inviter's user id (for the invitee's UI)
+  createdBy?: string; // group owner (creator) — v1 "admin" for @everyone gating (spec 1020)
 }
 
 /**
@@ -242,6 +243,12 @@ export interface MessagePayload {
   // (0/null = off). Applied as a side effect so the peer adopts the same setting;
   // never shown as a message.
   ttl?: number | null;
+  // @mentions (spec 1020, group chats): the member user-ids this message tags, and an
+  // admin/owner-only broadcast flag. Carried INSIDE the sealed payload — the server
+  // never learns who is mentioned. The recipient decrypts, checks if it (or a validated
+  // @everyone) is mentioned, and escalates the notification locally.
+  mentions?: string[];
+  mentionsEveryone?: boolean;
 }
 
 export interface WireMessage {

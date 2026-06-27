@@ -100,6 +100,11 @@ export interface IncomingNotice {
   // so the page must not double up via notifyLocal. Set by the drain path (App.vue
   // arms markPushWake(); receiveIncoming reads it through pushWakeActive()).
   pushWoken?: boolean;
+  // @mentions (spec 1020): this message @mentions me (individually, or a validated
+  // @everyone). When true (and the chat's mention pref is on) the alert escalates past
+  // mute/quiet, and the banner names the mentioner even under a masked content level.
+  mention?: boolean;
+  mentionName?: string; // who mentioned me (the sender's display name)
 }
 
 /* ---- in-app notification banners (custom green overlay; see NotificationBanners.vue) ---- */
@@ -402,6 +407,11 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
       inAppGloballyEnabled(),
     ]);
     const content = chatPrefs?.content ?? 'full';
+    // @mentions (spec 1020): escalate only when this message mentions me AND the chat's
+    // "mentions even when muted" pref is on. The global master (p.showMessages, checked
+    // above) + OS DND still gate everything.
+    const isMention = !!n.mention && (chatPrefs?.mentions ?? true);
+    const mentionBody = `${n.mentionName ?? 'Someone'} mentioned you`;
     const owner = notificationOwner({
       appVisible: appVisible(),
       unlocked: true, // isUnlockedNow() was checked above
@@ -414,6 +424,7 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
         inApp: globalInApp && (chatPrefs?.inApp ?? true),
         content,
         muted,
+        isMention,
       },
     });
 
@@ -434,9 +445,12 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
       // content='none' is badge-only (no OS text anywhere), so it never bridges via
       // notifyLocal even though the predicate routes it through 'sw-notification'
       // (the SW's own none-handling keeps it badge-only there).
-      if (!n.pushWoken && content !== 'none') {
+      // A mention bridges even when content='none' (it escalated past the content level)
+      // and names the mentioner when the text would otherwise be masked.
+      if (!n.pushWoken && (content !== 'none' || isMention)) {
         const showFull = content === 'full' && p.showPreview;
-        void notifyLocal(n.name, showFull ? n.body : 'New message', targetUrl(n), n.chatId);
+        const text = showFull ? n.body : isMention ? mentionBody : 'New message';
+        void notifyLocal(n.name, text, targetUrl(n), n.chatId);
       }
       return false;
     }
@@ -446,7 +460,7 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
     await inAppSoundAndHaptics();
     if (p.inappStyle === 'none') return false; // sound only; no visible surface
     const url = targetUrl(n);
-    const bodyText = showFull ? n.body : 'New message';
+    const bodyText = showFull ? n.body : isMention ? mentionBody : 'New message';
     const presented = await presentMessageBanner(n, bodyText, url, p.inappStyle);
     if (presented) notifyBannerPresented(); // tell the drain hand-off we claimed it
     return presented;
