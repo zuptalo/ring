@@ -3715,6 +3715,11 @@ async function startRecording() {
     // Tap the mic stream for a live waveform.
     const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     recAudioCtx = new AC();
+    // A freshly created AudioContext often starts SUSPENDED (autoplay policy), and a
+    // suspended context feeds the analyser nothing → getByteTimeDomainData stays at the
+    // 128 midline → the waveform reads flat even while you speak. We start recording from
+    // a tap, so resuming here is allowed and reliable.
+    void recAudioCtx.resume().catch(() => {});
     recAnalyser = recAudioCtx.createAnalyser();
     recAnalyser.fftSize = 512;
     recAudioCtx.createMediaStreamSource(stream).connect(recAnalyser);

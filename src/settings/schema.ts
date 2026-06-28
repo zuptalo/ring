@@ -38,9 +38,6 @@ import {
   syncOutline,
   shareSocialOutline,
   qrCodeOutline,
-  heartOutline,
-  cafeOutline,
-  logoGithub,
 } from 'ionicons/icons';
 
 /** ion-icon registry, keeps the schema serializable (string keys, not imports). */
@@ -75,9 +72,6 @@ export const ICONS: Record<string, string> = {
   sync: syncOutline,
   share: shareSocialOutline,
   qr: qrCodeOutline,
-  heart: heartOutline,
-  cafe: cafeOutline,
-  github: logoGithub,
 };
 
 export interface ChoiceOption {
@@ -94,9 +88,6 @@ export type SettingItem =
   | { type: 'segment'; title?: string; key: string; default: string; options: ChoiceOption[] }
   | { type: 'stat'; title: string; value: string; icon?: string }
   | { type: 'action'; title: string; action: string; danger?: boolean; confirm?: string; icon?: string }
-  // Opens an EXTERNAL url in a new browser tab (e.g. a donation page). The app never
-  // handles payment — it only links out — so the zero-knowledge boundary is untouched.
-  | { type: 'external'; title: string; url: string; icon?: string; note?: string }
   | { type: 'note'; text: string };
 
 export interface SettingGroup {
@@ -681,40 +672,6 @@ export const SETTINGS: Record<string, SettingNode> = {
     groups: [{ items: [{ type: 'choice', key: 'storage.autoDownload.documents', default: 'wifi', options: AUTO_DOWNLOAD }] }],
   },
 
-  /* ===== SUPPORT ===== */
-  // Pay-what-you-want contribution links (spec 1021). Outbound links ONLY — the app
-  // never touches money or payment data, so nothing new crosses the zero-knowledge
-  // boundary. All handles are `zuptalo`. Honest + optional, never a nag.
-  support: {
-    id: 'support',
-    title: 'Support Ring',
-    groups: [
-      {
-        items: [
-          {
-            type: 'note',
-            text:
-              'Ring is free and open-source, with no paywall — donations are never required. ' +
-              'If it’s useful to you, you can chip in whatever you think it’s worth to support its ' +
-              'development. Thank you! 🙏',
-          },
-        ],
-      },
-      {
-        header: 'Ways to contribute',
-        items: [
-          { type: 'external', title: 'Ko-fi', url: 'https://ko-fi.com/zuptalo', icon: 'cafe', note: 'Pay what you want' },
-          { type: 'external', title: 'Liberapay', url: 'https://liberapay.com/zuptalo', icon: 'heart', note: 'Recurring' },
-          { type: 'external', title: 'GitHub Sponsors', url: 'https://github.com/sponsors/zuptalo', icon: 'github', note: 'One-off or monthly' },
-        ],
-        footer: 'Each opens in your browser. Contributions are handled entirely by that platform — Ring never sees any payment details.',
-      },
-      {
-        items: [{ type: 'action', title: 'Share Ring', action: 'share-support', icon: 'share' }],
-      },
-    ],
-  },
-
   /* ===== HELP ===== */
   help: {
     id: 'help',
@@ -765,7 +722,6 @@ export const YOU_SECTIONS: { id: string; title: string; icon: string }[] = [
   { id: 'appearance', title: 'Appearance', icon: 'palette' },
   { id: 'notifications', title: 'Notifications', icon: 'bell' },
   { id: 'storage', title: 'Storage and data', icon: 'download' },
-  { id: 'support', title: 'Support Ring', icon: 'heart' },
   { id: 'help', title: 'Help', icon: 'help' },
   { id: 'about', title: 'About', icon: 'info' },
 ];
@@ -806,7 +762,7 @@ function buildSearchIndex(): SettingSearchResult[] {
           visit(item.id, hub);
         } else if (item.type === 'route') {
           add(item.title, item.path, hub, item.icon);
-        } else if (item.type === 'toggle' || item.type === 'action' || item.type === 'external') {
+        } else if (item.type === 'toggle' || item.type === 'action') {
           add(item.title, `/settings/${node.id}`, hub, item.icon);
         }
       }

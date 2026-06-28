@@ -70,7 +70,10 @@ watch(() => track.value?.id, () => { expanded.value = false; });
   gap: 10px;
   padding: 8px 10px;
   border-radius: 14px;
-  background: var(--ion-card-background, #ffffff);
+  /* Soft brand-green tint (the outgoing-bubble green) with a slim hairline border,
+     matching the chat bubbles. */
+  background: var(--app-bubble-out);
+  border: 1px solid var(--app-border);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
   /* Expanded: a full-width bar, centered. */
   left: 8px;
@@ -95,14 +98,17 @@ watch(() => track.value?.id, () => { expanded.value = false; });
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--ion-color-primary);
-  color: #fff;
-  font-size: 20px;
+  /* No filled square — the mic / music-note icon sits directly on the green pill so it
+     reads as part of the controller, not a button. (Album art, when present, still fills
+     this box.) */
+  background: transparent;
+  color: var(--ion-color-primary);
+  font-size: 24px;
 }
 .audio-mini.collapsed .am-cover {
-  width: 34px;
+  width: 30px;
   height: 34px;
-  font-size: 18px;
+  font-size: 22px;
 }
 .am-cover img {
   width: 100%;

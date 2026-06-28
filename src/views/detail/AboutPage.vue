@@ -37,22 +37,33 @@
           </ion-item>
         </ion-list>
 
-        <!-- Appreciation. A local button (no remote Liberapay script/pixel) so just
-             opening this page never leaks your IP. You only reach out if you tap. -->
+        <!-- Appreciation. Local buttons (no remote donation script or pixel) so just
+             opening this page never leaks your IP. You only reach out if you tap. Ring
+             is free and always will be, so anything here is pay what you feel like. -->
         <ion-list :inset="true">
           <ion-item lines="none">
             <ion-label class="ion-text-wrap beer">
-              <h2>Like it? 🍺</h2>
+              <h2>Like it? Buy me a coffee ☕</h2>
               <p>
                 If Ring kept you off some creepier app and you figure the late nights
-                were worth it, you can throw a beer my way. No pressure though, a nice
-                message is just as good.
+                were worth it, you can chip in whatever you think it is worth. No pressure
+                though, a nice message is just as good.
               </p>
             </ion-label>
           </ion-item>
-          <ion-item button :detail="false" lines="none" @click="buyBeer">
-            <ion-icon slot="start" :icon="beerOutline" color="primary" />
-            <ion-label color="primary">Buy me a beer (Liberapay)</ion-label>
+          <ion-item button :detail="false" lines="none" @click="openExternal('https://ko-fi.com/zuptalo')">
+            <ion-icon slot="start" :icon="cafeOutline" color="primary" />
+            <ion-label color="primary">Ko-fi</ion-label>
+            <ion-icon slot="end" :icon="openOutline" color="medium" />
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="openExternal('https://liberapay.com/zuptalo')">
+            <ion-icon slot="start" :icon="heartOutline" color="primary" />
+            <ion-label color="primary">Liberapay</ion-label>
+            <ion-icon slot="end" :icon="openOutline" color="medium" />
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="openExternal('https://github.com/sponsors/zuptalo')">
+            <ion-icon slot="start" :icon="logoGithub" color="primary" />
+            <ion-label color="primary">GitHub Sponsors</ion-label>
             <ion-icon slot="end" :icon="openOutline" color="medium" />
           </ion-item>
         </ion-list>
@@ -68,18 +79,12 @@ import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
   IonContent, IonList, IonItem, IonLabel, IonIcon,
 } from '@ionic/vue';
-import { beerOutline, openOutline } from 'ionicons/icons';
+import { cafeOutline, heartOutline, logoGithub, openOutline } from 'ionicons/icons';
 import { openExternal } from '@/utils/external';
 
 const appVersion = __APP_VERSION__;
-
-// Liberapay donate page (non-profit, 0% platform fee). Opened in the system
-// browser on tap; nothing from Liberapay loads until then.
-const LIBERAPAY_URL = 'https://liberapay.com/zuptalo/donate';
-
-function buyBeer(): void {
-  openExternal(LIBERAPAY_URL);
-}
+// Donation links open in the system browser on tap (openExternal); nothing from any
+// platform loads until then, so opening this page never reaches out on its own.
 </script>
 
 <style scoped>
