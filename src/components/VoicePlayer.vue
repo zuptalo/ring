@@ -40,6 +40,7 @@ import {
 
 const props = defineProps<{
   mid: string; // message id — this voice message's id in the global player
+  chatId?: string; // owning chat — lets the hovering controller hide while we're in it
   sender: string; // who it's from (shown in the hovering controller)
   src: string;
   outgoing: boolean;
@@ -100,7 +101,7 @@ async function decodeWaveform(): Promise<void> {
 // Play this voice message (or toggle it if it's already the active one) through the
 // global player, which replaces any other audio and keeps playing across navigation.
 function toggle(): void {
-  playAudio({ id: props.mid, url: props.src, title: 'Voice message', subtitle: props.sender, isVoice: true });
+  playAudio({ id: props.mid, url: props.src, title: 'Voice message', subtitle: props.sender, isVoice: true, chatId: props.chatId });
 }
 function cycleRate(): void {
   cycleAudioRate();
@@ -124,7 +125,12 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 200px;
+  /* Shrink to fit the bubble on narrow phones (Galaxy S25 ~360px): a hard min-width
+     plus the fixed-width play/time/avatar children used to overflow the bubble and
+     spill outside the chat frame. max-width:100% caps it; the flexible waveform
+     (.vp-wave, min-width:0) absorbs the slack. */
+  min-width: 0;
+  max-width: 100%;
   padding: 2px 0;
 }
 .vp-play {
@@ -148,7 +154,9 @@ onMounted(() => {
   gap: 2px;
   height: 24px;
   cursor: pointer;
-  min-width: 100px;
+  /* min-width:0 (not 100px) so the waveform can shrink below its content on a narrow
+     bubble instead of forcing the whole row wider than the chat frame. */
+  min-width: 0;
 }
 .vp-bar {
   flex: 1;

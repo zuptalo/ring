@@ -130,6 +130,8 @@ import { runInviteSync } from '@/services/invites';
 import { notifyBanners, showActionBanner } from '@/services/notify';
 import { recordCues, recordedCues } from '@/services/sound';
 import { syncContactEdges } from '@/services/directory';
+import { audioTrack, audioCurId, audioPlaying } from '@/composables/useAudioPlayer';
+import appRouter from '@/router';
 import {
   requestConnect as storeRequestConnect, acceptConnect as storeAcceptConnect,
   rejectConnect as storeRejectConnect, withdrawConnect as storeWithdrawConnect,
@@ -517,6 +519,18 @@ export function installTestHook(): void {
       dbSendMediaMessage(chatId, 'audio', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/mpeg' }), name, 12, {
         audio: { title, artist },
       }),
+    /** Pin a fake "now playing" track on the global player (no real audio element), so
+     *  tests can exercise the hovering controller (spec 1007) — including its hide-while-
+     *  in-the-owning-chat behavior — without a decodable blob that would 'end' instantly.
+     *  Pass the owning chatId so the controller hides while that chat is on screen. */
+    playAudioTest: (chatId: string, title = 'Demo Track'): void => {
+      audioCurId.value = `test-audio:${chatId}`;
+      audioTrack.value = { id: `test-audio:${chatId}`, url: '', title, subtitle: 'Ring', isVoice: false, chatId };
+      audioPlaying.value = true;
+    },
+    /** SPA navigation via the app router (preserves in-memory state, unlike a full
+     *  page reload) — e.g. to leave a chat without tearing down the global audio. */
+    navigate: (path: string): Promise<unknown> => appRouter.push(path),
     /** Send a round video-note ("video message"). */
     sendVideoNote: (chatId: string, name: string) =>
       dbSendMediaMessage(chatId, 'video', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'video/mp4' }), name, 8, {
