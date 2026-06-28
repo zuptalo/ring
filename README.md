@@ -200,7 +200,7 @@ Operators upgrading an existing instance: see **[`docs/UPGRADING.md`](docs/UPGRA
 
 ## Support
 
-Ring is free and open-source, with no paywall — and it always will be. If it's useful
+Ring is free and open source, with no paywall, and it always will be. If it's useful
 to you, you can chip in **whatever you think it's worth** to support its development.
 Contributions are always optional and never unlock anything.
 

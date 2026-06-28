@@ -103,8 +103,13 @@ function switchTab(path: string): void {
 ion-tab-bar {
   --color: var(--app-text);
   --color-selected: var(--app-text);
-  /* Match the chat footer / toolbars (a subtle brand-green tint) rather than the
-     plain page background, so the bottom bar reads as one with the chrome. */
-  --background: var(--ion-toolbar-background);
+  /* Match the chat composer footer: the same subtle toolbar tint, just slightly
+     translucent with a gentle backdrop blur so the bar + its safe-area inset read as one
+     quiet pane and anything scrolling underneath is softly frosted, not sharp. Borderless
+     so there's no seam against the content. */
+  --background: var(--app-tabbar-bg);
+  --border: 0;
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
 }
 </style>

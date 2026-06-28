@@ -101,11 +101,16 @@ ion-app {
      translucent header's backdrop blur, the fallback is a wash-colored bar
      rather than the bare black toolbar fill. */
   --ion-toolbar-background: color-mix(in srgb, var(--ion-color-primary) 5%, var(--ion-background-color, #ffffff));
+  /* Bottom tab bar: the SAME subtle toolbar tint as the chat composer footer, dropped
+     to ~90% opacity so a gentle backdrop blur (TabsPage) frosts whatever scrolls under
+     it — a quiet, blends-in bar like the composer, not a distinct green pane. */
+  --app-tabbar-bg: color-mix(in srgb, var(--ion-toolbar-background) 90%, transparent);
 }
 :root.ion-palette-dark {
   --ion-item-background: color-mix(in srgb, var(--ion-color-primary) 8%, var(--ion-background-color, #000000));
   --ion-card-background: color-mix(in srgb, var(--ion-color-primary) 8%, var(--ion-background-color, #000000));
   --ion-toolbar-background: color-mix(in srgb, var(--ion-color-primary) 8%, var(--ion-background-color, #000000));
+  --app-tabbar-bg: color-mix(in srgb, var(--ion-toolbar-background) 86%, transparent);
 }
 
 /* Large-title (condense) headers sit inside the scrolled content; let the
