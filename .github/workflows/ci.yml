@@ -200,10 +200,19 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Mirror to Docker Hub for discoverability (that's where people `docker pull`).
+      # ghcr.io stays the canonical/CI registry; both get the same tags.
+      - uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          images: ghcr.io/zuptalo/ring
+          images: |
+            ghcr.io/zuptalo/ring
+            docker.io/zuptalo/ring
           tags: |
             type=raw,value=develop
             type=sha,format=short,prefix=develop-
@@ -220,3 +229,13 @@ jobs:
             RELEASE_NOTES_B64=${{ steps.notes.outputs.b64 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # Keep the Docker Hub repo's Overview (README + short description) in sync with
+      # docs/DOCKERHUB.md on every develop publish, so the listing never drifts.
+      - name: Sync Docker Hub Overview
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: zuptalo/ring
+          short-description: 'Private, end-to-end-encrypted messenger & calling app — self-hostable PWA + Go backend (AGPL).'
+          readme-filepath: ./docs/DOCKERHUB.md
