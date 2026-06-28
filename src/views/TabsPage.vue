@@ -112,6 +112,14 @@ ion-tab-bar {
   backdrop-filter: blur(12px) saturate(1.4);
   -webkit-backdrop-filter: blur(12px) saturate(1.4);
 }
+/* The buttons default to the same translucent tab-bar fill, which then stacks ON TOP of
+   the bar's own fill — two semi-transparent layers doubling up into a darker band behind
+   the button row. Make the buttons transparent so the bar provides the single frosted
+   layer and the strip reads as one even tone. */
+ion-tab-button {
+  --background: transparent;
+  --background-focused: transparent;
+}
 
 /* Telegram-style selection: a circular brand-green highlight sits behind the active
    tab's icon. Every icon carries the same circular padding (transparent when inactive)

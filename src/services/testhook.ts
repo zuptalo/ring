@@ -145,9 +145,10 @@ import { activityFor } from '@/composables/useTyping';
 import type { ActivityKind, ActivityState } from '@/services/transport';
 import { setSecret } from '@/db/secrets';
 import { get, getAll, put, bulkPut } from '@/db/idb';
+import { initialsAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
-import type { FriendRequest, Media, Message } from '@/db/types';
+import type { Chat, FriendRequest, Media, Message } from '@/db/types';
 import {
   startDirectCall,
   startGroupCall,
@@ -875,6 +876,30 @@ export function installTestHook(): void {
       }
       if (media.length) await bulkPut<Media>('media', media);
       await bulkPut<Message>('messages', rows); // ONE write for all messages
+    },
+
+    /** Bulk-seed `n` plain 1:1 chats (one bulkPut) so the chat list is long enough to
+     *  scroll behind the tab bar — for visual/layout checks. Dev-only. */
+    seedManyChats: async (n: number): Promise<void> => {
+      const now = Date.now();
+      const chats: Chat[] = [];
+      for (let i = 0; i < n; i++) {
+        const id = `fake-${i}`;
+        const name = `Fake Chat ${i + 1}`;
+        chats.push({
+          id,
+          name,
+          avatar: initialsAvatar(name),
+          isGroup: false,
+          participantIds: [id],
+          lastMessage: `Preview of conversation ${i + 1}`,
+          lastKind: 'text',
+          lastMessageTime: now - i * 60_000,
+          unread: 0,
+          updatedAt: now - i * 60_000,
+        });
+      }
+      await bulkPut<Chat>('chats', chats);
     },
 
     /** Inject the curated showcase demo dataset (contacts, chats, messages, media,
