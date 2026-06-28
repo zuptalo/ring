@@ -26,7 +26,8 @@ async function tabIcon(client, selected) {
       );
       if (!el) return null;
       const s = getComputedStyle(el);
-      return { bg: s.backgroundColor, radius: s.borderTopLeftRadius, color: s.color };
+      const r = el.getBoundingClientRect();
+      return { bg: s.backgroundColor, radius: s.borderTopLeftRadius, color: s.color, w: r.width, h: r.height };
     }, selected);
     if (r) return r;
     await client.page.waitForTimeout(250);
@@ -46,6 +47,7 @@ for (const theme of ['light', 'dark']) {
   const sel = await tabIcon(a, true);
   const unsel = await tabIcon(a, false);
   check(`[${theme}] selected tab icon has a green circle`, sel && isGreenish(sel.bg) && sel.radius === '50%', sel && `bg=${sel.bg} r=${sel.radius}`);
+  check(`[${theme}] selected highlight is a TRUE circle (w≈h)`, sel && Math.abs(sel.w - sel.h) <= 1, sel && `${sel.w.toFixed(1)}×${sel.h.toFixed(1)}`);
   check(`[${theme}] unselected tab icon is transparent`, unsel && !isGreenish(unsel.bg), unsel && `bg=${unsel.bg}`);
 
   // Tab bar is frosted (has a backdrop-filter blur).

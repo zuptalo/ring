@@ -125,8 +125,14 @@ ion-tab-button {
    tab's icon. Every icon carries the same circular padding (transparent when inactive)
    so switching tabs only fades the fill in/out — the icon never shifts. */
 ion-tab-button ion-icon {
-  font-size: 22px;
-  padding: 7px;
+  /* True circle: the icon is a flex item in a short tab button, so a tall padding box
+     gets vertically squished into an ellipse. Keep it small enough to fit the row and
+     flex: none so it never compresses — equal box + 50% radius = a real circle. */
+  font-size: 20px;
+  width: 20px;
+  height: 20px;
+  padding: 6px;
+  flex: none;
   border-radius: 50%;
   box-sizing: content-box;
   background: transparent;
