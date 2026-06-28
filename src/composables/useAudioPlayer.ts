@@ -21,6 +21,10 @@ export interface AudioTrackMeta {
   subtitle?: string;
   coverUrl?: string;
   isVoice?: boolean;
+  // The chat this audio belongs to. Lets the hovering controller (MinimizedAudio) hide
+  // itself while you're INSIDE that chat — there the in-message player is the control —
+  // and reappear (collapsed) once you leave. Absent → the controller always shows.
+  chatId?: string;
 }
 
 const el = new Audio();
