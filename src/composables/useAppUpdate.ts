@@ -104,16 +104,34 @@ async function applyUpdate(updateServiceWorker: (reload?: boolean) => Promise<vo
   if (!router.currentRoute.value.path.startsWith('/tabs')) {
     await router.replace('/tabs/chats').catch(() => {});
   }
+  const reloadOnce = (): void => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  };
   // Guarantee the reload even if workbox's isUpdate-gated listener no-ops. Installed
-  // before SKIP_WAITING so we never miss the controllerchange it triggers.
+  // before SKIP_WAITING so we never miss the controllerchange it triggers. Wrapped in
+  // try/catch because some Android WebViews throw on addEventListener here — the timeout
+  // fallback below still reloads.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloading) return;
-      reloading = true;
-      window.location.reload();
-    });
+    try {
+      navigator.serviceWorker.addEventListener('controllerchange', reloadOnce, { once: true });
+    } catch {
+      /* listener unavailable; covered by the timeout fallback */
+    }
   }
-  await updateServiceWorker(true); // posts SKIP_WAITING → new worker activates → controllerchange → reload
+  try {
+    await updateServiceWorker(true); // posts SKIP_WAITING → new worker activates → controllerchange → reload
+  } catch {
+    /* SKIP_WAITING post failed; the new worker may still take over → fallback reload */
+  }
+  // Fallback for devices where `controllerchange` never fires after the new worker
+  // claims clients — observed on some Samsung builds (Galaxy S25): the prompt dismissed
+  // but the page never refreshed, so the old JS kept running. By the time this fires,
+  // skipWaiting + clients.claim have run, so a plain reload picks up the new build.
+  // `reloading` makes this and the controllerchange path mutually exclusive (no double
+  // reload). 2.5s comfortably exceeds the activate/claim round-trip.
+  window.setTimeout(reloadOnce, 2500);
 }
 
 export function useAppUpdate(): void {

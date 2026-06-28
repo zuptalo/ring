@@ -294,6 +294,7 @@
                 <voice-player
                   v-else-if="m.kind === 'voice'"
                   :mid="m.id"
+                  :chat-id="chatId"
                   :sender="m.outgoing ? 'You' : chat?.isGroup ? m.senderName : chat?.name ?? m.senderName"
                   :src="mediaInfo[m.mediaId].url || ''"
                   :outgoing="m.outgoing"
@@ -3519,9 +3520,10 @@ function audioMetaFor(id: string): AudioTrackMeta | undefined {
       subtitle: m.audio?.artist,
       coverUrl: mediaInfo.value[m.mediaId]?.posterUrl,
       isVoice: false,
+      chatId, // so the hovering controller hides while we're in this chat
     };
   }
-  return { id, url, title: 'Voice message', subtitle: who, isVoice: true };
+  return { id, url, title: 'Voice message', subtitle: who, isVoice: true, chatId };
 }
 function toggleAudio(id: string): void {
   const meta = audioMetaFor(id);
