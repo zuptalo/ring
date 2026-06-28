@@ -44,6 +44,7 @@ Specs are grouped by category band; status moves
 | [1018](specs/1018-media-sharing-and/spec.md) | Media Sharing & Viewer Improvements | 🔵 in-review |
 | [1019](specs/1019-hidden-chats-pin/spec.md) | Hidden Chats Locked Behind a PIN | 🔵 in-review |
 | [1020](specs/1020-mentions-group-chats/spec.md) | @mentions in group chats | 🔵 in-review |
+| [1021](specs/1021-support-contributions/spec.md) | Support the project (pay-what-you-want contributions) | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
