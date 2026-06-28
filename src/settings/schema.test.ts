@@ -51,4 +51,26 @@ describe('settings schema', () => {
     expect(searchSettings('passkeys')).toHaveLength(0);
     expect(searchSettings('chat backup')).toHaveLength(0);
   });
+
+  it('every external link is a real https URL (no in-app payment surface)', () => {
+    const ext = everyItem().filter((i): i is Extract<SettingItem, { type: 'external' }> => i.type === 'external');
+    expect(ext.length).toBeGreaterThan(0);
+    for (const i of ext) expect(i.url, i.title).toMatch(/^https:\/\//);
+  });
+
+  it('the Support screen lists the contribution platforms and is searchable', () => {
+    const support = settingNode('support');
+    expect(support).toBeDefined();
+    const urls = (support?.groups.flatMap((g) => g.items) ?? [])
+      .filter((i): i is Extract<SettingItem, { type: 'external' }> => i.type === 'external')
+      .map((i) => i.url);
+    expect(urls).toEqual(
+      expect.arrayContaining([
+        'https://ko-fi.com/zuptalo',
+        'https://liberapay.com/zuptalo',
+        'https://github.com/sponsors/zuptalo',
+      ]),
+    );
+    expect(searchSettings('ko-fi').length).toBeGreaterThan(0);
+  });
 });
