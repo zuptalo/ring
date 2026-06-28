@@ -5,6 +5,15 @@ PWA with a small Go backend. The server only ever relays sealed envelopes and
 stores opaque ciphertext. It never sees message bodies, contacts, profiles, or
 media. Made by Zuptalo with love for privacy.
 
+## Screenshots
+
+<p>
+  <img src="docs/screenshots/chats.png" width="220" alt="Chats" />
+  <img src="docs/screenshots/conversation.png" width="220" alt="Conversation" />
+  <img src="docs/screenshots/group.png" width="220" alt="Group chat" />
+  <img src="docs/screenshots/conversation-dark.png" width="220" alt="Conversation (dark)" />
+</p>
+
 ## What is in here
 
 This is a single repository with two parts that ship as one container:

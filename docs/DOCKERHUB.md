@@ -45,9 +45,9 @@ Images are multi-arch (`linux/amd64`, `linux/arm64`). The canonical registry is
 ## Screenshots
 
 <p>
-  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/showcase/output/iphone/light/02-chats.png" width="240" alt="Chats" />
-  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/showcase/output/iphone/light/03-chat.png" width="240" alt="Conversation" />
-  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/showcase/output/iphone/dark/06-group.png" width="240" alt="Group chat (dark)" />
+  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/docs/screenshots/chats.png" width="240" alt="Chats" />
+  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/docs/screenshots/conversation.png" width="240" alt="Conversation" />
+  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/docs/screenshots/group-dark.png" width="240" alt="Group chat (dark)" />
 </p>
 
 ## Support
