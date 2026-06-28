@@ -189,6 +189,16 @@ into `main`. A merge without a version bump re-runs CI but does not re-release.
 
 Operators upgrading an existing instance: see **[`docs/UPGRADING.md`](docs/UPGRADING.md)**.
 
+## Support
+
+Ring is free and open-source, with no paywall — and it always will be. If it's useful
+to you, you can chip in **whatever you think it's worth** to support its development.
+Contributions are always optional and never unlock anything.
+
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/zuptalo)
+[![Liberapay](https://img.shields.io/badge/Liberapay-Donate-F6C915?logo=liberapay&logoColor=black)](https://liberapay.com/zuptalo)
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub_Sponsors-zuptalo-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/zuptalo)
+
 ## License
 
 Ring is licensed under the **GNU Affero General Public License v3.0** (AGPL-3.0-only).

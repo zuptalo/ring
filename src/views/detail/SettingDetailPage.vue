@@ -55,6 +55,18 @@
               <ion-note v-if="item.note" slot="end">{{ item.note }}</ion-note>
             </ion-item>
 
+            <!-- external link (opens in the browser; e.g. a donation page) -->
+            <ion-item
+              v-else-if="item.type === 'external'"
+              button
+              :detail="true"
+              @click="openExternal(item.url)"
+            >
+              <ion-icon v-if="item.icon" slot="start" :icon="ICONS[item.icon]" color="primary" />
+              <ion-label class="ion-text-wrap">{{ item.title }}</ion-label>
+              <ion-note v-if="item.note" slot="end">{{ item.note }}</ion-note>
+            </ion-item>
+
             <!-- boolean toggle -->
             <ion-item v-else-if="item.type === 'toggle'">
               <ion-icon v-if="item.icon" slot="start" :icon="ICONS[item.icon]" color="primary" />
@@ -358,6 +370,12 @@ function go(path: string) {
   router.push(path);
 }
 
+// Open an external URL (e.g. a donation page) in a new browser context. `noopener`
+// severs the new page's access back to ours; the app itself never handles payment.
+function openExternal(url: string) {
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 // Same component instance reused for a param change (drill in / back).
 onBeforeRouteUpdate((to, from) => {
   save(from.fullPath);
@@ -475,6 +493,27 @@ const ACTIONS: Record<string, () => void | Promise<void>> = {
       }
     } else {
       notice('Invite a friend', 'Sharing isn’t supported on this device.');
+    }
+  },
+  'share-support': async () => {
+    const data = {
+      title: 'Ring',
+      text: 'Ring is a free, open-source, end-to-end-encrypted messenger. If you find it useful, you can support its development:',
+      url: 'https://ko-fi.com/zuptalo',
+    };
+    if (navigator.share) {
+      try {
+        await navigator.share(data);
+      } catch {
+        /* user cancelled */
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(data.url);
+        notice('Share Ring', 'Support link copied to your clipboard.');
+      } catch {
+        notice('Share Ring', data.url);
+      }
     }
   },
 };
