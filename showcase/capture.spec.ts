@@ -24,6 +24,7 @@ const SCREENS: Array<[string, string]> = [
   ['06-group', '/group/sc-trip'],
   ['07-settings', '/tabs/settings'],
   ['08-profile', '/settings/profile'],
+  ['09-support', '/settings/support'],
 ];
 
 async function waitHook(page: Page): Promise<void> {
