@@ -102,7 +102,7 @@ function switchTab(path: string): void {
    active tab is shown purely by the filled-vs-outline icon swap. */
 ion-tab-bar {
   --color: var(--app-text);
-  --color-selected: var(--app-text);
+  --color-selected: var(--ion-color-primary);
   /* Match the chat composer footer: the same subtle toolbar tint, just slightly
      translucent with a gentle backdrop blur so the bar + its safe-area inset read as one
      quiet pane and anything scrolling underneath is softly frosted, not sharp. Borderless
@@ -111,5 +111,21 @@ ion-tab-bar {
   --border: 0;
   backdrop-filter: blur(12px) saturate(1.4);
   -webkit-backdrop-filter: blur(12px) saturate(1.4);
+}
+
+/* Telegram-style selection: a circular brand-green highlight sits behind the active
+   tab's icon. Every icon carries the same circular padding (transparent when inactive)
+   so switching tabs only fades the fill in/out — the icon never shifts. */
+ion-tab-button ion-icon {
+  font-size: 22px;
+  padding: 7px;
+  border-radius: 50%;
+  box-sizing: content-box;
+  background: transparent;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+ion-tab-button.tab-selected ion-icon {
+  background: rgba(var(--ion-color-primary-rgb), 0.18);
+  color: var(--ion-color-primary);
 }
 </style>
