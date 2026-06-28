@@ -11,27 +11,27 @@
            `selected` explicitly (normally ion-tabs sets it off the href it navigates)
            so the active tab still reports correctly for assistive tech. -->
       <ion-tab-bar v-if="isAuthenticated" slot="bottom">
-        <ion-tab-button tab="calls" :selected="activeTab === 'calls'" @click="switchTab('/tabs/calls')">
+        <ion-tab-button tab="calls" :class="{ 'tab-on': activeTab === 'calls' }" :selected="activeTab === 'calls'" @click="switchTab('/tabs/calls')">
           <ion-icon :icon="activeTab === 'calls' ? call : callOutline" />
           <ion-label>Calls</ion-label>
           <ion-badge v-if="calls" color="danger">{{ calls }}</ion-badge>
         </ion-tab-button>
-        <ion-tab-button tab="chats" :selected="activeTab === 'chats'" @click="switchTab('/tabs/chats')">
+        <ion-tab-button tab="chats" :class="{ 'tab-on': activeTab === 'chats' }" :selected="activeTab === 'chats'" @click="switchTab('/tabs/chats')">
           <ion-icon :icon="activeTab === 'chats' ? chatbubbles : chatbubblesOutline" />
           <ion-label>Chats</ion-label>
           <ion-badge v-if="chats" color="primary">{{ chats }}</ion-badge>
         </ion-tab-button>
-        <ion-tab-button tab="wall" :selected="activeTab === 'wall'" @click="switchTab('/tabs/wall')">
+        <ion-tab-button tab="wall" :class="{ 'tab-on': activeTab === 'wall' }" :selected="activeTab === 'wall'" @click="switchTab('/tabs/wall')">
           <ion-icon :icon="activeTab === 'wall' ? sparkles : sparklesOutline" />
           <ion-label>Wall</ion-label>
           <ion-badge v-if="wall" color="primary">{{ wall }}</ion-badge>
         </ion-tab-button>
-        <ion-tab-button tab="contacts" :selected="activeTab === 'contacts'" @click="switchTab('/tabs/contacts')">
+        <ion-tab-button tab="contacts" :class="{ 'tab-on': activeTab === 'contacts' }" :selected="activeTab === 'contacts'" @click="switchTab('/tabs/contacts')">
           <ion-icon :icon="activeTab === 'contacts' ? people : peopleOutline" />
           <ion-label>Contacts</ion-label>
           <ion-badge v-if="contacts" color="primary">{{ contacts }}</ion-badge>
         </ion-tab-button>
-        <ion-tab-button tab="settings" :selected="activeTab === 'settings'" @click="switchTab('/tabs/settings')">
+        <ion-tab-button tab="settings" :class="{ 'tab-on': activeTab === 'settings' }" :selected="activeTab === 'settings'" @click="switchTab('/tabs/settings')">
           <ion-icon :icon="activeTab === 'settings' ? settings : settingsOutline" />
           <ion-label>Settings</ion-label>
           <ion-badge v-if="you" color="primary">{{ you }}</ion-badge>
@@ -124,7 +124,10 @@ ion-tab-button ion-icon {
   background: transparent;
   transition: background-color 0.18s ease, color 0.18s ease;
 }
-ion-tab-button.tab-selected ion-icon {
+/* Drive the highlight off the app's own route-derived active tab (`tab-on`), NOT
+   Ionic's `.tab-selected` — this app manages tab selection manually, so that class
+   isn't reliably present on a fresh load. */
+ion-tab-button.tab-on ion-icon {
   background: rgba(var(--ion-color-primary-rgb), 0.18);
   color: var(--ion-color-primary);
 }
