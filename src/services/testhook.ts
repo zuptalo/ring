@@ -942,6 +942,41 @@ export function installTestHook(): void {
       const p = await dbCreatePost({ body: opts.body, audience: opts.audience ?? 'friends', lifetime: opts.lifetime ?? '24h' });
       return p.id;
     },
+    /** Seed one own IMAGE post that has ONLY a poster tier and no full blob — i.e. a
+     *  received post whose full media hasn't downloaded yet. The feed must still show the
+     *  poster instantly (US1: no blank tile), which is what the thumbnail test asserts. */
+    seedWallPosterOnlyImage: async (): Promise<string> => {
+      const self = getSelfUserId() ?? 'me';
+      const now = Date.now();
+      const png = Uint8Array.from(
+        atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+        (c) => c.charCodeAt(0),
+      );
+      const mediaId = `imgseed-${now}`;
+      const postId = `postimg-${now}`;
+      await put<Media>('media', {
+        id: mediaId,
+        kind: 'image',
+        mime: 'image/png',
+        name: 'photo.png',
+        size: 0, // full blob freed/not-downloaded
+        posterBlob: new Blob([png], { type: 'image/png' }), // the only tier we have locally
+        updatedAt: now,
+      });
+      await put<Post>('posts', {
+        id: postId,
+        author: self,
+        kind: 'image',
+        mediaId,
+        mediaW: 1,
+        mediaH: 1,
+        audience: 'friends',
+        createdAt: now,
+        outgoing: true,
+        updatedAt: now,
+      });
+      return postId;
+    },
     /** Seed `n` own VIDEO posts straight into IndexedDB (no real encrypt/transcode), so the
      *  Wall feed renders `n` tall <video> cards for the autoplay-on-visible test. The stub
      *  bytes don't decode, but the autoplay directive observes the element regardless, so the
