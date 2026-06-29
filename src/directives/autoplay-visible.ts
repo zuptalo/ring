@@ -13,7 +13,23 @@
  * so styling can hide the manual play affordance and so tests can assert the visibility logic
  * deterministically without depending on a real decode succeeding.
  */
-import type { Directive } from 'vue';
+import { ref, type Directive } from 'vue';
+
+// Shared mute state for feed autoplay. Videos START muted (browsers block UNMUTED autoplay
+// without a user gesture). The inline speaker toggle flips this for ALL feed videos at once —
+// once you unmute (the tap is the gesture), every video that autoplays plays WITH sound until
+// you mute again. Persisting "muted" is the social-feed norm (TikTok/Reels).
+export const autoplayMuted = ref(true);
+
+// Toggle/set the shared mute state and apply it to the video playing right now. Unmuting is a
+// user gesture, so we (re)start the current clip to make sure it actually plays with audio.
+export function setAutoplayMuted(muted: boolean): void {
+  autoplayMuted.value = muted;
+  if (current) {
+    current.muted = muted;
+    if (!muted) void current.play().catch(() => {});
+  }
+}
 
 // Visible fraction at which a video starts playing / stops. The gap (hysteresis) keeps a
 // video that's hovering around the boundary from flickering between play and pause.
@@ -46,7 +62,7 @@ function setActive(el: HTMLVideoElement | null): void {
   current = el;
   if (el) {
     el.setAttribute('data-autoplaying', 'true');
-    el.muted = true; // muted inline playback is the only kind browsers allow without a gesture
+    el.muted = autoplayMuted.value; // respect the shared feed mute state (starts muted)
     void el.play().catch(() => {
       /* autoplay blocked — leave the poster frame showing */
     });
@@ -93,7 +109,7 @@ function observer(): IntersectionObserver {
 
 export const vAutoplayVisible: Directive<HTMLVideoElement> = {
   mounted(el) {
-    el.muted = true;
+    el.muted = autoplayMuted.value;
     el.setAttribute('playsinline', '');
     if (!el.getAttribute('preload')) el.setAttribute('preload', 'metadata');
     registered.add(el);

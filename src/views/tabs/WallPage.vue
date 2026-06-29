@@ -107,6 +107,17 @@
               <span v-if="p.mediaIds && p.mediaIds.length > 1" class="album-badge">
                 <ion-icon :icon="copyOutline" />{{ p.mediaIds.length }}
               </span>
+              <!-- Sound toggle for autoplaying feed videos. Tapping it (a user gesture) lets
+                   videos play WITH audio; the choice sticks for every video until muted again. -->
+              <button
+                v-if="p.kind === 'video' && (p.mediaUrl || p.posterUrl)"
+                type="button"
+                class="vol-toggle"
+                :aria-label="autoplayMuted ? 'Unmute videos' : 'Mute videos'"
+                @click.stop="setAutoplayMuted(!autoplayMuted)"
+              >
+                <ion-icon :icon="autoplayMuted ? volumeMuteOutline : volumeHighOutline" />
+              </button>
             </div>
             <div v-else-if="p.mediaUrl && p.kind === 'voice'" class="voice" @click="open(p.id)">
               <ion-icon :icon="micOutline" /> Voice message
@@ -196,13 +207,13 @@ import {
 import { useRouter } from 'vue-router';
 import {
   createOutline, sparklesOutline, micOutline, playCircleOutline, happyOutline, timeOutline,
-  notificationsOutline, notificationsOffOutline, copyOutline,
+  notificationsOutline, notificationsOffOutline, copyOutline, volumeMuteOutline, volumeHighOutline,
 } from 'ionicons/icons';
 import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
 import { vEnterSend } from '@/directives/enter-send';
-import { vAutoplayVisible } from '@/directives/autoplay-visible';
+import { vAutoplayVisible, autoplayMuted, setAutoplayMuted } from '@/directives/autoplay-visible';
 import { useWall, type WallPost } from '@/composables/useWall';
 import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
@@ -527,6 +538,23 @@ ion-item-sliding ion-item-option {
 }
 .album-badge ion-icon {
   font-size: 14px;
+}
+/* Sound toggle for autoplaying videos (bottom-right of the cover). */
+.vol-toggle {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 18px;
 }
 .body {
   margin: 8px 14px;

@@ -64,3 +64,34 @@ test('autoplay is suppressed under prefers-reduced-motion (tap-to-play fallback)
 
   await ctx.close();
 });
+
+test('the sound toggle unmutes feed videos and the choice sticks across videos', async ({ browser }) => {
+  const ctx = await browser.newContext();
+  const a = await createAccount(ctx, 'WALLMUTE1');
+
+  await a.page.evaluate(() => (window as any).__ringTest.seedWallVideoPosts(3));
+  await a.page.goto('/tabs/wall');
+  await expect(a.page.locator('.thumb video')).toHaveCount(3, { timeout: 30_000 });
+
+  // The on-screen video autoplays MUTED to start (browsers require it).
+  await expect(active(a)).toHaveCount(1, { timeout: 10_000 });
+  expect(await active(a).evaluate((v: HTMLVideoElement) => v.muted)).toBe(true);
+
+  // Tapping the speaker toggle (a user gesture) unmutes the playing video.
+  await a.page.locator('.vol-toggle').first().click();
+  await expect.poll(() => active(a).evaluate((v: HTMLVideoElement) => v.muted)).toBe(false);
+
+  // Scroll to the next video — it autoplays UNMUTED too: the choice is respected for every video.
+  await a.page.evaluate(async () => {
+    const el = await (document.querySelector('ion-content') as any).getScrollElement();
+    el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
+  });
+  await expect
+    .poll(async () => {
+      const c = await active(a).count();
+      return c === 1 ? active(a).evaluate((v: HTMLVideoElement) => v.muted) : null;
+    })
+    .toBe(false);
+
+  await ctx.close();
+});
