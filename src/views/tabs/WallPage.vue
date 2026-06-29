@@ -81,13 +81,21 @@
               />
               <video
                 v-else-if="p.kind === 'video' && p.mediaUrl"
+                v-autoplay-visible
                 :src="p.mediaUrl"
                 muted
                 playsinline
                 preload="metadata"
+                loop
                 @loadeddata="onMediaLoad(p.id)"
               />
-              <ion-icon v-if="p.kind === 'video' && p.mediaUrl" class="play" :icon="playCircleOutline" />
+              <!-- The play glyph is the "tap to open" hint; hide it while the clip is
+                   autoplaying inline so it isn't a button-over-moving-video. -->
+              <ion-icon
+                v-if="p.kind === 'video' && p.mediaUrl"
+                class="play"
+                :icon="playCircleOutline"
+              />
             </div>
             <div v-else-if="p.mediaUrl && p.kind === 'voice'" class="voice" @click="open(p.id)">
               <ion-icon :icon="micOutline" /> Voice message
@@ -183,6 +191,7 @@ import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
 import { vEnterSend } from '@/directives/enter-send';
+import { vAutoplayVisible } from '@/directives/autoplay-visible';
 import { useWall, type WallPost } from '@/composables/useWall';
 import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
@@ -484,6 +493,11 @@ ion-item-sliding ion-item-option {
   font-size: 52px;
   color: rgba(255, 255, 255, 0.92);
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.5));
+  transition: opacity 0.2s ease;
+}
+/* While the clip is autoplaying inline, drop the tap-to-open glyph (tapping still works). */
+.thumb video[data-autoplaying] + .play {
+  opacity: 0;
 }
 .body {
   margin: 8px 14px;
