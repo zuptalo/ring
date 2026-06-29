@@ -18,7 +18,7 @@
         class="composer"
         :auto-grow="true"
         :rows="3"
-        :placeholder="media ? 'Add a caption…' : 'Share something with your friends…'"
+        :placeholder="mediaItems.length ? 'Add a caption…' : 'Share something with your friends…'"
         autocapitalize="sentences"
         :spellcheck="true"
         dir="auto"
@@ -26,14 +26,27 @@
         @ion-input="onInput"
       />
 
-      <!-- Attachment preview -->
-      <div v-if="mediaUrl" class="preview">
-        <img v-if="mediaKind === 'image'" :src="mediaUrl" alt="Selected photo" />
-        <video v-else-if="mediaKind === 'video'" :src="mediaUrl" controls playsinline />
-        <audio v-else class="vpreview" :src="mediaUrl" controls />
+      <!-- Voice preview (a voice post is always on its own) -->
+      <div v-if="hasVoice" class="preview">
+        <audio class="vpreview" :src="mediaItems[0].url" controls />
         <ion-button class="remove" fill="solid" color="dark" size="small" @click="clearMedia">
           <ion-icon slot="icon-only" :icon="closeOutline" />
         </ion-button>
+      </div>
+
+      <!-- Photo/video staging: several compose an album (FR-019). A row of removable
+           thumbnails (their order is the album order) plus an "add more" tile. -->
+      <div v-else-if="mediaItems.length" class="album-stage">
+        <div v-for="(m, i) in mediaItems" :key="m.url" class="stage-thumb">
+          <img v-if="m.kind === 'image'" :src="m.url" alt="" />
+          <video v-else :src="m.url" muted playsinline />
+          <button type="button" class="stage-x" aria-label="Remove" @click="removeMedia(i)">
+            <ion-icon :icon="closeOutline" />
+          </button>
+        </div>
+        <button type="button" class="stage-add" aria-label="Add more photos or videos" @click="pickMedia">
+          <ion-icon :icon="imageOutline" />
+        </button>
       </div>
 
       <!-- Recording a voice post in progress -->
@@ -49,7 +62,7 @@
       <ion-list v-else :inset="true">
         <ion-item button :detail="false" @click="pickMedia">
           <ion-icon slot="start" :icon="imageOutline" color="primary" />
-          <ion-label color="primary">Add photo or video</ion-label>
+          <ion-label color="primary">Add photos or videos</ion-label>
         </ion-item>
         <ion-item button :detail="false" @click="startRecording">
           <ion-icon slot="start" :icon="micOutline" color="primary" />
@@ -60,6 +73,7 @@
         ref="fileInput"
         type="file"
         accept="image/*,video/*"
+        multiple
         style="display: none"
         @change="onFile"
       />
@@ -112,17 +126,21 @@ const audience = ref<'friends' | 'close'>('friends');
 const lifetime = ref<PostLifetime>('72h');
 const sharing = ref(false);
 
-// One attachment slot, shared by a picked photo/video file and a recorded voice clip.
-// `mediaKind` is set explicitly when the attachment is chosen (a recorded Blob has no
-// filename, so we can't derive the kind from a File like the picker can).
+// Staged attachments. Several photos/videos compose an ALBUM post (spec 1022, FR-019); a
+// recorded voice clip is always on its own. Object URLs back the previews, revoked on
+// remove/unmount. `kind` is explicit (a recorded Blob has no filename to derive it from).
+interface PostMedia {
+  blob: Blob;
+  kind: 'image' | 'video' | 'voice';
+  name: string;
+  durationSec?: number;
+  url: string;
+}
 const fileInput = ref<HTMLInputElement | null>(null);
-const media = ref<Blob | null>(null);
-const mediaUrl = ref<string | undefined>(undefined);
-const mediaKind = ref<'image' | 'video' | 'voice'>('image');
-const mediaName = ref('attachment');
-const mediaDuration = ref<number | undefined>(undefined);
+const mediaItems = ref<PostMedia[]>([]);
+const hasVoice = computed(() => mediaItems.value.some((m) => m.kind === 'voice'));
 
-const canShare = computed(() => body.value.trim().length > 0 || !!media.value);
+const canShare = computed(() => body.value.trim().length > 0 || mediaItems.value.length > 0);
 
 function onInput(e: CustomEvent): void {
   body.value = (e.detail as { value?: string | null }).value ?? '';
@@ -138,19 +156,27 @@ function pickMedia(): void {
   fileInput.value?.click();
 }
 function onFile(e: Event): void {
-  const f = (e.target as HTMLInputElement).files?.[0];
-  if (!f) return;
-  clearMedia();
-  media.value = f;
-  mediaKind.value = f.type.startsWith('video/') ? 'video' : 'image';
-  mediaName.value = f.name || 'attachment';
-  mediaUrl.value = URL.createObjectURL(f);
+  // Picking several photos/videos stages them all → one album on Send. A voice clip in the
+  // stage means it's a voice post; clear it before adding files (the two don't mix).
+  if (hasVoice.value) clearMedia();
+  const files = Array.from((e.target as HTMLInputElement).files ?? []);
+  for (const f of files) {
+    mediaItems.value.push({
+      blob: f,
+      kind: f.type.startsWith('video/') ? 'video' : 'image',
+      name: f.name || 'attachment',
+      url: URL.createObjectURL(f),
+    });
+  }
+  if (fileInput.value) fileInput.value.value = '';
+}
+function removeMedia(i: number): void {
+  const [gone] = mediaItems.value.splice(i, 1);
+  if (gone) URL.revokeObjectURL(gone.url);
 }
 function clearMedia(): void {
-  if (mediaUrl.value) URL.revokeObjectURL(mediaUrl.value);
-  mediaUrl.value = undefined;
-  media.value = null;
-  mediaDuration.value = undefined;
+  for (const m of mediaItems.value) URL.revokeObjectURL(m.url);
+  mediaItems.value = [];
   if (fileInput.value) fileInput.value.value = '';
 }
 
@@ -206,15 +232,19 @@ function finishRecording(): void {
   const durationSec = Math.max(1, Math.round((Date.now() - recStart) / 1000));
   const blob = new Blob(recChunks, { type: mime });
   clearMedia();
-  media.value = blob;
-  mediaKind.value = 'voice';
-  mediaName.value = `voice.${mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'}`;
-  mediaDuration.value = durationSec;
-  mediaUrl.value = URL.createObjectURL(blob);
+  mediaItems.value = [
+    {
+      blob,
+      kind: 'voice',
+      name: `voice.${mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'}`,
+      durationSec,
+      url: URL.createObjectURL(blob),
+    },
+  ];
 }
 
 onUnmounted(() => {
-  if (mediaUrl.value) URL.revokeObjectURL(mediaUrl.value);
+  for (const m of mediaItems.value) URL.revokeObjectURL(m.url);
   if (recTimer) clearInterval(recTimer);
   recStream?.getTracks().forEach((t) => t.stop());
 });
@@ -227,10 +257,16 @@ async function share(): Promise<void> {
       body: body.value,
       audience: audience.value,
       lifetime: lifetime.value,
-      media: media.value
-        ? // HD-only on the Wall (spec 1022, FR-020): feed media is for viewing, not
-          // downloading, so there's no quality choice — every post ships at HD.
-          { blob: media.value, kind: mediaKind.value, name: mediaName.value, durationSec: mediaDuration.value, quality: 'hd' }
+      // HD-only on the Wall (spec 1022, FR-020): no quality choice — every post ships at HD.
+      // One item → a single-media post; several photos/videos → an album (FR-019).
+      media: mediaItems.value.length
+        ? mediaItems.value.map((m) => ({
+            blob: m.blob,
+            kind: m.kind,
+            name: m.name,
+            durationSec: m.durationSec,
+            quality: 'hd' as const,
+          }))
         : undefined,
     });
     router.back();
@@ -274,6 +310,57 @@ async function share(): Promise<void> {
 }
 .vpreview {
   width: 100%;
+}
+/* Album staging: a horizontal row of removable thumbnails + an "add more" tile. */
+.album-stage {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 16px;
+}
+.stage-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 6px 6px 0 0; /* room for the overhanging × */
+}
+.stage-thumb img,
+.stage-thumb video {
+  width: 84px;
+  height: 84px;
+  object-fit: cover;
+  border-radius: 12px;
+  display: block;
+  background: #000;
+}
+.stage-x {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ion-color-medium);
+  color: var(--ion-color-medium-contrast);
+  font-size: 15px;
+}
+.stage-add {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 84px;
+  margin-top: 6px;
+  border-radius: 12px;
+  border: 1.5px dashed var(--app-border);
+  background: var(--app-surface);
+  color: var(--ion-color-primary);
+  font-size: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 /* Pulse the mic glyph while a voice post is being recorded. */
 .recdot {

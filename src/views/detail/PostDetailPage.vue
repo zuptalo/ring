@@ -28,7 +28,22 @@
           </div>
         </div>
 
-        <div v-if="mediaUrl && (post.kind === 'image' || post.kind === 'video')" class="media" :style="mediaBoxStyle">
+        <!-- Album (FR-019): a swipeable horizontal gallery — slide between items — with a
+             live position counter. Mixed image+video is fine; each slide plays on tap. -->
+        <div v-if="albumMedia.length > 1" class="album">
+          <div class="album-track" @scroll="onAlbumScroll">
+            <div v-for="(m, i) in albumMedia" :key="i" class="album-slide">
+              <img v-if="m.kind === 'image'" :src="m.url" alt="" />
+              <video v-else :src="m.url" controls playsinline />
+            </div>
+          </div>
+          <div class="album-count">{{ albumIndex + 1 }} / {{ albumMedia.length }}</div>
+        </div>
+        <div
+          v-else-if="mediaUrl && (post.kind === 'image' || post.kind === 'video')"
+          class="media"
+          :style="mediaBoxStyle"
+        >
           <img v-if="post.kind === 'image'" :src="mediaUrl" :alt="post.body || 'Photo'" />
           <video v-else :src="mediaUrl" controls playsinline />
         </div>
@@ -151,6 +166,13 @@ const authorName = ref('Unknown');
 const authorAvatar = ref('');
 const authorUsername = ref<string | undefined>(undefined);
 const mediaUrl = ref<string | undefined>(undefined);
+// Album posts (FR-019): every media resolved to an object URL, shown as a swipeable gallery.
+const albumMedia = ref<{ url: string; kind: 'image' | 'video' }[]>([]);
+const albumIndex = ref(0);
+function onAlbumScroll(e: Event): void {
+  const el = e.target as HTMLElement;
+  albumIndex.value = el.clientWidth ? Math.round(el.scrollLeft / el.clientWidth) : 0;
+}
 const leftLabel = computed(() => (post.value?.expiresAt ? timeLeft(post.value.expiresAt, Date.now()) : ''));
 // Reserve the media's aspect ratio so the page doesn't reflow as it decodes.
 const mediaBoxStyle = computed(() =>
@@ -244,8 +266,15 @@ onIonViewWillEnter(async () => {
   void syncEngagement(postId); // refresh reactions from the server
   post.value = await getPost(postId);
   if (!post.value) return;
-  if (post.value.mediaId) {
-    const md = await getMedia(post.value.mediaId);
+  const ids = post.value.mediaIds?.length ? post.value.mediaIds : post.value.mediaId ? [post.value.mediaId] : [];
+  if (ids.length > 1) {
+    // Album: resolve every item in order for the swipeable gallery.
+    for (const id of ids) {
+      const md = await getMedia(id);
+      if (md?.blob) albumMedia.value.push({ url: URL.createObjectURL(md.blob), kind: md.kind === 'video' ? 'video' : 'image' });
+    }
+  } else if (ids.length === 1) {
+    const md = await getMedia(ids[0]);
     if (md?.blob) mediaUrl.value = URL.createObjectURL(md.blob);
   }
   if (post.value.author === getSelfUserId()) {
@@ -271,6 +300,8 @@ onIonViewWillLeave(() => {
     URL.revokeObjectURL(mediaUrl.value);
     mediaUrl.value = undefined;
   }
+  for (const m of albumMedia.value) URL.revokeObjectURL(m.url);
+  albumMedia.value = [];
 });
 
 function initial(name: string): string {
@@ -354,6 +385,47 @@ async function confirmDelete(): Promise<void> {
   height: 100%;
   object-fit: contain;
   display: block;
+}
+/* Swipeable album gallery: scroll-snap row, one item per view + a position counter. */
+.album {
+  position: relative;
+  margin: 16px 0 0;
+}
+.album-track {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 14px;
+  background: #000;
+  scrollbar-width: none;
+}
+.album-track::-webkit-scrollbar {
+  display: none;
+}
+.album-slide {
+  flex: 0 0 100%;
+  scroll-snap-align: center;
+}
+.album-slide img,
+.album-slide video {
+  width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+.album-count {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
 }
 .vaudio {
   width: 100%;
