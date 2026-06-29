@@ -2145,6 +2145,15 @@ async function peerPostKey(userId: string): Promise<Uint8Array | null> {
   return b64urlToBytes(bundle.xPub);
 }
 
+/** One media attachment for a post: a picked/recorded blob + how to send it. */
+export interface PostMediaInput {
+  blob: Blob;
+  kind: 'image' | 'video' | 'voice';
+  name: string;
+  durationSec?: number;
+  quality?: 'sd' | 'hd';
+}
+
 /**
  * Create a Wall post: seal the payload under a fresh per-post key, wrap that key to
  * each audience member, upload the opaque blob, register the post server-side, then
@@ -2155,10 +2164,11 @@ export async function createPost(opts: {
   body?: string;
   audience: 'friends' | 'close';
   lifetime: PostLifetime;
-  // Optional attachment (image/video/voice). When present, it is compressed to the
-  // chosen quality (SD or HD — never original), encrypted + uploaded, and the media-ref
-  // rides sealed inside the post payload.
-  media?: { blob: Blob; kind: 'image' | 'video' | 'voice'; name: string; durationSec?: number; quality?: 'sd' | 'hd' };
+  // Optional attachment(s). A single item is an ordinary media post; an array of 2+
+  // image/video items is an ALBUM post (spec 1022, FR-019) — every item is compressed to
+  // the chosen quality, encrypted + uploaded, and all the media-refs ride sealed inside
+  // the one post payload.
+  media?: PostMediaInput | PostMediaInput[];
 }): Promise<Post> {
   const self = getSelfUserId();
   if (!self) throw new Error('not signed in');
@@ -2175,35 +2185,45 @@ export async function createPost(opts: {
 
   // Encrypt + upload the attachment first (its key rides sealed in the payload), and
   // keep a local Media copy so the author renders it immediately.
-  const kind: Post['kind'] = opts.media ? opts.media.kind : 'text';
-  let mediaId: string | undefined;
+  // Normalise to a list: one item = a single-media post; 2+ image/video items = an album.
+  const mediaList: PostMediaInput[] = opts.media ? (Array.isArray(opts.media) ? opts.media : [opts.media]) : [];
+  const kind: Post['kind'] = mediaList.length ? mediaList[0].kind : 'text';
+  let mediaId: string | undefined; // the cover (first item) — keeps single-media paths working
   let mediaW: number | undefined;
   let mediaH: number | undefined;
+  const mediaIds: string[] = [];
+  const refs: NonNullable<PostPayload['album']> = [];
   const payload: PostPayload = { kind, body };
-  if (opts.media) {
+  for (const m of mediaList) {
     // Posts only ship SD or HD (never the original): compress images/videos to the
     // chosen quality before upload; voice is left as-is.
-    const q = opts.media.quality ?? 'hd';
+    const q = m.quality ?? 'hd';
     const toUpload =
-      opts.media.kind === 'image'
-        ? await compressImage(opts.media.blob, q)
-        : opts.media.kind === 'video'
-          ? await compressVideo(opts.media.blob, q)
-          : opts.media.blob;
-    // Honest badge (spec 2007): label posts by the quality actually achieved. When a
-    // transcode can't shrink the clip it returns the original, so we don't claim an
-    // SD/HD the feed item isn't. (Voice isn't transcoded — keep its requested value.)
-    const achieved =
-      opts.media.kind === 'voice' ? q : achievedQuality(q, opts.media.blob.size, toUpload);
+      m.kind === 'image'
+        ? await compressImage(m.blob, q)
+        : m.kind === 'video'
+          ? await compressVideo(m.blob, q)
+          : m.blob;
+    // Honest badge (spec 2007): label by the quality actually achieved (a transcode that
+    // can't shrink the clip returns the original). Voice isn't transcoded — keep requested.
+    const achieved = m.kind === 'voice' ? q : achievedQuality(q, m.blob.size, toUpload);
     // Dimensions → reserve an aspect-ratio box in the feed (no layout jump).
-    if (opts.media.kind === 'image') ({ width: mediaW, height: mediaH } = await readImageMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
-    else if (opts.media.kind === 'video') ({ width: mediaW, height: mediaH } = await readVideoMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
-    const ref = await prepareOutgoingMedia(toUpload, opts.media.name, opts.media.durationSec, { width: mediaW, height: mediaH, quality: achieved });
-    payload.media = ref;
-    mediaId = uid();
+    let w: number | undefined;
+    let h: number | undefined;
+    if (m.kind === 'image') ({ width: w, height: h } = await readImageMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
+    else if (m.kind === 'video') ({ width: w, height: h } = await readVideoMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
+    const ref = await prepareOutgoingMedia(toUpload, m.name, m.durationSec, { width: w, height: h, quality: achieved });
+    refs.push(ref);
+    const id = uid();
+    mediaIds.push(id);
+    if (mediaIds.length === 1) {
+      mediaId = id; // cover
+      mediaW = w;
+      mediaH = h;
+    }
     await put<Media>('media', {
-      id: mediaId,
-      kind: opts.media.kind,
+      id,
+      kind: m.kind,
       mime: ref.mime,
       name: ref.name,
       size: ref.size,
@@ -2212,6 +2232,9 @@ export async function createPost(opts: {
       updatedAt: now(),
     });
   }
+  // Single item rides in `media`; an album rides as the ordered `album` list.
+  if (refs.length === 1) payload.media = refs[0];
+  else if (refs.length > 1) payload.album = refs;
 
   const built = buildPost(payload, audience);
   const blobId = await uploadBlob(new Blob([built.blob as BlobPart]));
@@ -2228,6 +2251,7 @@ export async function createPost(opts: {
     kind,
     body,
     mediaId,
+    mediaIds: mediaIds.length > 1 ? mediaIds : undefined,
     mediaW,
     mediaH,
     audience: opts.audience,
@@ -2261,19 +2285,36 @@ async function receivePost(sp: ServerPost): Promise<void> {
   }
   // Pull + decrypt the attachment (if any) and store it as a local Media record so the
   // Wall renders it like any other media.
+  // Pull + decrypt each attachment (a single `media`, or every item of an `album`) and
+  // store them as local Media records, preserving order, so the Wall renders them like
+  // any other media. The first becomes the cover (mediaId), matching createPost.
   let mediaId: string | undefined;
-  if (payload.media && payload.kind !== 'text') {
-    const mblob = await receiveIncomingMedia(payload.media).catch(() => null);
-    if (mblob) {
-      mediaId = uid();
+  let mediaW: number | undefined;
+  let mediaH: number | undefined;
+  const mediaIds: string[] = [];
+  const refsToGet = payload.album ?? (payload.media ? [payload.media] : []);
+  if (payload.kind !== 'text') {
+    for (const ref of refsToGet) {
+      const mblob = await receiveIncomingMedia(ref).catch(() => null);
+      if (!mblob) continue;
+      const id = uid();
+      mediaIds.push(id);
+      if (mediaIds.length === 1) {
+        mediaId = id;
+        mediaW = ref.width;
+        mediaH = ref.height;
+      }
+      // A mixed album can carry both images and videos, so derive each item's kind from
+      // its mime rather than the post's overall kind.
+      const itemKind = ref.mime.startsWith('video/') ? 'video' : ref.mime.startsWith('audio/') ? 'voice' : 'image';
       await put<Media>('media', {
-        id: mediaId,
-        kind: payload.kind,
-        mime: payload.media.mime,
-        name: payload.media.name,
-        size: payload.media.size,
+        id,
+        kind: itemKind,
+        mime: ref.mime,
+        name: ref.name,
+        size: ref.size,
         blob: mblob,
-        durationSec: payload.media.durationSec,
+        durationSec: ref.durationSec,
         updatedAt: now(),
       });
     }
@@ -2285,8 +2326,9 @@ async function receivePost(sp: ServerPost): Promise<void> {
     kind: payload.kind,
     body: payload.body,
     mediaId,
-    mediaW: payload.media?.width,
-    mediaH: payload.media?.height,
+    mediaIds: mediaIds.length > 1 ? mediaIds : undefined,
+    mediaW,
+    mediaH,
     createdAt: sp.createdAt,
     lastActivityAt: Math.max(prev?.lastActivityAt ?? 0, sp.createdAt),
     expiresAt: sp.expiresAt,
