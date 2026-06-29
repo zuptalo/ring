@@ -2169,6 +2169,8 @@ export async function createPost(opts: {
   // the chosen quality, encrypted + uploaded, and all the media-refs ride sealed inside
   // the one post payload.
   media?: PostMediaInput | PostMediaInput[];
+  // Progress for the composer's "encoding / uploading …" bar (per media item, 0–1).
+  onProgress?: (p: { phase: 'encoding' | 'uploading'; index: number; total: number; value: number }) => void;
 }): Promise<Post> {
   const self = getSelfUserId();
   if (!self) throw new Error('not signed in');
@@ -2194,15 +2196,17 @@ export async function createPost(opts: {
   const mediaIds: string[] = [];
   const refs: NonNullable<PostPayload['album']> = [];
   const payload: PostPayload = { kind, body };
+  const total = mediaList.length;
   for (const m of mediaList) {
+    const index = mediaIds.length; // 0-based position of this item
     // Posts only ship SD or HD (never the original): compress images/videos to the
-    // chosen quality before upload; voice is left as-is.
+    // chosen quality before upload; voice is left as-is. Video reports encode progress.
     const q = m.quality ?? 'hd';
     const toUpload =
       m.kind === 'image'
         ? await compressImage(m.blob, q)
         : m.kind === 'video'
-          ? await compressVideo(m.blob, q)
+          ? await compressVideo(m.blob, q, (value) => opts.onProgress?.({ phase: 'encoding', index, total, value }))
           : m.blob;
     // Honest badge (spec 2007): label by the quality actually achieved (a transcode that
     // can't shrink the clip returns the original). Voice isn't transcoded — keep requested.
@@ -2212,7 +2216,13 @@ export async function createPost(opts: {
     let h: number | undefined;
     if (m.kind === 'image') ({ width: w, height: h } = await readImageMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
     else if (m.kind === 'video') ({ width: w, height: h } = await readVideoMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
-    const ref = await prepareOutgoingMedia(toUpload, m.name, m.durationSec, { width: w, height: h, quality: achieved });
+    const ref = await prepareOutgoingMedia(
+      toUpload,
+      m.name,
+      m.durationSec,
+      { width: w, height: h, quality: achieved },
+      (value) => opts.onProgress?.({ phase: 'uploading', index, total, value }),
+    );
     refs.push(ref);
     const id = uid();
     mediaIds.push(id);

@@ -26,6 +26,16 @@
         @ion-input="onInput"
       />
 
+      <!-- While sharing media: a real progress bar (encode % then upload %) so a video
+           post isn't just a frozen, unexplained wait. -->
+      <div v-if="sharing && mediaItems.length" class="share-progress">
+        <ion-progress-bar
+          :type="progress ? 'determinate' : 'indeterminate'"
+          :value="progress?.value ?? 0"
+        />
+        <span class="share-label">{{ progressLabel }}</span>
+      </div>
+
       <!-- Voice preview (a voice post is always on its own) -->
       <div v-if="hasVoice" class="preview">
         <audio class="vpreview" :src="mediaItems[0].url" controls />
@@ -113,7 +123,7 @@ import { computed, ref, onUnmounted } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
   IonContent, IonTextarea, IonList, IonListHeader, IonItem, IonSegment, IonSegmentButton,
-  IonLabel, IonIcon, alertController,
+  IonLabel, IonIcon, IonProgressBar, alertController,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
 import { imageOutline, closeOutline, micOutline } from 'ionicons/icons';
@@ -125,6 +135,15 @@ const body = ref('');
 const audience = ref<'friends' | 'close'>('friends');
 const lifetime = ref<PostLifetime>('72h');
 const sharing = ref(false);
+// Encode/upload progress while a post with media is being shared (drives the progress bar).
+const progress = ref<{ phase: 'encoding' | 'uploading'; index: number; total: number; value: number } | null>(null);
+const progressLabel = computed(() => {
+  const p = progress.value;
+  if (!p) return 'Sharing…';
+  const which = p.total > 1 ? ` ${p.index + 1}/${p.total}` : '';
+  const pct = Math.round((p.value ?? 0) * 100);
+  return p.phase === 'encoding' ? `Processing${which}… ${pct}%` : `Uploading${which}… ${pct}%`;
+});
 
 // Staged attachments. Several photos/videos compose an ALBUM post (spec 1022, FR-019); a
 // recorded voice clip is always on its own. Object URLs back the previews, revoked on
@@ -252,6 +271,7 @@ onUnmounted(() => {
 async function share(): Promise<void> {
   if (!canShare.value || sharing.value) return;
   sharing.value = true;
+  progress.value = mediaItems.value.length ? { phase: 'encoding', index: 0, total: mediaItems.value.length, value: 0 } : null;
   try {
     await createPost({
       body: body.value,
@@ -268,6 +288,9 @@ async function share(): Promise<void> {
             quality: 'hd' as const,
           }))
         : undefined,
+      onProgress: (p) => {
+        progress.value = p;
+      },
     });
     router.back();
   } catch (err) {
@@ -279,6 +302,7 @@ async function share(): Promise<void> {
     await a.present();
   } finally {
     sharing.value = false;
+    progress.value = null;
   }
 }
 </script>
@@ -310,6 +334,16 @@ async function share(): Promise<void> {
 }
 .vpreview {
   width: 100%;
+}
+.share-progress {
+  margin: 10px 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.share-label {
+  font-size: 13px;
+  color: var(--app-text-muted, #8e8e93);
 }
 /* Album staging: a horizontal row of removable thumbnails + an "add more" tile. */
 .album-stage {
