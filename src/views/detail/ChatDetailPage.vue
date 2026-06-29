@@ -733,17 +733,42 @@
           </ion-button>
         </div>
       </ion-toolbar>
-      <!-- Images pasted into the composer, waiting to be sent: thumbnails above
-           the textarea (each removable); whatever is typed below goes out as the
-           caption when Send is tapped. -->
-      <ion-toolbar v-if="pendingImages.length" class="paste-bar">
+      <!-- Media staged in the composer, waiting to be sent: image/video thumbnails and
+           file chips above the textarea (each removable); whatever is typed below goes
+           out as the caption when Send is tapped. Picked AND pasted media land here
+           (spec 1023), so library photos can be captioned just like a paste. -->
+      <ion-toolbar v-if="pendingMedia.length" class="paste-bar">
         <div class="paste-row">
-          <div v-for="(p, i) in pendingImages" :key="p.url" class="paste-thumb">
-            <img :src="p.url" alt="Pasted image" />
-            <button type="button" class="paste-x" aria-label="Remove image" @click="removePendingImage(i)">
+          <div
+            v-for="(p, i) in pendingMedia"
+            :key="p.id"
+            class="paste-thumb"
+            :class="{ 'is-file': p.kind === 'file' }"
+          >
+            <img v-if="p.kind === 'image' && p.url" :src="p.url" alt="Attachment" />
+            <template v-else-if="p.kind === 'video' && p.url">
+              <video :src="p.url" muted playsinline preload="metadata" />
+              <ion-icon class="paste-play" :icon="playCircle" />
+            </template>
+            <div v-else class="paste-file">
+              <ion-icon :icon="documentOutline" />
+              <span class="paste-file-name">{{ p.blob.name || 'File' }}</span>
+            </div>
+            <button type="button" class="paste-x" aria-label="Remove attachment" @click="removePendingMedia(i)">
               <ion-icon :icon="closeOutline" />
             </button>
           </div>
+        </div>
+        <!-- 2+ photos/videos: send as one swipeable album (default) or separate messages. -->
+        <div v-if="albumChoiceVisible" class="send-mode">
+          <ion-segment
+            :value="sendAsAlbum ? 'album' : 'individual'"
+            mode="ios"
+            @ion-change="sendAsAlbum = ($event.detail.value as string) === 'album'"
+          >
+            <ion-segment-button value="album"><ion-label>Album</ion-label></ion-segment-button>
+            <ion-segment-button value="individual"><ion-label>Individual</ion-label></ion-segment-button>
+          </ion-segment>
         </div>
       </ion-toolbar>
       <!-- A still-pending (un-accepted) friend request: lock the composer until
@@ -832,10 +857,10 @@
             v-enter-send="send"
             class="composer"
             :value="draft"
-            :placeholder="pendingImages.length ? 'Add a caption' : 'Message'"
+            :placeholder="pendingMedia.length ? 'Add a caption' : 'Message'"
             :auto-grow="true"
             :rows="1"
-            :maxlength="pendingImages.length ? CAPTION_MAX : undefined"
+            :maxlength="pendingMedia.length ? CAPTION_MAX : undefined"
             autocapitalize="sentences"
             autocorrect="on"
             :spellcheck="true"
@@ -848,7 +873,7 @@
           />
           <ion-buttons slot="end">
             <ion-button
-              v-if="draft.trim() || pendingImages.length"
+              v-if="draft.trim() || pendingMedia.length"
               color="primary"
               aria-label="Send"
               @click="send"
@@ -954,6 +979,7 @@ import {
   IonBackButton, IonIcon, IonSearchbar, IonContent, IonFooter, IonTextarea,
   IonAvatar, IonNote, IonModal, IonSpinner, IonDatetime, actionSheetController, alertController, popoverController,
   IonInfiniteScroll, IonInfiniteScrollContent, IonFab, IonFabButton,
+  IonSegment, IonSegmentButton, IonLabel,
   onIonViewWillEnter, onIonViewDidEnter, onIonViewWillLeave,
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
@@ -1005,7 +1031,6 @@ import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import { segmentEmoji, emojiOnlyCount } from '@/utils/emoji';
 import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
-import { type Quality } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
 import { generateVideoPoster, generateImageThumb, isAnimatedImage } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
@@ -2224,16 +2249,59 @@ function onComposerFocus(): void {
 // Block Return while the composer is empty (or only whitespace) so a message can't
 // start with blank lines / be opened with nothing typed.
 function onComposerEnter(e: KeyboardEvent): void {
-  if (!draft.value.trim() && !pendingImages.value.length) e.preventDefault();
+  if (!draft.value.trim() && !pendingMedia.value.length) e.preventDefault();
 }
 
-/* ---- pasted images ----
-   An image pasted into the composer (iOS long-press → Paste, or Ctrl/Cmd+V)
-   doesn't send immediately: it parks here and shows as a removable thumbnail
-   above the textarea, the placeholder flips to "Add a caption", and Send ships
-   image + typed caption together (see send()). Object URLs back the thumbnails
-   and are revoked on remove/send/unmount. */
-const pendingImages = ref<{ blob: File; url: string }[]>([]);
+/* ---- staged media attachments (spec 1023) ----
+   Media added to the composer — whether PICKED from the library/files or PASTED
+   (iOS long-press → Paste, or Ctrl/Cmd+V) — doesn't send immediately: it parks here
+   as removable thumbnails above the textarea, the placeholder flips to "Add a caption",
+   and Send ships the media + typed caption together (see send()). Routing picked media
+   through here too (not just paste) is what lets you caption library photos as well.
+   For several photos/videos you choose Album (one swipeable post) or Individual; the
+   caption applies to the album once, or to each individual message. Object URLs back the
+   image/video thumbnails and are revoked on remove/send/unmount. */
+interface PendingMedia {
+  id: string;
+  blob: File;
+  kind: 'image' | 'video' | 'file';
+  url?: string; // object URL for an image/video preview; files show a chip instead
+}
+const pendingMedia = ref<PendingMedia[]>([]);
+// Multiple photos/videos: send as one album (default) or as separate messages.
+const sendAsAlbum = ref(true);
+// The Album/Individual choice only makes sense with 2+ image/video items.
+const albumChoiceVisible = computed(
+  () => pendingMedia.value.filter((p) => p.kind === 'image' || p.kind === 'video').length > 1,
+);
+
+// Classify a file by mime (the universal picker returns docs/music alongside media).
+// `forceFile` is the explicit "Choose Files" path, which keeps everything as a file.
+function mediaKindOf(f: File, forceFile = false): 'image' | 'video' | 'audio' | 'file' {
+  if (forceFile) return 'file';
+  if (f.type.startsWith('video/')) return 'video';
+  if (f.type.startsWith('image/')) return 'image';
+  if (f.type.startsWith('audio/')) return 'audio';
+  return 'file';
+}
+
+// Stage one picked/pasted file for captioning + sending. Audio takes its own title/artist
+// review path, so this returns 'audio' to let the caller route it to the audio queue;
+// everything else parks in pendingMedia and returns 'staged'.
+function stageMedia(f: File, forceFile = false): 'audio' | 'staged' {
+  const k = mediaKindOf(f, forceFile);
+  if (k === 'audio') return 'audio';
+  const kind: 'image' | 'video' | 'file' = k === 'image' || k === 'video' ? k : 'file';
+  const url = kind === 'image' || kind === 'video' ? URL.createObjectURL(f) : undefined;
+  pendingMedia.value.push({ id: crypto.randomUUID(), blob: f, kind, url });
+  return 'staged';
+}
+
+// Route a picked/pasted audio file into the title/artist review queue (its own flow).
+function queueAudioFile(f: File, reply?: ReplyRef): void {
+  audioQueue.value.push({ blob: f, name: f.name || 'audio', reply });
+  if (!audioReview.value.open) void processNextAudio();
+}
 
 // A bare image URL (single token, ends in a known image extension, query/hash allowed).
 const IMAGE_URL_RE = /^https?:\/\/[^\s]+\.(?:gif|webp|png|jpe?g|jfif|avif|bmp|svg)(?:[?#][^\s]*)?$/i;
@@ -2242,14 +2310,18 @@ function isImageUrl(s: string): boolean {
 }
 
 function onComposerPaste(e: ClipboardEvent): void {
-  const images = Array.from(e.clipboardData?.items ?? [])
-    .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+  // Any pasted file (image, video, audio, document) stages as an attachment — not just
+  // images (spec 1023). Audio routes to its own review queue.
+  const files = Array.from(e.clipboardData?.items ?? [])
+    .filter((it) => it.kind === 'file')
     .map((it) => it.getAsFile())
     .filter((f): f is File => !!f);
-  if (images.length) {
-    // Don't also insert the image's file name/uri as text.
+  if (files.length) {
+    // Don't also insert the file name/uri as text.
     e.preventDefault();
-    for (const f of images) pendingImages.value.push({ blob: f, url: URL.createObjectURL(f) });
+    for (const f of files) {
+      if (stageMedia(f) === 'audio') queueAudioFile(f);
+    }
     return;
   }
   // No image file on the clipboard, but the pasted text is a bare image URL → fetch it
@@ -2274,7 +2346,7 @@ async function attachImageFromUrl(url: string): Promise<void> {
     const blob = await res.blob();
     if (!blob.type.startsWith('image/')) throw new Error(`not an image (${blob.type || 'unknown'})`);
     const name = imageNameFromUrl(url, blob.type);
-    pendingImages.value.push({ blob: new File([blob], name, { type: blob.type }), url: URL.createObjectURL(blob) });
+    stageMedia(new File([blob], name, { type: blob.type }));
   } catch {
     // CORS-blocked / offline / not an image: don't swallow the paste — put the link in
     // the draft and tell the user why it wasn't attached.
@@ -2297,16 +2369,17 @@ function imageNameFromUrl(url: string, mime: string): string {
   return /\.[a-z0-9]+$/i.test(base) ? base : `${base}.${ext}`;
 }
 
-function removePendingImage(i: number): void {
-  const [gone] = pendingImages.value.splice(i, 1);
-  if (gone) URL.revokeObjectURL(gone.url);
+function removePendingMedia(i: number): void {
+  const [gone] = pendingMedia.value.splice(i, 1);
+  if (gone?.url) URL.revokeObjectURL(gone.url);
 }
 
-function clearPendingImages(): void {
-  for (const p of pendingImages.value) URL.revokeObjectURL(p.url);
-  pendingImages.value = [];
+function clearPendingMedia(): void {
+  for (const p of pendingMedia.value) if (p.url) URL.revokeObjectURL(p.url);
+  pendingMedia.value = [];
+  sendAsAlbum.value = true;
 }
-onUnmounted(clearPendingImages);
+onUnmounted(clearPendingMedia);
 
 const cameraInput = ref<HTMLInputElement | null>(null);
 const photoInput = ref<HTMLInputElement | null>(null);
@@ -3183,7 +3256,7 @@ function onContentScroll(): void {
 
 async function send() {
   const text = normalizeOutgoing(draft.value);
-  if (!text && !pendingImages.value.length) return;
+  if (!text && !pendingMedia.value.length) return;
   if (peerGhosted.value || peerBlocked.value) return; // composer is hidden anyway; backstop
   stopActivity(); // the message is going out → end any activity indicator (spec 1009)
 
@@ -3196,31 +3269,35 @@ async function send() {
     return;
   }
 
-  // Pasted images go out with the typed text as the caption (on the first image
-  // when several were pasted — they share an album grid like the picker flow).
-  if (pendingImages.value.length) {
-    // HD-only (spec 1023): chat media is for viewing, not downloading/saving, so there is
-    // no quality picker — everything sends at the HD tier. GIF/WebP still pass through
-    // untouched downstream (compressImage preserves animation/alpha regardless of tier).
-    const quality: Quality = 'hd';
-    const images = pendingImages.value.slice();
-    pendingImages.value = [];
+  // Staged media (picked OR pasted) go out with the typed text as the caption. With 2+
+  // photos/videos the user picks Album (one swipeable post, default) or Individual: an
+  // album carries the caption once (on the first item); individual messages each carry it.
+  // Files are never part of an album. HD-only (spec 1023): everything sends at the HD tier.
+  if (pendingMedia.value.length) {
+    const items = pendingMedia.value.slice();
+    pendingMedia.value = [];
+    const caption = text;
     draft.value = '';
     // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
-    let reply = replyingTo.value ? { ...replyingTo.value } : undefined;
+    const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
     replyingTo.value = null;
-    const albumId = images.length > 1 ? crypto.randomUUID() : undefined;
-    let caption: string | undefined = text;
-    for (const p of images) {
-      await sendMediaMessage(chatId, 'image', p.blob, p.blob.name || 'photo', undefined, {
-        replyTo: reply,
-        caption,
-        albumId,
-        quality,
-      });
-      reply = undefined; // quote + caption attach to the first item only
-      caption = undefined;
-      URL.revokeObjectURL(p.url);
+    const mediaCount = items.filter((it) => it.kind === 'image' || it.kind === 'video').length;
+    const asAlbum = mediaCount > 1 && sendAsAlbum.value;
+    const albumId = asAlbum ? crypto.randomUUID() : undefined;
+    sendAsAlbum.value = true; // reset the choice for next time
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const inAlbum = !!albumId && (it.kind === 'image' || it.kind === 'video');
+      const cap = asAlbum ? (i === 0 ? caption : undefined) : caption;
+      await sendMediaMessage(
+        chatId,
+        it.kind,
+        it.blob,
+        it.blob.name || (it.kind === 'file' ? 'file' : 'photo'),
+        undefined,
+        { replyTo: i === 0 ? reply : undefined, caption: cap, albumId: inAlbum ? albumId : undefined, quality: 'hd' },
+      );
+      if (it.url) URL.revokeObjectURL(it.url);
     }
     await scrollToNewest();
     return;
@@ -3336,90 +3413,29 @@ async function onVideoNoteSend(blob: Blob, dur: number, poster?: string): Promis
   await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply, poster });
 }
 
-// Ask for an optional album name; defaults to the album's date (the earliest of the
-// chosen photos/videos). Returns the name, or null if cancelled.
-function promptAlbumName(suggestedDate?: string): Promise<string | null> {
-  const date = suggestedDate || new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  return new Promise((resolve) => {
-    void alertController
-      .create({
-        header: 'Album name',
-        message: 'Optional, leave blank to use the date.',
-        inputs: [{ name: 'name', type: 'text', value: '', placeholder: date, attributes: { maxlength: 60 } }],
-        buttons: [
-          { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
-          { text: 'Send', handler: (d: { name?: string }) => resolve((d?.name ?? '').trim() || date) },
-        ],
-      })
-      .then((a) => a.present());
-  });
-}
-
-
-
-async function onPick(e: Event, mode: 'auto' | 'file') {
+function onPick(e: Event, mode: 'auto' | 'file') {
   const input = e.target as HTMLInputElement;
   const files = Array.from(input.files ?? []);
   input.value = ''; // allow re-picking the same file
   if (!files.length) return;
-  // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
-  const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
-  replyingTo.value = null;
-  // Detect each file's kind from its mime type (the universal picker can return
-  // documents and music alongside photos/videos).
-  const kindOf = (f: File): 'image' | 'video' | 'audio' | 'file' =>
-    mode === 'file'
-      ? 'file'
-      : f.type.startsWith('video/')
-        ? 'video'
-        : f.type.startsWith('image/')
-          ? 'image'
-          : f.type.startsWith('audio/')
-            ? 'audio'
-            : 'file';
-  // Audio files take a separate path (metadata review before sending).
-  const audioFiles = files.filter((f) => kindOf(f) === 'audio');
-  const otherFiles = files.filter((f) => kindOf(f) !== 'audio');
-  let replyLeft = reply; // the quote attaches to the first item sent
-
-  if (otherFiles.length) {
-    // HD-only (spec 1023): chat media is for viewing, not downloading/saving, so there is
-    // no quality picker — send everything at the HD tier (GIF/WebP stay untouched
-    // downstream regardless of the tier).
-    const quality: Quality = 'hd';
-    // Several photos/videos chosen together share an album id → rendered as a grid.
-    const allMedia = otherFiles.every((f) => kindOf(f) === 'image' || kindOf(f) === 'video');
-    const albumId = otherFiles.length > 1 && allMedia ? crypto.randomUUID() : undefined;
-    let albumName: string | undefined;
-    if (albumId) {
-      // Suggest the EARLIEST capture date among the chosen media (their file
-      // lastModified), not today, so the album reads as when the photos were taken.
-      const times = otherFiles.map((f) => f.lastModified).filter((t) => t > 0);
-      const earliest = times.length ? Math.min(...times) : Date.now();
-      const name = await promptAlbumName(new Date(earliest).toISOString().slice(0, 10));
-      if (name === null) return; // cancelled
-      albumName = name;
-    }
-    // Send the originals + chosen quality; compression for photos/videos runs in
-    // the background (status 'compressing' with a progress bar) so the UI never
-    // blocks and the user can keep chatting.
-    for (const file of otherFiles) {
-      const kind = kindOf(file) as 'image' | 'video' | 'file';
-      await sendMediaMessage(chatId, kind, file, file.name || 'attachment', undefined, {
-        replyTo: replyLeft,
-        albumId,
-        albumName,
-        quality,
-      });
+  // Picked media now STAGES like a paste (spec 1023) so it can be captioned before
+  // sending, and several photos/videos can go as an album or individually — see send().
+  // Audio keeps its own title/artist review path.
+  const audioFiles: File[] = [];
+  for (const f of files) {
+    if (stageMedia(f, mode === 'file') === 'audio') audioFiles.push(f);
+  }
+  if (audioFiles.length) {
+    // The pending reply (if any) rides the first audio only when nothing else was staged
+    // to consume it — staged media takes the reply on send(). Plain copy: the reactive
+    // Proxy can't be cloned into IndexedDB.
+    let replyLeft: ReplyRef | undefined =
+      pendingMedia.value.length || !replyingTo.value ? undefined : { ...replyingTo.value };
+    if (replyLeft) replyingTo.value = null;
+    for (const f of audioFiles) {
+      queueAudioFile(f, replyLeft);
       replyLeft = undefined;
     }
-  }
-
-  // Queue audio files for the title/artist review sheet (one at a time).
-  if (audioFiles.length) {
-    for (const f of audioFiles) audioQueue.value.push({ blob: f, name: f.name || 'audio', reply: replyLeft });
-    replyLeft = undefined;
-    if (!audioReview.value.open) void processNextAudio();
   }
 }
 
@@ -3898,12 +3914,63 @@ function cancelRecording() {
   /* breathing room so the overhanging × isn't clipped by the scroll row */
   padding: 6px 6px 0 0;
 }
-.paste-thumb img {
+.paste-thumb img,
+.paste-thumb video {
   width: 64px;
   height: 64px;
   object-fit: cover;
   border-radius: 10px;
   display: block;
+}
+.paste-thumb video {
+  background: #000;
+}
+/* Play glyph over a staged video's poster frame. */
+.paste-play {
+  position: absolute;
+  left: calc(50% - 3px);
+  top: calc(50% + 3px);
+  transform: translate(-50%, -50%);
+  font-size: 26px;
+  color: #fff;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+  pointer-events: none;
+}
+/* A staged non-media file shows a labelled chip instead of a thumbnail. */
+.paste-file {
+  width: 132px;
+  height: 64px;
+  border-radius: 10px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+.paste-file ion-icon {
+  font-size: 22px;
+  color: var(--ion-color-primary);
+}
+.paste-file-name {
+  font-size: 11px;
+  line-height: 1.2;
+  max-width: 100%;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-text-muted);
+}
+/* Album vs Individual choice for a multi-photo/video send. */
+.send-mode {
+  padding: 2px 12px 6px;
+}
+.send-mode ion-segment {
+  max-width: 240px;
 }
 .paste-x {
   position: absolute;
