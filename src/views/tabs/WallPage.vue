@@ -102,6 +102,11 @@
                 class="play"
                 :icon="playCircleOutline"
               />
+              <!-- Album post (FR-019): the feed shows the cover with a count badge; the
+                   swipeable gallery is in the full post. -->
+              <span v-if="p.mediaIds && p.mediaIds.length > 1" class="album-badge">
+                <ion-icon :icon="copyOutline" />{{ p.mediaIds.length }}
+              </span>
             </div>
             <div v-else-if="p.mediaUrl && p.kind === 'voice'" class="voice" @click="open(p.id)">
               <ion-icon :icon="micOutline" /> Voice message
@@ -191,7 +196,7 @@ import {
 import { useRouter } from 'vue-router';
 import {
   createOutline, sparklesOutline, micOutline, playCircleOutline, happyOutline, timeOutline,
-  notificationsOutline, notificationsOffOutline,
+  notificationsOutline, notificationsOffOutline, copyOutline,
 } from 'ionicons/icons';
 import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
@@ -504,6 +509,24 @@ ion-item-sliding ion-item-option {
 /* While the clip is autoplaying inline, drop the tap-to-open glyph (tapping still works). */
 .thumb video[data-autoplaying] + .play {
   opacity: 0;
+}
+/* Album count badge over the cover (top-right). */
+.album-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.album-badge ion-icon {
+  font-size: 14px;
 }
 .body {
   margin: 8px 14px;
