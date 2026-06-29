@@ -32,7 +32,8 @@ export interface WallPost extends Post {
   authorAvatar: string;
   authorUsername?: string;
   muted: boolean; // author's Wall notifications are muted
-  mediaUrl?: string;
+  mediaUrl?: string; // full-resolution blob (video src; image fallback) — may be absent
+  posterUrl?: string; // small poster tier — shows instantly so the feed never blanks (US1)
   reactions: ReactionGroup[];
   myEmojis: string[];
   comments: CommentView[];
@@ -53,30 +54,44 @@ export function useWall() {
   const tick = setInterval(() => (now.value = Date.now()), 30_000);
   onUnmounted(() => clearInterval(tick));
 
-  // Media object URLs by post id (created/revoked as posts come and go).
+  // Media object URLs by post id (created/revoked as posts come and go). We resolve TWO
+  // tiers: the small poster (shows instantly so the feed never flashes a blank tile — it
+  // rode the sealed envelope, so it's local even before the full media downloads) and the
+  // full blob (the video src; the image fallback when there's no poster).
   const mediaUrls = ref<Record<string, string>>({});
+  const posterUrls = ref<Record<string, string>>({});
   watch(
     () => posts.value.map((p) => `${p.id}:${p.mediaId ?? ''}`).join('|'),
     async () => {
-      const next: Record<string, string> = {};
+      const nextMedia: Record<string, string> = {};
+      const nextPoster: Record<string, string> = {};
       for (const p of posts.value) {
         if (!p.mediaId) continue;
-        if (mediaUrls.value[p.id]) {
-          next[p.id] = mediaUrls.value[p.id];
+        // Reuse already-resolved URLs (both tiers were resolved together on a prior pass).
+        if (mediaUrls.value[p.id] || posterUrls.value[p.id]) {
+          if (mediaUrls.value[p.id]) nextMedia[p.id] = mediaUrls.value[p.id];
+          if (posterUrls.value[p.id]) nextPoster[p.id] = posterUrls.value[p.id];
           continue;
         }
         const md = await getMedia(p.mediaId);
-        if (md?.blob) next[p.id] = URL.createObjectURL(md.blob);
+        if (md?.blob) nextMedia[p.id] = URL.createObjectURL(md.blob);
+        const poster = md?.posterBlob ?? md?.posterGrid;
+        if (poster) nextPoster[p.id] = URL.createObjectURL(poster);
       }
       for (const [pid, url] of Object.entries(mediaUrls.value)) {
-        if (next[pid] !== url) URL.revokeObjectURL(url);
+        if (nextMedia[pid] !== url) URL.revokeObjectURL(url);
       }
-      mediaUrls.value = next;
+      for (const [pid, url] of Object.entries(posterUrls.value)) {
+        if (nextPoster[pid] !== url) URL.revokeObjectURL(url);
+      }
+      mediaUrls.value = nextMedia;
+      posterUrls.value = nextPoster;
     },
     { immediate: true },
   );
   onUnmounted(() => {
     for (const url of Object.values(mediaUrls.value)) URL.revokeObjectURL(url);
+    for (const url of Object.values(posterUrls.value)) URL.revokeObjectURL(url);
   });
 
   const wall = computed<WallPost[]>(() => {
@@ -128,6 +143,7 @@ export function useWall() {
         authorUsername: isOwn ? undefined : c?.username,
         muted: !!mutedUsers.value[p.author],
         mediaUrl: mediaUrls.value[p.id],
+        posterUrl: posterUrls.value[p.id],
         reactions,
         myEmojis,
         comments,

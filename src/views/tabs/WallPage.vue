@@ -73,16 +73,22 @@
               :style="mediaStyle(p)"
               @click="open(p.id)"
             >
+              <!-- Prefer the small poster: it's local immediately (it rode the sealed
+                   envelope), so the feed shows it at once instead of a blank box while the
+                   full image downloads. The full blob is loaded in the viewer on tap. -->
               <img
-                v-if="p.kind === 'image' && p.mediaUrl"
-                :src="p.mediaUrl"
+                v-if="p.kind === 'image' && (p.posterUrl || p.mediaUrl)"
+                :src="p.posterUrl || p.mediaUrl"
                 :alt="p.body || 'Photo'"
                 @load="onMediaLoad(p.id)"
               />
+              <!-- Video: the poster attribute shows a frame instantly; the full clip plays
+                   (and autoplays on screen) once its blob is present. -->
               <video
-                v-else-if="p.kind === 'video' && p.mediaUrl"
+                v-else-if="p.kind === 'video' && (p.mediaUrl || p.posterUrl)"
                 v-autoplay-visible
                 :src="p.mediaUrl"
+                :poster="p.posterUrl"
                 muted
                 playsinline
                 preload="metadata"
@@ -92,7 +98,7 @@
               <!-- The play glyph is the "tap to open" hint; hide it while the clip is
                    autoplaying inline so it isn't a button-over-moving-video. -->
               <ion-icon
-                v-if="p.kind === 'video' && p.mediaUrl"
+                v-if="p.kind === 'video' && (p.mediaUrl || p.posterUrl)"
                 class="play"
                 :icon="playCircleOutline"
               />
