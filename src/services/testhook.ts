@@ -148,7 +148,7 @@ import { get, getAll, put, bulkPut } from '@/db/idb';
 import { initialsAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
-import type { Chat, FriendRequest, Media, Message } from '@/db/types';
+import type { Chat, FriendRequest, Media, Message, Post } from '@/db/types';
 import {
   startDirectCall,
   startGroupCall,
@@ -941,6 +941,43 @@ export function installTestHook(): void {
     post: async (opts: { body?: string; audience?: 'friends' | 'close'; lifetime?: '1h' | '24h' | '72h' }): Promise<string> => {
       const p = await dbCreatePost({ body: opts.body, audience: opts.audience ?? 'friends', lifetime: opts.lifetime ?? '24h' });
       return p.id;
+    },
+    /** Seed `n` own VIDEO posts straight into IndexedDB (no real encrypt/transcode), so the
+     *  Wall feed renders `n` tall <video> cards for the autoplay-on-visible test. The stub
+     *  bytes don't decode, but the autoplay directive observes the element regardless, so the
+     *  visibility coordination is exercised deterministically + instantly. Newest first. */
+    seedWallVideoPosts: async (n: number): Promise<string[]> => {
+      const self = getSelfUserId() ?? 'me';
+      const now = Date.now();
+      const bytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]); // ftyp/isom-ish
+      const ids: string[] = [];
+      for (let i = 0; i < n; i++) {
+        const mediaId = `vidseed-${now}-${i}`;
+        const postId = `postseed-${now}-${i}`;
+        await put<Media>('media', {
+          id: mediaId,
+          kind: 'video',
+          mime: 'video/mp4',
+          name: `clip-${i}.mp4`,
+          size: bytes.length,
+          blob: new Blob([bytes], { type: 'video/mp4' }),
+          updatedAt: now,
+        });
+        await put<Post>('posts', {
+          id: postId,
+          author: self,
+          kind: 'video',
+          mediaId,
+          mediaW: 720,
+          mediaH: 1280, // portrait → each card fills the viewport, so one plays at a time
+          audience: 'friends',
+          createdAt: now - i * 1000, // index 0 newest (top of feed)
+          outgoing: true,
+          updatedAt: now,
+        });
+        ids.push(postId);
+      }
+      return ids;
     },
     /** Compose + share an ALBUM post of `n` tiny images through the REAL createPost path
      *  (compress → seal N refs → upload → register), so e2e exercises album round-trip. */
