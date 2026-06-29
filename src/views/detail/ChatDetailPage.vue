@@ -1005,9 +1005,9 @@ import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import { segmentEmoji, emojiOnlyCount } from '@/utils/emoji';
 import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
-import { type Quality, availableQualities, qualityLabel, isPreservedImageMime } from '@/services/media-encode';
+import { type Quality } from '@/services/media-encode';
 import { jobProgress } from '@/services/media-jobs';
-import { generateVideoPoster, generateImageThumb, isAnimatedImage, readImageMeta, readVideoMeta } from '@/utils/media-meta';
+import { generateVideoPoster, generateImageThumb, isAnimatedImage } from '@/utils/media-meta';
 import { openExternal } from '@/utils/external';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing } from '@/utils/text';
@@ -3199,20 +3199,10 @@ async function send() {
   // Pasted images go out with the typed text as the caption (on the first image
   // when several were pasted — they share an album grid like the picker flow).
   if (pendingImages.value.length) {
-    // GIF / WebP are always sent untouched (animation/alpha preserved), so a quality
-    // prompt would be a no-op — skip it when every pending image is one of those. A
-    // mixed batch still asks, since the JPEG/PNG items genuinely have tiers to choose.
-    let quality: Quality;
-    if (pendingImages.value.every((p) => isPreservedImageMime(p.blob.type))) {
-      quality = 'original';
-    } else {
-      const longEdge = await maxSourceLongEdge(
-        pendingImages.value.map((p) => ({ blob: p.blob, kind: 'image' as const })),
-      );
-      const picked = await pickQuality(longEdge);
-      if (picked === null) return; // cancelled: keep the images and the draft
-      quality = picked;
-    }
+    // HD-only (spec 1023): chat media is for viewing, not downloading/saving, so there is
+    // no quality picker — everything sends at the HD tier. GIF/WebP still pass through
+    // untouched downstream (compressImage preserves animation/alpha regardless of tier).
+    const quality: Quality = 'hd';
     const images = pendingImages.value.slice();
     pendingImages.value = [];
     draft.value = '';
@@ -3365,54 +3355,7 @@ function promptAlbumName(suggestedDate?: string): Promise<string | null> {
   });
 }
 
-// The longest pixel edge across the chosen photos/videos (the largest source in the
-// batch), used to decide which quality tiers are worth offering. Best-effort + bounded
-// by the meta readers; a 'file' or an unreadable item contributes nothing.
-async function maxSourceLongEdge(
-  items: { blob: Blob; kind: 'image' | 'video' | 'file' }[],
-): Promise<number | undefined> {
-  let max = 0;
-  for (const it of items) {
-    if (it.kind === 'image') {
-      const m = await readImageMeta(it.blob).catch(() => ({}) as { width?: number; height?: number });
-      if (m.width && m.height) max = Math.max(max, m.width, m.height);
-    } else if (it.kind === 'video') {
-      const m = await readVideoMeta(it.blob).catch(() => ({}) as { width?: number; height?: number });
-      if (m.width && m.height) max = Math.max(max, m.width, m.height);
-    }
-  }
-  return max || undefined;
-}
 
-// Ask the send quality for photos/videos (WhatsApp-style), offering ONLY the tiers a
-// source of this resolution can actually produce — no upscaling, no "4K" on a 720p clip
-// (spec 2007). `longEdge` is the largest source's longest pixel edge. The sheet always
-// appears for photos/videos (predictable, and the existing flows depend on it); when the
-// source is below the smallest tier it simply lists Original alone. Returns null on cancel.
-function pickQuality(longEdge?: number): Promise<Quality | null> {
-  const opts = availableQualities(longEdge);
-  // Highest fidelity first (Original, then Full HD → SD), mirroring WhatsApp's ordering.
-  const tiers = opts.filter((q) => q !== 'original').reverse();
-  return new Promise((resolve) => {
-    const buttons: import('@ionic/vue').ActionSheetButton[] = [
-      { text: 'Original quality', handler: () => resolve('original') },
-      ...tiers.map((q) => ({
-        text: q === 'sd' ? 'SD quality (smaller)' : `${qualityLabel(q)} quality`,
-        handler: () => resolve(q),
-      })),
-      { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
-    ];
-    void actionSheetController
-      .create({ header: 'Send quality', buttons })
-      .then((s) => {
-        // Tapping the backdrop also dismisses → treat as cancel.
-        s.onDidDismiss().then((d) => {
-          if (d.role === 'backdrop') resolve(null);
-        });
-        return s.present();
-      });
-  });
-}
 
 async function onPick(e: Event, mode: 'auto' | 'file') {
   const input = e.target as HTMLInputElement;
@@ -3440,22 +3383,10 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
   let replyLeft = reply; // the quote attaches to the first item sent
 
   if (otherFiles.length) {
-    // Photos/videos can be sent at HD/SD/Original; ask once for the whole batch — but
-    // only when something in it actually has tiers to choose. GIF/WebP are always sent
-    // untouched, so a batch of only those (no other photos/videos) skips the prompt.
-    const needsQuality = otherFiles.some((f) => {
-      const k = kindOf(f);
-      return (k === 'image' || k === 'video') && !isPreservedImageMime(f.type);
-    });
-    let quality: Quality = 'original';
-    if (needsQuality) {
-      const longEdge = await maxSourceLongEdge(
-        otherFiles.map((f) => ({ blob: f, kind: kindOf(f) as 'image' | 'video' | 'file' })),
-      );
-      const q = await pickQuality(longEdge);
-      if (q === null) return; // cancelled
-      quality = q;
-    }
+    // HD-only (spec 1023): chat media is for viewing, not downloading/saving, so there is
+    // no quality picker — send everything at the HD tier (GIF/WebP stay untouched
+    // downstream regardless of the tier).
+    const quality: Quality = 'hd';
     // Several photos/videos chosen together share an album id → rendered as a grid.
     const allMedia = otherFiles.every((f) => kindOf(f) === 'image' || kindOf(f) === 'video');
     const albumId = otherFiles.length > 1 && allMedia ? crypto.randomUUID() : undefined;

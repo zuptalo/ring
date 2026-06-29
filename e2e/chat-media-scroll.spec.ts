@@ -26,7 +26,7 @@ async function pasteImage(p: any): Promise<void> {
     ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
   });
   await p.page.getByRole('button', { name: 'Send' }).click();
-  await p.page.getByText('Original quality').click();
+  // HD-only (spec 1023): no quality picker — the send goes through directly.
 }
 
 test('image renders in the list and the full-screen viewer opens on tap', async ({ browser }) => {

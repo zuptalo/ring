@@ -41,10 +41,12 @@ test('pasted image sends with the typed caption', async ({ browser }) => {
   await expect(a.page.locator('.paste-thumb img')).toBeVisible({ timeout: 10_000 });
   await expect(composer).toHaveAttribute('placeholder', 'Add a caption');
 
-  // Type the caption below the thumbnail and send (Original skips compression).
+  // Type the caption below the thumbnail and send. HD-only (spec 1023): there is NO
+  // quality picker — the send goes through directly at the HD tier.
   await composer.pressSequentially('From my clipboard', { delay: 15 });
   await a.page.getByRole('button', { name: 'Send' }).click();
-  await a.page.getByText('Original quality').click();
+  // The old "Send quality" action sheet must not appear anymore.
+  await expect(a.page.getByText('Send quality')).toHaveCount(0);
 
   // Sender side: an image bubble with the caption under the photo, staging row gone.
   await expect(a.page.locator('.bubble .bubble-image').last()).toBeVisible({ timeout: 30_000 });
