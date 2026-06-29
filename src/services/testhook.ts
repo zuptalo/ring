@@ -1014,6 +1014,26 @@ export function installTestHook(): void {
       }
       return ids;
     },
+    /** Compose + share an ALBUM post of `n` tiny images through the REAL createPost path
+     *  (compress → seal N refs → upload → register), so e2e exercises album round-trip. */
+    postAlbum: async (n: number, body?: string): Promise<string> => {
+      const png = Uint8Array.from(
+        atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+        (c) => c.charCodeAt(0),
+      );
+      const media = Array.from({ length: n }, (_, i) => ({
+        blob: new Blob([png], { type: 'image/png' }),
+        kind: 'image' as const,
+        name: `album-${i}.png`,
+      }));
+      const p = await dbCreatePost({ body, audience: 'friends', lifetime: '24h', media });
+      return p.id;
+    },
+    /** How many media a post carries locally (album size; 1 for single; 0 for text). */
+    postMediaCount: async (id: string): Promise<number> => {
+      const p = await dbGetPost(id);
+      return p?.mediaIds?.length ?? (p?.mediaId ? 1 : 0);
+    },
     /** Pull posts addressed to us (and apply revocations). */
     syncPosts: () => dbSyncPosts(),
     /** Ids of the non-expired, non-hidden posts on this device (feed order). */

@@ -383,9 +383,14 @@ export interface Post {
   author: string; // userId; self for own posts, the peer for received
   kind: 'text' | 'voice' | 'video' | 'image';
   body?: string; // decrypted text / caption
-  mediaId?: string; // local `media` store id for voice/video/image
-  // Pixel dimensions of the attachment, so the feed can reserve an aspect-ratio box
-  // (with a skeleton) before the media loads — no layout jump as it decodes.
+  mediaId?: string; // local `media` store id for voice/video/image (the cover, for albums)
+  // An album post (spec 1022, FR-019) carries an ORDERED set of image/video media in one
+  // post — these are the local `media` ids in order. `mediaId` is set to the first (the
+  // cover) so single-media code paths keep working; album-aware UI uses the full list.
+  // Absent / length ≤ 1 ⇒ an ordinary single-media post.
+  mediaIds?: string[];
+  // Pixel dimensions of the attachment (the cover, for albums), so the feed can reserve an
+  // aspect-ratio box (with a skeleton) before the media loads — no layout jump as it decodes.
   mediaW?: number;
   mediaH?: number;
   audience?: 'friends' | 'close'; // own posts only (display-only on received)

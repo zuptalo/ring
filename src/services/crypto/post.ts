@@ -34,6 +34,10 @@ export interface PostPayload {
   kind: 'text' | 'voice' | 'video' | 'image';
   body?: string;
   media?: import('./message').MediaRef;
+  // An album post (spec 1022, FR-019) seals an ORDERED set of image/video media-refs here
+  // instead of the single `media`. Every ref rides sealed under K_post, so the server still
+  // sees only opaque ciphertext regardless of how many media a post carries.
+  album?: import('./message').MediaRef[];
 }
 
 /** Generate a fresh per-post content key. */
