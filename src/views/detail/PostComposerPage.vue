@@ -64,17 +64,6 @@
         @change="onFile"
       />
 
-      <!-- Quality applies to photos/videos only; voice is sent as recorded. -->
-      <ion-list v-if="media && mediaKind !== 'voice'" :inset="true">
-        <ion-list-header>Quality</ion-list-header>
-        <ion-item lines="none">
-          <ion-segment :value="quality" @ion-change="onQuality">
-            <ion-segment-button value="sd"><ion-label>SD</ion-label></ion-segment-button>
-            <ion-segment-button value="hd"><ion-label>HD</ion-label></ion-segment-button>
-          </ion-segment>
-        </ion-item>
-      </ion-list>
-
       <ion-list :inset="true">
         <ion-list-header>Who can see this</ion-list-header>
         <ion-item lines="none">
@@ -132,7 +121,6 @@ const mediaUrl = ref<string | undefined>(undefined);
 const mediaKind = ref<'image' | 'video' | 'voice'>('image');
 const mediaName = ref('attachment');
 const mediaDuration = ref<number | undefined>(undefined);
-const quality = ref<'sd' | 'hd'>('hd');
 
 const canShare = computed(() => body.value.trim().length > 0 || !!media.value);
 
@@ -144,9 +132,6 @@ function onAudience(e: CustomEvent): void {
 }
 function onLifetime(e: CustomEvent): void {
   lifetime.value = ((e.detail as { value?: string }).value as PostLifetime) ?? '72h';
-}
-function onQuality(e: CustomEvent): void {
-  quality.value = ((e.detail as { value?: string }).value as 'sd' | 'hd') ?? 'hd';
 }
 
 function pickMedia(): void {
@@ -243,7 +228,9 @@ async function share(): Promise<void> {
       audience: audience.value,
       lifetime: lifetime.value,
       media: media.value
-        ? { blob: media.value, kind: mediaKind.value, name: mediaName.value, durationSec: mediaDuration.value, quality: quality.value }
+        ? // HD-only on the Wall (spec 1022, FR-020): feed media is for viewing, not
+          // downloading, so there's no quality choice — every post ships at HD.
+          { blob: media.value, kind: mediaKind.value, name: mediaName.value, durationSec: mediaDuration.value, quality: 'hd' }
         : undefined,
     });
     router.back();
