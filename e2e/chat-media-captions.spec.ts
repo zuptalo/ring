@@ -112,6 +112,57 @@ test('multiple picked photos can be sent individually, each carrying the shared 
   await ctxB.close();
 });
 
+test('a per-item caption overrides the shared caption for just that item', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'PERITEM1');
+  const b = await createAccount(ctxB, 'PERITEM2');
+  await pair(a, b);
+
+  const aChat = (await chatWith(a, b.id)) as string;
+  await a.page.goto(`/chat/${aChat}`);
+  const composer = a.page.locator('ion-textarea.composer textarea');
+  await composer.waitFor({ state: 'visible', timeout: 30_000 });
+
+  // Stage two photos.
+  await photoInput(a).setInputFiles([pngFile('one.png'), pngFile('two.png')]);
+  await expect(a.page.locator('.paste-thumb')).toHaveCount(2, { timeout: 10_000 });
+
+  // Tap the FIRST staged item → caption it individually via the alert.
+  await a.page.locator('.paste-tap').first().click();
+  const alertBox = a.page.locator('ion-alert textarea');
+  await alertBox.waitFor({ state: 'visible', timeout: 10_000 });
+  await alertBox.fill('just this one');
+  await a.page.locator('ion-alert button', { hasText: 'Save' }).click();
+  // The captioned item shows its badge ring.
+  await expect(a.page.locator('.paste-thumb.has-cap')).toHaveCount(1);
+
+  // Type a SHARED caption for the rest and send individually.
+  await composer.click();
+  await composer.pressSequentially('the others', { delay: 12 });
+  await a.page.locator('.send-mode ion-segment-button').nth(1).click(); // Individual
+  await a.page.getByRole('button', { name: 'Send' }).click();
+
+  // The first item carries its own caption; the second falls back to the shared one.
+  await expect
+    .poll(
+      async () => {
+        const id = (await chatWith(a, b.id)) as string;
+        const ms = await messages(a, id);
+        const imgs = ms.filter((m) => m.kind === 'image' && !m.albumId);
+        return {
+          own: imgs.filter((m) => m.body === 'just this one').length,
+          shared: imgs.filter((m) => m.body === 'the others').length,
+        };
+      },
+      { timeout: 30_000 },
+    )
+    .toEqual({ own: 1, shared: 1 });
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
 test('multiple picked photos sent as an album share one album id with a single caption', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();

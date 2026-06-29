@@ -743,17 +743,26 @@
             v-for="(p, i) in pendingMedia"
             :key="p.id"
             class="paste-thumb"
-            :class="{ 'is-file': p.kind === 'file' }"
+            :class="{ 'is-file': p.kind === 'file', 'has-cap': !!p.caption }"
           >
-            <img v-if="p.kind === 'image' && p.url" :src="p.url" alt="Attachment" />
-            <template v-else-if="p.kind === 'video' && p.url">
-              <video :src="p.url" muted playsinline preload="metadata" />
-              <ion-icon class="paste-play" :icon="playCircle" />
-            </template>
-            <div v-else class="paste-file">
-              <ion-icon :icon="documentOutline" />
-              <span class="paste-file-name">{{ p.blob.name || 'File' }}</span>
-            </div>
+            <!-- Tapping a staged item captions just that one (overrides the shared caption). -->
+            <button
+              type="button"
+              class="paste-tap"
+              :aria-label="p.caption ? 'Edit caption for this item' : 'Add a caption to this item'"
+              @click="editItemCaption(i)"
+            >
+              <img v-if="p.kind === 'image' && p.url" :src="p.url" alt="Attachment" />
+              <template v-else-if="p.kind === 'video' && p.url">
+                <video :src="p.url" muted playsinline preload="metadata" />
+                <ion-icon class="paste-play" :icon="playCircle" />
+              </template>
+              <div v-else class="paste-file">
+                <ion-icon :icon="documentOutline" />
+                <span class="paste-file-name">{{ p.blob.name || 'File' }}</span>
+              </div>
+              <ion-icon v-if="p.caption" class="paste-cap-badge" :icon="chatbubbleEllipses" />
+            </button>
             <button type="button" class="paste-x" aria-label="Remove attachment" @click="removePendingMedia(i)">
               <ion-icon :icon="closeOutline" />
             </button>
@@ -989,7 +998,7 @@ import {
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
-  chevronDownOutline,
+  chevronDownOutline, chatbubbleEllipses,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, markChatRead, sendMediaMessage, sendMessage,
@@ -2266,10 +2275,42 @@ interface PendingMedia {
   blob: File;
   kind: 'image' | 'video' | 'file';
   url?: string; // object URL for an image/video preview; files show a chip instead
+  caption?: string; // optional per-item caption (overrides the shared one for this item)
 }
 const pendingMedia = ref<PendingMedia[]>([]);
 // Multiple photos/videos: send as one album (default) or as separate messages.
 const sendAsAlbum = ref(true);
+
+// Caption a single staged item (tap its thumbnail). Per-item captions override the
+// shared caption typed in the composer for that one item (spec 1023). The shared caption
+// still applies to any item left without its own.
+async function editItemCaption(i: number): Promise<void> {
+  const item = pendingMedia.value[i];
+  if (!item) return;
+  const alert = await alertController.create({
+    header: 'Caption',
+    inputs: [
+      {
+        name: 'caption',
+        type: 'textarea',
+        value: item.caption ?? '',
+        placeholder: 'Caption this item',
+        attributes: { maxlength: CAPTION_MAX, rows: 3 },
+      },
+    ],
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Save',
+        handler: (d: { caption?: string }) => {
+          const next = pendingMedia.value[i];
+          if (next) next.caption = (d?.caption ?? '').slice(0, CAPTION_MAX).trim() || undefined;
+        },
+      },
+    ],
+  });
+  await alert.present();
+}
 // The Album/Individual choice only makes sense with 2+ image/video items.
 const albumChoiceVisible = computed(
   () => pendingMedia.value.filter((p) => p.kind === 'image' || p.kind === 'video').length > 1,
@@ -3288,7 +3329,9 @@ async function send() {
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       const inAlbum = !!albumId && (it.kind === 'image' || it.kind === 'video');
-      const cap = asAlbum ? (i === 0 ? caption : undefined) : caption;
+      // A per-item caption (set by tapping the thumbnail) wins for that item; otherwise the
+      // shared caption applies — once for an album (first item), or to each individual message.
+      const cap = it.caption || (asAlbum ? (i === 0 ? caption : undefined) : caption);
       await sendMediaMessage(
         chatId,
         it.kind,
@@ -3964,6 +4007,33 @@ function cancelRecording() {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--app-text-muted);
+}
+/* The whole staged item is a button: tapping it captions that one item. */
+.paste-tap {
+  display: block;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  border-radius: 10px;
+}
+/* An item with its own caption gets a brand-green ring + a caption badge. */
+.paste-thumb.has-cap .paste-tap {
+  outline: 2px solid var(--ion-color-primary);
+  outline-offset: 1px;
+}
+.paste-cap-badge {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  font-size: 15px;
+  color: #fff;
+  background: var(--ion-color-primary);
+  border-radius: 50%;
+  padding: 2px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
 }
 /* Album vs Individual choice for a multi-photo/video send. */
 .send-mode {
