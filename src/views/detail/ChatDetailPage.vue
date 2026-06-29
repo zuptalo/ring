@@ -1041,7 +1041,8 @@ import { segmentEmoji, emojiOnlyCount } from '@/utils/emoji';
 import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
 import { jobProgress } from '@/services/media-jobs';
-import { generateVideoPoster, generateImageThumb, isAnimatedImage } from '@/utils/media-meta';
+import { generateVideoPoster, generateImageThumb, isAnimatedImage, readImageMeta, readVideoMeta } from '@/utils/media-meta';
+import { type Quality, availableQualities, qualityLabel, isPreservedImageMime } from '@/services/media-encode';
 import { openExternal } from '@/utils/external';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing } from '@/utils/text';
@@ -3313,8 +3314,24 @@ async function send() {
   // Staged media (picked OR pasted) go out with the typed text as the caption. With 2+
   // photos/videos the user picks Album (one swipeable post, default) or Individual: an
   // album carries the caption once (on the first item); individual messages each carry it.
-  // Files are never part of an album. HD-only (spec 1023): everything sends at the HD tier.
+  // Files are never part of an album.
   if (pendingMedia.value.length) {
+    // Ask the send quality once for the whole batch (photos/videos), as the chat composer
+    // has always done — quality is a per-chat choice (the HD-only rule is a Wall thing, not
+    // chats). GIF/WebP are sent untouched, so a batch with nothing compressible skips the
+    // no-op prompt. Cancelling keeps the staged media + the draft intact.
+    const compressible = pendingMedia.value.filter(
+      (it) => (it.kind === 'image' || it.kind === 'video') && !isPreservedImageMime(it.blob.type),
+    );
+    let quality: Quality = 'original';
+    if (compressible.length) {
+      const longEdge = await maxSourceLongEdge(
+        compressible.map((it) => ({ blob: it.blob, kind: it.kind as 'image' | 'video' })),
+      );
+      const picked = await pickQuality(longEdge);
+      if (picked === null) return; // cancelled
+      quality = picked;
+    }
     const items = pendingMedia.value.slice();
     pendingMedia.value = [];
     const caption = text;
@@ -3338,7 +3355,7 @@ async function send() {
         it.blob,
         it.blob.name || (it.kind === 'file' ? 'file' : 'photo'),
         undefined,
-        { replyTo: i === 0 ? reply : undefined, caption: cap, albumId: inAlbum ? albumId : undefined, quality: 'hd' },
+        { replyTo: i === 0 ? reply : undefined, caption: cap, albumId: inAlbum ? albumId : undefined, quality },
       );
       if (it.url) URL.revokeObjectURL(it.url);
     }
@@ -3454,6 +3471,54 @@ async function onVideoNoteSend(blob: Blob, dur: number, poster?: string): Promis
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
   await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply, poster });
+}
+
+// Ask the send quality for photos/videos (WhatsApp-style), offering ONLY the tiers a
+// source of this resolution can actually produce — no upscaling, no "4K" on a 720p clip
+// (spec 2007). `longEdge` is the largest source's longest pixel edge. When the source is
+// below the smallest tier it simply lists Original alone. Returns null on cancel.
+function pickQuality(longEdge?: number): Promise<Quality | null> {
+  const opts = availableQualities(longEdge);
+  // Highest fidelity first (Original, then Full HD → SD), mirroring WhatsApp's ordering.
+  const tiers = opts.filter((q) => q !== 'original').reverse();
+  return new Promise((resolve) => {
+    const buttons: import('@ionic/vue').ActionSheetButton[] = [
+      { text: 'Original quality', handler: () => resolve('original') },
+      ...tiers.map((q) => ({
+        text: q === 'sd' ? 'SD quality (smaller)' : `${qualityLabel(q)} quality`,
+        handler: () => resolve(q),
+      })),
+      { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
+    ];
+    void actionSheetController
+      .create({ header: 'Send quality', buttons })
+      .then((s) => {
+        // Tapping the backdrop also dismisses → treat as cancel.
+        s.onDidDismiss().then((d) => {
+          if (d.role === 'backdrop') resolve(null);
+        });
+        return s.present();
+      });
+  });
+}
+
+// The longest pixel edge across the chosen photos/videos (the largest source in the
+// batch), used to decide which quality tiers are worth offering. Best-effort + bounded
+// by the meta readers; an unreadable item contributes nothing.
+async function maxSourceLongEdge(
+  items: { blob: Blob; kind: 'image' | 'video' }[],
+): Promise<number | undefined> {
+  let max = 0;
+  for (const it of items) {
+    if (it.kind === 'image') {
+      const m = await readImageMeta(it.blob).catch(() => ({}) as { width?: number; height?: number });
+      if (m.width && m.height) max = Math.max(max, m.width, m.height);
+    } else {
+      const m = await readVideoMeta(it.blob).catch(() => ({}) as { width?: number; height?: number });
+      if (m.width && m.height) max = Math.max(max, m.width, m.height);
+    }
+  }
+  return max || undefined;
 }
 
 function onPick(e: Event, mode: 'auto' | 'file') {
