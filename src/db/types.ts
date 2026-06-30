@@ -256,6 +256,17 @@ export interface ReplyRef {
   videoNote?: boolean; // quoted message was a round video note
 }
 
+// A per-chat composer draft: the unsent text, the caret, and any reply-in-progress, so leaving the
+// chat or closing the app keeps you exactly where you left off. Local-only, keyed by chatId, never synced.
+export interface ChatDraft {
+  chatId: string;
+  text: string;
+  selStart?: number; // caret/selection in the text, to restore the cursor
+  selEnd?: number;
+  reply?: ReplyRef; // a reply you'd started but not sent
+  updatedAt: number;
+}
+
 export interface Message {
   id: string;
   chatId: string;

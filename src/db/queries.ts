@@ -36,7 +36,7 @@ import type {
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, ChatDraft,
 } from './types';
 
 // WhatsApp-style cap on pinned chats.
@@ -2390,6 +2390,17 @@ export async function updatePendingPost(rec: OutboxPost): Promise<void> {
 
 export async function deletePendingPost(id: string): Promise<void> {
   await remove('pendingPosts', id);
+}
+
+/* ---- per-chat composer drafts (local-only; keep your place across leave/close) ---- */
+export async function getDraft(chatId: string): Promise<ChatDraft | undefined> {
+  return get<ChatDraft>('drafts', chatId);
+}
+export async function saveDraft(d: Omit<ChatDraft, 'updatedAt'>): Promise<void> {
+  await put<ChatDraft>('drafts', { ...d, updatedAt: now() });
+}
+export async function clearDraft(chatId: string): Promise<void> {
+  await remove('drafts', chatId);
 }
 
 // Persist a single received post: unwrap K_post with our identity key, open the
