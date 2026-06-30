@@ -421,8 +421,13 @@ export interface OutboxPost {
   audience?: 'friends' | 'close'; // wall only
   lifetime?: '1h' | '24h' | '72h'; // wall only
   items: OutboxItem[];
-  status: 'uploading' | 'failed' | 'canceled';
+  // 'uploading' = in-session background upload in flight; 'failed' = in-session failure (Retry/Cancel);
+  // 'interrupted' = the app was fully closed mid-upload — library media was dropped (its file handle
+  // doesn't survive a cold start) and only the caption + in-app voice notes were kept for the user to
+  // finish in the composer; 'canceled' = discarded.
+  status: 'uploading' | 'failed' | 'canceled' | 'interrupted';
   error?: string; // last failure reason (free-space, network…)
+  droppedMedia?: boolean; // 'interrupted' posts: there WERE photos/videos we couldn't keep → "re-add"
   attempts: number; // worker attempts; guards the auto-retry-once
   createdLocally: number; // ms at Share — ordering ONLY (NOT the post's createdAt)
   updatedAt: number; // change-bus / last-write

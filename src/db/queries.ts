@@ -36,7 +36,7 @@ import type {
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, OutboxItem,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost,
 } from './types';
 
 // WhatsApp-style cap on pinned chats.
@@ -2343,18 +2343,20 @@ export async function enqueuePendingPost(input: {
   }[];
 }): Promise<string> {
   const id = uid();
-  // Copy each picked file's bytes into a self-contained, memory-backed Blob NOW, while the app still
-  // has access to it. A File from the library picker is backed by an OS file reference; on iOS that
-  // reference is released once the PWA is fully closed, so a raw cached File can't be re-read on a
-  // cold relaunch — the resumed upload would stall forever (never erroring, never finishing). Reading
-  // the bytes here detaches the outbox copy from the file so it survives a full restart. Done
-  // sequentially to avoid holding every (possibly large video) item's bytes in memory at once.
-  const items: OutboxItem[] = [];
-  for (const it of input.items) {
-    const bytes = await it.blob.arrayBuffer();
-    items.push({
+  // The cached blobs only need to outlive the COMPOSER (the upload runs in-session, while the app is
+  // open and the picked files are still readable). We deliberately do NOT try to make library media
+  // survive a full app close — an iOS File handle doesn't, and a half-resumed upload was unreliable.
+  // On a cold restart these posts are recovered as drafts instead (see recoverInterruptedPosts).
+  const rec: OutboxPost = {
+    id,
+    target: input.target,
+    chatId: input.chatId,
+    body: input.body,
+    audience: input.audience,
+    lifetime: input.lifetime,
+    items: input.items.map((it) => ({
       localId: uid(),
-      blob: new Blob([bytes], { type: it.mime || it.blob.type }),
+      blob: it.blob,
       kind: it.kind,
       name: it.name,
       mime: it.mime,
@@ -2363,16 +2365,7 @@ export async function enqueuePendingPost(input: {
       height: it.height,
       poster: it.poster,
       progress: 0,
-    });
-  }
-  const rec: OutboxPost = {
-    id,
-    target: input.target,
-    chatId: input.chatId,
-    body: input.body,
-    audience: input.audience,
-    lifetime: input.lifetime,
-    items,
+    })),
     status: 'uploading',
     attempts: 0,
     createdLocally: now(),

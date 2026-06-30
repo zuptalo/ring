@@ -1,15 +1,16 @@
 /**
  * Spec 1024 — the resilient-posting upload worker.
  *
- * Drains the `pendingPosts` outbox: for each pending post it runs the normal {@link createPost}
- * pipeline (encode → upload → seal → send) off its CACHED blobs, writing per-item progress back so
- * the Wall's pending card animates. On success the real Post is written by createPost and the
- * pending record (+ its cached blobs) is dropped; on failure the record flips to `failed` and is
- * retained for retry. The composer dismisses BEFORE this runs — that's the whole point.
+ * The composer dismisses the moment you tap Share; this worker finishes the post in the background
+ * by running the normal {@link createPost} pipeline (encode → upload → seal → send) off the CACHED
+ * blobs, writing per-item progress back so the Wall's pending card animates. On success createPost
+ * writes the real Post and the outbox record (+ blobs) is dropped; an in-session failure flips it to
+ * `failed` (Retry / Cancel).
  *
- * One drain at a time (a simple in-process guard); the post itself is processed sequentially so
- * bandwidth + progress stay predictable. Resume is just "drain again": an `uploading` record that
- * was interrupted is picked up on the next kick (app start / reconnect).
+ * IMPORTANT: the upload is an IN-SESSION job. We do NOT try to resume it across a full app close — an
+ * iOS library File handle doesn't survive a cold start, so a "resumed" upload just stalls forever on
+ * unreadable bytes. Instead {@link recoverInterruptedPosts} runs once at startup and turns any
+ * leftover post into a draft (caption + in-app voice notes kept; library media dropped to re-add).
  */
 import {
   createPost,
@@ -22,12 +23,7 @@ import {
 
 let draining = false;
 
-// After this many resume attempts a post stops auto-retrying and surfaces as `failed` (with Retry /
-// Cancel) instead of spinning forever. The check runs BEFORE each upload attempt, so even a post
-// whose upload somehow hangs is force-failed on the next app start rather than wedging the queue.
-const MAX_ATTEMPTS = 5;
-
-/** Fire-and-forget kick — safe to call repeatedly (enqueue, app start, reconnect). */
+/** Fire-and-forget kick — safe to call repeatedly (enqueue, in-session Retry). */
 export function kickPendingPosts(): void {
   void drainPendingPosts();
 }
@@ -53,16 +49,7 @@ const lastProgressWrite = new Map<string, number>();
 
 async function uploadOne(id: string): Promise<void> {
   const rec = await getPendingPost(id);
-  if (!rec || rec.status !== 'uploading') return; // canceled / already gone
-  // Give up auto-retrying after too many attempts so a chronically-failing post can't keep the
-  // single-drain guard busy and block fresh posts behind it. Checked before the upload, so a prior
-  // hung attempt is converted to a proper failure on the next launch.
-  if (rec.attempts >= MAX_ATTEMPTS) {
-    rec.status = 'failed';
-    rec.error = rec.error || 'Upload keeps failing — tap retry.';
-    await updatePendingPost(rec);
-    return;
-  }
+  if (!rec || rec.status !== 'uploading') return; // canceled / interrupted / already gone
   rec.attempts += 1;
   await updatePendingPost(rec);
   try {
@@ -132,10 +119,54 @@ export async function retryPendingPost(id: string): Promise<void> {
   kickPendingPosts();
 }
 
-/** Drop a pending post for good — discards its cached blobs (user tapped Cancel). */
+/** Drop a pending post for good — discards its cached blobs (user tapped Cancel / Discard). */
 export async function cancelPendingPost(id: string): Promise<void> {
   await deletePendingPost(id);
   lastProgressWrite.delete(id);
+}
+
+let recovered = false;
+
+/**
+ * Run ONCE at app start (after unlock). Any pending post still around is left over from a previous
+ * session — its in-flight upload died when the app was fully closed. We can't reliably finish it
+ * (library File handles don't survive a cold start), so rather than stall:
+ *   • if the upload had actually completed before the app died (the real Post already exists), just
+ *     clean the leftover outbox row — no duplicate, no draft;
+ *   • else keep the caption + any in-app VOICE recordings (memory-backed → they survive) and flip the
+ *     record to `interrupted`, so the Wall offers "Finish" (reopen composer) + re-add the media;
+ *   • a post with nothing worth keeping (library media only, no caption) is discarded.
+ * Returns counts so the caller can let the user know.
+ */
+export async function recoverInterruptedPosts(): Promise<{ recovered: number; discarded: number }> {
+  if (recovered) return { recovered: 0, discarded: 0 };
+  recovered = true;
+  let recoveredN = 0;
+  let discarded = 0;
+  for (const rec of await listPendingPosts()) {
+    if (rec.status === 'interrupted' || rec.status === 'canceled') continue;
+    if (await getPost(rec.id)) {
+      // The upload had actually finished; only the cleanup was lost. Drop the row, keep the post.
+      await deletePendingPost(rec.id);
+      continue;
+    }
+    const voice = rec.items.filter((it) => it.kind === 'voice');
+    const droppedMedia = rec.items.some((it) => it.kind !== 'voice');
+    if (rec.body?.trim() || voice.length) {
+      rec.items = voice; // keep in-app recordings; library photos/videos can't be re-read → drop them
+      rec.status = 'interrupted';
+      rec.error = undefined;
+      rec.droppedMedia = droppedMedia;
+      rec.attempts = 0;
+      await updatePendingPost(rec);
+      recoveredN += 1;
+    } else {
+      await deletePendingPost(rec.id); // pure library-media post with no caption — nothing to keep
+      discarded += 1;
+    }
+    lastProgressWrite.delete(rec.id);
+  }
+  return { recovered: recoveredN, discarded };
 }
 
 // Throttle the per-item progress writes (~6×/s) so the change-bus + IDB don't thrash during encode.

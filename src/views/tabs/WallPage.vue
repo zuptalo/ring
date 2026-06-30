@@ -53,27 +53,42 @@
       </div>
 
       <!-- Spec 1024: posts still uploading. The composer dismissed immediately; the worker
-           finishes them in the background and each becomes a real post on confirmation. -->
+           finishes them in the background and each becomes a real post on confirmation.
+           An 'interrupted' post is a draft recovered after the app was closed mid-upload:
+           caption + voice notes were kept; the user re-adds media and finishes it. -->
       <ion-item v-for="pp in pending" :key="pp.id" lines="none" class="postitem">
         <div class="post pending-post">
           <div class="phead">
             <ion-avatar class="avatar"><div class="ph">{{ initial('You') }}</div></ion-avatar>
             <div class="who">
               <div class="name">You</div>
-              <div class="sub">{{ pp.status === 'failed' ? 'Couldn’t post' : 'Posting…' }}</div>
+              <div class="sub">
+                {{ pp.status === 'failed' ? 'Couldn’t post' : pp.status === 'interrupted' ? 'Post didn’t finish' : 'Posting…' }}
+              </div>
             </div>
             <ion-spinner v-if="pp.status === 'uploading'" name="crescent" class="pspin" />
           </div>
           <p v-if="pp.body" class="body"><EmojiText :text="pp.body" /></p>
           <ion-progress-bar v-if="pp.status === 'uploading'" :value="pp.progress" class="pbar" />
           <p class="pending-note">
-            {{ pp.count ? pp.count + (pp.count > 1 ? ' items' : ' item') : 'Text post' }} ·
-            {{ pp.status === 'failed' ? (pp.error || 'Failed') : Math.round(pp.progress * 100) + '%' }}
+            <template v-if="pp.status === 'interrupted'">
+              The app closed before this finished.
+              {{ pp.droppedMedia ? 'Your caption & voice are saved — re-add your photos/videos to post.' : 'Tap Finish to post it.' }}
+            </template>
+            <template v-else>
+              {{ pp.count ? pp.count + (pp.count > 1 ? ' items' : ' item') : 'Text post' }} ·
+              {{ pp.status === 'failed' ? (pp.error || 'Failed') : Math.round(pp.progress * 100) + '%' }}
+            </template>
           </p>
           <!-- A failed upload keeps its cached blobs: the user can retry it or discard it. -->
           <div v-if="pp.status === 'failed'" class="pending-actions">
             <ion-button size="small" fill="solid" @click="retryPendingPost(pp.id)">Retry</ion-button>
             <ion-button size="small" fill="clear" color="medium" @click="cancelPendingPost(pp.id)">Cancel</ion-button>
+          </div>
+          <!-- A recovered draft: reopen the composer (caption + voice restored) or discard it. -->
+          <div v-else-if="pp.status === 'interrupted'" class="pending-actions">
+            <ion-button size="small" fill="solid" @click="finishPendingPost(pp.id)">Finish</ion-button>
+            <ion-button size="small" fill="clear" color="medium" @click="cancelPendingPost(pp.id)">Discard</ion-button>
           </div>
         </div>
       </ion-item>
@@ -414,6 +429,11 @@ const filteredWall = computed(() => {
 
 function compose(): void {
   void router.push('/wall/compose');
+}
+// Reopen the composer on a recovered draft: its caption + voice notes are restored from the outbox
+// record; the user re-adds any photos/videos and shares. The record is cleared once it's re-sent.
+function finishPendingPost(id: string): void {
+  void router.push({ path: '/wall/compose', query: { resume: id } });
 }
 function initial(name: string): string {
   return (name.trim()[0] ?? '?').toUpperCase();
