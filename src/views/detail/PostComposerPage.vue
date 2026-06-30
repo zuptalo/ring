@@ -210,7 +210,7 @@ async function onFile(e: Event): Promise<void> {
   // pick up front if the device clearly can't stage them, so we fail loudly here instead of mid-upload.
   const incoming = files.reduce((n, f) => n + f.size, 0);
   if (!(await hasRoomFor(incoming))) {
-    void appToast('Not enough storage on this device — free up space and try again.');
+    void appToast('Not enough storage on this device. Free up space and try again.');
     return;
   }
   for (const f of files) {
@@ -546,7 +546,7 @@ async function share(): Promise<void> {
   align-items: center;
   /* Mic to the top, duration to the bottom — clears the center for the (larger) play glyph. */
   justify-content: space-between;
-  padding: 8px 0;
+  padding: 4px 0 9px;
   background: var(--ion-color-primary);
   color: #fff;
   font-size: 22px;

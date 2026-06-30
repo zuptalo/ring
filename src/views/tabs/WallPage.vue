@@ -73,7 +73,7 @@
           <p class="pending-note">
             <template v-if="pp.status === 'interrupted'">
               The app closed before this finished.
-              {{ pp.droppedMedia ? 'Your caption & voice are saved — re-add your photos/videos to post.' : 'Tap Finish to post it.' }}
+              {{ pp.droppedMedia ? 'Your caption and voice are saved. Re-add your photos or videos to post.' : 'Tap Finish to post it.' }}
             </template>
             <template v-else>
               {{ pp.count ? pp.count + (pp.count > 1 ? ' items' : ' item') : 'Text post' }} ·
@@ -446,7 +446,7 @@ async function onReact(post: WallPost, emoji: string): Promise<void> {
     await appToast({
       message:
         res === 'limit-emojis'
-          ? `This post already has ${MAX_DISTINCT_REACTIONS} different reactions — tap one of those instead.`
+          ? `This post already has ${MAX_DISTINCT_REACTIONS} different reactions. Tap one of those instead.`
           : `You can add up to ${MAX_REACTIONS_PER_USER} reactions.`,
       duration: 1600,
     });
@@ -574,7 +574,7 @@ async function changeAudience(post: WallPost, audience: 'friends' | 'close'): Pr
                 duration: 1400,
               });
             } catch {
-              await appToast({ message: 'Couldn’t change who can see this — try again.', duration: 1800 });
+              await appToast({ message: 'Couldn’t change who can see this. Try again.', duration: 1800 });
             }
           })();
         },
@@ -590,7 +590,7 @@ async function extendPost(post: WallPost): Promise<void> {
     await keepAlivePost(post.id);
     await appToast({ message: 'Post kept for longer.', duration: 1400 });
   } catch {
-    await appToast({ message: 'Couldn’t extend that post — try again.', duration: 1800 });
+    await appToast({ message: 'Couldn’t extend that post. Try again.', duration: 1800 });
   }
 }
 
@@ -677,10 +677,13 @@ ion-item-sliding ion-item-option {
   gap: 10px;
   padding: 12px 14px 8px;
 }
-/* Spec 1024: pending (uploading) post card — the green card with a progress bar while the worker
-   finishes it; flips to a real post on confirmation. */
+/* Spec 1024: pending post card (uploading / failed / interrupted). A warm amber wash + a warning
+   accent down the left edge so an unfinished post is obviously NOT final, set apart from the
+   settled green posts. Flips to a normal green post once it confirms. */
 .pending-post {
   padding-bottom: 10px;
+  background: var(--app-bubble-pending, #ffe6ad);
+  box-shadow: inset 4px 0 0 var(--ion-color-warning, #ffc409), 0 1px 4px rgba(0, 0, 0, 0.1);
 }
 .pspin {
   margin-left: auto;

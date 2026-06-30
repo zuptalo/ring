@@ -957,7 +957,7 @@ export function installTestHook(): void {
         lifetime: '72h',
         items: [],
         status: 'failed',
-        error: 'Upload failed — tap retry.',
+        error: 'Upload failed. Tap Retry to try again.',
         attempts: 1,
         createdLocally: now,
         updatedAt: now,

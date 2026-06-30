@@ -24,6 +24,9 @@
      bleed through the text. Incoming = light grey, outgoing = soft green. */
   --app-bubble-in: #e7e8ec;
   --app-bubble-out: #d6f3cc;
+  /* Wall pending/unfinished post card — a warm amber so an unsent, uploading or failed post reads
+     as "not final yet" against the settled green posts. Opaque, like the bubbles, for legible text. */
+  --app-bubble-pending: #ffe6ad;
   /* Full-screen media viewer (spec 1014 FR-023): follows the app theme rather than a
      hardcoded black surface. Light defaults here; dark overrides below. The chrome (top/
      bottom bars) sits over the media, so the scrims + pill fills are theme-tinted for
@@ -51,6 +54,8 @@
   /* Opaque dark bubbles (WhatsApp-style): grey incoming, deep-green outgoing. */
   --app-bubble-in: #232d33;
   --app-bubble-out: #103a2c;
+  /* Deep amber pending card for dark mode (mirrors the light --app-bubble-pending). */
+  --app-bubble-pending: #43320c;
   /* Media viewer — immersive dark surface in dark mode (spec 1014 FR-023). */
   --viewer-surface: #000000;
   --viewer-text: #ffffff;
