@@ -141,7 +141,7 @@
               </ion-label>
             </ion-item>
             <ion-item-options side="end">
-              <ion-item-option color="danger" @click="removeContact(person.id)">
+              <ion-item-option color="danger" @click="removeContact(person)">
                 <ion-icon slot="icon-only" :icon="trashOutline" />
               </ion-item-option>
             </ion-item-options>
@@ -235,12 +235,32 @@ async function onPullRefresh(e: RefresherCustomEvent): Promise<void> {
   }
 }
 const open = (id: string) => router.push(`/contact/${id}`);
-const removeContact = async (id: string): Promise<void> => {
-  try {
-    await deleteContact(id);
-  } catch {
-    void appToast({ message: 'Could not delete. Try again.', duration: 1500, color: 'danger' });
-  }
+// Deleting a contact is destructive (it also removes the conversation on this device and can't be
+// undone), so confirm first with a clear hint — matching the contact page's Delete flow — instead of
+// the swipe acting instantly.
+const removeContact = async (person: { id: string; name: string }): Promise<void> => {
+  const alert = await alertController.create({
+    header: `Delete ${person.name || 'this contact'}?`,
+    message:
+      'This removes them from your contacts and deletes this conversation on this device. It cannot be undone.',
+    buttons: [
+      { text: 'Cancel', role: 'cancel' },
+      {
+        text: 'Delete',
+        role: 'destructive',
+        handler: () => {
+          void (async () => {
+            try {
+              await deleteContact(person.id);
+            } catch {
+              void appToast({ message: 'Could not delete. Try again.', duration: 1500, color: 'danger' });
+            }
+          })();
+        },
+      },
+    ],
+  });
+  await alert.present();
 };
 
 // Shared add-contact flow (also used by the New-chat modal).
