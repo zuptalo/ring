@@ -131,10 +131,10 @@ import {
   IonContent, IonTextarea, IonList, IonListHeader, IonItem, IonSegment, IonSegmentButton,
   IonLabel, IonIcon, IonSpinner, alertController,
 } from '@ionic/vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { imageOutline, closeOutline, micOutline, playCircle } from 'ionicons/icons';
 import { vEnterSend } from '@/directives/enter-send';
-import { enqueuePendingPost, type PostLifetime } from '@/db/queries';
+import { enqueuePendingPost, getPendingPost, deletePendingPost, type PostLifetime } from '@/db/queries';
 import { kickPendingPosts } from '@/services/pending-posts';
 import { hasRoomFor } from '@/services/storage-estimate';
 import { generateVideoPoster } from '@/utils/media-meta';
@@ -142,10 +142,14 @@ import { playAudio, stopIfPlaying } from '@/composables/useAudioPlayer';
 import { appToast } from '@/services/toast';
 
 const router = useRouter();
+const route = useRoute();
 const body = ref('');
 const audience = ref<'friends' | 'close'>('friends');
 const lifetime = ref<PostLifetime>('72h');
 const sharing = ref(false); // true only during the brief enqueue, before the composer dismisses
+// Set when we're finishing a draft recovered after the app closed mid-post (?resume=<outbox id>):
+// the old record is removed once the post is re-shared so it doesn't linger on the Wall.
+const resumeId = ref<string | null>(null);
 
 // Staged attachments. Several photos/videos compose an ALBUM post (spec 1022, FR-019); a
 // recorded voice clip is always on its own. Object URLs back the previews, revoked on
@@ -322,7 +326,31 @@ onMounted(() => {
   document.addEventListener('touchmove', onDocTouchMove, { passive: false });
   document.addEventListener('touchend', onDocTouchEnd);
   document.addEventListener('touchcancel', onDocTouchEnd);
+  void loadResumeDraft();
 });
+
+// Spec 1024: if we arrived via "Finish" on a recovered draft, restore its caption + voice notes.
+// Library photos/videos can't be recovered after a full app close, so the user re-adds those.
+async function loadResumeDraft(): Promise<void> {
+  const id = typeof route.query.resume === 'string' ? route.query.resume : null;
+  if (!id) return;
+  const rec = await getPendingPost(id);
+  if (!rec || rec.status !== 'interrupted') return; // gone or no longer recoverable
+  resumeId.value = id;
+  body.value = rec.body ?? '';
+  if (rec.audience) audience.value = rec.audience;
+  if (rec.lifetime) lifetime.value = rec.lifetime;
+  for (const it of rec.items) {
+    if (it.kind !== 'voice') continue; // only in-app recordings survive; nothing else is kept here
+    mediaItems.value.push({
+      blob: it.blob,
+      kind: 'voice',
+      name: it.name,
+      durationSec: it.durationSec,
+      url: URL.createObjectURL(it.blob),
+    });
+  }
+}
 
 /* ---- voice post recording (mirrors the chat voice recorder, minus the live
    waveform/pause/preview — a post is a single take, kept simple) ---- */
@@ -423,6 +451,8 @@ async function share(): Promise<void> {
         poster: m.poster,
       })),
     });
+    // Finishing a recovered draft: clear the old interrupted record now that it's re-queued.
+    if (resumeId.value) await deletePendingPost(resumeId.value);
     kickPendingPosts();
     router.back();
   } catch (err) {

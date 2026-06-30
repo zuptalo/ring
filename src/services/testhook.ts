@@ -129,6 +129,7 @@ import {
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
 import { notifyBanners, showActionBanner } from '@/services/notify';
+import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { recordCues, recordedCues } from '@/services/sound';
 import { syncContactEdges } from '@/services/directory';
 import { audioTrack, audioCurId, audioPlaying } from '@/composables/useAudioPlayer';
@@ -965,6 +966,39 @@ export function installTestHook(): void {
     },
     /** Count outbox records (any status) — lets a test assert a Cancel actually cleared one. */
     pendingPostCount: async (): Promise<number> => (await getAll<OutboxPost>('pendingPosts')).length,
+    /** Run (and await) cold-start recovery — lets a test order itself AFTER recovery so a freshly
+     *  seeded in-session failure isn't swept into a draft by the once-per-load recovery pass. */
+    recoverPending: () => recoverInterruptedPosts(),
+    /** Spec 1024 (US2): seed an INTERRUPTED draft (app closed mid-post) with a caption + a voice note,
+     *  so the Wall renders the "Post didn't finish" card and Finish restores it in the composer. */
+    seedInterruptedPost: async (body = 'Recovered draft', withVoice = true): Promise<string> => {
+      const now = Date.now();
+      const id = `pp-int-${now}`;
+      await put<OutboxPost>('pendingPosts', {
+        id,
+        target: 'wall',
+        body,
+        audience: 'friends',
+        lifetime: '72h',
+        items: withVoice
+          ? [{
+              localId: `v-${now}`,
+              blob: new Blob([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])], { type: 'audio/webm' }),
+              kind: 'voice',
+              name: 'voice.webm',
+              mime: 'audio/webm',
+              durationSec: 3,
+              progress: 0,
+            }]
+          : [],
+        status: 'interrupted',
+        droppedMedia: true,
+        attempts: 0,
+        createdLocally: now,
+        updatedAt: now,
+      });
+      return id;
+    },
     /** Seed one own IMAGE post that has ONLY a poster tier and no full blob — i.e. a
      *  received post whose full media hasn't downloaded yet. The feed must still show the
      *  poster instantly (US1: no blank tile), which is what the thumbnail test asserts. */

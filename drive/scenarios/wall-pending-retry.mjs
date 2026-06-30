@@ -11,12 +11,14 @@ import path from 'node:path';
 await preflight();
 const me = await createAccount({ name: 'Pending Pat', mobile: true });
 
-// Seed a failed pending post directly into the outbox (dev-only testhook helper).
+// Reach the Wall, then make sure cold-start recovery has already run (it's once-per-load) before we
+// seed an IN-SESSION failure — otherwise recovery would sweep our seed into a draft (correct in real
+// life, but here we want the in-session Retry/Cancel card, which renders reactively).
+await me.page.goto('/tabs/wall');
+await me.page.waitForFunction(() => !!window.__ringTest, null, { timeout: 30_000 });
+await me.page.evaluate(() => window.__ringTest.recoverPending());
 const id = await me.page.evaluate(() => window.__ringTest.seedFailedPendingPost('My stuck post'));
 console.log('seeded failed pending post', id);
-
-// Land on the Wall — the failed card should render with Retry/Cancel.
-await me.page.goto('/tabs/wall');
 await poll(
   () => me.page.evaluate(() => !!document.querySelector('.pending-post')),
   Boolean,

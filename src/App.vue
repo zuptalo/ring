@@ -53,7 +53,7 @@ import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate, checkForUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
 import { takePendingNav } from '@/services/pending-nav';
-import { kickPendingPosts } from '@/services/pending-posts';
+import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import type { Message } from '@/db/types';
 
@@ -78,9 +78,20 @@ watch(
   (unlocked) => {
     if (unlocked) {
       void warmAll();
-      // Spec 1024: resume any interrupted media uploads from the outbox (a post the app was
-      // killed mid-upload finishes itself on reopen).
-      kickPendingPosts();
+      // Spec 1024: a post whose upload was cut off by a full app close can't be resumed (its library
+      // media handle is gone). Recover it as a draft instead — keep the caption + voice notes for the
+      // user to finish in the composer — and let them know if a media-only post had to be dropped.
+      void recoverInterruptedPosts().then(({ discarded }) => {
+        if (discarded > 0) {
+          void appToast({
+            message:
+              discarded === 1
+                ? 'A post didn’t finish because the app closed — please share it again.'
+                : `${discarded} posts didn’t finish because the app closed — please share them again.`,
+            duration: 3200,
+          });
+        }
+      });
       // Cold-launched from a notification? The SW stashed where to go (iOS PWAs can't deep-link
       // via openWindow); now that we're unlocked and the tabs are reachable, route there. The
       // microtask defer lets the auth gate's default landing settle first so this wins.
