@@ -342,12 +342,16 @@ async function loadResumeDraft(): Promise<void> {
   if (rec.lifetime) lifetime.value = rec.lifetime;
   for (const it of rec.items) {
     if (it.kind !== 'voice') continue; // only in-app recordings survive; nothing else is kept here
+    // Rebuild a FRESH in-memory Blob from the inline bytes. The stored Blob can read back broken on
+    // iOS after a reload (its bytes hang), which is what stalled the re-upload — the ArrayBuffer copy
+    // we stashed at enqueue is always readable. Fall back to the Blob if an older draft has no bytes.
+    const blob = it.bytes ? new Blob([it.bytes], { type: it.mime || 'audio/webm' }) : it.blob;
     mediaItems.value.push({
-      blob: it.blob,
+      blob,
       kind: 'voice',
       name: it.name,
       durationSec: it.durationSec,
-      url: URL.createObjectURL(it.blob),
+      url: URL.createObjectURL(blob),
     });
   }
 }

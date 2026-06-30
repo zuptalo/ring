@@ -36,7 +36,7 @@ import type {
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, ChatDraft,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, OutboxItem, ChatDraft,
 } from './types';
 
 // WhatsApp-style cap on pinned chats.
@@ -2347,16 +2347,15 @@ export async function enqueuePendingPost(input: {
   // open and the picked files are still readable). We deliberately do NOT try to make library media
   // survive a full app close — an iOS File handle doesn't, and a half-resumed upload was unreliable.
   // On a cold restart these posts are recovered as drafts instead (see recoverInterruptedPosts).
-  const rec: OutboxPost = {
-    id,
-    target: input.target,
-    chatId: input.chatId,
-    body: input.body,
-    audience: input.audience,
-    lifetime: input.lifetime,
-    items: input.items.map((it) => ({
+  // EXCEPTION: an in-app VOICE recording IS kept across a restart (it's part of the recovered draft),
+  // so we stash its bytes inline as an ArrayBuffer — an IDB Blob can read back broken on iOS, an
+  // ArrayBuffer doesn't. Small clips, so the read is cheap.
+  const items: OutboxItem[] = [];
+  for (const it of input.items) {
+    items.push({
       localId: uid(),
       blob: it.blob,
+      bytes: it.kind === 'voice' ? await it.blob.arrayBuffer() : undefined,
       kind: it.kind,
       name: it.name,
       mime: it.mime,
@@ -2365,7 +2364,16 @@ export async function enqueuePendingPost(input: {
       height: it.height,
       poster: it.poster,
       progress: 0,
-    })),
+    });
+  }
+  const rec: OutboxPost = {
+    id,
+    target: input.target,
+    chatId: input.chatId,
+    body: input.body,
+    audience: input.audience,
+    lifetime: input.lifetime,
+    items,
     status: 'uploading',
     attempts: 0,
     createdLocally: now(),

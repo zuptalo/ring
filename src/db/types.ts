@@ -447,6 +447,11 @@ export interface OutboxPost {
 export interface OutboxItem {
   localId: string;
   blob: Blob; // cached working copy (plaintext, local-only; deleted on finalize/cancel)
+  // VOICE only: the clip's bytes stored inline (not as a Blob). A Blob retrieved from IndexedDB
+  // after a full app reload can be unreadable on iOS (its arrayBuffer() hangs), which would stall the
+  // re-upload of a recovered draft. An ArrayBuffer is stored inline and always reads back, so we
+  // rebuild a fresh in-memory Blob from this when restoring the draft into the composer.
+  bytes?: ArrayBuffer;
   kind: 'image' | 'video' | 'voice';
   name: string;
   mime: string;
