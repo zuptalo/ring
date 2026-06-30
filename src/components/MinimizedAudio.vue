@@ -5,7 +5,7 @@
        player is the control, so this hides itself (track.chatId === current chat). Once
        you leave, it reappears COLLAPSED (a compact pill) and can be expanded on demand. -->
   <div
-    v-if="track && !inOwningChat"
+    v-if="track && !inOwningChat && track.id !== controllerHiddenForId"
     class="audio-mini"
     :class="{ collapsed: !expanded }"
     role="group"
@@ -38,7 +38,7 @@ import { useRoute } from 'vue-router';
 import { IonIcon } from '@ionic/vue';
 import { play, pause, stop, mic, musicalNotes, chevronUpOutline, chevronDownOutline } from 'ionicons/icons';
 import {
-  audioTrack as track, audioPlaying, audioProgress, toggleAudioPlayback, stopAudio,
+  audioTrack as track, audioPlaying, audioProgress, toggleAudioPlayback, stopAudio, controllerHiddenForId,
 } from '@/composables/useAudioPlayer';
 
 const route = useRoute();

@@ -21,11 +21,12 @@ import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { CacheFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import {
-  previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, markConnShown,
+  previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, markConnShown,
   coalesceForShow, loadShownSummary, setting,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { resubscribePush } from '@/services/sw-push';
+import { setPendingNav } from '@/services/pending-nav';
 import { userFacing, prettify, displayVersion } from '@/services/release-notes';
 
 declare const self: ServiceWorkerGlobalScope & {
@@ -320,7 +321,21 @@ async function showVersionNotification(): Promise<void> {
  *  app is closed; a live page shows the rich in-app banner / live update via the WS
  *  frame, so the SW stays silent there to avoid a duplicate. "Activity" rather than
  *  "post" so it reads honestly for a reaction/comment too. */
-async function showPostNotification(): Promise<void> {
+async function showPostNotification(): Promise<number> {
+  let notes: ConnNote[] = [];
+  let newCount = 0;
+  try {
+    const r = await previewPosts();
+    notes = r.notes;
+    newCount = r.newCount;
+  } catch {
+    /* fall through to the generic placeholder */
+  }
+  if (notes.length) {
+    // notes carry "<author> · posted on their Wall"; reuse the conn-note renderer (same shape).
+    await showConnNotes(notes);
+    return newCount;
+  }
   await self.registration.showNotification('Ring', {
     body: 'New activity on your Wall',
     icon: ICON,
@@ -328,6 +343,7 @@ async function showPostNotification(): Promise<void> {
     tag: 'ring:post',
     data: { url: '/tabs/wall' },
   });
+  return newCount;
 }
 
 /** Show the generic friend-request notifications (identity-safe; no decryption). */
@@ -355,27 +371,31 @@ async function showConnNotes(notes: ConnNote[]): Promise<void> {
  * device is PIN-locked. Always shows at least a generic placeholder to honor the
  * userVisibleOnly contract when something is pending but can't be reconciled.
  */
-async function showConnNotification(): Promise<void> {
+async function showConnNotification(): Promise<number> {
   let notes: ConnNote[] = [];
+  let pendingIncoming = 0;
   try {
-    notes = await previewConnections();
+    const r = await previewConnections();
+    notes = r.notes;
+    pendingIncoming = r.pendingIncoming;
   } catch {
     /* fall through to the placeholder below */
   }
   if (notes.length) {
     await showConnNotes(notes);
     await markConnShown(notes.flatMap((n) => n.keys));
-    return;
+    return pendingIncoming;
   }
   // Couldn't reconcile (offline / already-seen) but a tickle implies activity →
   // a single generic placeholder keeps the userVisibleOnly contract.
-  await self.registration.showNotification('Ring', {
-    body: 'New friend request',
+  await self.registration.showNotification('New friend request', {
+    body: 'Tap to review',
     icon: ICON,
     badge: BADGE,
     tag: 'ring:conn:req',
     data: { url: '/tabs/contacts' },
   });
+  return pendingIncoming;
 }
 
 /**
@@ -558,7 +578,12 @@ self.addEventListener('push', (event) => {
         // SW only notifies when the app is fully CLOSED (no client to claim it),
         // avoiding a duplicate. Still nudge any live client to reconcile its lists.
         for (const client of clients) client.postMessage({ type: 'ring:conn' });
-        if (!clients.length) await showConnNotification();
+        if (!clients.length) {
+          // Show the notification AND bump the app-icon badge (messages + pending requests);
+          // the conn path previously never touched the badge, so a friend request didn't count.
+          const pendingIncoming = await showConnNotification();
+          await updateAppBadge(pendingIncoming);
+        }
         return;
       }
       if (kind === 'post') {
@@ -569,7 +594,9 @@ self.addEventListener('push', (event) => {
         // Honor the Wall notifications toggle (the foreground banner is already gated
         // by notifyNewPost; this gates the app-closed system notification to match).
         if (!clients.length && (await setting('notifications.wall.show', true))) {
-          await showPostNotification();
+          // Name the author AND bump the app-icon badge (the post path previously did neither).
+          const newCount = await showPostNotification();
+          await updateAppBadge(newCount);
         }
         return;
       }
@@ -620,7 +647,11 @@ self.addEventListener('notificationclick', (event) => {
           return client.focus();
         }
       }
-      // No window open → cold start at the deep-link (or the app root).
+      // No window open → cold start. iOS PWAs ignore openWindow's path (they land on the
+      // default tab post-unlock), so ALSO stash the target; the app consumes it once unlocked
+      // and routes there. On platforms where openWindow honors the path it's a harmless no-op
+      // (the app is already there; the consume just re-routes to the same place).
+      if (data.url) await setPendingNav(data.url);
       return self.clients.openWindow(data.url || '/');
     })(),
   );

@@ -36,31 +36,47 @@
         <span class="share-label">{{ progressLabel }}</span>
       </div>
 
-      <!-- Voice preview (a voice post is always on its own) -->
-      <div v-if="hasVoice" class="preview">
-        <audio class="vpreview" :src="mediaItems[0].url" controls />
-        <ion-button class="remove" fill="solid" color="dark" size="small" @click="clearMedia">
-          <ion-icon slot="icon-only" :icon="closeOutline" />
-        </ion-button>
-      </div>
-
-      <!-- Photo/video staging: several compose an album (FR-019). A row of removable
-           thumbnails (their order is the album order) plus an "add more" tile. -->
-      <div v-else-if="mediaItems.length" class="album-stage">
-        <div v-for="(m, i) in mediaItems" :key="m.url" class="stage-thumb">
-          <img v-if="m.kind === 'image'" :src="m.url" alt="" />
-          <video v-else :src="m.url" muted playsinline />
+      <!-- Media staging (FR-019): photos, videos AND voice clips compose ONE post as a row of
+           reorderable thumbnails (their order is the album order). Voice mixes in like any other
+           item — record it and it joins the row; tap its ▶ to review it through the same player
+           the chat and feed use. -->
+      <div v-if="mediaItems.length" ref="stageRow" class="album-stage">
+        <div
+          v-for="(m, i) in mediaItems"
+          :key="m.url"
+          class="stage-thumb"
+          :class="{ dragging: dragIndex === i }"
+          @touchstart.passive="onThumbTouchStart(i, $event)"
+        >
+          <button v-if="m.kind === 'voice'" type="button" class="stage-voice" @click="previewVoice(m)">
+            <ion-icon :icon="micOutline" />
+            <span>{{ fmtDur(m.durationSec) }}</span>
+            <ion-icon class="stage-play" :icon="playCircle" aria-hidden="true" />
+          </button>
+          <template v-else>
+            <img v-if="m.kind === 'image' || m.poster" :src="m.kind === 'image' ? m.url : m.poster" alt="" />
+            <div v-else class="stage-vid">
+              <ion-spinner v-if="!m.posterTried" name="crescent" class="stage-spin" />
+            </div>
+            <ion-icon v-if="m.kind === 'video'" class="stage-play" :icon="playCircle" aria-hidden="true" />
+          </template>
           <button type="button" class="stage-x" aria-label="Remove" @click="removeMedia(i)">
             <ion-icon :icon="closeOutline" />
           </button>
         </div>
-        <button type="button" class="stage-add" aria-label="Add more photos or videos" @click="pickMedia">
+        <button type="button" class="stage-add" aria-label="Add more photos or videos" :disabled="atMaxMedia" @click="pickMedia">
           <ion-icon :icon="imageOutline" />
         </button>
+        <button type="button" class="stage-add" aria-label="Record a voice clip" :disabled="recording || atMaxMedia" @click="startRecording">
+          <ion-icon :icon="micOutline" />
+        </button>
       </div>
+      <p v-if="mediaItems.length > 1" class="stage-hint">
+        Hold &amp; drag a thumbnail to reorder.<span v-if="atMaxMedia"> · {{ MAX_MEDIA }}-item max reached</span>
+      </p>
 
-      <!-- Recording a voice post in progress -->
-      <ion-list v-else-if="recording" :inset="true">
+      <!-- Recording in progress — can be the first item or added to an existing album. -->
+      <ion-list v-if="recording" :inset="true">
         <ion-item lines="none">
           <ion-icon slot="start" :icon="micOutline" color="danger" class="recdot" />
           <ion-label>Recording… {{ recElapsed }}</ion-label>
@@ -68,8 +84,8 @@
         </ion-item>
       </ion-list>
 
-      <!-- Attachment options: a photo/video file, or a recorded voice post -->
-      <ion-list v-else :inset="true">
+      <!-- First-attachment options: only when nothing is staged yet and not already recording. -->
+      <ion-list v-if="!mediaItems.length && !recording" :inset="true">
         <ion-item button :detail="false" @click="pickMedia">
           <ion-icon slot="start" :icon="imageOutline" color="primary" />
           <ion-label color="primary">Add photos or videos</ion-label>
@@ -119,16 +135,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onUnmounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
   IonContent, IonTextarea, IonList, IonListHeader, IonItem, IonSegment, IonSegmentButton,
-  IonLabel, IonIcon, IonProgressBar, alertController,
+  IonLabel, IonIcon, IonProgressBar, IonSpinner, alertController,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
-import { imageOutline, closeOutline, micOutline } from 'ionicons/icons';
+import { imageOutline, closeOutline, micOutline, playCircle } from 'ionicons/icons';
 import { vEnterSend } from '@/directives/enter-send';
 import { createPost, type PostLifetime } from '@/db/queries';
+import { generateVideoPoster } from '@/utils/media-meta';
+import { playAudio, stopIfPlaying } from '@/composables/useAudioPlayer';
+import { appToast } from '@/services/toast';
 
 const router = useRouter();
 const body = ref('');
@@ -137,6 +156,7 @@ const lifetime = ref<PostLifetime>('72h');
 const sharing = ref(false);
 // Encode/upload progress while a post with media is being shared (drives the progress bar).
 const progress = ref<{ phase: 'encoding' | 'uploading'; index: number; total: number; value: number } | null>(null);
+let lastProgressTs = 0; // throttle progress re-renders so they don't starve the encoder
 const progressLabel = computed(() => {
   const p = progress.value;
   if (!p) return 'Sharing…';
@@ -154,12 +174,28 @@ interface PostMedia {
   name: string;
   durationSec?: number;
   url: string;
+  poster?: string; // first-frame thumbnail for a staged video (a <video> tile paints black)
+  posterTried?: boolean; // poster generation has settled (succeeded or given up) — stop the spinner
 }
 const fileInput = ref<HTMLInputElement | null>(null);
 const mediaItems = ref<PostMedia[]>([]);
-const hasVoice = computed(() => mediaItems.value.some((m) => m.kind === 'voice'));
+// Cap items per post (photos + videos + voice clips combined). Keeps the album swipe + the
+// upload manageable, and bounds the encode/upload work.
+const MAX_MEDIA = 10;
+const atMaxMedia = computed(() => mediaItems.value.length >= MAX_MEDIA);
 
 const canShare = computed(() => body.value.trim().length > 0 || mediaItems.value.length > 0);
+
+// mm:ss for a staged voice clip's thumbnail.
+const fmtDur = (s?: number): string => {
+  const n = Math.round(s ?? 0);
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
+};
+// Review a staged clip through the SAME single-source player the chat + feed use (so the
+// minimized controller behaves identically and only one thing ever plays).
+function previewVoice(m: PostMedia): void {
+  playAudio({ id: m.url, url: m.url, title: 'Voice clip', subtitle: 'Your recording', isVoice: true });
+}
 
 function onInput(e: CustomEvent): void {
   body.value = (e.detail as { value?: string | null }).value ?? '';
@@ -175,29 +211,129 @@ function pickMedia(): void {
   fileInput.value?.click();
 }
 function onFile(e: Event): void {
-  // Picking several photos/videos stages them all → one album on Send. A voice clip in the
-  // stage means it's a voice post; clear it before adding files (the two don't mix).
-  if (hasVoice.value) clearMedia();
-  const files = Array.from((e.target as HTMLInputElement).files ?? []);
+  // Picking several photos/videos stages them all → one album on Send. Voice clips mix in as
+  // their own items now, so we just APPEND — never clear what's already staged. Cap at MAX_MEDIA.
+  const picked = Array.from((e.target as HTMLInputElement).files ?? []);
+  const room = MAX_MEDIA - mediaItems.value.length;
+  const files = picked.slice(0, Math.max(0, room));
+  if (picked.length > files.length) {
+    void appToast(`You can share up to ${MAX_MEDIA} items in one post.`);
+  }
   for (const f of files) {
-    mediaItems.value.push({
-      blob: f,
-      kind: f.type.startsWith('video/') ? 'video' : 'image',
-      name: f.name || 'attachment',
-      url: URL.createObjectURL(f),
-    });
+    const url = URL.createObjectURL(f);
+    const kind = f.type.startsWith('video/') ? 'video' : 'image';
+    mediaItems.value.push({ blob: f, kind, name: f.name || 'attachment', url });
+    // A <video> tile paints black until it seeks — generate a first-frame poster and drop it
+    // onto the (reactive) staged item so the preview shows a real thumbnail. Match by url since
+    // the index can shift if another item is removed while this resolves.
+    if (kind === 'video') {
+      void generateVideoPoster(f)
+        .then((poster) => {
+          const it = mediaItems.value.find((m) => m.url === url);
+          if (it && poster) it.poster = poster;
+        })
+        .catch(() => {})
+        .finally(() => {
+          const it = mediaItems.value.find((m) => m.url === url);
+          if (it) it.posterTried = true; // stop the spinner whether or not we got a frame
+        });
+    }
   }
   if (fileInput.value) fileInput.value.value = '';
 }
 function removeMedia(i: number): void {
   const [gone] = mediaItems.value.splice(i, 1);
-  if (gone) URL.revokeObjectURL(gone.url);
+  if (gone) {
+    stopIfPlaying(gone.url); // dismiss the player if we're previewing this clip
+    URL.revokeObjectURL(gone.url);
+  }
 }
 function clearMedia(): void {
-  for (const m of mediaItems.value) URL.revokeObjectURL(m.url);
+  for (const m of mediaItems.value) {
+    stopIfPlaying(m.url);
+    URL.revokeObjectURL(m.url);
+  }
   mediaItems.value = [];
   if (fileInput.value) fileInput.value.value = '';
 }
+
+/* ---- press-and-hold to reorder the staged album ----
+   The row scrolls natively (smooth, with momentum) — we never touch that. A press-and-hold on
+   a thumbnail "lifts" it; only THEN do we take over the gesture (preventDefault) and reorder
+   live as the finger passes its neighbours. A swipe that moves before the hold fires cancels
+   the lift, so it just scrolls. Touch events (not pointer) + a non-passive document listener,
+   which is what actually works on iOS. */
+const stageRow = ref<HTMLElement | null>(null);
+const dragIndex = ref<number | null>(null);
+let holdTimer: ReturnType<typeof setTimeout> | undefined;
+let touchId: number | null = null;
+let downX = 0;
+let downY = 0;
+let lifted = false;
+
+function thumbAt(clientX: number): number {
+  const thumbs = Array.from(stageRow.value?.querySelectorAll('.stage-thumb') ?? []) as HTMLElement[];
+  for (let k = 0; k < thumbs.length; k++) {
+    if (clientX < thumbs[k].getBoundingClientRect().right) return k;
+  }
+  return thumbs.length - 1;
+}
+function tracked(e: TouchEvent): Touch | null {
+  for (const t of Array.from(e.changedTouches)) if (t.identifier === touchId) return t;
+  return null;
+}
+function onThumbTouchStart(i: number, e: TouchEvent): void {
+  if (touchId !== null) return; // ignore a second finger mid-gesture
+  if ((e.target as HTMLElement).closest('.stage-x')) return; // the remove button owns its taps
+  const t = e.changedTouches[0];
+  touchId = t.identifier;
+  downX = t.clientX;
+  downY = t.clientY;
+  lifted = false;
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => {
+    lifted = true;
+    dragIndex.value = i;
+    navigator.vibrate?.(8);
+  }, 300);
+}
+function onDocTouchMove(e: TouchEvent): void {
+  if (touchId === null) return;
+  const t = tracked(e);
+  if (!t) return;
+  if (!lifted) {
+    // Still deciding: any real travel before the hold means the user is scrolling — stand down
+    // and let the browser scroll natively (do NOT preventDefault).
+    if (Math.abs(t.clientX - downX) > 10 || Math.abs(t.clientY - downY) > 10) {
+      clearTimeout(holdTimer);
+      touchId = null;
+    }
+    return;
+  }
+  // Lifted — we own the gesture now: stop the scroll and reorder.
+  e.preventDefault();
+  const over = thumbAt(t.clientX);
+  if (dragIndex.value !== null && over >= 0 && over !== dragIndex.value) {
+    const arr = mediaItems.value;
+    const [moved] = arr.splice(dragIndex.value, 1);
+    arr.splice(over, 0, moved);
+    dragIndex.value = over;
+  }
+}
+function onDocTouchEnd(e: TouchEvent): void {
+  if (touchId === null || !tracked(e)) return;
+  clearTimeout(holdTimer);
+  dragIndex.value = null;
+  touchId = null;
+  lifted = false;
+}
+onMounted(() => {
+  // Non-passive so preventDefault works once a thumbnail is lifted; on document so the gesture
+  // keeps tracking even as the finger leaves the row.
+  document.addEventListener('touchmove', onDocTouchMove, { passive: false });
+  document.addEventListener('touchend', onDocTouchEnd);
+  document.addEventListener('touchcancel', onDocTouchEnd);
+});
 
 /* ---- voice post recording (mirrors the chat voice recorder, minus the live
    waveform/pause/preview — a post is a single take, kept simple) ---- */
@@ -210,6 +346,10 @@ let recStart = 0;
 let recTimer: number | undefined;
 
 async function startRecording(): Promise<void> {
+  if (atMaxMedia.value) {
+    void appToast(`You can share up to ${MAX_MEDIA} items in one post.`);
+    return;
+  }
   try {
     recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const types = ['audio/webm', 'audio/mp4', 'audio/ogg'];
@@ -250,22 +390,27 @@ function finishRecording(): void {
   if (!recChunks.length) return;
   const durationSec = Math.max(1, Math.round((Date.now() - recStart) / 1000));
   const blob = new Blob(recChunks, { type: mime });
-  clearMedia();
-  mediaItems.value = [
-    {
-      blob,
-      kind: 'voice',
-      name: `voice.${mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'}`,
-      durationSec,
-      url: URL.createObjectURL(blob),
-    },
-  ];
+  // APPEND the clip as its own album item (it mixes with photos/videos and is reorderable) —
+  // don't replace what's already staged.
+  mediaItems.value.push({
+    blob,
+    kind: 'voice',
+    name: `voice.${mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'}`,
+    durationSec,
+    url: URL.createObjectURL(blob),
+  });
 }
 
 onUnmounted(() => {
-  for (const m of mediaItems.value) URL.revokeObjectURL(m.url);
+  for (const m of mediaItems.value) {
+    stopIfPlaying(m.url); // leaving the composer discards the draft → stop any preview playing
+    URL.revokeObjectURL(m.url);
+  }
   if (recTimer) clearInterval(recTimer);
   recStream?.getTracks().forEach((t) => t.stop());
+  document.removeEventListener('touchmove', onDocTouchMove);
+  document.removeEventListener('touchend', onDocTouchEnd);
+  document.removeEventListener('touchcancel', onDocTouchEnd);
 });
 
 async function share(): Promise<void> {
@@ -289,7 +434,15 @@ async function share(): Promise<void> {
           }))
         : undefined,
       onProgress: (p) => {
-        progress.value = p;
+        // Throttle: a per-frame bar update during video encoding starves the (main-thread)
+        // encoder on slower devices (the post would appear stuck). Update on a phase/item
+        // change, on completion, or at most ~8×/sec.
+        const t = performance.now();
+        const cur = progress.value;
+        if (!cur || cur.phase !== p.phase || cur.index !== p.index || p.value >= 1 || t - lastProgressTs > 120) {
+          lastProgressTs = t;
+          progress.value = p;
+        }
       },
     });
     router.back();
@@ -350,21 +503,86 @@ async function share(): Promise<void> {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch; /* momentum scroll on iOS */
   padding: 8px 16px;
 }
 .stage-thumb {
   position: relative;
   flex: 0 0 auto;
   padding: 6px 6px 0 0; /* room for the overhanging × */
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease;
+}
+.stage-thumb.dragging {
+  transform: scale(1.08);
+  opacity: 0.92;
+  z-index: 2;
 }
 .stage-thumb img,
-.stage-thumb video {
+.stage-thumb .stage-vid {
   width: 84px;
   height: 84px;
   object-fit: cover;
   border-radius: 12px;
   display: block;
   background: #000;
+  pointer-events: none; /* taps/drags belong to the thumb, not the media element */
+}
+.stage-vid {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  background: #1c1c1c;
+}
+/* Voice clip tile: a mic + duration, same 84px square as the photo/video thumbs, with a ▶
+   overlay so it reads as tappable (reviews through the shared player). */
+.stage-voice {
+  width: 84px;
+  height: 84px;
+  border: none;
+  border-radius: 12px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--ion-color-primary);
+  color: #fff;
+  font-size: 22px;
+}
+.stage-voice span {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.stage-voice .stage-play {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  font-size: 18px;
+  opacity: 0.9;
+}
+.stage-spin {
+  width: 24px;
+  height: 24px;
+  color: rgba(255, 255, 255, 0.75);
+}
+/* play glyph marking a staged video (over its poster) */
+.stage-play {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 3px);
+  transform: translate(-50%, -50%);
+  font-size: 28px;
+  color: #fff;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
+  pointer-events: none;
+}
+.stage-hint {
+  margin: 2px 16px 0;
+  font-size: 12px;
+  color: var(--ion-color-medium);
 }
 .stage-x {
   position: absolute;
@@ -395,6 +613,9 @@ async function share(): Promise<void> {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.stage-add:disabled {
+  opacity: 0.35;
 }
 /* Pulse the mic glyph while a voice post is being recorded. */
 .recdot {

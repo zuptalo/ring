@@ -15,10 +15,10 @@
  */
 import { ref, type Directive } from 'vue';
 
-// Shared mute state for feed autoplay. Videos START muted (browsers block UNMUTED autoplay
-// without a user gesture). The inline speaker toggle flips this for ALL feed videos at once —
-// once you unmute (the tap is the gesture), every video that autoplays plays WITH sound until
-// you mute again. Persisting "muted" is the social-feed norm (TikTok/Reels).
+// Shared mute state for feed autoplay. Default is MUTED — clips autoplay silently and the
+// inline speaker toggle unmutes them (a tap that also satisfies the browser's autoplay-with-
+// sound gate). The choice then sticks for every feed video until changed. Muted-by-default is
+// the social-feed norm and sidesteps iOS's per-element audio-routing quirks on autoplay.
 export const autoplayMuted = ref(true);
 
 // Toggle/set the shared mute state and apply it to the video playing right now. Unmuting is a
@@ -40,6 +40,15 @@ const registered = new Set<HTMLVideoElement>();
 const ratios = new Map<HTMLVideoElement, number>();
 let current: HTMLVideoElement | null = null;
 let io: IntersectionObserver | null = null;
+// When a full-screen viewer (or any modal) is open over the feed, the feed videos are still
+// "intersecting" the viewport behind it, so suspend autoplay outright — otherwise a clip keeps
+// playing (now with sound) behind the overlay.
+let suspended = false;
+export function suspendAutoplay(on: boolean): void {
+  suspended = on;
+  if (on) setActive(null);
+  else reconcile();
+}
 
 // Respect the platform/user signals that say "don't autoplay": reduced-motion and the
 // Save-Data hint. When either is on we never autoplay (tap-to-play still works).
@@ -62,9 +71,16 @@ function setActive(el: HTMLVideoElement | null): void {
   current = el;
   if (el) {
     el.setAttribute('data-autoplaying', 'true');
-    el.muted = autoplayMuted.value; // respect the shared feed mute state (starts muted)
-    void el.play().catch(() => {
-      /* autoplay blocked — leave the poster frame showing */
+    el.muted = autoplayMuted.value; // respect the shared feed mute state (default: sound on)
+    void el.play().catch((err: unknown) => {
+      // Fall back to MUTED playback ONLY when the browser BLOCKED unmuted autoplay
+      // (NotAllowedError) — so a clip the user chose to hear still plays (muted) instead of
+      // freezing on its poster. Do NOT mute on other rejections (media not yet loaded / can't
+      // decode): that would wrongly silence an unmuted clip and break "unmute sticks".
+      if ((err as { name?: string } | null)?.name === 'NotAllowedError' && !el.muted) {
+        el.muted = true;
+        void el.play().catch(() => {});
+      }
     });
   }
 }
@@ -72,7 +88,7 @@ function setActive(el: HTMLVideoElement | null): void {
 // Pick the most-visible registered video and make it the single active one; drop the
 // current one once it's mostly off screen.
 function reconcile(): void {
-  if (lowData()) {
+  if (lowData() || suspended) {
     setActive(null);
     return;
   }

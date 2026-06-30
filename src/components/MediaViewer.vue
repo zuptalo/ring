@@ -20,10 +20,10 @@
                where you are in a multi-item album. Auto-hides with the chrome. FR-011. -->
           <div v-if="items.length > 1" class="v-count" aria-live="polite">{{ index + 1 }} / {{ items.length }}</div>
         </div>
-        <button v-if="cur?.outgoing" class="v-icon" aria-label="Caption" @click="$emit('caption', cur.id)">
+        <button v-if="cur?.outgoing && !minimal" class="v-icon" aria-label="Caption" @click="$emit('caption', cur.id)">
           <ion-icon :icon="pencil" />
         </button>
-        <button class="v-icon" aria-label="More" @click="menu = !menu">
+        <button v-if="!minimal" class="v-icon" aria-label="More" @click="menu = !menu">
           <ion-icon :icon="ellipsisHorizontal" />
         </button>
         <div v-if="menu" class="v-menu" @click="menu = false">
@@ -72,6 +72,7 @@
               v-else-if="i === index || nearby(i)"
               :ref="(c) => bindVideo(c, i)"
               :src="it.url"
+              :poster="it.thumb"
               :embedded="true"
               :chrome-hidden="chromeHidden"
               :start-at="positions[it.id]"
@@ -138,8 +139,9 @@
         </div>
 
         <!-- Action buttons sit on a translucent dark pill so they stay legible over a
-             bright or tall image showing behind them. -->
-        <div class="v-actions">
+             bright or tall image showing behind them. Hidden entirely in the minimal Wall
+             viewer — a post is reacted to from the feed/detail, not in the viewer. -->
+        <div v-if="!minimal" class="v-actions">
           <button aria-label="React" @click="showEmojis = !showEmojis"><ion-icon :icon="happyOutline" /></button>
           <button aria-label="Reply" @click="$emit('reply', cur.id)"><ion-icon :icon="arrowUndoOutline" /></button>
           <button aria-label="Save" @click="$emit('save', cur.id)"><ion-icon :icon="downloadOutline" /></button>
@@ -202,7 +204,7 @@ interface VideoApi {
   togglePip: () => void;
 }
 
-interface ViewerItem {
+export interface ViewerItem {
   id: string;
   url: string;
   thumb: string;
@@ -214,7 +216,9 @@ interface ViewerItem {
   favorite: boolean;
   reactions: Array<{ emoji: string; count: number }>;
 }
-const props = defineProps<{ open: boolean; items: ViewerItem[]; start: number }>();
+// `minimal` = a read-only viewer (Wall posts): keep the zoom/pan/swipe/fullscreen, drop the
+// chat-only chrome (caption pen, overflow menu, reply/save/forward/favorite/delete actions).
+const props = defineProps<{ open: boolean; items: ViewerItem[]; start: number; minimal?: boolean }>();
 const emit = defineEmits<{
   (e: 'close'): void;
   (e: 'dismiss', id: string): void;
@@ -291,6 +295,9 @@ function goToStart(): void {
 // stops it — only the on-screen video is ever active.
 async function playCurrentIfVideo(): Promise<void> {
   await nextTick();
+  // Minimal (Wall) viewer: never autoplay — show the poster + play button and let the user
+  // start it. (The chat viewer keeps the slide-onto-it-plays behaviour.)
+  if (props.minimal) return;
   if (cur.value?.kind !== 'video') return;
   const api = videoApis.get(index.value);
   if (api && !api.playing) api.toggle();

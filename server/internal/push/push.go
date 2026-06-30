@@ -8,6 +8,7 @@ package push
 
 import (
 	"context"
+	"encoding/base64"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -155,6 +156,15 @@ func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p push
 	// address (a leading "mailto:" would yield "mailto:mailto:…", which Apple
 	// rejects as BadJwtToken). An https URL is left untouched.
 	subscriber := strings.TrimPrefix(s.subject, "mailto:")
+	// The Web Push "Topic" (RFC 8030, used to collapse a burst of tickles) must be a
+	// URL-safe-base64 string of at most 32 bytes. Apple enforces this strictly and 400s
+	// with {"reason":"BadWebPushTopic"} on a plain label like "ring-conn" (which isn't a
+	// decodable base64 string); FCM is lenient, which is why only iOS push was failing.
+	// Encode our short labels so collapsing works on every push service.
+	topic := p.topic
+	if topic != "" {
+		topic = base64.RawURLEncoding.EncodeToString([]byte(topic))
+	}
 	resp, err := webpush.SendNotificationWithContext(ctx, p.payload, &webpush.Subscription{
 		Endpoint: sub.Endpoint,
 		Keys:     webpush.Keys{P256dh: sub.P256dh, Auth: sub.Auth},
@@ -164,7 +174,7 @@ func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p push
 		VAPIDPrivateKey: s.vapidPrivate,
 		TTL:             p.ttl,
 		Urgency:         p.urgency,
-		Topic:           p.topic,
+		Topic:           topic,
 	})
 	if err != nil {
 		return 0, 0, err

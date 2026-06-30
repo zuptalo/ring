@@ -58,8 +58,9 @@ test('autoplay is suppressed under prefers-reduced-motion (tap-to-play fallback)
   await a.page.goto('/tabs/wall');
   await expect(a.page.locator('.thumb video')).toHaveCount(2, { timeout: 30_000 });
 
-  // With reduced-motion on, nothing autoplays — the play glyph stays and no video is active.
-  await expect(a.page.locator('.thumb .play').first()).toBeVisible();
+  // With reduced-motion on, nothing autoplays — the inline play control stays (tap-to-play) and
+  // no video is active.
+  await expect(a.page.locator('.thumb .wv-play').first()).toBeVisible();
   await expect(active(a)).toHaveCount(0);
 
   await ctx.close();

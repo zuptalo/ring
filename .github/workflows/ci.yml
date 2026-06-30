@@ -231,7 +231,11 @@ jobs:
           cache-to: type=gha,mode=max
       # Keep the Docker Hub repo's Overview (README + short description) in sync with
       # docs/DOCKERHUB.md on every develop publish, so the listing never drifts.
+      # Best-effort: editing the Hub Overview needs a token scope an image-push PAT lacks
+      # (returns 403 Forbidden), so DON'T fail the whole develop publish on a cosmetic README
+      # sync — the image itself (the step above) is already pushed. Fix the token to re-enable.
       - name: Sync Docker Hub Overview
+        continue-on-error: true
         uses: peter-evans/dockerhub-description@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}

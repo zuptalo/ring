@@ -116,7 +116,9 @@ type InviteStore interface {
 type PostStore interface {
 	CreatePost(ctx context.Context, p store.NewPost) error
 	ListPosts(ctx context.Context, recipient string, sinceMs int64) ([]store.PostForRecipient, error)
-	DeletePost(ctx context.Context, author, id string) error
+	DeletePost(ctx context.Context, author, id string) ([]string, error)
+	KeepAlive(ctx context.Context, author, id string) (bool, error)
+	AddEnvelopes(ctx context.Context, author, postID string, envs []store.NewPostEnvelope) ([]string, error)
 	RemovePostRecipient(ctx context.Context, postID, author, recipient string) (bool, error)
 	ListRevocations(ctx context.Context, recipient string) ([]string, error)
 	RecentPostCount(ctx context.Context, author string, withinSec int) (int, error)
@@ -241,6 +243,8 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	mux.Handle("POST /v1/posts", authMW(http.HandlerFunc(h.createPost)))
 	mux.Handle("GET /v1/posts", authMW(http.HandlerFunc(h.listPosts)))
 	mux.Handle("DELETE /v1/posts/{id}", authMW(http.HandlerFunc(h.deletePost)))
+	mux.Handle("POST /v1/posts/{id}/keepalive", authMW(http.HandlerFunc(h.keepAlivePost)))
+	mux.Handle("POST /v1/posts/{id}/envelopes", authMW(http.HandlerFunc(h.addPostEnvelopes)))
 	mux.Handle("DELETE /v1/posts/{id}/recipient/{userId}", authMW(http.HandlerFunc(h.removePostRecipient)))
 	mux.Handle("POST /v1/posts/{id}/engagement", authMW(http.HandlerFunc(h.submitEngagement)))
 	mux.Handle("GET /v1/posts/{id}/engagement", authMW(http.HandlerFunc(h.listEngagement)))

@@ -128,6 +128,26 @@ export async function deletePost(id: string): Promise<void> {
   if (!res.ok && res.status !== 404) throw new Error(`delete post failed: ${res.status}`);
 }
 
+/** Push one of the caller's own posts' auto-delete back to a full window (author-only). */
+export async function keepAlivePost(id: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(id)}/keepalive`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`extend post failed: ${res.status}`);
+}
+
+/** Broaden one of the caller's own posts' audience by adding recipient key-envelopes
+ *  (author-only). The added recipients get the post silently (no notification). */
+export async function addPostEnvelopes(postId: string, envelopes: PostEnvelopeWire[]): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/envelopes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ envelopes }),
+  });
+  if (!res.ok) throw new Error(`add post envelopes failed: ${res.status}`);
+}
+
 /** Remove one recipient from one of the caller's own posts (author-only). Used when
  *  un-close-friending someone to revoke close-only posts: their key envelope is deleted
  *  and a revocation is recorded so their device prunes the local copy. Idempotent. */

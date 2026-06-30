@@ -452,9 +452,98 @@ func (h *Handlers) deletePost(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if err := h.Posts.DeletePost(r.Context(), uid, id); err != nil {
+	recipients, err := h.Posts.DeletePost(r.Context(), uid, id)
+	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not delete post")
 		return
+	}
+	// Live prune: tell every online recipient to drop its local copy right now (offline ones
+	// catch it via listPosts.revoked on their next sync — the post_deletions tombstone).
+	if h.Hub != nil {
+		if b, err := json.Marshal(map[string]any{"t": "post-revoke", "post": id}); err == nil {
+			for _, rec := range recipients {
+				h.Hub.Send(rec, b)
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// keepAlivePost (author-only) pushes a post's auto-delete back to a full window from now —
+// the explicit "Keep for longer" action. 404 if it isn't the caller's post.
+func (h *Handlers) keepAlivePost(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	id := r.PathValue("id")
+	if !uuidRE.MatchString(id) {
+		httpx.Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	ok, err := h.Posts.KeepAlive(r.Context(), uid, id)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not extend post")
+		return
+	}
+	if !ok {
+		httpx.Error(w, http.StatusNotFound, "post not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// addPostEnvelopes broadens a post's audience (author-only): the client re-wraps K_post to
+// the newly-included friends and posts their envelopes here. Newly-added recipients get a
+// SILENT live delivery (a `post-new` frame with no `from` → the device syncs the post into its
+// feed without a banner) — a visibility change must NOT notify anyone (the explicit ask).
+func (h *Handlers) addPostEnvelopes(w http.ResponseWriter, r *http.Request) {
+	uid, ok := auth.UserID(r.Context())
+	if !ok || uid == "" {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	id := r.PathValue("id")
+	if !uuidRE.MatchString(id) {
+		httpx.Error(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req createPostReq // reuse: it carries Envelopes []{Recipient, WrappedKey}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&req); err != nil ||
+		len(req.Envelopes) == 0 || len(req.Envelopes) > maxPostEnvelopes {
+		httpx.Error(w, http.StatusBadRequest, "invalid envelopes")
+		return
+	}
+	envs := make([]store.NewPostEnvelope, 0, len(req.Envelopes))
+	for _, e := range req.Envelopes {
+		if !uuidRE.MatchString(e.Recipient) || e.Recipient == uid || e.WrappedKey == "" {
+			httpx.Error(w, http.StatusBadRequest, "invalid recipient")
+			return
+		}
+		// Same audience rule as createPost: recipients must be accepted, non-blocked friends.
+		connected, err := h.Connections.Connected(r.Context(), uid, e.Recipient)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "could not verify audience")
+			return
+		}
+		if !connected {
+			httpx.Error(w, http.StatusForbidden, "recipient is not a friend")
+			return
+		}
+		envs = append(envs, store.NewPostEnvelope{Recipient: e.Recipient, WrappedKey: e.WrappedKey})
+	}
+	added, err := h.Posts.AddEnvelopes(r.Context(), uid, id, envs)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "could not update audience")
+		return
+	}
+	if h.Hub != nil {
+		if b, err := json.Marshal(map[string]any{"t": "post-new"}); err == nil {
+			for _, rec := range added {
+				h.Hub.Send(rec, b)
+			}
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -252,6 +252,9 @@ function start(): void {
         await replenishPreKeysIfLow();
       })();
       void runOwnSync(); // back up recovery wrap + sync own data (no-op if locked)
+      // Pull Wall posts on reconnect too (not just messages): a post published — or deleted —
+      // while we were offline is otherwise missed until the next app open / visibility change.
+      if (isUnlocked.value) void syncPosts();
       if (isUnlocked.value) void runInviteSync(); // connect inviter↔invitee on redemption
       if (isUnlocked.value) {
         void refreshBlocks(); // reconcile the local block ledger with the server

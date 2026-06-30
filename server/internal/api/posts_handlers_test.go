@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"ring/server/internal/store"
 	"ring/server/internal/ws"
@@ -171,11 +172,58 @@ func (f *fakePostStore) ListPosts(_ context.Context, recipient string, _ int64) 
 	}
 	return out, nil
 }
-func (f *fakePostStore) DeletePost(_ context.Context, author, id string) error {
-	if p, ok := f.posts[id]; ok && p.Author == author {
-		delete(f.posts, id)
+func (f *fakePostStore) DeletePost(_ context.Context, author, id string) ([]string, error) {
+	p, ok := f.posts[id]
+	if !ok || p.Author != author {
+		return nil, nil
 	}
-	return nil
+	var recipients []string
+	for _, e := range p.Envelopes {
+		recipients = append(recipients, e.Recipient)
+		f.revoked[e.Recipient] = append(f.revoked[e.Recipient], id) // durable deletion tombstone
+	}
+	delete(f.posts, id)
+	return recipients, nil
+}
+func (f *fakePostStore) KeepAlive(_ context.Context, author, id string) (bool, error) {
+	p, ok := f.posts[id]
+	if !ok || p.Author != author {
+		return false, nil
+	}
+	exp := time.Now().Add(time.Duration(p.TtlMs) * time.Millisecond)
+	p.ExpiresAt = &exp
+	f.posts[id] = p
+	return true, nil
+}
+func (f *fakePostStore) AddEnvelopes(_ context.Context, author, postID string, envs []store.NewPostEnvelope) ([]string, error) {
+	p, ok := f.posts[postID]
+	if !ok || p.Author != author {
+		return nil, nil
+	}
+	have := map[string]bool{}
+	for _, e := range p.Envelopes {
+		have[e.Recipient] = true
+	}
+	var added []string
+	for _, e := range envs {
+		if !have[e.Recipient] {
+			p.Envelopes = append(p.Envelopes, e)
+			have[e.Recipient] = true
+			added = append(added, e.Recipient)
+		}
+		// Undo any tombstone for this recipient (broaden-back).
+		if ids := f.revoked[e.Recipient]; len(ids) > 0 {
+			kept := ids[:0:0]
+			for _, rid := range ids {
+				if rid != postID {
+					kept = append(kept, rid)
+				}
+			}
+			f.revoked[e.Recipient] = kept
+		}
+	}
+	f.posts[postID] = p
+	return added, nil
 }
 func (f *fakePostStore) RemovePostRecipient(_ context.Context, postID, author, recipient string) (bool, error) {
 	p, ok := f.posts[postID]
@@ -466,6 +514,102 @@ func TestDeletePostAuthorOnly(t *testing.T) {
 // TestRemovePostRecipientAuthorOnly: dropping a recipient is author-only, removes the
 // post from that recipient's feed, and surfaces in their `revoked` list so an offline
 // device can prune it (the un-close-friend revocation path).
+func TestKeepAlivePostAuthorOnly(t *testing.T) {
+	conn := newFakePostConn()
+	st := newFakePostStore()
+	srv := newPostTestServer(conn, st)
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Bob (not the author) → 404; nothing is extended.
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/keepalive", tokB, ""); rr.Code != http.StatusNotFound {
+		t.Fatalf("non-author keepalive status = %d, want 404", rr.Code)
+	}
+	// Alice (the author) → 204 and the expiry is (re)set.
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/keepalive", tokA, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("author keepalive status = %d, want 204", rr.Code)
+	}
+	if p := st.posts[postID]; p.ExpiresAt == nil {
+		t.Errorf("keepalive did not set the post's expiry")
+	}
+}
+
+func TestDeletePostTombstonesRecipients(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+
+	// Alice deletes her post → 204.
+	if rr := do(t, srv, http.MethodDelete, "/v1/posts/"+postID, tokA, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", rr.Code)
+	}
+
+	// Bob no longer sees it, AND it surfaces in his `revoked` set so an OFFLINE device prunes
+	// its local copy on next sync (the durable tombstone, beyond the live websocket push).
+	rr := do(t, srv, http.MethodGet, "/v1/posts", tokB, "")
+	var resp struct {
+		Posts   []json.RawMessage `json:"posts"`
+		Revoked []string          `json:"revoked"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(resp.Posts) != 0 {
+		t.Errorf("after delete, bob still sees %d posts, want 0", len(resp.Posts))
+	}
+	if len(resp.Revoked) != 1 || resp.Revoked[0] != postID {
+		t.Errorf("revoked = %v, want [%s]", resp.Revoked, postID)
+	}
+}
+
+func TestAddPostEnvelopesBroadensAudience(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	_, bobID, _ := registerNamed(t, srv, "bob")
+	tokC, carolID, _ := registerNamed(t, srv, "carol")
+	conn.befriend(aliceID, bobID)
+	conn.befriend(aliceID, carolID)
+
+	// Alice posts to ONLY bob (a "close friends" audience).
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WKb"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if ids := listPostIDs(t, srv, tokC); len(ids) != 0 {
+		t.Fatalf("carol sees %v before broaden, want []", ids)
+	}
+
+	// Alice broadens the audience to include carol (re-wrapped envelope).
+	add := `{"envelopes":[{"recipient":"` + carolID + `","wrappedKey":"WKc"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/envelopes", tokA, add); rr.Code != http.StatusNoContent {
+		t.Fatalf("add envelopes status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if ids := listPostIDs(t, srv, tokC); len(ids) != 1 || ids[0] != postID {
+		t.Errorf("carol sees %v after broaden, want [%s]", ids, postID)
+	}
+
+	// A non-friend recipient is rejected (same audience rule as createPost).
+	_, eveID, _ := registerNamed(t, srv, "eve")
+	bad := `{"envelopes":[{"recipient":"` + eveID + `","wrappedKey":"WKe"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/envelopes", tokA, bad); rr.Code != http.StatusForbidden {
+		t.Errorf("add non-friend status = %d, want 403", rr.Code)
+	}
+}
+
 func TestRemovePostRecipientAuthorOnly(t *testing.T) {
 	conn := newFakePostConn()
 	srv := newPostTestServer(conn, newFakePostStore())

@@ -52,6 +52,7 @@ import { stopAudio } from '@/composables/useAudioPlayer';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate, checkForUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
+import { takePendingNav } from '@/services/pending-nav';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import type { Message } from '@/db/types';
 
@@ -74,8 +75,15 @@ const router = useRouter();
 watch(
   isUnlocked,
   (unlocked) => {
-    if (unlocked) void warmAll();
-    else {
+    if (unlocked) {
+      void warmAll();
+      // Cold-launched from a notification? The SW stashed where to go (iOS PWAs can't deep-link
+      // via openWindow); now that we're unlocked and the tabs are reachable, route there. The
+      // microtask defer lets the auth gate's default landing settle first so this wins.
+      void takePendingNav().then((url) => {
+        if (url) void routeRelevant(url);
+      });
+    } else {
       clearWarm();
       stopAudio(); // never leave media audio playing once locked / signed out
     }

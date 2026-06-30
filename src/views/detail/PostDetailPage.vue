@@ -32,9 +32,17 @@
              live position counter. Mixed image+video is fine; each slide plays on tap. -->
         <div v-if="albumMedia.length > 1" class="album">
           <div class="album-track" @scroll="onAlbumScroll">
-            <div v-for="(m, i) in albumMedia" :key="i" class="album-slide">
-              <img v-if="m.kind === 'image'" :src="m.url" alt="" />
-              <video v-else :src="m.url" controls playsinline />
+            <!-- Mixed aspect ratios: each item shown whole (contain) with its own blurred
+                 copy filling the letterbox — same treatment as the feed gallery. -->
+            <div v-for="(m, i) in albumMedia" :key="i" class="album-slide" @click="openViewer(i)">
+              <!-- Stills only here (no per-slide <video>): the blurred fill + the item are
+                   images; a video shows its poster + play glyph and plays in the viewer on tap. -->
+              <img class="aslide-fill" :src="m.kind === 'video' ? m.poster : m.url" alt="" aria-hidden="true" />
+              <img v-if="m.kind === 'image'" class="aslide-main" :src="m.url" alt="" />
+              <template v-else>
+                <img class="aslide-main" :src="m.poster" alt="" />
+                <ion-icon class="aslide-play" :icon="playCircleOutline" aria-hidden="true" />
+              </template>
             </div>
           </div>
           <div class="album-count">{{ albumIndex + 1 }} / {{ albumMedia.length }}</div>
@@ -43,9 +51,14 @@
           v-else-if="mediaUrl && (post.kind === 'image' || post.kind === 'video')"
           class="media"
           :style="mediaBoxStyle"
+          @click="openViewer(0)"
         >
           <img v-if="post.kind === 'image'" :src="mediaUrl" :alt="post.body || 'Photo'" />
-          <video v-else :src="mediaUrl" controls playsinline />
+          <template v-else>
+            <img v-if="posterUrl" :src="posterUrl" :alt="post.body || 'Video'" />
+            <div v-else class="media-vid" />
+            <ion-icon class="aslide-play" :icon="playCircleOutline" aria-hidden="true" />
+          </template>
         </div>
         <audio v-else-if="mediaUrl && post.kind === 'voice'" class="vaudio" :src="mediaUrl" controls />
 
@@ -126,11 +139,21 @@
       </div>
       <div v-else class="missing">This post is no longer available.</div>
     </ion-content>
+
+    <!-- Stills in the gallery → full-screen viewer (minimal: just close + react) on tap. -->
+    <media-viewer
+      :open="viewer.open"
+      :items="viewer.items"
+      :start="viewer.start"
+      minimal
+      @close="viewer.open = false"
+      @dismiss="viewer.open = false"
+    />
   </ion-page>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
   IonContent, IonAvatar, IonIcon, IonTextarea, IonList, IonItem, IonLabel,
@@ -138,7 +161,8 @@ import {
   onIonViewWillEnter, onIonViewWillLeave, alertController,
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
-import { trashOutline, happyOutline, timeOutline } from 'ionicons/icons';
+import { trashOutline, happyOutline, timeOutline, playCircleOutline } from 'ionicons/icons';
+import MediaViewer, { type ViewerItem } from '@/components/MediaViewer.vue';
 import { timeLeft, formatPostDateTime } from '@/utils/post-time';
 import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
@@ -166,8 +190,9 @@ const authorName = ref('Unknown');
 const authorAvatar = ref('');
 const authorUsername = ref<string | undefined>(undefined);
 const mediaUrl = ref<string | undefined>(undefined);
+const posterUrl = ref<string | undefined>(undefined); // single-video poster (still shown until tapped)
 // Album posts (FR-019): every media resolved to an object URL, shown as a swipeable gallery.
-const albumMedia = ref<{ url: string; kind: 'image' | 'video' }[]>([]);
+const albumMedia = ref<{ url: string; kind: 'image' | 'video'; poster?: string }[]>([]);
 const albumIndex = ref(0);
 function onAlbumScroll(e: Event): void {
   const el = e.target as HTMLElement;
@@ -212,6 +237,30 @@ async function react(emoji: string): Promise<void> {
       duration: 1600,
     });
   }
+}
+// Full-screen viewer (minimal mode): the gallery shows stills, the clip plays here on tap.
+const viewer = reactive<{ open: boolean; items: ViewerItem[]; start: number }>({ open: false, items: [], start: 0 });
+function openViewer(start: number): void {
+  const list: { url: string; kind: 'image' | 'video'; poster?: string }[] = albumMedia.value.length
+    ? albumMedia.value
+    : mediaUrl.value
+      ? [{ url: mediaUrl.value, kind: post.value?.kind === 'video' ? 'video' : 'image', poster: posterUrl.value }]
+      : [];
+  if (!list.length) return;
+  viewer.items = list.map((m, i) => ({
+    id: `${postId}:${i}`,
+    url: m.url,
+    thumb: (m.kind === 'video' ? m.poster : m.url) ?? m.url,
+    kind: m.kind,
+    caption: post.value?.body ?? '',
+    senderName: authorName.value,
+    when: '',
+    outgoing: post.value?.author === selfId,
+    favorite: false,
+    reactions: [],
+  }));
+  viewer.start = Math.min(start, viewer.items.length - 1);
+  viewer.open = true;
 }
 function openPicker(ev: Event): void {
   const existing = grouped.value.map((g) => g.emoji);
@@ -268,14 +317,24 @@ onIonViewWillEnter(async () => {
   if (!post.value) return;
   const ids = post.value.mediaIds?.length ? post.value.mediaIds : post.value.mediaId ? [post.value.mediaId] : [];
   if (ids.length > 1) {
-    // Album: resolve every item in order for the swipeable gallery.
+    // Album: resolve every item in order for the swipeable gallery. Video slides carry a poster
+    // so the gallery shows a still (no live <video> per slide) and only plays in the viewer.
     for (const id of ids) {
       const md = await getMedia(id);
-      if (md?.blob) albumMedia.value.push({ url: URL.createObjectURL(md.blob), kind: md.kind === 'video' ? 'video' : 'image' });
+      if (!md?.blob) continue;
+      const kind = md.kind === 'video' ? 'video' : 'image';
+      const posterBlob = kind === 'video' ? (md.posterBlob ?? md.posterGrid) : undefined;
+      albumMedia.value.push({
+        url: URL.createObjectURL(md.blob),
+        kind,
+        poster: posterBlob ? URL.createObjectURL(posterBlob) : undefined,
+      });
     }
   } else if (ids.length === 1) {
     const md = await getMedia(ids[0]);
     if (md?.blob) mediaUrl.value = URL.createObjectURL(md.blob);
+    const posterBlob = md?.kind === 'video' ? (md.posterBlob ?? md.posterGrid) : undefined;
+    if (posterBlob) posterUrl.value = URL.createObjectURL(posterBlob);
   }
   if (post.value.author === getSelfUserId()) {
     authorName.value = 'You';
@@ -300,7 +359,14 @@ onIonViewWillLeave(() => {
     URL.revokeObjectURL(mediaUrl.value);
     mediaUrl.value = undefined;
   }
-  for (const m of albumMedia.value) URL.revokeObjectURL(m.url);
+  if (posterUrl.value) {
+    URL.revokeObjectURL(posterUrl.value);
+    posterUrl.value = undefined;
+  }
+  for (const m of albumMedia.value) {
+    URL.revokeObjectURL(m.url);
+    if (m.poster) URL.revokeObjectURL(m.poster);
+  }
   albumMedia.value = [];
 });
 
@@ -372,12 +438,18 @@ async function confirmDelete(): Promise<void> {
   font-size: 13px;
 }
 .media {
+  position: relative;
   margin: 16px 0 0;
   width: 100%;
   max-height: 70vh;
   border-radius: 14px;
   overflow: hidden;
   background: #000;
+}
+.media-vid {
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  background: #1c1c1c;
 }
 .media img,
 .media video {
@@ -399,21 +471,47 @@ async function confirmDelete(): Promise<void> {
   border-radius: 14px;
   background: #000;
   scrollbar-width: none;
+  /* One stable frame for the whole mixed-aspect album (4:5, capped to most of the screen). */
+  aspect-ratio: 4 / 5;
+  max-height: 74vh;
 }
 .album-track::-webkit-scrollbar {
   display: none;
 }
 .album-slide {
+  position: relative;
   flex: 0 0 100%;
+  height: 100%;
   scroll-snap-align: center;
+  overflow: hidden;
 }
-.album-slide img,
-.album-slide video {
+/* Blurred, zoomed copy fills the letterbox; the item itself is shown whole (contain). */
+.aslide-fill {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  max-height: 70vh;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.15);
+  filter: blur(22px) brightness(0.85) saturate(1.1);
+}
+.aslide-main {
+  position: relative;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   display: block;
-  background: #000;
+}
+.aslide-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 56px;
+  color: rgba(255, 255, 255, 0.92);
+  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.55));
+  pointer-events: none;
+  z-index: 2;
 }
 .album-count {
   position: absolute;

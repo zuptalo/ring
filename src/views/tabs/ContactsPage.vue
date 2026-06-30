@@ -19,6 +19,11 @@
     </ion-header>
 
     <ion-content :fullscreen="true">
+      <!-- Pull down to refresh: re-pull pending/accepted connection state AND any friend's
+           latest name/avatar from the directory (changes otherwise only land opportunistically). -->
+      <ion-refresher slot="fixed" @ion-refresh="onPullRefresh">
+        <ion-refresher-content pulling-text="Pull to refresh requests &amp; friends" refreshing-text="Refreshing…" />
+      </ion-refresher>
       <ion-header collapse="condense">
         <ion-toolbar>
           <ion-title size="large">Contacts</ion-title>
@@ -192,9 +197,11 @@ import {
   IonItemDivider, IonAvatar, IonLabel, IonNote,
   IonInfiniteScroll, IonInfiniteScrollContent,
   IonItemSliding, IonItemOptions, IonItemOption,
+  IonRefresher, IonRefresherContent,
   actionSheetController, alertController, onIonViewWillEnter,
 } from '@ionic/vue';
-import type { InfiniteScrollCustomEvent } from '@ionic/vue';
+import type { InfiniteScrollCustomEvent, RefresherCustomEvent } from '@ionic/vue';
+import { refreshContactProfiles } from '@/services/directory';
 import { personAddOutline, trashOutline, ellipsisHorizontal, compassOutline, banOutline } from 'ionicons/icons';
 import {
   incomingRequests, outgoingRequests, acceptConnect, rejectConnect, withdrawConnect, refreshConnections,
@@ -217,6 +224,16 @@ import { peerPresence } from '@/composables/usePresence';
 
 const PAGE = 15;
 const router = useRouter();
+
+// Pull-to-refresh: re-pull connection state (pending/accepted requests) and refresh every
+// friend's name/avatar from the directory, in parallel; release when both settle.
+async function onPullRefresh(e: RefresherCustomEvent): Promise<void> {
+  try {
+    await Promise.all([refreshConnections(), refreshContactProfiles()]);
+  } finally {
+    void e.detail.complete();
+  }
+}
 const open = (id: string) => router.push(`/contact/${id}`);
 const removeContact = async (id: string): Promise<void> => {
   try {

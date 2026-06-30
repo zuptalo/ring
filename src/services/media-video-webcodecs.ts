@@ -80,7 +80,11 @@ function audioSpecificConfig(file: any, trackId: number): Uint8Array | undefined
     while (stack.length) {
       const node = stack.shift();
       if (!node) continue;
-      if (node.data) return new Uint8Array(node.data);
+      // A valid AudioSpecificConfig is ≥2 bytes. Some containers nest a stray 1-byte
+      // descriptor (e.g. an SLConfig) ahead of the real DecoderSpecificInfo, so skip
+      // too-short `.data` and keep walking — returning it would mux a broken (silent)
+      // track. If nothing valid is found we fall back to a synthesized ASC.
+      if (node.data && node.data.length >= 2) return new Uint8Array(node.data);
       if (Array.isArray(node.descs)) stack.push(...node.descs);
     }
     return undefined;

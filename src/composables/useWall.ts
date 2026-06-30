@@ -6,10 +6,12 @@
  * "disappears in …" countdowns fresh. Ordering is by last activity (queries side), so
  * new posts and newly-interacted posts both rise to the top.
  */
-import { computed, ref, watch, onUnmounted } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useSelfProfile } from '@/composables/useSelfProfile';
-import { listWallPosts, listContacts, listAllPostEngagement, getMedia, getWallMutedUsers } from '@/db/queries';
+import { listWallPosts, listContacts, listAllPostEngagement, getMedia, getWallMutedUsers, syncPosts } from '@/db/queries';
+import { wallSyncedOnce } from '@/services/wall-load';
+import { stopIfPlaying } from '@/composables/useAudioPlayer';
 import { getSelfUserId } from '@/services/auth';
 import type { Post, Contact, PostEngagement } from '@/db/types';
 
@@ -34,6 +36,7 @@ export interface WallPost extends Post {
   muted: boolean; // author's Wall notifications are muted
   mediaUrl?: string; // full-resolution blob (video src; image fallback) — may be absent
   posterUrl?: string; // small poster tier — shows instantly so the feed never blanks (US1)
+  album?: { url: string; kind: 'image' | 'video' | 'voice'; poster?: string }[]; // all media, for the inline feed gallery
   reactions: ReactionGroup[];
   myEmojis: string[];
   comments: CommentView[];
@@ -60,38 +63,102 @@ export function useWall() {
   // full blob (the video src; the image fallback when there's no poster).
   const mediaUrls = ref<Record<string, string>>({});
   const posterUrls = ref<Record<string, string>>({});
+  // For ALBUM posts (FR-019): every media resolved in order, so the feed can swipe the whole
+  // gallery inline without diving into the post.
+  const albumUrls = ref<Record<string, { url: string; kind: 'image' | 'video' | 'voice'; poster?: string }[]>>({});
+  // `updatedAt` is in the key so a background-downloaded blob (which touches the post) re-runs
+  // resolution — the post is on the Wall instantly via its poster, and each blob fills in after.
   watch(
-    () => posts.value.map((p) => `${p.id}:${p.mediaId ?? ''}`).join('|'),
+    () => posts.value.map((p) => `${p.id}:${p.mediaId ?? ''}:${p.mediaIds?.length ?? 0}:${p.updatedAt}`).join('|'),
     async () => {
       const nextMedia: Record<string, string> = {};
       const nextPoster: Record<string, string> = {};
+      const nextAlbum: Record<string, { url: string; kind: 'image' | 'video' | 'voice'; poster?: string }[]> = {};
       for (const p of posts.value) {
         if (!p.mediaId) continue;
-        // Reuse already-resolved URLs (both tiers were resolved together on a prior pass).
-        if (mediaUrls.value[p.id] || posterUrls.value[p.id]) {
-          if (mediaUrls.value[p.id]) nextMedia[p.id] = mediaUrls.value[p.id];
+        // Cover: reuse the full media URL once resolved; otherwise re-resolve so a freshly
+        // downloaded blob is picked up. The poster is reused if already created.
+        if (mediaUrls.value[p.id]) {
+          nextMedia[p.id] = mediaUrls.value[p.id];
           if (posterUrls.value[p.id]) nextPoster[p.id] = posterUrls.value[p.id];
-          continue;
+        } else {
+          const md = await getMedia(p.mediaId);
+          if (md?.blob) nextMedia[p.id] = URL.createObjectURL(md.blob);
+          if (posterUrls.value[p.id]) nextPoster[p.id] = posterUrls.value[p.id];
+          else {
+            const poster = md?.posterBlob ?? md?.posterGrid;
+            if (poster) nextPoster[p.id] = URL.createObjectURL(poster);
+          }
         }
-        const md = await getMedia(p.mediaId);
-        if (md?.blob) nextMedia[p.id] = URL.createObjectURL(md.blob);
-        const poster = md?.posterBlob ?? md?.posterGrid;
-        if (poster) nextPoster[p.id] = URL.createObjectURL(poster);
+        // Album (2+ items): reuse when every item already has its full blob; otherwise resolve
+        // per-item — keep an item that already has a URL (so a playing clip isn't recreated) and
+        // resolve the rest, rendering from the poster (empty url) while the blob streams in.
+        if (p.mediaIds && p.mediaIds.length > 1) {
+          const prev = albumUrls.value[p.id];
+          if (prev && prev.length === p.mediaIds.length && prev.every((it) => it.url)) {
+            nextAlbum[p.id] = prev;
+          } else {
+            const items: { url: string; kind: 'image' | 'video' | 'voice'; poster?: string }[] = [];
+            for (let k = 0; k < p.mediaIds.length; k++) {
+              const cached = prev?.[k];
+              if (cached?.url) {
+                items.push(cached);
+                continue;
+              }
+              const md = await getMedia(p.mediaIds[k]);
+              if (!md) continue;
+              const kind = md.kind === 'video' ? 'video' : md.kind === 'voice' ? 'voice' : 'image';
+              const posterBlob = kind === 'video' ? (md.posterBlob ?? md.posterGrid) : undefined;
+              items.push({
+                url: md.blob ? URL.createObjectURL(md.blob) : '',
+                kind,
+                poster: cached?.poster ?? (posterBlob ? URL.createObjectURL(posterBlob) : undefined),
+              });
+            }
+            if (items.length) nextAlbum[p.id] = items;
+          }
+        }
       }
-      for (const [pid, url] of Object.entries(mediaUrls.value)) {
-        if (nextMedia[pid] !== url) URL.revokeObjectURL(url);
-      }
-      for (const [pid, url] of Object.entries(posterUrls.value)) {
-        if (nextPoster[pid] !== url) URL.revokeObjectURL(url);
-      }
+      // Revoke per-URL (not per-post), so URLs reused above survive while truly-dropped ones go.
+      const live = new Set<string>();
+      for (const u of Object.values(nextMedia)) live.add(u);
+      for (const u of Object.values(nextPoster)) live.add(u);
+      for (const items of Object.values(nextAlbum))
+        for (const it of items) {
+          if (it.url) live.add(it.url);
+          if (it.poster) live.add(it.poster);
+        }
+      // If a URL we're about to revoke is the one the floating audio player is playing (e.g. a
+      // voice post just got deleted/expired mid-playback), stop + dismiss the player first so it
+      // doesn't linger over a dead blob.
+      for (const u of Object.values(mediaUrls.value))
+        if (!live.has(u)) {
+          stopIfPlaying(u);
+          URL.revokeObjectURL(u);
+        }
+      for (const u of Object.values(posterUrls.value)) if (!live.has(u)) URL.revokeObjectURL(u);
+      for (const items of Object.values(albumUrls.value))
+        for (const it of items) {
+          if (it.url && !live.has(it.url)) {
+            stopIfPlaying(it.url);
+            URL.revokeObjectURL(it.url);
+          }
+          if (it.poster && !live.has(it.poster)) URL.revokeObjectURL(it.poster);
+        }
       mediaUrls.value = nextMedia;
       posterUrls.value = nextPoster;
+      albumUrls.value = nextAlbum;
     },
     { immediate: true },
   );
   onUnmounted(() => {
     for (const url of Object.values(mediaUrls.value)) URL.revokeObjectURL(url);
     for (const url of Object.values(posterUrls.value)) URL.revokeObjectURL(url);
+    for (const items of Object.values(albumUrls.value))
+      for (const it of items) {
+        URL.revokeObjectURL(it.url);
+        if (it.poster) URL.revokeObjectURL(it.poster);
+      }
   });
 
   const wall = computed<WallPost[]>(() => {
@@ -144,6 +211,7 @@ export function useWall() {
         muted: !!mutedUsers.value[p.author],
         mediaUrl: mediaUrls.value[p.id],
         posterUrl: posterUrls.value[p.id],
+        album: albumUrls.value[p.id],
         reactions,
         myEmojis,
         comments,
@@ -152,7 +220,27 @@ export function useWall() {
     });
   });
 
+  // Pull from the server whenever the Wall is opened (cursor-based, so it only fetches what's
+  // new). This also guarantees `wallSyncedOnce` flips — dropping the first-load spinner — even
+  // if the global sync loop hasn't fired yet for this session.
+  let firstSyncFailsafe: number | undefined;
+  onMounted(() => {
+    void syncPosts();
+    // Failsafe so the loader can NEVER spin forever: syncPosts flips `wallSyncedOnce` in its
+    // finally, but it early-returns (skipping that) while the keystore is still settling at
+    // mount, and a request can also stall. After a short grace period, resolve the spinner
+    // regardless — any real posts still stream in via the live query once a sync lands.
+    firstSyncFailsafe = window.setTimeout(() => {
+      wallSyncedOnce.value = true;
+    }, 5000);
+  });
+  onUnmounted(() => {
+    if (firstSyncFailsafe) clearTimeout(firstSyncFailsafe);
+  });
+
   // `loaded` flips true after the first query resolves, so the UI can avoid flashing
-  // the empty state / "New post" button before posts have loaded.
-  return { wall, now, loaded: posts.loaded };
+  // the empty state / "New post" button before posts have loaded. `synced` flips true after
+  // the first server sync attempt — distinguishing "still pulling" (spinner) from "really
+  // empty" (the empty state) on a fresh device.
+  return { wall, now, loaded: posts.loaded, synced: wallSyncedOnce };
 }
