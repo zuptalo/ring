@@ -99,12 +99,12 @@ async function uploadOne(id: string): Promise<void> {
 function friendlyError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err ?? '');
   if (/quota|storage|exceeded|QuotaExceeded/i.test(msg) || (err as { name?: string })?.name === 'QuotaExceededError') {
-    return 'Not enough storage — free up space and retry.';
+    return 'Not enough storage. Free up space and try again.';
   }
   if (/network|fetch|offline|timeout|Failed to fetch/i.test(msg)) {
-    return "Couldn't reach the server — check your connection and retry.";
+    return "Couldn't reach the server. Check your connection and try again.";
   }
-  return 'Upload failed — tap retry.';
+  return 'Upload failed. Tap Retry to try again.';
 }
 
 /** Re-arm a failed post for another drain pass (user tapped Retry). Resets the attempt budget so a

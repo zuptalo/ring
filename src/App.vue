@@ -86,8 +86,8 @@ watch(
           void appToast({
             message:
               discarded === 1
-                ? 'A post didn’t finish because the app closed — please share it again.'
-                : `${discarded} posts didn’t finish because the app closed — please share them again.`,
+                ? 'A post didn’t finish because the app closed. Please share it again.'
+                : `${discarded} posts didn’t finish because the app closed. Please share them again.`,
             duration: 3200,
           });
         }
