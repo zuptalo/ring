@@ -40,9 +40,9 @@ appear, Retry re-sends only unconfirmed, Cancel removes record+blobs; remove the
 post still completes.
 
 - [ ] T011 [US2] e2e (failing first): kill mid-upload → reopen auto-retries once and finishes; forced failure surfaces Retry/Cancel; Retry resumes only unconfirmed items; Cancel removes; source-removal-after-Share still completes — extend `e2e/resilient-posting.spec.ts`
-- [ ] T012 [US2] `resumeOutboxOnStart()` (auto-retry each interrupted post once, guarded by `attempts`; then mark `failed`) in `src/services/outbox.ts`; call on keystore unlock in `src/App.vue` (the `isUnlocked` watcher)
-- [ ] T013 [US2] Retry/Cancel affordances on `failed` pending posts (stock `ion-button`) with `retryOutboxPost`/`cancelOutboxPost` wired, in `src/views/tabs/WallPage.vue`
-- [ ] T014 [US2] Storage-exhaustion + network failures set `status='failed'` + `error` (free-space hint) without partial posts, in `src/services/outbox.ts`
+- [X] T012 [US2] `resumeOutboxOnStart()` (auto-retry each interrupted post once, guarded by `attempts`; then mark `failed`) in `src/services/outbox.ts`; call on keystore unlock in `src/App.vue` (the `isUnlocked` watcher)
+- [X] T013 [US2] Retry/Cancel affordances on `failed` pending posts (stock `ion-button`) with `retryOutboxPost`/`cancelOutboxPost` wired, in `src/views/tabs/WallPage.vue`
+- [X] T014 [US2] Storage-exhaustion + network failures set `status='failed'` + `error` (free-space hint) without partial posts, in `src/services/outbox.ts`
 
 ## Phase 5 — User Story 3: Warned before running out of space (P2)
 
@@ -51,10 +51,10 @@ never start a half-finished share.
 
 **Independent test**: Simulate low free space → select a large batch → up-front warning, no encode begins.
 
-- [ ] T015 [P] [US3] Unit test: `hasRoomFor` returns false when `free < bytes×2.5` (floor 50 MB); returns true (best-effort) when `navigator.storage.estimate` is absent — in `src/services/storage-estimate.test.ts`
+- [X] T015 [P] [US3] Unit test: `hasRoomFor` returns false when `free < bytes×2.5` (floor 50 MB); returns true (best-effort) when `navigator.storage.estimate` is absent — in `src/services/storage-estimate.test.ts`
 - [ ] T016 [US3] e2e: low free space → up-front warning + no encode/stage starts — extend `e2e/resilient-posting.spec.ts`
-- [ ] T017 [P] [US3] `hasRoomFor(bytes)` via `navigator.storage.estimate()` in `src/services/storage-estimate.ts`
-- [ ] T018 [US3] Guard media selection (warn + abort) in `src/views/detail/PostComposerPage.vue` and the chat media picker in `src/views/detail/ChatDetailPage.vue`
+- [X] T017 [P] [US3] `hasRoomFor(bytes)` via `navigator.storage.estimate()` in `src/services/storage-estimate.ts`
+- [X] T018 [US3] Guard media selection (warn + abort) in `src/views/detail/PostComposerPage.vue` and the chat media picker in `src/views/detail/ChatDetailPage.vue`
 
 ## Phase 6 — Polish & cross-cutting
 

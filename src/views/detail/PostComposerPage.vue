@@ -136,6 +136,7 @@ import { imageOutline, closeOutline, micOutline, playCircle } from 'ionicons/ico
 import { vEnterSend } from '@/directives/enter-send';
 import { enqueuePendingPost, type PostLifetime } from '@/db/queries';
 import { kickPendingPosts } from '@/services/pending-posts';
+import { hasRoomFor } from '@/services/storage-estimate';
 import { generateVideoPoster } from '@/utils/media-meta';
 import { playAudio, stopIfPlaying } from '@/composables/useAudioPlayer';
 import { appToast } from '@/services/toast';
@@ -191,14 +192,22 @@ function onLifetime(e: CustomEvent): void {
 function pickMedia(): void {
   fileInput.value?.click();
 }
-function onFile(e: Event): void {
+async function onFile(e: Event): Promise<void> {
   // Picking several photos/videos stages them all → one album on Send. Voice clips mix in as
   // their own items now, so we just APPEND — never clear what's already staged. Cap at MAX_MEDIA.
   const picked = Array.from((e.target as HTMLInputElement).files ?? []);
   const room = MAX_MEDIA - mediaItems.value.length;
   const files = picked.slice(0, Math.max(0, room));
+  if (fileInput.value) fileInput.value.value = '';
   if (picked.length > files.length) {
     void appToast(`You can share up to ${MAX_MEDIA} items in one post.`);
+  }
+  // Spec 1024 (US3): the outbox caches these blobs plaintext until the upload confirms. Refuse the
+  // pick up front if the device clearly can't stage them, so we fail loudly here instead of mid-upload.
+  const incoming = files.reduce((n, f) => n + f.size, 0);
+  if (!(await hasRoomFor(incoming))) {
+    void appToast('Not enough storage on this device — free up space and try again.');
+    return;
   }
   for (const f of files) {
     const url = URL.createObjectURL(f);
@@ -220,7 +229,6 @@ function onFile(e: Event): void {
         });
     }
   }
-  if (fileInput.value) fileInput.value.value = '';
 }
 function removeMedia(i: number): void {
   const [gone] = mediaItems.value.splice(i, 1);

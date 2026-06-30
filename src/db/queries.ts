@@ -2180,6 +2180,9 @@ export async function createPost(opts: {
   body?: string;
   audience: 'friends' | 'close';
   lifetime: PostLifetime;
+  // Spec 1024: a stable post id supplied by the outbox worker so a retry is idempotent — the same
+  // id overwrites the local post and the server upserts it, instead of creating a duplicate.
+  id?: string;
   // Optional attachment(s). A single item is an ordinary media post; an array of 2+
   // image/video items is an ALBUM post (spec 1022, FR-019) — every item is compressed to
   // the chosen quality, encrypted + uploaded, and all the media-refs ride sealed inside
@@ -2288,7 +2291,7 @@ export async function createPost(opts: {
 
   const built = buildPost(payload, audience);
   const blobId = await uploadBlob(new Blob([built.blob as BlobPart]));
-  const id = uid();
+  const id = opts.id ?? uid();
   const createdAt = now();
   // The chosen window (1h/24h/72h), capped at 72h. Keep-alive later resets the expiry
   // to now + this same window on each interaction.
