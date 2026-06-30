@@ -36,7 +36,7 @@ import type {
 } from '@/services/crypto/message';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost,
 } from './types';
 
 // WhatsApp-style cap on pinned chats.
@@ -2315,6 +2315,74 @@ export async function createPost(opts: {
   };
   await put<Post>('posts', post);
   return post;
+}
+
+// ---- spec 1024: resilient-posting outbox (`pendingPosts` store) ----
+
+/** Cache the staged media + metadata as a pending post and return its id. The composer dismisses
+ *  the moment this resolves; the upload worker (services/pending-posts) drains it in the
+ *  background. The blobs are the app's OWN cached copies, so removing the source can't break it. */
+export async function enqueuePendingPost(input: {
+  target: 'wall' | 'chat';
+  chatId?: string;
+  body: string;
+  audience?: 'friends' | 'close';
+  lifetime?: PostLifetime;
+  items: {
+    blob: Blob;
+    kind: 'image' | 'video' | 'voice';
+    name: string;
+    mime: string;
+    durationSec?: number;
+    width?: number;
+    height?: number;
+    poster?: string;
+  }[];
+}): Promise<string> {
+  const id = uid();
+  const rec: OutboxPost = {
+    id,
+    target: input.target,
+    chatId: input.chatId,
+    body: input.body,
+    audience: input.audience,
+    lifetime: input.lifetime,
+    items: input.items.map((it) => ({
+      localId: uid(),
+      blob: it.blob,
+      kind: it.kind,
+      name: it.name,
+      mime: it.mime,
+      durationSec: it.durationSec,
+      width: it.width,
+      height: it.height,
+      poster: it.poster,
+      progress: 0,
+    })),
+    status: 'uploading',
+    attempts: 0,
+    createdLocally: now(),
+    updatedAt: now(),
+  };
+  await put<OutboxPost>('pendingPosts', rec);
+  return id;
+}
+
+export async function listPendingPosts(): Promise<OutboxPost[]> {
+  const all = await getAll<OutboxPost>('pendingPosts');
+  return all.sort((a, b) => a.createdLocally - b.createdLocally);
+}
+
+export async function getPendingPost(id: string): Promise<OutboxPost | undefined> {
+  return get<OutboxPost>('pendingPosts', id);
+}
+
+export async function updatePendingPost(rec: OutboxPost): Promise<void> {
+  await put<OutboxPost>('pendingPosts', { ...rec, updatedAt: now() });
+}
+
+export async function deletePendingPost(id: string): Promise<void> {
+  await remove('pendingPosts', id);
 }
 
 // Persist a single received post: unwrap K_post with our identity key, open the

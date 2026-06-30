@@ -36,20 +36,42 @@
       </ion-header>
 
       <!-- Fresh device, nothing local yet AND the first server sync hasn't returned → show a
-           loader instead of the "No posts yet" empty state (which would flash misleadingly). -->
-      <div v-if="loaded && !wall.length && !synced" class="empty">
+           loader instead of the "No posts yet" empty state (which would flash misleadingly).
+           A pending (uploading) post counts as content, so the empty/loader states yield to it. -->
+      <div v-if="loaded && !wall.length && !synced && !pending.length" class="empty">
         <ion-spinner name="crescent" />
         <p>Loading your Wall…</p>
       </div>
-      <div v-else-if="loaded && !wall.length && synced" class="empty">
+      <div v-else-if="loaded && !wall.length && synced && !pending.length" class="empty">
         <ion-icon :icon="sparklesOutline" />
         <p>No posts yet. Share a moment with your friends.</p>
         <ion-button fill="solid" @click="compose">New post</ion-button>
       </div>
 
-      <div v-if="loaded && wall.length && !filteredWall.length" class="empty">
+      <div v-if="loaded && wall.length && !filteredWall.length && !pending.length" class="empty">
         <p>No posts match “{{ search }}”.</p>
       </div>
+
+      <!-- Spec 1024: posts still uploading. The composer dismissed immediately; the worker
+           finishes them in the background and each becomes a real post on confirmation. -->
+      <ion-item v-for="pp in pending" :key="pp.id" lines="none" class="postitem">
+        <div class="post pending-post">
+          <div class="phead">
+            <ion-avatar class="avatar"><div class="ph">{{ initial('You') }}</div></ion-avatar>
+            <div class="who">
+              <div class="name">You</div>
+              <div class="sub">{{ pp.status === 'failed' ? 'Couldn’t post — will retry' : 'Posting…' }}</div>
+            </div>
+            <ion-spinner v-if="pp.status === 'uploading'" name="crescent" class="pspin" />
+          </div>
+          <p v-if="pp.body" class="body"><EmojiText :text="pp.body" /></p>
+          <ion-progress-bar v-if="pp.status === 'uploading'" :value="pp.progress" class="pbar" />
+          <p class="pending-note">
+            {{ pp.count ? pp.count + (pp.count > 1 ? ' items' : ' item') : 'Text post' }} ·
+            {{ pp.status === 'failed' ? (pp.error || 'Failed') : Math.round(pp.progress * 100) + '%' }}
+          </p>
+        </div>
+      </ion-item>
 
       <!-- Each post is a sliding item: swipe LEFT to delete your own post (or hide
            someone else's), swipe RIGHT to mute/unmute their Wall notifications. -->
@@ -257,7 +279,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,
-  IonItem, IonAvatar, IonIcon, IonTextarea, IonSearchbar, IonSpinner,
+  IonItem, IonAvatar, IonIcon, IonTextarea, IonSearchbar, IonSpinner, IonProgressBar,
   IonRefresher, IonRefresherContent,
   actionSheetController, alertController,
   onIonViewWillEnter, onIonViewWillLeave,
@@ -278,6 +300,7 @@ import { suspendAutoplay } from '@/directives/autoplay-visible';
 import WallVideo from '@/components/WallVideo.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
 import { useWall, type WallPost } from '@/composables/useWall';
+import { usePendingPosts } from '@/composables/usePendingPosts';
 import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
   reactToPost, commentOnPost, deletePost, keepAlivePost, setPostAudience,
@@ -289,6 +312,7 @@ import { timeLeft, ago } from '@/utils/post-time';
 
 const router = useRouter();
 const { wall, now, loaded, synced } = useWall();
+const { pending } = usePendingPosts();
 
 // Pull-to-refresh: re-pull the feed (new posts stream in via the live query) and release the
 // control when the sync settles.
@@ -626,6 +650,27 @@ ion-item-sliding ion-item-option {
   align-items: center;
   gap: 10px;
   padding: 12px 14px 8px;
+}
+/* Spec 1024: pending (uploading) post card — the green card with a progress bar while the worker
+   finishes it; flips to a real post on confirmation. */
+.pending-post {
+  padding-bottom: 10px;
+}
+.pspin {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  color: var(--ion-color-primary);
+}
+.pbar {
+  margin: 6px 14px 4px;
+  border-radius: 3px;
+  --progress-background: var(--ion-color-primary);
+}
+.pending-note {
+  font-size: 12px;
+  color: var(--app-text-muted, #8e8e93);
+  margin: 2px 14px 0;
 }
 .avatar {
   width: 40px;

@@ -13,8 +13,8 @@ feature; server untouched. `[P]` = parallelizable (different files, no incomplet
 ## Phase 2 — Foundational (blocking prerequisites for all stories)
 
 - [ ] T003 [P] Outbox unit tests (vitest) — enqueue persists record+blobs; `listOutbox` ordering; per-item `blobId` confirmation gating; cleanup deletes record+blobs — in `src/db/outbox.test.ts`
-- [ ] T004 Outbox CRUD in `src/db/queries.ts`: `enqueueOutboxPost`, `listOutbox`, `getOutbox`, `updateOutboxItem`, `deleteOutbox` (writes via the change-bus)
-- [ ] T005 `useOutbox` composable (reactive pending list via `useLiveQuery('outbox')`) in `src/composables/useOutbox.ts`
+- [X] T004 Outbox CRUD in `src/db/queries.ts`: `enqueueOutboxPost`, `listOutbox`, `getOutbox`, `updateOutboxItem`, `deleteOutbox` (writes via the change-bus)
+- [X] T005 `useOutbox` composable (reactive pending list via `useLiveQuery('outbox')`) in `src/composables/useOutbox.ts`
 
 ## Phase 3 — User Story 1: Share and move on; the post finishes itself (P1) 🎯 MVP
 
@@ -25,10 +25,10 @@ finalizes to a real post (createdAt at confirmation) without blocking the user.
 becomes a normal post with a fresh countdown only after all items upload.
 
 - [ ] T006 [US1] e2e (failing first): share → composer dismisses immediately; `.outbox-pending` card with `ion-progress-bar` at top of Wall; finalizes to a real post whose `createdAt` ≈ confirm time — in `e2e/resilient-posting.spec.ts`
-- [ ] T007 [US1] Upload worker `drainOutbox()` in `src/services/outbox.ts`: per item → encode/resize (reuse `media-video`/compress) → `uploadBlob` → set `item.blobId` (skip already-confirmed); when all confirmed → seal + `createPost` → on 2xx write the real `Post` (`createdAt=now`) and delete the outbox row + every `item.blob`
-- [ ] T008 [US1] Composer Share handler → `enqueueOutboxPost(...)` then dismiss immediately (no awaiting encode/upload) in `src/views/detail/PostComposerPage.vue`
-- [ ] T009 [US1] Render pending Wall posts at the top (thumbnails + `ion-progress-bar` + per-item state); merge outbox items into the feed in `src/composables/useWall.ts` + `src/views/tabs/WallPage.vue`
-- [ ] T010 [US1] Kick `drainOutbox()` on enqueue and on reconnect/`online` (wire alongside `useSync`) in `src/services/outbox.ts` + `src/composables/useSync.ts`
+- [X] T007 [US1] Upload worker `drainOutbox()` in `src/services/outbox.ts`: per item → encode/resize (reuse `media-video`/compress) → `uploadBlob` → set `item.blobId` (skip already-confirmed); when all confirmed → seal + `createPost` → on 2xx write the real `Post` (`createdAt=now`) and delete the outbox row + every `item.blob`
+- [X] T008 [US1] Composer Share handler → `enqueueOutboxPost(...)` then dismiss immediately (no awaiting encode/upload) in `src/views/detail/PostComposerPage.vue`
+- [X] T009 [US1] Render pending Wall posts at the top (thumbnails + `ion-progress-bar` + per-item state); merge outbox items into the feed in `src/composables/useWall.ts` + `src/views/tabs/WallPage.vue`
+- [X] T010 [US1] Kick `drainOutbox()` on enqueue and on reconnect/`online` (wire alongside `useSync`) in `src/services/outbox.ts` + `src/composables/useSync.ts`
 
 ## Phase 4 — User Story 2: Pick up where it left off after the app closes (P1)
 

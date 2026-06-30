@@ -26,16 +26,6 @@
         @ion-input="onInput"
       />
 
-      <!-- While sharing media: a real progress bar (encode % then upload %) so a video
-           post isn't just a frozen, unexplained wait. -->
-      <div v-if="sharing && mediaItems.length" class="share-progress">
-        <ion-progress-bar
-          :type="progress ? 'determinate' : 'indeterminate'"
-          :value="progress?.value ?? 0"
-        />
-        <span class="share-label">{{ progressLabel }}</span>
-      </div>
-
       <!-- Media staging (FR-019): photos, videos AND voice clips compose ONE post as a row of
            reorderable thumbnails (their order is the album order). Voice mixes in like any other
            item — record it and it joins the row; tap its ▶ to review it through the same player
@@ -139,12 +129,13 @@ import { computed, ref, onMounted, onUnmounted } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
   IonContent, IonTextarea, IonList, IonListHeader, IonItem, IonSegment, IonSegmentButton,
-  IonLabel, IonIcon, IonProgressBar, IonSpinner, alertController,
+  IonLabel, IonIcon, IonSpinner, alertController,
 } from '@ionic/vue';
 import { useRouter } from 'vue-router';
 import { imageOutline, closeOutline, micOutline, playCircle } from 'ionicons/icons';
 import { vEnterSend } from '@/directives/enter-send';
-import { createPost, type PostLifetime } from '@/db/queries';
+import { enqueuePendingPost, type PostLifetime } from '@/db/queries';
+import { kickPendingPosts } from '@/services/pending-posts';
 import { generateVideoPoster } from '@/utils/media-meta';
 import { playAudio, stopIfPlaying } from '@/composables/useAudioPlayer';
 import { appToast } from '@/services/toast';
@@ -153,17 +144,7 @@ const router = useRouter();
 const body = ref('');
 const audience = ref<'friends' | 'close'>('friends');
 const lifetime = ref<PostLifetime>('72h');
-const sharing = ref(false);
-// Encode/upload progress while a post with media is being shared (drives the progress bar).
-const progress = ref<{ phase: 'encoding' | 'uploading'; index: number; total: number; value: number } | null>(null);
-let lastProgressTs = 0; // throttle progress re-renders so they don't starve the encoder
-const progressLabel = computed(() => {
-  const p = progress.value;
-  if (!p) return 'Sharing…';
-  const which = p.total > 1 ? ` ${p.index + 1}/${p.total}` : '';
-  const pct = Math.round((p.value ?? 0) * 100);
-  return p.phase === 'encoding' ? `Processing${which}… ${pct}%` : `Uploading${which}… ${pct}%`;
-});
+const sharing = ref(false); // true only during the brief enqueue, before the composer dismisses
 
 // Staged attachments. Several photos/videos compose an ALBUM post (spec 1022, FR-019); a
 // recorded voice clip is always on its own. Object URLs back the previews, revoked on
@@ -416,35 +397,25 @@ onUnmounted(() => {
 async function share(): Promise<void> {
   if (!canShare.value || sharing.value) return;
   sharing.value = true;
-  progress.value = mediaItems.value.length ? { phase: 'encoding', index: 0, total: mediaItems.value.length, value: 0 } : null;
   try {
-    await createPost({
+    // Spec 1024: cache the staged media into the outbox and DISMISS immediately — the upload
+    // worker finishes it in the background and the Wall shows a pending card with progress.
+    // HD-only on the Wall (spec 1022, FR-020): every post ships at HD.
+    await enqueuePendingPost({
+      target: 'wall',
       body: body.value,
       audience: audience.value,
       lifetime: lifetime.value,
-      // HD-only on the Wall (spec 1022, FR-020): no quality choice — every post ships at HD.
-      // One item → a single-media post; several photos/videos → an album (FR-019).
-      media: mediaItems.value.length
-        ? mediaItems.value.map((m) => ({
-            blob: m.blob,
-            kind: m.kind,
-            name: m.name,
-            durationSec: m.durationSec,
-            quality: 'hd' as const,
-          }))
-        : undefined,
-      onProgress: (p) => {
-        // Throttle: a per-frame bar update during video encoding starves the (main-thread)
-        // encoder on slower devices (the post would appear stuck). Update on a phase/item
-        // change, on completion, or at most ~8×/sec.
-        const t = performance.now();
-        const cur = progress.value;
-        if (!cur || cur.phase !== p.phase || cur.index !== p.index || p.value >= 1 || t - lastProgressTs > 120) {
-          lastProgressTs = t;
-          progress.value = p;
-        }
-      },
+      items: mediaItems.value.map((m) => ({
+        blob: m.blob,
+        kind: m.kind,
+        name: m.name,
+        mime: m.blob.type || (m.kind === 'voice' ? 'audio/webm' : m.kind === 'video' ? 'video/mp4' : 'image/jpeg'),
+        durationSec: m.durationSec,
+        poster: m.poster,
+      })),
     });
+    kickPendingPosts();
     router.back();
   } catch (err) {
     const a = await alertController.create({
@@ -455,7 +426,6 @@ async function share(): Promise<void> {
     await a.present();
   } finally {
     sharing.value = false;
-    progress.value = null;
   }
 }
 </script>
@@ -487,16 +457,6 @@ async function share(): Promise<void> {
 }
 .vpreview {
   width: 100%;
-}
-.share-progress {
-  margin: 10px 16px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.share-label {
-  font-size: 13px;
-  color: var(--app-text-muted, #8e8e93);
 }
 /* Album staging: a horizontal row of removable thumbnails + an "add more" tile. */
 .album-stage {
