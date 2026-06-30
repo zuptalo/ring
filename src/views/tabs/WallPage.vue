@@ -113,6 +113,7 @@
                         :src="m.url"
                         :outgoing="!!p.isOwn"
                         :avatar="p.authorAvatar"
+                        :float-when-away="true"
                       />
                       <div v-else class="voice-loading"><ion-icon :icon="micOutline" /><ion-spinner name="crescent" /></div>
                     </div>
@@ -169,6 +170,7 @@
                 :src="p.mediaUrl"
                 :outgoing="!!p.isOwn"
                 :avatar="p.authorAvatar"
+                :float-when-away="true"
               />
               <div v-else class="voice-loading">
                 <ion-icon :icon="micOutline" />

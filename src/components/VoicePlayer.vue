@@ -2,7 +2,7 @@
   <!-- Voice message player: play/pause + a real waveform (decoded from the audio)
        that fills as it plays and is seekable, with elapsed/total time and the
        sender's avatar + mic badge. -->
-  <div class="vp" :class="{ out: outgoing }">
+  <div ref="vpEl" class="vp" :class="{ out: outgoing }">
     <button type="button" class="vp-play" :aria-label="playing ? 'Pause' : 'Play'" @click.stop="toggle">
       <ion-icon :icon="playing ? pause : play" />
     </button>
@@ -29,12 +29,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, pause, mic } from 'ionicons/icons';
 import SpeedPill from '@/components/SpeedPill.vue';
 import {
-  audioCurId, audioPlaying, audioProgress, audioRate,
+  audioCurId, audioPlaying, audioProgress, audioRate, controllerHiddenForId,
   playAudio, seekAudioFrac, cycleAudioRate,
 } from '@/composables/useAudioPlayer';
 
@@ -46,6 +46,9 @@ const props = defineProps<{
   outgoing: boolean;
   avatar?: string;
   durationSec?: number;
+  // Wall feed: hide the floating controller while THIS inline player is on screen, and reveal it
+  // the moment the post is swiped/scrolled out of view (so you don't see both at once).
+  floatWhenAway?: boolean;
 }>();
 
 const BAR_COUNT = 44;
@@ -115,8 +118,34 @@ function seek(ev: MouseEvent): void {
   seekAudioFrac(Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width)));
 }
 
+// Wall feed only: track whether this inline player is on screen. While it's the active track AND
+// visible, hide the floating controller (the inline player is right here); release it the instant
+// it swipes/scrolls out of view. IntersectionObserver clips through the album's horizontal scroll
+// container too, so left/right swipes count as "away" just like up/down feed scrolls.
+const vpEl = ref<HTMLElement>();
+const onScreen = ref(true);
+let io: IntersectionObserver | null = null;
+watch([isActive, onScreen], ([active, vis]) => {
+  if (!props.floatWhenAway) return;
+  if (active && vis) controllerHiddenForId.value = props.mid;
+  else if (controllerHiddenForId.value === props.mid) controllerHiddenForId.value = null;
+});
+
 onMounted(() => {
   void decodeWaveform();
+  if (props.floatWhenAway && vpEl.value && 'IntersectionObserver' in window) {
+    io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) onScreen.value = e.isIntersecting && e.intersectionRatio >= 0.5;
+      },
+      { threshold: [0, 0.5, 1] },
+    );
+    io.observe(vpEl.value);
+  }
+});
+onUnmounted(() => {
+  io?.disconnect();
+  if (controllerHiddenForId.value === props.mid) controllerHiddenForId.value = null;
 });
 </script>
 
