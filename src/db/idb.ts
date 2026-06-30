@@ -26,6 +26,8 @@ export const STORES = [
   // = reactions/comments/view-receipts keyed by postId. Both keyPath 'id'.
   'posts',
   'postEngagement',
+  // v10 (spec 1024): the resilient-posting outbox — pending posts/chat-media with cached blobs.
+  'pendingPosts',
 ] as const;
 export type StoreName = (typeof STORES)[number];
 

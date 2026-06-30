@@ -53,6 +53,7 @@ import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useAppUpdate, checkForUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
 import { takePendingNav } from '@/services/pending-nav';
+import { kickPendingPosts } from '@/services/pending-posts';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import type { Message } from '@/db/types';
 
@@ -77,6 +78,9 @@ watch(
   (unlocked) => {
     if (unlocked) {
       void warmAll();
+      // Spec 1024: resume any interrupted media uploads from the outbox (a post the app was
+      // killed mid-upload finishes itself on reopen).
+      kickPendingPosts();
       // Cold-launched from a notification? The SW stashed where to go (iOS PWAs can't deep-link
       // via openWindow); now that we're unlocked and the tabs are reachable, route there. The
       // microtask defer lets the auth gate's default landing settle first so this wins.
