@@ -22,18 +22,28 @@ import {
 
 let draining = false;
 
+// After this many resume attempts a post stops auto-retrying and surfaces as `failed` (with Retry /
+// Cancel) instead of spinning forever. The check runs BEFORE each upload attempt, so even a post
+// whose upload somehow hangs is force-failed on the next app start rather than wedging the queue.
+const MAX_ATTEMPTS = 5;
+
 /** Fire-and-forget kick — safe to call repeatedly (enqueue, app start, reconnect). */
 export function kickPendingPosts(): void {
   void drainPendingPosts();
 }
 
-/** Process every `uploading` pending post once, sequentially. */
+/** Process every `uploading` pending post, sequentially, until none remain. */
 export async function drainPendingPosts(): Promise<void> {
   if (draining) return;
   draining = true;
   try {
-    const queue = (await listPendingPosts()).filter((p) => p.status === 'uploading');
-    for (const rec of queue) await uploadOne(rec.id);
+    // Loop until the outbox is dry: a post enqueued WHILE we were draining (its kick was a no-op
+    // because `draining` was set) must still get picked up in the same pass.
+    for (;;) {
+      const queue = (await listPendingPosts()).filter((p) => p.status === 'uploading');
+      if (!queue.length) break;
+      for (const rec of queue) await uploadOne(rec.id);
+    }
   } finally {
     draining = false;
   }
@@ -44,6 +54,15 @@ const lastProgressWrite = new Map<string, number>();
 async function uploadOne(id: string): Promise<void> {
   const rec = await getPendingPost(id);
   if (!rec || rec.status !== 'uploading') return; // canceled / already gone
+  // Give up auto-retrying after too many attempts so a chronically-failing post can't keep the
+  // single-drain guard busy and block fresh posts behind it. Checked before the upload, so a prior
+  // hung attempt is converted to a proper failure on the next launch.
+  if (rec.attempts >= MAX_ATTEMPTS) {
+    rec.status = 'failed';
+    rec.error = rec.error || 'Upload keeps failing — tap retry.';
+    await updatePendingPost(rec);
+    return;
+  }
   rec.attempts += 1;
   await updatePendingPost(rec);
   try {
@@ -101,12 +120,14 @@ function friendlyError(err: unknown): string {
   return 'Upload failed — tap retry.';
 }
 
-/** Re-arm a failed post for another drain pass (user tapped Retry). */
+/** Re-arm a failed post for another drain pass (user tapped Retry). Resets the attempt budget so a
+ *  post that exhausted its auto-retries gets a fresh start instead of failing instantly. */
 export async function retryPendingPost(id: string): Promise<void> {
   const rec = await getPendingPost(id);
   if (!rec) return;
   rec.status = 'uploading';
   rec.error = undefined;
+  rec.attempts = 0;
   await updatePendingPost(rec);
   kickPendingPosts();
 }
