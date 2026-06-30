@@ -544,8 +544,9 @@ async function share(): Promise<void> {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  /* Mic to the top, duration to the bottom — clears the center for the (larger) play glyph. */
+  justify-content: space-between;
+  padding: 8px 0;
   background: var(--ion-color-primary);
   color: #fff;
   font-size: 22px;
@@ -556,10 +557,14 @@ async function share(): Promise<void> {
 }
 .stage-voice .stage-play {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  font-size: 18px;
-  opacity: 0.9;
+  left: 50%;
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  font-size: 32px;
+  opacity: 1;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.35));
 }
 .stage-spin {
   width: 24px;
