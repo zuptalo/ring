@@ -1010,7 +1010,7 @@ import {
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
-  backfillThumbTiers,
+  backfillThumbTiers, getDraft, saveDraft, clearDraft,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
 import { hasRoomFor } from '@/services/storage-estimate';
@@ -1809,6 +1809,71 @@ watch(composerEl, (el) => {
   void ta?.getInputElement?.().then((native) => native?.setAttribute('dir', 'auto')).catch(() => {});
 });
 
+// ---- composer draft: keep your place across leaving the chat or closing the app ----
+// An unsent message (text + caret + any reply-in-progress) is restored when you re-open this chat,
+// saved as you type (debounced), flushed on leave / background, and cleared once you send.
+let draftSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let draftLoaded = false;
+
+async function nativeComposer(): Promise<HTMLTextAreaElement | undefined> {
+  const ta = composerEl.value?.$el as
+    | (HTMLIonTextareaElement & { getInputElement?: () => Promise<HTMLTextAreaElement> })
+    | undefined;
+  return ta?.getInputElement?.().catch(() => undefined);
+}
+
+async function loadDraft(): Promise<void> {
+  if (draftLoaded) return; // once per mount; returning from a sub-page keeps the live draft as-is
+  draftLoaded = true;
+  const d = await getDraft(chatId);
+  if (!d || draft.value.trim()) return; // nothing saved, or the user already started typing
+  draft.value = d.text ?? '';
+  if (d.reply && !replyingTo.value) replyingTo.value = d.reply;
+  if (d.text) {
+    await nextTick();
+    const native = await nativeComposer();
+    if (native) {
+      const end = d.selEnd ?? d.text.length;
+      try {
+        native.setSelectionRange(d.selStart ?? end, end); // drop the caret back where it was
+      } catch {
+        /* selection unsupported on this element state — ignore */
+      }
+      native.focus();
+    }
+  }
+}
+
+function scheduleDraftSave(): void {
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(() => void persistDraft(), 400);
+}
+
+async function persistDraft(): Promise<void> {
+  clearTimeout(draftSaveTimer);
+  if (editingMsg.value) return; // an in-progress edit rewrites a sent message, it isn't a draft
+  const text = draft.value;
+  const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
+  if (!text.trim() && !reply) {
+    await clearDraft(chatId);
+    return;
+  }
+  const native = await nativeComposer();
+  await saveDraft({
+    chatId,
+    text,
+    selStart: native?.selectionStart ?? undefined,
+    selEnd: native?.selectionEnd ?? undefined,
+    reply,
+  });
+}
+
+// Sent → the draft is spent; drop the pending save and the stored copy.
+function clearComposerDraft(): void {
+  clearTimeout(draftSaveTimer);
+  void clearDraft(chatId);
+}
+
 // A short text snapshot of a message for the quote (the media icon is rendered
 // separately from `replyTo.kind`, so these labels carry no emoji).
 function previewOf(m: Message): string {
@@ -2236,6 +2301,7 @@ function onComposerInput(e: CustomEvent): void {
   draft.value = (e.detail as { value?: string | null }).value ?? '';
   if (draft.value.trim()) startActivity('typing');
   else stopActivity('typing'); // cleared the draft → no longer typing
+  scheduleDraftSave(); // persist the unsent text so leaving/closing keeps your place
   updateMentionQuery(); // spec 1020: open/refresh the @-mention autocomplete
   const host = composerEl.value?.$el;
   if (host) requestAnimationFrame(() => { host.scrollTop = host.scrollHeight; });
@@ -2606,6 +2672,7 @@ watch(syncState, (s) => {
 onMounted(() => {
   void markChatRead(chatId);
   void resumePendingMediaJobs(); // restart any compressions interrupted by a reload
+  void loadDraft(); // restore an unsent message (text + caret + reply) if you left one here
   document.addEventListener('visibilitychange', onVisibilityChange);
   // Safety net: if the enter transition's didEnter never fires (e.g. opened
   // directly with no animation), still reveal the header rather than leave it
@@ -2617,6 +2684,7 @@ onMounted(() => {
   listReadyFallback = setTimeout(() => (listReady.value = true), 800);
 });
 onUnmounted(() => {
+  void persistDraft(); // leaving the chat → keep the unsent message for next time
   document.removeEventListener('visibilitychange', onVisibilityChange);
   clearTimeout(headerReadyFallback);
   clearTimeout(listReadyFallback);
@@ -2675,7 +2743,9 @@ function onVisibilityChange(): void {
       scheduleShareHint();
     }
   } else {
-    // Backgrounded: clear so a stale toast can't surface over the gate on return.
+    // Backgrounded (incl. an iOS app close that starts here): flush the unsent message now, while we
+    // still can, so it survives a full termination.
+    void persistDraft();
     clearTimeout(shareHintTimer);
     dismissShareHintToast();
   }
@@ -2702,6 +2772,7 @@ function dismissShareHintToast(): void {
 onIonViewWillLeave(() => {
   viewActive.value = false;
   setActiveChat(null);
+  void persistDraft(); // navigating away within the app → save the unsent message
   stopActivity(); // leaving the chat ends any outgoing activity indicator (spec 1009)
   clearTimeout(shareHintTimer);
   dismissShareHintToast(); // don't let the hint linger on other pages
@@ -3308,6 +3379,7 @@ async function send() {
     const target = editingMsg.value;
     editingMsg.value = null;
     draft.value = '';
+    clearComposerDraft();
     await editMessage(target.id, text);
     return;
   }
@@ -3337,6 +3409,7 @@ async function send() {
     pendingMedia.value = [];
     const caption = text;
     draft.value = '';
+    clearComposerDraft();
     // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
     const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
     replyingTo.value = null;
@@ -3365,6 +3438,7 @@ async function send() {
   }
 
   draft.value = '';
+  clearComposerDraft();
   mentionQuery.value = null; // close the autocomplete
   // @mentions (spec 1020): resolve the body's @tokens to member ids + an honored @everyone.
   const { mentions, everyone } = resolveMentions(text);
@@ -3531,7 +3605,7 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
   // if there's clearly no room, rather than failing partway through encode/upload.
   const incoming = files.reduce((n, f) => n + f.size, 0);
   if (!(await hasRoomFor(incoming))) {
-    void appToast({ message: 'Not enough storage on this device — free up space and try again.', duration: 2600 });
+    void appToast({ message: 'Not enough storage on this device. Free up space and try again.', duration: 2600 });
     return;
   }
   // Picked media now STAGES like a paste (spec 1023) so it can be captioned before
