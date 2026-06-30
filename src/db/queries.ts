@@ -2410,6 +2410,10 @@ export async function saveDraft(d: Omit<ChatDraft, 'updatedAt'>): Promise<void> 
 export async function clearDraft(chatId: string): Promise<void> {
   await remove('drafts', chatId);
 }
+/** All saved drafts — the Chats list uses this to mark which chats have an unsent message. */
+export async function listDrafts(): Promise<ChatDraft[]> {
+  return getAll<ChatDraft>('drafts');
+}
 
 // Persist a single received post: unwrap K_post with our identity key, open the
 // payload, store it. Own posts come back without an envelope (already local) and are

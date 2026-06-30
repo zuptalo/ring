@@ -30,6 +30,11 @@
           <template v-if="activityLabel">
             <span class="preview activity">{{ activityLabel }}</span>
           </template>
+          <!-- An unsent draft trumps the last message so you can see where you left off. -->
+          <template v-else-if="draft !== undefined">
+            <span class="draft-tag">Draft</span>
+            <span class="preview draft-text">{{ draft ? ': ' + draft : '' }}</span>
+          </template>
           <template v-else>
             <ion-icon
               v-if="previewIcon"
@@ -93,7 +98,7 @@ import { activityFor, activityKindLabel } from '@/composables/useTyping';
 import { formatTime } from '@/utils/time';
 import type { Chat } from '@/db/types';
 
-const props = defineProps<{ chat: Chat }>();
+const props = defineProps<{ chat: Chat; draft?: string }>();
 const emit = defineEmits<{ (e: 'open', id: string): void; (e: 'more', chat: Chat): void }>();
 
 const sliding = ref<{ $el: HTMLIonItemSlidingElement } | null>(null);
@@ -231,6 +236,16 @@ ion-item-option ion-icon {
 }
 .preview.activity {
   color: var(--ion-color-primary, #10b981);
+}
+/* "Draft" marker on a chat with an unsent message — red, like the convention, with the text muted. */
+.draft-tag {
+  flex: none;
+  margin-top: 1px;
+  color: var(--ion-color-danger, #eb445a);
+  font-weight: 600;
+}
+.draft-text {
+  color: var(--app-text-muted);
 }
 .preview {
   flex: 1;
