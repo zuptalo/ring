@@ -175,6 +175,23 @@ clear up-front warning (with a free-space hint) and that no partial encode/uploa
 - Interrupted uploads auto-retry once on reopen before asking the user (FR-013), and retries resume
   only the unconfirmed items via per-item confirmation tracking (FR-014).
 
+## Zero-Knowledge Impact
+
+- **What crosses to the server**: unchanged from today — only **sealed ciphertext blobs** (existing
+  `uploadBlob`) and the **sealed post/message envelope** (existing `createPost` / message send), plus
+  opaque blob ids and the same recipient routing already used. This feature adds **no new plaintext,
+  fields, or endpoints** on the wire.
+- **New local plaintext**: the outbox caches **working copies of the selected media (plaintext) in
+  IndexedDB** until the post finalizes — the same class/treatment as the existing `media` store
+  (device encryption + PIN-lock gate the app; not separately AEAD-wrapped). Copies are deleted on
+  finalize or cancel (FR-008) — no lingering plaintext.
+- **Confirmation is metadata-free**: per-item confirmation is just the server's existing blob-id and
+  2xx responses; the server learns nothing new about content or audience.
+- **Timestamps**: `createdAt`/`expiresAt` remain client-set on the sealed envelope exactly as today;
+  the only change is *when* (at confirmation rather than at Share).
+- **Checklist**: `/speckit-checklist` is REQUIRED (Principle I) and must confirm the at-rest stance
+  of the cached blobs before implementation.
+
 ## Out of Scope
 
 - Background upload while the app is fully terminated by the OS (no service-worker upload queue in
