@@ -15,6 +15,7 @@ import {
   createPost,
   listPendingPosts,
   getPendingPost,
+  getPost,
   updatePendingPost,
   deletePendingPost,
 } from '@/db/queries';
@@ -47,6 +48,10 @@ async function uploadOne(id: string): Promise<void> {
   await updatePendingPost(rec);
   try {
     await createPost({
+      // Pass the outbox record's id as the post id so a retry is idempotent: createPost overwrites
+      // the same local Post instead of minting a second one. (See the "already made" guard below for
+      // the kill-after-send window the stable id alone can't cover.)
+      id,
       body: rec.body || undefined,
       audience: rec.audience ?? 'friends',
       lifetime: rec.lifetime ?? '72h',
@@ -67,13 +72,49 @@ async function uploadOne(id: string): Promise<void> {
     await deletePendingPost(id);
     lastProgressWrite.delete(id);
   } catch (err) {
+    // If the app was killed AFTER the post was already sent but BEFORE we cleaned up, the retry's
+    // server insert collides on the (now-existing) post id. The local Post is present, so this isn't
+    // a real failure — treat it as success and clear the outbox quietly rather than flash "failed".
+    if (await getPost(id)) {
+      await deletePendingPost(id);
+      lastProgressWrite.delete(id);
+      return;
+    }
     const cur = await getPendingPost(id);
     if (cur && cur.status === 'uploading') {
       cur.status = 'failed';
-      cur.error = err instanceof Error ? err.message : 'Upload failed';
+      cur.error = friendlyError(err);
       await updatePendingPost(cur);
     }
   }
+}
+
+/** Map a raw upload error to a short, user-facing reason for the pending card. */
+function friendlyError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  if (/quota|storage|exceeded|QuotaExceeded/i.test(msg) || (err as { name?: string })?.name === 'QuotaExceededError') {
+    return 'Not enough storage — free up space and retry.';
+  }
+  if (/network|fetch|offline|timeout|Failed to fetch/i.test(msg)) {
+    return "Couldn't reach the server — check your connection and retry.";
+  }
+  return 'Upload failed — tap retry.';
+}
+
+/** Re-arm a failed post for another drain pass (user tapped Retry). */
+export async function retryPendingPost(id: string): Promise<void> {
+  const rec = await getPendingPost(id);
+  if (!rec) return;
+  rec.status = 'uploading';
+  rec.error = undefined;
+  await updatePendingPost(rec);
+  kickPendingPosts();
+}
+
+/** Drop a pending post for good — discards its cached blobs (user tapped Cancel). */
+export async function cancelPendingPost(id: string): Promise<void> {
+  await deletePendingPost(id);
+  lastProgressWrite.delete(id);
 }
 
 // Throttle the per-item progress writes (~6×/s) so the change-bus + IDB don't thrash during encode.

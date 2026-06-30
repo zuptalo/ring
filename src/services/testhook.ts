@@ -149,7 +149,7 @@ import { get, getAll, put, bulkPut } from '@/db/idb';
 import { initialsAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
-import type { Chat, FriendRequest, Media, Message, Post } from '@/db/types';
+import type { Chat, FriendRequest, Media, Message, Post, OutboxPost } from '@/db/types';
 import {
   startDirectCall,
   startGroupCall,
@@ -943,6 +943,28 @@ export function installTestHook(): void {
       const p = await dbCreatePost({ body: opts.body, audience: opts.audience ?? 'friends', lifetime: opts.lifetime ?? '24h' });
       return p.id;
     },
+    /** Spec 1024 (US2): seed a FAILED pending post straight into the outbox so the Wall renders the
+     *  "Couldn't post" card with Retry/Cancel. Text-only (no cached blobs needed for the UI check). */
+    seedFailedPendingPost: async (body = 'Stuck post'): Promise<string> => {
+      const now = Date.now();
+      const id = `pp-${now}`;
+      await put<OutboxPost>('pendingPosts', {
+        id,
+        target: 'wall',
+        body,
+        audience: 'friends',
+        lifetime: '72h',
+        items: [],
+        status: 'failed',
+        error: 'Upload failed — tap retry.',
+        attempts: 1,
+        createdLocally: now,
+        updatedAt: now,
+      });
+      return id;
+    },
+    /** Count outbox records (any status) — lets a test assert a Cancel actually cleared one. */
+    pendingPostCount: async (): Promise<number> => (await getAll<OutboxPost>('pendingPosts')).length,
     /** Seed one own IMAGE post that has ONLY a poster tier and no full blob — i.e. a
      *  received post whose full media hasn't downloaded yet. The feed must still show the
      *  poster instantly (US1: no blank tile), which is what the thumbnail test asserts. */

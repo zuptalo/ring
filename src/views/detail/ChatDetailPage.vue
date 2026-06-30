@@ -1013,6 +1013,7 @@ import {
   backfillThumbTiers,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
+import { hasRoomFor } from '@/services/storage-estimate';
 import { groupProgress } from '@/services/message-status';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import MessageActions from '@/components/MessageActions.vue';
@@ -3521,11 +3522,18 @@ async function maxSourceLongEdge(
   return max || undefined;
 }
 
-function onPick(e: Event, mode: 'auto' | 'file') {
+async function onPick(e: Event, mode: 'auto' | 'file') {
   const input = e.target as HTMLInputElement;
   const files = Array.from(input.files ?? []);
   input.value = ''; // allow re-picking the same file
   if (!files.length) return;
+  // Spec 1024 (US3): staging caches the picked blobs on-device until send confirms. Bail up front
+  // if there's clearly no room, rather than failing partway through encode/upload.
+  const incoming = files.reduce((n, f) => n + f.size, 0);
+  if (!(await hasRoomFor(incoming))) {
+    void appToast({ message: 'Not enough storage on this device — free up space and try again.', duration: 2600 });
+    return;
+  }
   // Picked media now STAGES like a paste (spec 1023) so it can be captioned before
   // sending, and several photos/videos can go as an album or individually — see send().
   // Audio keeps its own title/artist review path.

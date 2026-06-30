@@ -60,7 +60,7 @@
             <ion-avatar class="avatar"><div class="ph">{{ initial('You') }}</div></ion-avatar>
             <div class="who">
               <div class="name">You</div>
-              <div class="sub">{{ pp.status === 'failed' ? 'Couldn’t post — will retry' : 'Posting…' }}</div>
+              <div class="sub">{{ pp.status === 'failed' ? 'Couldn’t post' : 'Posting…' }}</div>
             </div>
             <ion-spinner v-if="pp.status === 'uploading'" name="crescent" class="pspin" />
           </div>
@@ -70,6 +70,11 @@
             {{ pp.count ? pp.count + (pp.count > 1 ? ' items' : ' item') : 'Text post' }} ·
             {{ pp.status === 'failed' ? (pp.error || 'Failed') : Math.round(pp.progress * 100) + '%' }}
           </p>
+          <!-- A failed upload keeps its cached blobs: the user can retry it or discard it. -->
+          <div v-if="pp.status === 'failed'" class="pending-actions">
+            <ion-button size="small" fill="solid" @click="retryPendingPost(pp.id)">Retry</ion-button>
+            <ion-button size="small" fill="clear" color="medium" @click="cancelPendingPost(pp.id)">Cancel</ion-button>
+          </div>
         </div>
       </ion-item>
 
@@ -301,6 +306,7 @@ import WallVideo from '@/components/WallVideo.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
 import { useWall, type WallPost } from '@/composables/useWall';
 import { usePendingPosts } from '@/composables/usePendingPosts';
+import { retryPendingPost, cancelPendingPost } from '@/services/pending-posts';
 import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
   reactToPost, commentOnPost, deletePost, keepAlivePost, setPostAudience,
@@ -671,6 +677,16 @@ ion-item-sliding ion-item-option {
   font-size: 12px;
   color: var(--app-text-muted, #8e8e93);
   margin: 2px 14px 0;
+}
+.pending-actions {
+  display: flex;
+  gap: 4px;
+  margin: 4px 8px 0;
+}
+.pending-actions ion-button {
+  --padding-start: 12px;
+  --padding-end: 12px;
+  margin: 0;
 }
 .avatar {
   width: 40px;
