@@ -24,13 +24,13 @@ test('an album shows a count badge in the feed and a swipeable gallery in the po
   // A shares a 3-photo album.
   const postId = (await a.page.evaluate(() => (window as any).__ringTest.postAlbum(3, 'our trip'))) as string;
 
-  // Feed: the cover shows with a "3" album badge.
+  // Feed: the album renders inline as a swipeable gallery — three slides + a "1 / 3" counter
+  // (the cover+badge was replaced by showing the whole album right in the feed).
   await a.page.goto('/tabs/wall');
-  const badge = a.page.locator('.album-badge');
-  await expect(badge).toBeVisible({ timeout: 30_000 });
-  await expect(badge).toContainText('3');
+  await expect(a.page.locator('.album-slide')).toHaveCount(3, { timeout: 30_000 });
+  await expect(a.page.locator('.album-count')).toContainText('1 / 3');
 
-  // Full post: a swipeable gallery of all three, with a "1 / 3" position counter.
+  // The full-post route still renders the same swipeable gallery.
   await a.page.goto(`/wall/post/${postId}`);
   await expect(a.page.locator('.album-slide')).toHaveCount(3, { timeout: 30_000 });
   await expect(a.page.locator('.album-count')).toContainText('1 / 3');
@@ -57,9 +57,9 @@ test('the post composer stages several photos and shares them as one album', asy
   // They stage as three removable thumbnails.
   await expect(a.page.locator('.stage-thumb')).toHaveCount(3, { timeout: 10_000 });
 
-  // Share → back on the Wall, the post is an album (count badge of 3).
+  // Share → back on the Wall, the post renders as an inline swipeable album ("1 / 3" counter).
   await a.page.getByRole('button', { name: 'Share' }).click();
-  await expect(a.page.locator('.album-badge')).toContainText('3', { timeout: 30_000 });
+  await expect(a.page.locator('.album-count')).toContainText('1 / 3', { timeout: 30_000 });
 
   await ctxA.close();
   await ctxB.close();

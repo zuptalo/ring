@@ -72,11 +72,12 @@ function setActive(el: HTMLVideoElement | null): void {
   if (el) {
     el.setAttribute('data-autoplaying', 'true');
     el.muted = autoplayMuted.value; // respect the shared feed mute state (default: sound on)
-    void el.play().catch(() => {
-      // Unmuted autoplay is blocked until the page has a user gesture. Don't freeze on the
-      // poster — fall back to MUTED playback (keeping the intent "sound on", so the next tap
-      // brings audio in). If it was already muted, nothing more we can do.
-      if (!el.muted) {
+    void el.play().catch((err: unknown) => {
+      // Fall back to MUTED playback ONLY when the browser BLOCKED unmuted autoplay
+      // (NotAllowedError) — so a clip the user chose to hear still plays (muted) instead of
+      // freezing on its poster. Do NOT mute on other rejections (media not yet loaded / can't
+      // decode): that would wrongly silence an unmuted clip and break "unmute sticks".
+      if ((err as { name?: string } | null)?.name === 'NotAllowedError' && !el.muted) {
         el.muted = true;
         void el.play().catch(() => {});
       }

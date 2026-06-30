@@ -18,10 +18,10 @@
       @loadedmetadata="onMeta"
     />
     <div class="wv-bar" @click.stop>
-      <button class="wv-btn" :aria-label="playing ? 'Pause' : 'Play'" @click="toggle">
+      <button class="wv-btn wv-play" :aria-label="playing ? 'Pause' : 'Play'" @click="toggle">
         <ion-icon :icon="playing ? pauseIcon : playIcon" />
       </button>
-      <button class="wv-btn" :aria-label="autoplayMuted ? 'Unmute' : 'Mute'" @click="setAutoplayMuted(!autoplayMuted)">
+      <button class="wv-btn vol-toggle" :aria-label="autoplayMuted ? 'Unmute' : 'Mute'" @click="setAutoplayMuted(!autoplayMuted)">
         <ion-icon :icon="autoplayMuted ? volumeMuteOutline : volumeHighOutline" />
       </button>
       <span class="wv-time">{{ fmt(cur) }}</span>
@@ -59,22 +59,8 @@ const dur = ref(0);
 const pct = computed(() => (dur.value ? Math.min(100, (cur.value / dur.value) * 100) : 0) + '%');
 const fmt = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
-// iOS leaves a freshly-mounted clip's audio output disconnected even with muted=false — it
-// plays "unmuted" but silent until you mute→unmute (which reconnects the route). Each album
-// swipe mounts a NEW <video>, hitting this. So on the first play, if we intend sound, toggle
-// muted off→on→off across a frame to reconnect the audio — programmatically doing the manual
-// workaround. Runs once per mount; the brief (~1 frame) mute is imperceptible.
-let routed = false;
 function onPlay(): void {
   playing.value = true;
-  const v = el.value;
-  if (routed || !v || autoplayMuted.value || v.muted) return;
-  routed = true;
-  v.muted = true;
-  requestAnimationFrame(() => {
-    const vv = el.value;
-    if (vv && !autoplayMuted.value) vv.muted = false;
-  });
 }
 function onTime(): void {
   const v = el.value;
