@@ -38,6 +38,21 @@ const afterReturn = await composerValue();
 console.log('after leave+return:', JSON.stringify(afterReturn));
 await shot(a, 'draft-restored');
 
+// The Chats list should mark this chat with a "Draft" indicator.
+await a.page.goto('/tabs/chats');
+await poll(
+  () => a.page.evaluate(() => !!document.querySelector('.draft-tag')),
+  Boolean,
+  { label: 'draft tag in chats list' },
+);
+const draftRow = await a.page.evaluate(() => {
+  const tag = document.querySelector('.draft-tag');
+  const text = tag?.parentElement?.textContent?.trim();
+  return text;
+});
+console.log('chats-list draft row:', JSON.stringify(draftRow));
+await shot(a, 'draft-in-chats-list');
+
 // Simulate a full app close: reload the page, then open the chat again.
 await a.page.reload();
 await poll(() => a.page.evaluate(() => !!window.__ringTest), Boolean, { label: 'app reloaded' });

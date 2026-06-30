@@ -56,6 +56,7 @@
           v-for="chat in chats"
           :key="chat.id"
           :chat="chat"
+          :draft="draftFor(chat.id)"
           @open="open"
           @more="(c) => actions?.openMore(c)"
         />
@@ -181,14 +182,14 @@ import ChatFilterBar from '@/components/ChatFilterBar.vue';
 import ChatListsSheet from '@/components/ChatListsSheet.vue';
 import EditChatTabsModal from '@/components/EditChatTabsModal.vue';
 import NewListModal from '@/components/NewListModal.vue';
-import { listArchivedChats, listLockedChats, listContacts, startDirectChat, getSetting } from '@/db/queries';
+import { listArchivedChats, listLockedChats, listContacts, startDirectChat, getSetting, listDrafts } from '@/db/queries';
 import { useChatFilters } from '@/services/chat-filters';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useConnect } from '@/composables/useConnect';
 import { useHiddenChats } from '@/composables/useHiddenChats';
 import { hiddenPinLength } from '@/services/hidden-chats';
 import { isUnlocked } from '@/services/crypto/identity';
-import type { Chat, Contact } from '@/db/types';
+import type { Chat, Contact, ChatDraft } from '@/db/types';
 
 const router = useRouter();
 
@@ -291,6 +292,16 @@ const archivedCount = computed(() => archived.value.length);
 // Whether any chat is locked (entry shows; count hidden for privacy).
 const locked = useLiveQuery(() => listLockedChats(), ['chats', 'messages'], [] as Chat[]);
 const hasLocked = computed(() => locked.value.length > 0);
+
+// Unsent drafts → mark the chat row with a "Draft" preview (spec: keep-your-place). Keyed by chatId;
+// a row shows it instead of the last message until the draft is sent or cleared.
+const drafts = useLiveQuery(() => listDrafts(), ['drafts'], [] as ChatDraft[]);
+const draftMap = computed(() => {
+  const m = new Map<string, string>();
+  for (const d of drafts.value) if (d.text?.trim() || d.reply) m.set(d.chatId, d.text?.trim() ?? '');
+  return m;
+});
+const draftFor = (id: string): string | undefined => draftMap.value.get(id);
 
 function open(id: string) {
   router.push(`/chat/${id}`);
