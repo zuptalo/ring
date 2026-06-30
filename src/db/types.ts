@@ -409,6 +409,39 @@ export interface Post {
   updatedAt: number; // change-bus / dedup
 }
 
+/** Spec 1024 — a pending Wall post / chat media send held in the `pendingPosts` outbox: its own
+ *  CACHED working blobs + the metadata to encode, upload, seal, and send it. Drained by the upload
+ *  worker; deleted (with its blobs) once the post is confirmed made, or canceled. `createdLocally`
+ *  is for pending-list ordering ONLY — the real post's `createdAt` is stamped at confirmation. */
+export interface OutboxPost {
+  id: string;
+  target: 'wall' | 'chat';
+  chatId?: string; // required when target='chat'
+  body: string; // caption / message text (may be empty)
+  audience?: 'friends' | 'close'; // wall only
+  lifetime?: '1h' | '24h' | '72h'; // wall only
+  items: OutboxItem[];
+  status: 'uploading' | 'failed' | 'canceled';
+  error?: string; // last failure reason (free-space, network…)
+  attempts: number; // worker attempts; guards the auto-retry-once
+  createdLocally: number; // ms at Share — ordering ONLY (NOT the post's createdAt)
+  updatedAt: number; // change-bus / last-write
+}
+
+export interface OutboxItem {
+  localId: string;
+  blob: Blob; // cached working copy (plaintext, local-only; deleted on finalize/cancel)
+  kind: 'image' | 'video' | 'voice';
+  name: string;
+  mime: string;
+  durationSec?: number;
+  width?: number;
+  height?: number;
+  poster?: string; // embedded video poster (data URL)
+  blobId?: string; // set when uploaded/confirmed → per-item confirmation (resume only unconfirmed)
+  progress: number; // 0..1, this item's encode+upload progress
+}
+
 /** Engagement on a post: a reaction, a comment, or a view receipt. Reactions and
  *  views are one-per-actor (id `${postId}:${type}:${actor}`, last-write-wins);
  *  comments are append-only with a uuid id. `deleted` tombstones a comment (removed
