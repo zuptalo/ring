@@ -47,33 +47,50 @@ export async function drainPendingPosts(): Promise<void> {
 
 const lastProgressWrite = new Map<string, number>();
 
+// If an upload makes NO progress for this long it's treated as stalled and fails (→ Retry/Cancel),
+// rather than spinning at 0% forever and wedging the single-drain worker behind it. A real upload
+// reports progress well within this window (encode + the immediate onProgress(0) on upload start);
+// only a genuine hang — e.g. reading an unreadable cached blob — goes silent this long.
+const UPLOAD_STALL_MS = 45_000;
+
 async function uploadOne(id: string): Promise<void> {
   const rec = await getPendingPost(id);
   if (!rec || rec.status !== 'uploading') return; // canceled / interrupted / already gone
   rec.attempts += 1;
   await updatePendingPost(rec);
+  let lastTick = Date.now();
+  let watchdog: ReturnType<typeof setInterval> | undefined;
   try {
-    await createPost({
-      // Pass the outbox record's id as the post id so a retry is idempotent: createPost overwrites
-      // the same local Post instead of minting a second one. (See the "already made" guard below for
-      // the kill-after-send window the stable id alone can't cover.)
-      id,
-      body: rec.body || undefined,
-      audience: rec.audience ?? 'friends',
-      lifetime: rec.lifetime ?? '72h',
-      media: rec.items.length
-        ? rec.items.map((it) => ({
-            blob: it.blob,
-            kind: it.kind,
-            name: it.name,
-            durationSec: it.durationSec,
-            quality: 'hd' as const,
-          }))
-        : undefined,
-      onProgress: (p) => {
-        void writeProgress(id, p);
-      },
+    const stalled = new Promise<never>((_, reject) => {
+      watchdog = setInterval(() => {
+        if (Date.now() - lastTick > UPLOAD_STALL_MS) reject(new Error('Upload stalled. Tap Retry to try again.'));
+      }, 5_000);
     });
+    await Promise.race([
+      createPost({
+        // Pass the outbox record's id as the post id so a retry is idempotent: createPost overwrites
+        // the same local Post instead of minting a second one. (See the "already made" guard below for
+        // the kill-after-send window the stable id alone can't cover.)
+        id,
+        body: rec.body || undefined,
+        audience: rec.audience ?? 'friends',
+        lifetime: rec.lifetime ?? '72h',
+        media: rec.items.length
+          ? rec.items.map((it) => ({
+              blob: it.blob,
+              kind: it.kind,
+              name: it.name,
+              durationSec: it.durationSec,
+              quality: 'hd' as const,
+            }))
+          : undefined,
+        onProgress: (p) => {
+          lastTick = Date.now(); // each progress event keeps the watchdog from firing
+          void writeProgress(id, p);
+        },
+      }),
+      stalled,
+    ]);
     // createPost wrote the real Post (createdAt = confirmation time) → drop the outbox record + blobs.
     await deletePendingPost(id);
     lastProgressWrite.delete(id);
@@ -92,6 +109,8 @@ async function uploadOne(id: string): Promise<void> {
       cur.error = friendlyError(err);
       await updatePendingPost(cur);
     }
+  } finally {
+    clearInterval(watchdog); // stop the stall-watchdog whether we finished, failed, or timed out
   }
 }
 
@@ -103,6 +122,9 @@ function friendlyError(err: unknown): string {
   }
   if (/network|fetch|offline|timeout|Failed to fetch/i.test(msg)) {
     return "Couldn't reach the server. Check your connection and try again.";
+  }
+  if (/stalled/i.test(msg)) {
+    return 'Upload stalled. Tap Retry to try again.';
   }
   return 'Upload failed. Tap Retry to try again.';
 }
