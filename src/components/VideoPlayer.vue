@@ -11,6 +11,7 @@
       ref="el"
       class="vid-el"
       :src="src"
+      :poster="poster"
       playsinline
       preload="metadata"
       @timeupdate="onTime"
@@ -56,7 +57,7 @@ import SpeedPill from '@/components/SpeedPill.vue';
 import { nextRate, playWhenReady } from '@/utils/playback';
 import { useScrub } from '@/composables/useScrub';
 
-const props = defineProps<{ src: string; embedded?: boolean; chromeHidden?: boolean; startAt?: number }>();
+const props = defineProps<{ src: string; poster?: string; embedded?: boolean; chromeHidden?: boolean; startAt?: number }>();
 const emit = defineEmits<{ (e: 'tap'): void; (e: 'time', seconds: number): void }>();
 
 const el = ref<HTMLVideoElement>();

@@ -22,6 +22,11 @@
     </ion-header>
 
     <ion-content :fullscreen="true">
+      <!-- Pull down to recover: force a fresh reconnect so the server re-runs its on-connect
+           queue flush and we pull anything missed while the socket was dropped. -->
+      <ion-refresher slot="fixed" @ion-refresh="onPullRefresh">
+        <ion-refresher-content pulling-text="Pull to reconnect &amp; catch up" refreshing-text="Reconnecting…" />
+      </ion-refresher>
       <ion-header collapse="condense">
         <ion-toolbar>
           <ion-title size="large">Chats</ion-title>
@@ -163,7 +168,8 @@ import { useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
   IonIcon, IonSearchbar, IonContent, IonList, IonListHeader, IonItem, IonAvatar,
-  IonLabel, IonNote, IonModal,
+  IonLabel, IonNote, IonModal, IonRefresher, IonRefresherContent,
+  type RefresherCustomEvent,
 } from '@ionic/vue';
 import {
   createOutline, personAddOutline, peopleOutline, archiveOutline, lockClosedOutline,
@@ -185,6 +191,18 @@ import { isUnlocked } from '@/services/crypto/identity';
 import type { Chat, Contact } from '@/db/types';
 
 const router = useRouter();
+
+// Pull-to-refresh = recovery: force a fresh socket so the server re-flushes its on-connect
+// queue (pulling anything missed while it was dropped). It's fire-and-forget, so hold the
+// control briefly to give the reconnect + drain a moment, then release.
+// NB: import useSync DYNAMICALLY here, not statically — a static edge from this page reorders
+// module eval and trips a useSync↔useCall circular-import TDZ (`syncState` before init).
+async function onPullRefresh(e: RefresherCustomEvent): Promise<void> {
+  const { forceReconnect } = await import('@/composables/useSync');
+  forceReconnect();
+  await new Promise((r) => setTimeout(r, 1200));
+  void e.detail.complete();
+}
 const search = ref('');
 const actions = ref<InstanceType<typeof ChatActionsHost> | null>(null);
 const { connect, requireProfile } = useConnect();

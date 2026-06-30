@@ -91,6 +91,7 @@ import {
   createPost as dbCreatePost,
   syncPosts as dbSyncPosts,
   getPost as dbGetPost,
+  getMedia as dbGetMedia,
   listWallPosts as dbListWallPosts,
   reactToPost as dbReactToPost,
   syncEngagement as dbSyncEngagement,
@@ -1028,6 +1029,91 @@ export function installTestHook(): void {
       }));
       const p = await dbCreatePost({ body, audience: 'friends', lifetime: '24h', media });
       return p.id;
+    },
+    /** Share an album of MIXED aspect ratios (portrait, square, landscape) so the gallery's
+     *  fixed-frame + blurred-fill presentation can be checked visually. */
+    postMixedAlbum: async (): Promise<string> => {
+      const make = async (w: number, h: number, color: string, label: string): Promise<Blob> => {
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext('2d')!;
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, w, h);
+        // A thick white border on all four edges: if the whole image is shown (contain) the
+        // border is fully visible; if it's cover-cropped, the top/bottom (or sides) are cut off.
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = Math.round(Math.min(w, h) / 12);
+        ctx.strokeRect(ctx.lineWidth / 2, ctx.lineWidth / 2, w - ctx.lineWidth, h - ctx.lineWidth);
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.font = `${Math.round(Math.min(w, h) / 7)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, w / 2, h / 2);
+        return await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+      };
+      const media = [
+        { blob: await make(600, 800, '#3b82f6', 'PORTRAIT'), kind: 'image' as const, name: 'p.png' },
+        { blob: await make(800, 800, '#10b981', 'SQUARE'), kind: 'image' as const, name: 's.png' },
+        { blob: await make(1280, 720, '#f59e0b', 'LANDSCAPE'), kind: 'image' as const, name: 'l.png' },
+      ];
+      const p = await dbCreatePost({ audience: 'friends', lifetime: '24h', media });
+      return p.id;
+    },
+    /** Share a post with a REAL (decodable) H.264 video, through the actual createPost path —
+     *  so we can verify the video post gets a poster thumbnail and autoplays in the feed. */
+    postVideo: async (): Promise<string> => {
+      const blob = await makeTestVideo(640, 360, 2);
+      const p = await dbCreatePost({
+        audience: 'friends',
+        lifetime: '24h',
+        media: { blob, kind: 'video', name: 'clip.mp4' },
+      });
+      return p.id;
+    },
+    /** Post an album of 2 real videos + 2 images through createPost, timing each progress
+     *  phase, to reproduce the "stuck while processing" report. Returns elapsed ms + last
+     *  progress seen (so a hang shows up as a never-resolving promise / frozen last phase). */
+    postVideoAlbumTimed: async (): Promise<{ ms: number; id: string }> => {
+      const png = Uint8Array.from(
+        atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+        (c) => c.charCodeAt(0),
+      );
+      const v1 = await makeTestVideo(480, 360, 1);
+      const v2 = await makeTestVideo(480, 360, 1);
+      const media = [
+        { blob: v1, kind: 'video' as const, name: 'a.mp4' },
+        { blob: v2, kind: 'video' as const, name: 'b.mp4' },
+        { blob: new Blob([png], { type: 'image/png' }), kind: 'image' as const, name: 'c.png' },
+        { blob: new Blob([png], { type: 'image/png' }), kind: 'image' as const, name: 'd.png' },
+      ];
+      const t0 = performance.now();
+      const p = await dbCreatePost({
+        audience: 'friends',
+        lifetime: '24h',
+        media,
+        onProgress: (pr) => console.log('[post-progress]', pr.phase, pr.index + 1, '/', pr.total, Math.round(pr.value * 100) + '%'),
+      });
+      return { ms: Math.round(performance.now() - t0), id: p.id };
+    },
+    /** Does a post's cover Media have a poster thumbnail stored? (sender-side thumbnail check) */
+    postHasPoster: async (id: string): Promise<boolean> => {
+      const p = await dbGetPost(id);
+      const md = p?.mediaId ? await dbGetMedia(p.mediaId) : null;
+      return !!(md?.posterBlob || md?.posterGrid);
+    },
+    /** The latest own post's cover media as base64 + mime — to inspect what was actually
+     *  stored (e.g. ffprobe the transcoded video off-device to check the audio track). */
+    lastPostMediaB64: async (): Promise<{ b64: string; mime: string; bytes: number } | null> => {
+      const posts = await dbListWallPosts();
+      const self = getSelfUserId() ?? '';
+      const own = posts.find((p) => p.author === self && p.mediaId);
+      const md = own?.mediaId ? await dbGetMedia(own.mediaId) : null;
+      if (!md?.blob) return null;
+      const buf = new Uint8Array(await md.blob.arrayBuffer());
+      let s = '';
+      for (let i = 0; i < buf.length; i += 8192) s += String.fromCharCode(...buf.subarray(i, i + 8192));
+      return { b64: btoa(s), mime: md.mime, bytes: buf.length };
     },
     /** How many media a post carries locally (album size; 1 for single; 0 for text). */
     postMediaCount: async (id: string): Promise<number> => {

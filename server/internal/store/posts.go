@@ -103,9 +103,118 @@ func (s *Store) ListPosts(ctx context.Context, recipient string, sinceMs int64) 
 
 // DeletePost removes a post (and, via cascade, its envelopes/engagement/views). The
 // author-only guard is the `author` predicate, so a non-author delete is a no-op.
-func (s *Store) DeletePost(ctx context.Context, author, id string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM posts WHERE id = $1 AND author::text = $2`, id, author)
-	return err
+// DeletePost removes the author's own post and records a durable per-recipient tombstone so
+// every recipient prunes its local copy (offline → next sync; online → the caller WS-pushes).
+// Returns the recipient ids that held it (for the live push). No-op + nil if not the author's.
+func (s *Store) DeletePost(ctx context.Context, author, id string) ([]string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var owned bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1 AND author::text = $2)`, id, author).Scan(&owned); err != nil {
+		return nil, err
+	}
+	if !owned {
+		return nil, nil
+	}
+
+	rows, err := tx.Query(ctx, `SELECT recipient::text FROM post_envelopes WHERE post_id = $1`, id)
+	if err != nil {
+		return nil, err
+	}
+	var recipients []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		recipients = append(recipients, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Tombstone each recipient BEFORE deleting the post (this table has no cascade FK, so the
+	// rows persist past the DELETE below and reach offline recipients via listPosts.revoked).
+	for _, r := range recipients {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO post_deletions (post_id, recipient) VALUES ($1, $2) ON CONFLICT DO NOTHING`, id, r); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM posts WHERE id = $1 AND author::text = $2`, id, author); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return recipients, nil
+}
+
+// KeepAlive (author-only): explicitly push a post's expiry back to now + its own window —
+// the manual version of the engagement keep-alive. Never shortens. Returns false if the
+// post isn't the caller's (or doesn't exist).
+func (s *Store) KeepAlive(ctx context.Context, author, id string) (bool, error) {
+	ct, err := s.pool.Exec(ctx,
+		`UPDATE posts SET expires_at = GREATEST(expires_at, now() + (ttl_ms * interval '1 millisecond'))
+		  WHERE id = $1 AND author::text = $2`,
+		id, author)
+	if err != nil {
+		return false, err
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
+// AddEnvelopes broadens a post's audience (author-only): inserts new recipient key-envelopes
+// and clears any prior revocation/deletion tombstone for those recipients (so broadening back
+// re-grants access). Returns the recipients actually ADDED (newly inserted), for a silent live
+// delivery. No-op + nil if the post isn't the author's.
+func (s *Store) AddEnvelopes(ctx context.Context, author, postID string, envs []NewPostEnvelope) ([]string, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var owned bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1 AND author::text = $2)`, postID, author).Scan(&owned); err != nil {
+		return nil, err
+	}
+	if !owned {
+		return nil, nil
+	}
+
+	var added []string
+	for _, e := range envs {
+		ct, err := tx.Exec(ctx,
+			`INSERT INTO post_envelopes (post_id, recipient, wrapped_key) VALUES ($1, $2, $3)
+			 ON CONFLICT (post_id, recipient) DO NOTHING`,
+			postID, e.Recipient, e.WrappedKey)
+		if err != nil {
+			return nil, err
+		}
+		if ct.RowsAffected() > 0 {
+			added = append(added, e.Recipient)
+		}
+		// Undo any prior tombstone so a re-granted recipient re-fetches the post.
+		if _, err := tx.Exec(ctx, `DELETE FROM post_revocations WHERE post_id = $1 AND recipient::text = $2`, postID, e.Recipient); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM post_deletions WHERE post_id = $1 AND recipient::text = $2`, postID, e.Recipient); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return added, nil
 }
 
 // RemovePostRecipient drops `recipient` from a post's audience (author-only): it
@@ -143,6 +252,9 @@ func (s *Store) RemovePostRecipient(ctx context.Context, postID, author, recipie
 func (s *Store) ListRevocations(ctx context.Context, recipient string) ([]string, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT post_id FROM post_revocations
+		  WHERE recipient::text = $1 AND created_at > now() - interval '30 days'
+		 UNION
+		 SELECT post_id FROM post_deletions
 		  WHERE recipient::text = $1 AND created_at > now() - interval '30 days'`, recipient)
 	if err != nil {
 		return nil, err

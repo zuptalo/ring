@@ -100,3 +100,17 @@ export function stopAudio(): void {
 export function detachAudioEnded(): void {
   endedCb = null;
 }
+
+/** Stop + clear the player IF `url` is the source it's currently playing. Call this right
+ *  before revoking a blob URL — e.g. the voice post being played is deleted/expired — so the
+ *  floating controller doesn't linger over a now-dead source (it would otherwise show a stuck
+ *  track and error on the revoked blob). Resets all now-playing state (hides the controller). */
+export function stopIfPlaying(url: string): void {
+  if (url && audioTrack.value?.url === url) stopAudio();
+}
+
+// Last-resort: if the element itself errors on its source (e.g. the blob was revoked out from
+// under it), don't sit in a stuck "playing" state — tear the player down and hide the controller.
+el.addEventListener('error', () => {
+  if (audioTrack.value) stopAudio();
+});

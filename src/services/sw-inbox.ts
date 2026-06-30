@@ -564,9 +564,35 @@ interface ConnReq {
  * All bodies are identity-safe (no names / ids), so nothing about who is exposed,
  * and no decryption is needed. Returns [] on any auth/network failure.
  */
-export async function previewConnections(): Promise<ConnNote[]> {
+/** A requester's/target's name for a friend-request notification: their public
+ *  directory profile (display name, else @username). Fetched LOCALLY by the SW — the
+ *  identity never rides in the content-free push. 'Someone' if it can't be resolved. */
+async function connName(userId: string, token: string): Promise<string> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/users/${encodeURIComponent(userId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.ok) {
+      const u = (await res.json()) as { displayName?: string; username?: string };
+      return u.displayName?.trim() || (u.username ? `@${u.username}` : 'Someone');
+    }
+  } catch {
+    /* fall through to a generic, identity-safe label */
+  }
+  return 'Someone';
+}
+
+export async function previewConnections(): Promise<{ notes: ConnNote[]; pendingIncoming: number }> {
   const token = await readSessionToken();
-  if (!token) return [];
+  if (!token) return { notes: [], pendingIncoming: 0 };
   let data: { incoming?: ConnReq[]; outgoing?: ConnReq[] };
   try {
     const ctrl = new AbortController();
@@ -577,27 +603,81 @@ export async function previewConnections(): Promise<ConnNote[]> {
     } finally {
       clearTimeout(timer);
     }
-    if (!res.ok) return [];
+    if (!res.ok) return { notes: [], pendingIncoming: 0 };
     data = (await res.json()) as { incoming?: ConnReq[]; outgoing?: ConnReq[] };
   } catch {
-    return [];
+    return { notes: [], pendingIncoming: 0 };
   }
   const seen = new Set((await loadConnShownEntries()).map((e) => e.id));
   const notes: ConnNote[] = [];
-  const add = (key: string, body: string, tag: string): void => {
+  // Title = WHO, body = the action — so iOS renders "<name>: wants to be friends". The app
+  // name ("Ring") is already the notification's source line, so the old "Ring / New friend
+  // request" was doubly redundant.
+  const add = (key: string, title: string, body: string, tag: string): void => {
     if (seen.has(key)) return;
     seen.add(key);
-    notes.push({ keys: [key], title: 'Ring', body, url: '/tabs/contacts', tag });
+    notes.push({ keys: [key], title, body, url: '/tabs/contacts', tag });
   };
+  let pendingIncoming = 0;
   for (const r of data.incoming ?? []) {
-    if (r.state === 'pending' && r.requester) add(`req:${r.requester}`, 'New friend request', 'ring:conn:req');
+    if (r.state === 'pending' && r.requester) {
+      pendingIncoming++;
+      add(`req:${r.requester}`, await connName(r.requester, token), 'wants to be friends', 'ring:conn:req');
+    }
   }
   for (const r of data.outgoing ?? []) {
     if (!r.target) continue;
-    if (r.state === 'accepted') add(`acc:${r.target}`, 'Your friend request was accepted', `ring:conn:acc:${r.target}`);
-    else if (r.state === 'rejected') add(`rej:${r.target}`, 'Your friend request was declined', `ring:conn:rej:${r.target}`);
+    if (r.state === 'accepted') add(`acc:${r.target}`, await connName(r.target, token), 'accepted your friend request', `ring:conn:acc:${r.target}`);
+    else if (r.state === 'rejected') add(`rej:${r.target}`, await connName(r.target, token), 'declined your friend request', `ring:conn:rej:${r.target}`);
   }
-  return notes;
+  return { notes, pendingIncoming };
+}
+
+// Wall: on a "new post" tickle (app closed), name the author instead of a generic placeholder.
+// The author is server-visible metadata (not E2EE content), so this needs NO decryption — we
+// resolve their public directory name, exactly like a friend request. Recent-window + a cursor
+// keep us from re-announcing old posts; collapsed by author so 3 posts from X = one "X posted".
+const POST_SINCE_KEY = 'sw.postNotifySince';
+const POST_RECENT_MS = 10 * 60 * 1000;
+export async function previewPosts(): Promise<{ notes: ConnNote[]; newCount: number }> {
+  const token = await readSessionToken();
+  if (!token) return { notes: [], newCount: 0 };
+  const self = await readSessionUserId();
+  const since = (await setting<number>(POST_SINCE_KEY, 0)) || 0;
+  let data: { posts?: Array<{ id: string; author: string; createdAt: number }>; cursor?: number };
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/posts?since=${since}`, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return { notes: [], newCount: 0 };
+    data = (await res.json()) as typeof data;
+  } catch {
+    return { notes: [], newCount: 0 };
+  }
+  const cutoff = Date.now() - POST_RECENT_MS;
+  const fresh = (data.posts ?? []).filter((p) => p.author && p.author !== self && (p.createdAt ?? 0) > cutoff);
+  const notes: ConnNote[] = [];
+  const seen = new Set<string>();
+  for (const p of fresh) {
+    if (seen.has(p.author)) continue;
+    seen.add(p.author);
+    notes.push({
+      keys: [`post:${p.id}`],
+      title: await connName(p.author, token),
+      body: 'posted on their Wall',
+      url: '/tabs/wall',
+      tag: `ring:post:${p.author}`,
+    });
+  }
+  if (data.cursor && data.cursor > since) {
+    await put<Setting<number>>('settings', { key: POST_SINCE_KEY, value: data.cursor });
+  }
+  return { notes, newCount: fresh.length };
 }
 
 /** Persist the conn-ledger keys we displayed, so the same event doesn't re-notify

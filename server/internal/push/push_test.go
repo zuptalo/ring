@@ -123,8 +123,8 @@ func TestNotifyHeaders(t *testing.T) {
 	if cap.urgency != "high" {
 		t.Errorf("message Urgency = %q, want high", cap.urgency)
 	}
-	if cap.topic != "ring-msg" {
-		t.Errorf("message Topic = %q, want ring-msg", cap.topic)
+	if want := base64.RawURLEncoding.EncodeToString([]byte("ring-msg")); cap.topic != want {
+		t.Errorf("message Topic = %q, want %q (base64url of ring-msg — Apple rejects a non-base64 topic)", cap.topic, want)
 	}
 
 	n.NotifyCall(context.Background(), "u1")
@@ -163,8 +163,8 @@ func TestNotifyConnHeaders(t *testing.T) {
 	if cap.urgency != "high" {
 		t.Errorf("conn Urgency = %q, want high", cap.urgency)
 	}
-	if cap.topic != "ring-conn" {
-		t.Errorf("conn Topic = %q, want ring-conn", cap.topic)
+	if want := base64.RawURLEncoding.EncodeToString([]byte("ring-conn")); cap.topic != want {
+		t.Errorf("conn Topic = %q, want %q (base64url of ring-conn)", cap.topic, want)
 	}
 }
 
@@ -317,8 +317,8 @@ func TestSendVersionHeaders(t *testing.T) {
 	if cap.urgency != "low" {
 		t.Errorf("version Urgency = %q, want low", cap.urgency)
 	}
-	if cap.topic != "ring-version" {
-		t.Errorf("version Topic = %q, want ring-version", cap.topic)
+	if want := base64.RawURLEncoding.EncodeToString([]byte("ring-version")); cap.topic != want {
+		t.Errorf("version Topic = %q, want %q (base64url of ring-version)", cap.topic, want)
 	}
 }
 

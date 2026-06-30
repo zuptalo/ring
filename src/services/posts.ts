@@ -62,6 +62,20 @@ export function buildPost(payload: PostPayload, audience: AudienceMember[]): Bui
   return { blob, envelopes, postKey: bytesToB64url(k) };
 }
 
+/** Re-wrap an EXISTING post's content key K_post to additional audience members. Used to
+ *  broaden a post's audience (close → all friends) WITHOUT rebuilding or re-sealing the
+ *  payload — only new key-envelopes are produced for the added recipients. */
+export function wrapForNewAudience(
+  postKeyB64: string,
+  audience: AudienceMember[],
+): { recipient: string; wrappedKey: string }[] {
+  const k = b64urlToBytes(postKeyB64);
+  return audience.map((m) => ({
+    recipient: m.userId,
+    wrappedKey: JSON.stringify(wrapPostKey(k, m.pubKey)),
+  }));
+}
+
 /**
  * Recover a received post: unwrap K_post from the caller's envelope, then open the
  * sealed payload blob. Returns the payload AND K_post (b64url) — the recipient keeps

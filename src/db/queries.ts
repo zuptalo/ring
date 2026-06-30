@@ -11,11 +11,12 @@ import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
 import { autoSaveIncomingMedia } from '@/services/media-autosave';
-import { buildPost, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
+import { wallSyncedOnce } from '@/services/wall-load';
+import { buildPost, wrapForNewAudience, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
 import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
@@ -2145,6 +2146,21 @@ async function peerPostKey(userId: string): Promise<Uint8Array | null> {
   return b64urlToBytes(bundle.xPub);
 }
 
+// Decode a base64 data URL to a Blob WITHOUT fetch() — fetch of a `data:` URL can hang in the
+// iOS PWA webview, which would freeze a video post on poster generation. Returns undefined on
+// a malformed input.
+function dataUrlToBlobSafe(dataUrl: string): Blob | undefined {
+  try {
+    const comma = dataUrl.indexOf(',');
+    if (comma < 0) return undefined;
+    const mime = dataUrl.slice(0, comma).match(/data:([^;]+)/)?.[1] ?? 'image/jpeg';
+    const bytes = Uint8Array.from(atob(dataUrl.slice(comma + 1)), (c) => c.charCodeAt(0));
+    return new Blob([bytes], { type: mime });
+  } catch {
+    return undefined;
+  }
+}
+
 /** One media attachment for a post: a picked/recorded blob + how to send it. */
 export interface PostMediaInput {
   blob: Blob;
@@ -2231,6 +2247,27 @@ export async function createPost(opts: {
       mediaW = w;
       mediaH = h;
     }
+    // A first-frame poster for videos: the feed (and a not-yet-downloaded recipient) shows a
+    // thumbnail before/without playback instead of a blank box. Stored as a Blob (+ derived
+    // tiers) so the Wall's posterUrl resolves it like an image poster.
+    let posterBlob: Blob | undefined;
+    let posterGrid: Blob | undefined;
+    let posterStrip: Blob | undefined;
+    if (m.kind === 'video') {
+      const dataUrl = await generateVideoPoster(toUpload).catch(() => undefined);
+      // Embed the poster (a small JPEG data URL, ≤~40KB) in the sealed MediaRef so a RECIPIENT
+      // shows the thumbnail without downloading/decoding the clip — exactly how chat video
+      // messages carry MediaRef.poster. It rides in the one sealed post blob, not per envelope.
+      if (dataUrl) ref.poster = dataUrl;
+      // Decode the data URL to a Blob directly (NOT fetch(dataUrl) — that can hang in the iOS
+      // PWA webview) so a video post never stalls on poster generation.
+      if (dataUrl) posterBlob = dataUrlToBlobSafe(dataUrl);
+      if (posterBlob) {
+        const tiers = await deriveTiers(posterBlob).catch(() => ({}) as { grid?: Blob; strip?: Blob });
+        posterGrid = tiers.grid;
+        posterStrip = tiers.strip;
+      }
+    }
     await put<Media>('media', {
       id,
       kind: m.kind,
@@ -2238,6 +2275,9 @@ export async function createPost(opts: {
       name: ref.name,
       size: ref.size,
       blob: toUpload,
+      posterBlob,
+      posterGrid,
+      posterStrip,
       durationSec: ref.durationSec,
       updatedAt: now(),
     });
@@ -2303,10 +2343,9 @@ async function receivePost(sp: ServerPost): Promise<void> {
   let mediaH: number | undefined;
   const mediaIds: string[] = [];
   const refsToGet = payload.album ?? (payload.media ? [payload.media] : []);
+  const pending: { id: string; ref: MediaRef }[] = [];
   if (payload.kind !== 'text') {
     for (const ref of refsToGet) {
-      const mblob = await receiveIncomingMedia(ref).catch(() => null);
-      if (!mblob) continue;
       const id = uid();
       mediaIds.push(id);
       if (mediaIds.length === 1) {
@@ -2317,16 +2356,35 @@ async function receivePost(sp: ServerPost): Promise<void> {
       // A mixed album can carry both images and videos, so derive each item's kind from
       // its mime rather than the post's overall kind.
       const itemKind = ref.mime.startsWith('video/') ? 'video' : ref.mime.startsWith('audio/') ? 'voice' : 'image';
+      // Persist the embedded poster (videos) NOW so the post renders a thumbnail immediately.
+      let posterBlob: Blob | undefined;
+      let posterGrid: Blob | undefined;
+      let posterStrip: Blob | undefined;
+      if (itemKind === 'video' && ref.poster) {
+        posterBlob = dataUrlToBlobSafe(ref.poster);
+        if (posterBlob) {
+          const tiers = await deriveTiers(posterBlob).catch(() => ({}) as { grid?: Blob; strip?: Blob });
+          posterGrid = tiers.grid;
+          posterStrip = tiers.strip;
+        }
+      }
+      // Store the Media record WITHOUT the heavy blob (it's optional — the same shape as a
+      // "kept preview"). The full blob streams in afterwards (downloadPostMedia) so the post +
+      // its Wall badge appear AT ONCE instead of waiting on a full video download. The feed
+      // shows the poster meanwhile and the idb bus live-updates each item as its blob lands.
       await put<Media>('media', {
         id,
         kind: itemKind,
         mime: ref.mime,
         name: ref.name,
         size: ref.size,
-        blob: mblob,
+        posterBlob,
+        posterGrid,
+        posterStrip,
         durationSec: ref.durationSec,
         updatedAt: now(),
       });
+      pending.push({ id, ref });
     }
   }
   const prev = await get<Post>('posts', sp.id);
@@ -2350,6 +2408,24 @@ async function receivePost(sp: ServerPost): Promise<void> {
   // Pull any engagement (reactions/comments) that already exists on this post (also
   // applies keep-alive from past interactions).
   void syncEngagement(sp.id);
+  // Stream the full media in the BACKGROUND — the post is already visible (posters); each blob
+  // landing live-updates the feed (video becomes playable, image fills in).
+  void downloadPostMedia(sp.id, pending);
+}
+
+// Download a received post's media blobs after the post is already on the Wall, attaching each
+// to its (poster-only) Media record. Best-effort + sequential so one slow video doesn't block
+// the others' visibility — they're all already showing their posters. After each blob lands we
+// touch the post so useWall re-resolves it (the freshly-downloaded blob becomes a playable URL).
+async function downloadPostMedia(postId: string, pending: { id: string; ref: MediaRef }[]): Promise<void> {
+  for (const { id, ref } of pending) {
+    const mblob = await receiveIncomingMedia(ref).catch(() => null);
+    if (!mblob) continue;
+    const md = await get<Media>('media', id);
+    if (md) await put<Media>('media', { ...md, blob: mblob, size: ref.size, updatedAt: now() });
+    const post = await get<Post>('posts', postId);
+    if (post) await put<Post>('posts', { ...post, updatedAt: now() });
+  }
 }
 
 /** Pull new posts addressed to us and persist them (called on app open, on the
@@ -2366,6 +2442,9 @@ export async function syncPosts(): Promise<void> {
     if (next > cursor) await setSetting('postsCursor', next);
   } catch {
     /* offline / transient — retried on the next nudge */
+  } finally {
+    // First real sync attempt done (success or transient fail) → drop the Wall first-load spinner.
+    wallSyncedOnce.value = true;
   }
 }
 
@@ -2522,6 +2601,42 @@ export async function getMedia(id: string): Promise<Media | null> {
 export async function deletePost(id: string): Promise<void> {
   await apiDeletePost(id).catch(() => {});
   await remove('posts', id);
+}
+
+/** Explicitly extend one of our own posts' lifetime ("Keep for longer"): the server pushes
+ *  its expiry back to a full window, and we mirror that locally so the countdown updates. */
+export async function keepAlivePost(id: string): Promise<void> {
+  await apiKeepAlivePost(id);
+  await bumpPostActivity(id, now());
+}
+
+/** Change one of our own posts' visibility after the fact (close ↔ all friends). Broadening
+ *  re-wraps K_post to the newly-included friends and adds their envelopes (they receive it
+ *  SILENTLY — no new notification); narrowing revokes the non-close friends' copies (their
+ *  device prunes it). Those already in the audience are never re-notified. */
+export async function setPostAudience(id: string, audience: 'friends' | 'close'): Promise<void> {
+  const post = await get<Post>('posts', id);
+  if (!post || !post.outgoing || !post.postKey || post.audience === audience) return;
+  const closeIds = new Set((await listCloseFriends()).map((c) => c.id));
+  const friends = await listFriends();
+  if (audience === 'friends') {
+    // Broaden: add every friend not already a recipient (i.e. the non-close ones).
+    const members: AudienceMember[] = [];
+    for (const f of friends) {
+      if (closeIds.has(f.id)) continue;
+      const pub = await peerPostKey(f.id);
+      if (pub) members.push({ userId: f.id, pubKey: pub });
+    }
+    if (members.length) await apiAddPostEnvelopes(id, wrapForNewAudience(post.postKey, members));
+  } else {
+    // Narrow: revoke every friend who isn't a close friend (reuses the existing revoke path).
+    for (const f of friends) {
+      if (!closeIds.has(f.id)) await apiRemovePostRecipient(id, f.id).catch(() => {});
+    }
+  }
+  post.audience = audience;
+  post.updatedAt = now();
+  await put<Post>('posts', post);
 }
 
 /** Remove posts (and their engagement) whose lifetime has elapsed. Wired into the

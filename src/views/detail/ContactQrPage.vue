@@ -24,19 +24,21 @@
         <ion-text v-else color="medium"><p>QR code unavailable, register first.</p></ion-text>
       </div>
 
-      <ion-list v-if="username" :inset="true">
-        <ion-item lines="none">
-          <ion-label class="ion-text-center">
-            <p>Your username</p>
+      <!-- Tap a row to copy it. Username for a friend to search; user ID for an exact add. -->
+      <ion-list :inset="true">
+        <ion-item v-if="username" button :detail="false" lines="full" @click="copy('Username', `@${username}`, 'username')">
+          <ion-label class="ion-text-wrap">
+            <p>{{ copiedKey === 'username' ? 'Copied!' : 'Your username — tap to copy' }}</p>
             <h2 class="ring-id">@{{ username }}</h2>
           </ion-label>
         </ion-item>
+        <ion-item v-if="userId" button :detail="false" lines="none" @click="copy('User ID', userId, 'userId')">
+          <ion-label class="ion-text-wrap">
+            <p>{{ copiedKey === 'userId' ? 'Copied!' : 'Your user ID — tap to copy' }}</p>
+            <h2 class="ring-id">{{ userId }}</h2>
+          </ion-label>
+        </ion-item>
       </ion-list>
-      <div v-if="username" class="ion-text-center">
-        <ion-button size="small" fill="outline" @click="copyHandle">
-          {{ copied ? 'Copied' : 'Copy' }}
-        </ion-button>
-      </div>
 
       <ion-list :inset="true">
         <ion-item lines="none">
@@ -54,7 +56,6 @@ import { onMounted, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
   IonContent, IonAvatar, IonText, IonImg, IonSpinner, IonList, IonItem, IonLabel,
-  IonButton,
 } from '@ionic/vue';
 import { appToast } from '@/services/toast';
 import { getSecret } from '@/db/secrets';
@@ -66,13 +67,22 @@ const avatar = ref(initialsAvatar('You'));
 const qr = ref<string | null>(null);
 const loading = ref(true);
 const username = ref<string | null>(null);
-const copied = ref(false);
+const userId = ref<string | null>(null);
+// Which row just copied — drives the per-row checkmark; reset after a beat.
+const copiedKey = ref<string | null>(null);
 
-function copyHandle(): void {
-  if (!username.value) return;
-  void navigator.clipboard?.writeText(`@${username.value}`);
-  copied.value = true;
-  void appToast({ message: 'Username copied', duration: 1200 });
+async function copy(label: string, value: string, key: string): Promise<void> {
+  if (!value) return;
+  try {
+    await navigator.clipboard?.writeText(value);
+    copiedKey.value = key;
+    setTimeout(() => {
+      if (copiedKey.value === key) copiedKey.value = null;
+    }, 1500);
+    void appToast({ message: `${label} copied`, duration: 1200 });
+  } catch {
+    void appToast({ message: 'Copy failed — long-press to select instead', duration: 1600 });
+  }
 }
 
 onMounted(async () => {
@@ -81,6 +91,7 @@ onMounted(async () => {
   avatar.value = photo || initialsAvatar(name.value);
   username.value = getSelfUsername();
   const uid = getSelfUserId();
+  userId.value = uid;
   if (!uid) {
     loading.value = false;
     return;
@@ -100,11 +111,12 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* Render the 36-char UUID on a single line (no wrapping). */
+/* Show the full 36-char UUID — wrap rather than clip so it's always entirely visible. */
 .ring-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.72rem;
-  white-space: nowrap;
+  font-size: 0.95rem;
+  white-space: normal;
+  word-break: break-all;
   margin-top: 2px;
 }
 </style>

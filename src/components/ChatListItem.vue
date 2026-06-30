@@ -252,6 +252,11 @@ ion-label h2 {
      start-aligning (which would right-align RTL). */
   unicode-bidi: plaintext;
   text-align: left;
+  /* Never wrap the name to a second line (e.g. a long group title like "Kamran, Macbook &
+     iPad" on a narrow screen) — keep it one line and truncate with an ellipsis. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .avatar-wrap {
   position: relative;

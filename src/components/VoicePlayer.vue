@@ -157,10 +157,15 @@ onMounted(() => {
   /* min-width:0 (not 100px) so the waveform can shrink below its content on a narrow
      bubble instead of forcing the whole row wider than the chat frame. */
   min-width: 0;
+  /* overflow:hidden is the actual safety net: when the box shrinks below the bars' natural
+     width, the 1px-floor bars would otherwise SPILL to the right — past the bubble and off the
+     screen edge. Clipping keeps the player inside its bubble (a few trailing bars just drop). */
+  overflow: hidden;
 }
 .vp-bar {
   flex: 1;
-  min-width: 2px;
+  /* 1px floor (was 2px) lets more bars fit a narrow waveform before any get clipped. */
+  min-width: 1px;
   border-radius: 1px;
   background: var(--app-text-muted, #8e8e93);
   opacity: 0.45;
