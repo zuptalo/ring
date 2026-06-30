@@ -36,7 +36,8 @@ const DB_NAME = 'ring';
 // existing rows are preserved unchanged and the tiers are filled in by the background backfill.
 // v9 (spec 0003): add the social-Wall stores `posts` + `postEngagement` (additive
 // createObjectStore in onupgradeneeded; existing data untouched).
-const DB_VERSION = 9;
+// v10 (spec 1024): add the `pendingPosts` outbox store (additive; existing data untouched).
+const DB_VERSION = 10;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -147,6 +148,11 @@ export function openDB(): Promise<IDBDatabase> {
         const s = db.createObjectStore('postEngagement', { keyPath: 'id' });
         s.createIndex('postId', 'postId');
       }
+      // v10 (spec 1024): the resilient-posting OUTBOX — pending Wall posts / chat media sends with
+      // their own cached working blobs, drained by the upload worker. Named `pendingPosts` to avoid
+      // the existing message-sync `outbox` store above.
+      if (!db.objectStoreNames.contains('pendingPosts'))
+        db.createObjectStore('pendingPosts', { keyPath: 'id' });
       // Forward message migrations (v6: spec 1010 "read"→"seen" rename; v7: spec 1013
       // seen-reported backfill). They run in ONE cursor pass so a multi-version upgrade
       // (e.g. v5→v7) does not open two racing cursors on the same store that could clobber

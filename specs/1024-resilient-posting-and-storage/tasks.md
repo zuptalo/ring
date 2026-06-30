@@ -7,8 +7,8 @@ feature; server untouched. `[P]` = parallelizable (different files, no incomplet
 
 ## Phase 1 — Setup (shared infrastructure)
 
-- [ ] T001 [P] Add `OutboxPost` + `OutboxItem` types in `src/db/types.ts` (per data-model.md)
-- [ ] T002 Bump `DB_VERSION` and create the `outbox` object store (keyPath `id`) in `onupgradeneeded` in `src/db/idb.ts`
+- [X] T001 [P] Add `OutboxPost` + `OutboxItem` types in `src/db/types.ts` (per data-model.md)
+- [X] T002 Bump `DB_VERSION` and create the `outbox` object store (keyPath `id`) in `onupgradeneeded` in `src/db/idb.ts`
 
 ## Phase 2 — Foundational (blocking prerequisites for all stories)
 
