@@ -97,6 +97,11 @@
             <ion-label>Disappearing messages</ion-label>
             <ion-note slot="end">{{ ttlLabel }}</ion-note>
           </ion-item>
+          <ion-item button :detail="false" @click="openQuality">
+            <ion-icon slot="start" :icon="imagesOutline" />
+            <ion-label>Media quality</ion-label>
+            <ion-note slot="end">{{ qualityLabel }}</ion-note>
+          </ion-item>
           <ion-item button :detail="false" lines="none" @click="openPresenceOverride">
             <ion-icon slot="start" :icon="eyeOutline" />
             <ion-label class="ion-text-wrap">Online & last seen to this contact</ion-label>
@@ -165,7 +170,7 @@ import {
 } from 'ionicons/icons';
 import { computed, ref } from 'vue';
 import {
-  getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl,
+  getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl, setChatSendQuality,
   getPresenceOverrides, setPresenceOverride, setChatNotifyPrefs, type ChatNotifyContent,
   setContactLocalProfile, resetContactToRemote, adoptContactProfile, dismissContactProfile, downscaleAvatar,
   deleteContact,
@@ -342,6 +347,33 @@ async function openTtl(): Promise<void> {
       { text: '7 days', handler: () => void setChatTtl(id, 7 * DAY) },
       { text: '90 days', handler: () => void setChatTtl(id, 90 * DAY) },
       { text: 'Off', handler: () => void setChatTtl(id, null) },
+      { text: 'Cancel', role: 'cancel' as const },
+    ],
+  });
+  await sheet.present();
+}
+
+const QUALITY_ROWS = [
+  { q: 'sd' as const, text: 'SD (smaller)' },
+  { q: 'hd' as const, text: 'HD' },
+  { q: 'fhd' as const, text: 'Full HD' },
+  { q: 'original' as const, text: 'Original' },
+];
+const qualityLabel = computed(() => {
+  const q = chat.value?.sendQuality;
+  return q ? (QUALITY_ROWS.find((r) => r.q === q)?.text ?? q) : 'Default';
+});
+// Per-chat send-quality default (pre-selects the composer's Send-quality prompt). "Default" clears
+// it back to the global Upload-quality setting.
+async function openQuality(): Promise<void> {
+  const id = chat.value?.id;
+  if (!id) return;
+  const sheet = await actionSheetController.create({
+    header: 'Media quality',
+    subHeader: 'Default quality for photos and videos sent in this chat:',
+    buttons: [
+      ...QUALITY_ROWS.map((r) => ({ text: r.text, handler: () => void setChatSendQuality(id, r.q) })),
+      { text: 'Use global default', handler: () => void setChatSendQuality(id, null) },
       { text: 'Cancel', role: 'cancel' as const },
     ],
   });

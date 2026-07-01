@@ -3290,6 +3290,20 @@ export async function collectUnconfirmedOutgoing(): Promise<string[]> {
   return ids.slice(-RECONCILE_ID_CAP);
 }
 
+/** Set (or clear) a chat's media send-quality override. null = fall back to the global setting.
+ *  Purely local (own-data-synced); never leaves the device on the wire. */
+export async function setChatSendQuality(
+  chatId: string,
+  q: 'sd' | 'hd' | 'fhd' | 'original' | null,
+): Promise<void> {
+  const chat = await getChat(chatId);
+  if (!chat) return;
+  if (q) chat.sendQuality = q;
+  else delete chat.sendQuality;
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
 /** Set (or clear) disappearing messages for a chat: messages sent from now on
  *  self-destruct after `ttlMs` (null/0 = off). The setting is shared with the
  *  peer(s) via a `ttl` control so it disappears for everyone. */

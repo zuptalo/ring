@@ -50,10 +50,15 @@
             <ion-label>Notifications</ion-label>
             <ion-note slot="end">{{ muteLabel }}</ion-note>
           </ion-item>
-          <ion-item button :detail="false" lines="none" @click="openTtl">
+          <ion-item button :detail="false" @click="openTtl">
             <ion-icon slot="start" :icon="timerOutline" />
             <ion-label>Disappearing messages</ion-label>
             <ion-note slot="end">{{ ttlLabel }}</ion-note>
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="openQuality">
+            <ion-icon slot="start" :icon="imagesOutline" />
+            <ion-label>Media quality</ion-label>
+            <ion-note slot="end">{{ qualityLabel }}</ion-note>
           </ion-item>
         </ion-list>
 
@@ -158,7 +163,7 @@ import {
 } from 'ionicons/icons';
 import {
   getChat, listContacts, addMemberToGroup, removeMember, leaveGroup,
-  renameGroup, setGroupAvatar, clearGroupAvatar, setChatMute, setChatTtl,
+  renameGroup, setGroupAvatar, clearGroupAvatar, setChatMute, setChatTtl, setChatSendQuality,
   setChatNotifyPrefs, type ChatNotifyContent,
 } from '@/db/queries';
 import type { Chat, Contact } from '@/db/types';
@@ -260,6 +265,29 @@ async function openTtl(): Promise<void> {
       { text: '7 days', handler: () => void setChatTtl(chatId, 7 * DAY) },
       { text: '90 days', handler: () => void setChatTtl(chatId, 90 * DAY) },
       { text: 'Off', handler: () => void setChatTtl(chatId, null) },
+      { text: 'Cancel', role: 'cancel' as const },
+    ],
+  });
+  await sheet.present();
+}
+
+const QUALITY_ROWS = [
+  { q: 'sd' as const, text: 'SD (smaller)' },
+  { q: 'hd' as const, text: 'HD' },
+  { q: 'fhd' as const, text: 'Full HD' },
+  { q: 'original' as const, text: 'Original' },
+];
+const qualityLabel = computed(() => {
+  const q = chat.value?.sendQuality;
+  return q ? (QUALITY_ROWS.find((r) => r.q === q)?.text ?? q) : 'Default';
+});
+async function openQuality(): Promise<void> {
+  const sheet = await actionSheetController.create({
+    header: 'Media quality',
+    subHeader: 'Default quality for photos and videos sent in this group:',
+    buttons: [
+      ...QUALITY_ROWS.map((r) => ({ text: r.text, handler: () => void setChatSendQuality(chatId, r.q) })),
+      { text: 'Use global default', handler: () => void setChatSendQuality(chatId, null) },
       { text: 'Cancel', role: 'cancel' as const },
     ],
   });
