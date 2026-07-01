@@ -980,19 +980,33 @@ export function installTestHook(): void {
         body,
         audience: 'friends',
         lifetime: '72h',
-        items: withVoice
-          ? [{
-              localId: `v-${now}`,
-              blob: new Blob([new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])], { type: 'audio/webm' }),
-              kind: 'voice',
-              name: 'voice.webm',
-              mime: 'audio/webm',
-              durationSec: 3,
-              progress: 0,
-            }]
-          : [],
+        // A photo (inline bytes) plus, optionally, a voice clip — so a test can confirm both survive
+        // the restart and come back staged in the composer.
+        items: [
+          {
+            localId: `img-${now}`,
+            bytes: Uint8Array.from(
+              atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+              (c) => c.charCodeAt(0),
+            ).buffer,
+            kind: 'image',
+            name: 'photo.png',
+            mime: 'image/png',
+            progress: 0,
+          },
+          ...(withVoice
+            ? [{
+                localId: `v-${now}`,
+                bytes: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer,
+                kind: 'voice' as const,
+                name: 'voice.webm',
+                mime: 'audio/webm',
+                durationSec: 3,
+                progress: 0,
+              }]
+            : []),
+        ],
         status: 'interrupted',
-        droppedMedia: true,
         attempts: 0,
         createdLocally: now,
         updatedAt: now,

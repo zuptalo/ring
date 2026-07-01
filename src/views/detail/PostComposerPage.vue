@@ -329,8 +329,8 @@ onMounted(() => {
   void loadResumeDraft();
 });
 
-// Spec 1024: if we arrived via "Finish" on a recovered draft, restore its caption + voice notes.
-// Library photos/videos can't be recovered after a full app close, so the user re-adds those.
+// Spec 1024: if we arrived via "Finish" on a recovered draft, restore the WHOLE post — caption,
+// audience, lifetime, and every attachment (photos, videos and voice) — so it's ready to post as-is.
 async function loadResumeDraft(): Promise<void> {
   const id = typeof route.query.resume === 'string' ? route.query.resume : null;
   if (!id) return;
@@ -341,19 +341,37 @@ async function loadResumeDraft(): Promise<void> {
   if (rec.audience) audience.value = rec.audience;
   if (rec.lifetime) lifetime.value = rec.lifetime;
   for (const it of rec.items) {
-    if (it.kind !== 'voice') continue; // only in-app recordings survive; nothing else is kept here
-    // Rebuild a FRESH in-memory Blob from the inline bytes. The stored Blob can read back broken on
-    // iOS after a reload (its bytes hang), which is what stalled the re-upload — the ArrayBuffer copy
-    // we stashed at enqueue is always readable. Fall back to the Blob if an older draft has no bytes.
-    const blob = it.bytes ? new Blob([it.bytes], { type: it.mime || 'audio/webm' }) : it.blob;
+    // Rebuild a FRESH in-memory Blob from the inline bytes. A Blob read back from IDB can hang on iOS
+    // after a reload; the ArrayBuffer we stashed at enqueue always reads back. Skip an older item that
+    // only has a (now-unreadable) legacy Blob and no bytes.
+    if (!it.bytes && !it.blob) continue;
+    const blob = it.bytes ? new Blob([it.bytes], { type: it.mime || defaultMime(it.kind) }) : (it.blob as Blob);
     mediaItems.value.push({
       blob,
-      kind: 'voice',
+      kind: it.kind,
       name: it.name,
       durationSec: it.durationSec,
       url: URL.createObjectURL(blob),
+      poster: it.poster, // a video's first-frame thumbnail rode along in the outbox record
+      posterTried: it.kind === 'video' ? !!it.poster : undefined,
     });
+    // A recovered video with no saved poster: regenerate one so its tile isn't a black box.
+    if (it.kind === 'video' && !it.poster) {
+      const staged = mediaItems.value[mediaItems.value.length - 1];
+      void generateVideoPoster(blob)
+        .then((poster) => {
+          if (poster) staged.poster = poster;
+        })
+        .catch(() => {})
+        .finally(() => {
+          staged.posterTried = true;
+        });
+    }
   }
+}
+
+function defaultMime(kind: 'image' | 'video' | 'voice'): string {
+  return kind === 'voice' ? 'audio/webm' : kind === 'video' ? 'video/mp4' : 'image/jpeg';
 }
 
 /* ---- voice post recording (mirrors the chat voice recorder, minus the live
