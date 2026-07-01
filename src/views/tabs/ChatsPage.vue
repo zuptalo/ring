@@ -298,7 +298,11 @@ const hasLocked = computed(() => locked.value.length > 0);
 const drafts = useLiveQuery(() => listDrafts(), ['drafts'], [] as ChatDraft[]);
 const draftMap = computed(() => {
   const m = new Map<string, string>();
-  for (const d of drafts.value) if (d.text?.trim() || d.reply) m.set(d.chatId, d.text?.trim() ?? '');
+  for (const d of drafts.value) {
+    // A draft is text, a started reply, and/or staged attachments. The preview is the text if any,
+    // otherwise a label for the attachments (e.g. "Photo", "3 attachments").
+    if (d.text?.trim() || d.reply || d.mediaCount) m.set(d.chatId, d.text?.trim() || d.mediaLabel || '');
+  }
   return m;
 });
 const draftFor = (id: string): string | undefined => draftMap.value.get(id);

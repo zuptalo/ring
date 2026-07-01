@@ -30,6 +30,8 @@ export const STORES = [
   'pendingPosts',
   // v11: per-chat composer drafts (unsent text + caret + reply) so leaving/closing keeps your place.
   'drafts',
+  // v12: staged (unsent) chat attachments for a draft — bytes stored inline so they survive a reload.
+  'draftMedia',
 ] as const;
 export type StoreName = (typeof STORES)[number];
 
@@ -41,7 +43,7 @@ const DB_NAME = 'ring';
 // v9 (spec 0003): add the social-Wall stores `posts` + `postEngagement` (additive
 // createObjectStore in onupgradeneeded; existing data untouched).
 // v10 (spec 1024): add the `pendingPosts` outbox store (additive; existing data untouched).
-const DB_VERSION = 11;
+const DB_VERSION = 12;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -161,6 +163,10 @@ export function openDB(): Promise<IDBDatabase> {
       // is restored when you re-open the chat or relaunch the app. Local-only — never synced.
       if (!db.objectStoreNames.contains('drafts'))
         db.createObjectStore('drafts', { keyPath: 'chatId' });
+      // v12: staged attachments for a chat draft, keyed by chatId. Bytes are stored inline (not as
+      // Blobs) so they read back after a reload on iOS; rebuilt into fresh in-memory files on restore.
+      if (!db.objectStoreNames.contains('draftMedia'))
+        db.createObjectStore('draftMedia', { keyPath: 'chatId' });
       // Forward message migrations (v6: spec 1010 "read"→"seen" rename; v7: spec 1013
       // seen-reported backfill). They run in ONE cursor pass so a multi-version upgrade
       // (e.g. v5→v7) does not open two racing cursors on the same store that could clobber

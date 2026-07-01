@@ -37,6 +37,7 @@ import type {
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
   GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, OutboxItem, ChatDraft,
+  DraftMedia, DraftMediaItem,
 } from './types';
 
 // WhatsApp-style cap on pinned chats.
@@ -2413,6 +2414,16 @@ export async function clearDraft(chatId: string): Promise<void> {
 /** All saved drafts — the Chats list uses this to mark which chats have an unsent message. */
 export async function listDrafts(): Promise<ChatDraft[]> {
   return getAll<ChatDraft>('drafts');
+}
+/* Staged attachments for a chat draft (bytes stored inline; see DraftMedia). */
+export async function getDraftMedia(chatId: string): Promise<DraftMedia | undefined> {
+  return get<DraftMedia>('draftMedia', chatId);
+}
+export async function saveDraftMedia(chatId: string, items: DraftMediaItem[]): Promise<void> {
+  await put<DraftMedia>('draftMedia', { chatId, items, updatedAt: now() });
+}
+export async function clearDraftMedia(chatId: string): Promise<void> {
+  await remove('draftMedia', chatId);
 }
 
 // Persist a single received post: unwrap K_post with our identity key, open the
