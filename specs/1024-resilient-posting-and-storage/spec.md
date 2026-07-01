@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-30
 
-**Status**: planned
+**Status**: in-review
 
 **Input**: User description: "When sharing media to the Wall (and selecting media in chat), make
 posting resilient: tapping Share should dismiss the composer immediately and show a pending
