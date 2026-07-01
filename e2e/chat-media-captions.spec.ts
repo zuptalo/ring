@@ -128,14 +128,15 @@ test('a per-item caption overrides the shared caption for just that item', async
   await photoInput(a).setInputFiles([pngFile('one.png'), pngFile('two.png')]);
   await expect(a.page.locator('.paste-thumb')).toHaveCount(2, { timeout: 10_000 });
 
-  // Tap the FIRST staged item → caption it individually via the alert.
+  // Tap the FIRST staged item → caption it individually via the caption modal.
   await a.page.locator('.paste-tap').first().click();
-  const alertBox = a.page.locator('ion-alert textarea');
-  await alertBox.waitFor({ state: 'visible', timeout: 10_000 });
-  await alertBox.fill('just this one');
-  await a.page.locator('ion-alert button', { hasText: 'Save' }).click();
+  const captionBox = a.page.locator('.caption-modal ion-textarea textarea');
+  await captionBox.waitFor({ state: 'visible', timeout: 10_000 });
+  await captionBox.click();
+  await captionBox.pressSequentially('just this one', { delay: 8 });
+  await a.page.locator('.caption-modal ion-button', { hasText: 'Save' }).click();
   // The captioned item shows its badge ring.
-  await expect(a.page.locator('.paste-thumb.has-cap')).toHaveCount(1);
+  await expect(a.page.locator('.paste-thumb.has-cap')).toHaveCount(1, { timeout: 10_000 });
 
   // Type a SHARED caption for the rest and send individually.
   await composer.click();
