@@ -27,6 +27,23 @@
         </ion-item>
       </ion-list>
 
+      <!-- Disappearing message: exact time left + when it self-destructs (the bubble shows a melting
+           face; the numbers live here). -->
+      <ion-list :inset="true" v-if="message?.expiresAt">
+        <ion-list-header>
+          <ion-icon :icon="timeOutline" />
+          <ion-label>Disappearing message</ion-label>
+        </ion-list-header>
+        <ion-item lines="inset">
+          <ion-label>Disappears in</ion-label>
+          <ion-note slot="end">{{ ttlLeftLabel }}</ion-note>
+        </ion-item>
+        <ion-item lines="none">
+          <ion-label>Disappears at</ion-label>
+          <ion-note slot="end">{{ formatTime(message.expiresAt) }}</ion-note>
+        </ion-item>
+      </ion-list>
+
       <!-- Media facts (quality · resolution · size · format · duration). Shown for
            media in BOTH directions — the metadata that used to sit on the bubble. -->
       <ion-list :inset="true" v-if="message && hasMediaMeta">
@@ -143,7 +160,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
@@ -171,6 +188,27 @@ const message = useLiveQuery<Message | undefined>(
 );
 const chat = useLiveQuery<Chat | undefined>(() => getChat(chatId), ['chats'], undefined);
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+
+// Live countdown for a disappearing message (ticks each second while this page is open).
+const nowMs = ref(Date.now());
+let tick: ReturnType<typeof setInterval> | undefined;
+onMounted(() => (tick = setInterval(() => (nowMs.value = Date.now()), 1000)));
+onUnmounted(() => clearInterval(tick));
+const ttlLeftLabel = computed(() => {
+  const exp = message.value?.expiresAt;
+  if (!exp) return '';
+  let s = Math.max(0, Math.round((exp - nowMs.value) / 1000));
+  if (s <= 0) return 'any moment';
+  const d = Math.floor(s / 86400); s -= d * 86400;
+  const h = Math.floor(s / 3600); s -= h * 3600;
+  const m = Math.floor(s / 60); s -= m * 60;
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m) parts.push(`${m}m`);
+  if (!d && !h) parts.push(`${s}s`); // show seconds only when under an hour
+  return parts.join(' ');
+});
 
 // The on-device media record (for the MIME type → format label + preserved check).
 // Re-runs once the message resolves and we learn its mediaId.
