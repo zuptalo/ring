@@ -20,11 +20,12 @@
         </div>
 
         <ion-grid class="actions">
+          <!-- Spec 1025 US6: Video and Message swapped (Video takes Message's place). -->
           <ion-row>
             <ion-col>
-              <ion-button expand="block" fill="clear" @click="message">
-                <ion-icon slot="start" :icon="chatbubbleOutline" />
-                Message
+              <ion-button expand="block" fill="clear" @click="call('video')">
+                <ion-icon slot="start" :icon="videocamOutline" />
+                Video
               </ion-button>
             </ion-col>
             <ion-col>
@@ -34,9 +35,9 @@
               </ion-button>
             </ion-col>
             <ion-col>
-              <ion-button expand="block" fill="clear" @click="call('video')">
-                <ion-icon slot="start" :icon="videocamOutline" />
-                Video
+              <ion-button expand="block" fill="clear" @click="message">
+                <ion-icon slot="start" :icon="chatbubbleOutline" />
+                Message
               </ion-button>
             </ion-col>
           </ion-row>
@@ -60,7 +61,7 @@
             </p>
           </ion-label>
           <ion-note slot="end">
-            {{ formatTime(c.timestamp) }} · {{ formatClock(c.timestamp) }}
+            {{ formatDay(c.timestamp) }} · {{ formatClock(c.timestamp) }}
           </ion-note>
         </ion-item>
       </ion-list>
@@ -80,7 +81,7 @@ import { getContact, listCallsForContact, listChats } from '@/db/queries';
 import { startDirectCall } from '@/composables/useCall';
 import type { Call, Contact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
-import { formatClock, formatDuration, formatTime } from '@/utils/time';
+import { formatClock, formatDuration, formatDay } from '@/utils/time';
 import { formatBytes } from '@/utils/bytes';
 
 const route = useRoute();

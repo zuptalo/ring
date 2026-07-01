@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  formatTime, formatClock, sameDay, dayLabel, formatFull, formatStamp, formatDuration,
+  formatTime, formatClock, sameDay, dayLabel, formatFull, formatStamp, formatDuration, formatDay,
 } from './time';
 
 const DAY = 86_400_000;
@@ -70,5 +70,15 @@ describe('formatDuration', () => {
     expect(formatDuration(45)).toBe('45 sec');
     expect(formatDuration(90)).toBe('1:30');
     expect(formatDuration(612)).toBe('10:12');
+  });
+});
+
+describe('formatDay', () => {
+  it('formats a local calendar date as YYYY-MM-DD with zero padding', () => {
+    // Construct via local-time components so the assertion is timezone-independent.
+    const ts = new Date(2026, 5, 19, 14, 30).getTime(); // 2026-06-19 local
+    expect(formatDay(ts)).toBe('2026-06-19');
+    const jan = new Date(2026, 0, 3, 0, 5).getTime(); // 2026-01-03 local
+    expect(formatDay(jan)).toBe('2026-01-03');
   });
 });

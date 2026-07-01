@@ -2008,6 +2008,20 @@ export async function listCallGroups(q = ''): Promise<CallGroup[]> {
   return groups;
 }
 
+/** All non-hidden call records (raw, ungrouped, newest first) — the source for the Calls-tab usage
+ *  totals (spec 1025 US6). Hidden calls are excluded so the totals never leak hidden-chat call time,
+ *  mirroring listCallGroups. Fails closed (empty) until the hidden set is known. */
+export async function listCallsForTotals(): Promise<Call[]> {
+  const calls = await listCalls();
+  const hidden = await ensureHiddenLoaded();
+  if (!isHiddenKnown()) return [];
+  if (hidden.size > 0) {
+    const exclude = hiddenCallKeys(await getAll<Chat>('chats'), hidden);
+    return calls.filter((c) => !exclude.has(c.contactId));
+  }
+  return calls;
+}
+
 /** Delete one or more call-log entries (tombstoned so a pull can't resurrect them). */
 export async function deleteCalls(ids: string[]): Promise<void> {
   const deletedAt = now();
