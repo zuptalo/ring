@@ -51,7 +51,6 @@ test('media picked from the library can be captioned before sending (not just pa
   await composer.click();
   await composer.pressSequentially('from my library', { delay: 12 });
   await a.page.getByRole('button', { name: 'Send' }).click();
-  await a.page.getByText('Original quality').click(); // tiny PNGs only offer Original
 
   // The image bubble carries the caption; the staging row is cleared.
   await expect(a.page.locator('.bubble .bubble-image').last()).toBeVisible({ timeout: 30_000 });
@@ -96,7 +95,6 @@ test('multiple picked photos can be sent individually, each carrying the shared 
   await composer.click();
   await composer.pressSequentially('trip', { delay: 12 });
   await a.page.getByRole('button', { name: 'Send' }).click();
-  await a.page.getByText('Original quality').click(); // tiny PNGs only offer Original
 
   // Three SEPARATE image messages (no shared albumId), each carrying the shared caption.
   await expect
@@ -144,7 +142,6 @@ test('a per-item caption overrides the shared caption for just that item', async
   await composer.pressSequentially('the others', { delay: 12 });
   await a.page.locator('.send-mode ion-segment-button').nth(1).click(); // Individual
   await a.page.getByRole('button', { name: 'Send' }).click();
-  await a.page.getByText('Original quality').click(); // tiny PNGs only offer Original
 
   // The first item carries its own caption; the second falls back to the shared one.
   await expect
@@ -184,7 +181,6 @@ test('multiple picked photos sent as an album share one album id with a single c
   await composer.click();
   await composer.pressSequentially('holiday', { delay: 12 });
   await a.page.getByRole('button', { name: 'Send' }).click();
-  await a.page.getByText('Original quality').click(); // tiny PNGs only offer Original
 
   // All three images share ONE album id, and exactly one of them carries the caption.
   await expect
