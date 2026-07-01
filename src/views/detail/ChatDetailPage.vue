@@ -898,6 +898,17 @@
             @paste="onComposerPaste"
           />
           <ion-buttons slot="end">
+            <!-- Per-message disappearing timer (sticky until changed): green when messages you send
+                 will disappear (an override, or the chat's default), grey when they won't. -->
+            <ion-button
+              :aria-label="`Disappearing timer: ${msgTtlLabel}`"
+              :color="effectiveTtlMs ? 'primary' : 'medium'"
+              class="ttl-btn"
+              @click="openMsgTtl"
+            >
+              <ion-icon slot="icon-only" :icon="timerOutline" />
+              <span v-if="effectiveTtlMs" class="ttl-badge">{{ msgTtlShort }}</span>
+            </ion-button>
             <ion-button
               v-if="draft.trim() || pendingMedia.length"
               color="primary"
@@ -1066,7 +1077,7 @@ import {
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
-  chevronDownOutline, chatbubbleEllipses, albumsOutline, imagesOutline, createOutline,
+  chevronDownOutline, chatbubbleEllipses, albumsOutline, imagesOutline, createOutline, timerOutline,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, markChatRead, sendMediaMessage, sendMessage,
@@ -2379,6 +2390,43 @@ const search = ref('');
 const showSearch = ref(false);
 const draft = ref('');
 
+// ---- per-message disappearing timer (composer) ----
+// Sticky override applied to messages you send from now on, on top of the chat/group default:
+//   undefined = follow the chat default · null = off (don't disappear) · >0 = this many ms.
+// It stays until you change it (this session), and is passed as ttlOverrideMs on send.
+const MIN = 60 * 1000;
+const HOUR = 60 * MIN;
+const TTL_DAY = 24 * HOUR;
+const msgTtl = ref<number | null | undefined>(undefined);
+const effectiveTtlMs = computed(() => (msgTtl.value !== undefined ? msgTtl.value : chat.value?.defaultTtlMs ?? null));
+function fmtTtl(ms: number): string {
+  if (ms >= TTL_DAY) return `${Math.round(ms / TTL_DAY)}d`;
+  if (ms >= HOUR) return `${Math.round(ms / HOUR)}h`;
+  return `${Math.round(ms / MIN)}m`;
+}
+const msgTtlShort = computed(() => (effectiveTtlMs.value ? fmtTtl(effectiveTtlMs.value) : ''));
+const msgTtlLabel = computed(() => {
+  if (msgTtl.value === undefined) return effectiveTtlMs.value ? `chat default (${fmtTtl(effectiveTtlMs.value)})` : 'off (chat default)';
+  if (!msgTtl.value) return 'off';
+  return fmtTtl(msgTtl.value);
+});
+async function openMsgTtl(): Promise<void> {
+  const sheet = await actionSheetController.create({
+    header: 'Disappearing timer',
+    subHeader: 'Messages you send disappear after (until you change it):',
+    buttons: [
+      { text: 'Use chat default', handler: () => { msgTtl.value = undefined; } },
+      { text: 'Off', handler: () => { msgTtl.value = null; } },
+      { text: '5 minutes', handler: () => { msgTtl.value = 5 * MIN; } },
+      { text: '1 hour', handler: () => { msgTtl.value = HOUR; } },
+      { text: '24 hours', handler: () => { msgTtl.value = TTL_DAY; } },
+      { text: '7 days', handler: () => { msgTtl.value = 7 * TTL_DAY; } },
+      { text: 'Cancel', role: 'cancel' as const },
+    ],
+  });
+  await sheet.present();
+}
+
 // Keep the line you're typing visible. Once the composer hits its max height it
 // scrolls, but the scroll container is the ion-textarea HOST (its inner native
 // textarea grows to fit, so it never scrolls itself), and the browser only keeps
@@ -3622,7 +3670,7 @@ async function send() {
         it.blob,
         it.blob.name || (it.kind === 'file' ? 'file' : 'photo'),
         undefined,
-        { replyTo: i === 0 ? reply : undefined, caption: cap, albumId: inAlbum ? albumId : undefined, quality },
+        { replyTo: i === 0 ? reply : undefined, caption: cap, albumId: inAlbum ? albumId : undefined, quality, ttlOverrideMs: msgTtl.value },
       );
       if (it.url) URL.revokeObjectURL(it.url);
     }
@@ -3638,7 +3686,7 @@ async function send() {
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
-  await sendMessage(chatId, text, reply, mentions, everyone);
+  await sendMessage(chatId, text, reply, mentions, everyone, msgTtl.value);
   await scrollToNewest();
 }
 
@@ -3738,7 +3786,7 @@ async function onVideoNoteSend(blob: Blob, dur: number, poster?: string): Promis
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
-  await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply, poster });
+  await sendMediaMessage(chatId, 'video', blob, 'video-note', dur, { videoNote: true, replyTo: reply, poster, ttlOverrideMs: msgTtl.value });
 }
 
 // Ask the send quality for photos/videos (WhatsApp-style), offering ONLY the tiers a
@@ -3941,6 +3989,7 @@ async function onAudioReviewSend(meta: { title: string; artist: string }): Promi
     await sendMediaMessage(chatId, 'audio', cur.blob, cur.name, audioReview.value.durationSec, {
       audio: { title: meta.title, artist: meta.artist || undefined },
       replyTo: cur.reply,
+      ttlOverrideMs: msgTtl.value,
     });
     void scrollToNewest();
   }
@@ -4151,7 +4200,7 @@ async function stopAndSendRecording() {
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
-  await sendMediaMessage(chatId, 'voice', blob, 'voice-message', durationSec, { replyTo: reply });
+  await sendMediaMessage(chatId, 'voice', blob, 'voice-message', durationSec, { replyTo: reply, ttlOverrideMs: msgTtl.value });
 }
 
 function cancelRecording() {
@@ -5531,5 +5580,20 @@ function cancelRecording() {
   --padding-bottom: 6px;
   max-height: 7.5rem;
   overflow-y: auto;
+}
+/* Disappearing-timer button: the duration badge tucks under the timer glyph. */
+.ttl-btn {
+  position: relative;
+}
+.ttl-badge {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.3px;
+  pointer-events: none;
 }
 </style>

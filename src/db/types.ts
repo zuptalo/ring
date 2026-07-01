@@ -341,6 +341,10 @@ export interface Message {
   deleted?: boolean; // soft-deleted → shows a "deleted" placeholder
   editedAt?: number; // text rewritten by its author after sending → "edited" tag
   expiresAt?: number; // disappearing messages: epoch ms when this self-destructs
+  // Per-message disappearing override carried from the composer to the DEFERRED media seal (the
+  // compress/upload job seals later, without the send-time opts). undefined = chat default, null/0 =
+  // off. Local-only; never on the wire (the resulting expiresAt is what rides in the payload).
+  ttlOverrideMs?: number | null;
   location?: GeoLocation; // kind === 'location'
   poll?: Poll; // kind === 'poll'
   contact?: SharedContact; // kind === 'contact'

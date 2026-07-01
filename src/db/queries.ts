@@ -336,6 +336,7 @@ export async function sendMessage(
   replyTo?: ReplyRef,
   mentions?: string[],
   mentionsEveryone?: boolean,
+  ttlOverrideMs?: number | null,
 ): Promise<void> {
   const ts = now();
   const chat = await getChat(chatId);
@@ -376,8 +377,8 @@ export async function sendMessage(
   // Seal the message (E2EE) and hand it to the sync engine; receipts advance the
   // status. Group chats fan out to each member over their 1:1 session.
   const payload: MessagePayload = { body, kind: 'text', timestamp: ts, reply: replyTo, mentions: ment, mentionsEveryone: everyone };
-  if (chat?.isGroup) await sealAndEnqueueGroup(chat, message.id, payload);
-  else await sealAndEnqueue(chat, message.id, payload);
+  if (chat?.isGroup) await sealAndEnqueueGroup(chat, message.id, payload, ttlOverrideMs);
+  else await sealAndEnqueue(chat, message.id, payload, ttlOverrideMs);
 
   // Link preview: build it in the background (a relay round-trip + downscale) and
   // patch it in once ready, so the text isn't held up. Best-effort and gated by
@@ -391,11 +392,19 @@ export async function sendMessage(
 /** If the chat has disappearing messages on, stamp the (real, stored) message and
  *  its outgoing payload with an expiry, so both sides sweep it. No-op for control
  *  signals (cards/rekey/ttl), which have no stored message row. */
-async function stampExpiry(chat: Chat, messageId: string, payload: MessagePayload): Promise<void> {
-  if (!chat.defaultTtlMs) return;
+async function stampExpiry(
+  chat: Chat,
+  messageId: string,
+  payload: MessagePayload,
+  ttlOverrideMs?: number | null,
+): Promise<void> {
+  // A per-message override (from the composer timer) wins over the chat default: undefined = use the
+  // chat default; null/0 = explicitly no expiry for this message even if the chat has one; >0 = this.
+  const ttl = ttlOverrideMs !== undefined ? ttlOverrideMs : chat.defaultTtlMs;
+  if (!ttl || ttl <= 0) return;
   const m = await getMessage(messageId);
   if (!m || m.expiresAt) return;
-  const exp = (payload.timestamp || m.timestamp || now()) + chat.defaultTtlMs;
+  const exp = (payload.timestamp || m.timestamp || now()) + ttl;
   payload.expiresAt = exp;
   m.expiresAt = exp;
   await put('messages', m);
@@ -406,10 +415,11 @@ async function sealAndEnqueue(
   chat: Chat | undefined,
   messageId: string,
   payload: MessagePayload,
+  ttlOverrideMs?: number | null,
 ): Promise<void> {
   const peerUserId = chat?.participantIds[0];
   if (!chat || !peerUserId) return;
-  await stampExpiry(chat, messageId, payload);
+  await stampExpiry(chat, messageId, payload, ttlOverrideMs);
   try {
     const sealed = await sealForChat(chat.id, peerUserId, chat.isGroup, payload);
     if (sealed) await enqueue({ t: 'msg', id: messageId, to: sealed.to, ciphertext: sealed.packet });
@@ -479,8 +489,9 @@ async function sealAndEnqueueGroup(
   chat: Chat,
   messageId: string,
   payload: MessagePayload,
+  ttlOverrideMs?: number | null,
 ): Promise<void> {
-  await stampExpiry(chat, messageId, payload); // disappearing messages: one stamp, fanned out
+  await stampExpiry(chat, messageId, payload, ttlOverrideMs); // disappearing messages: one stamp, fanned out
   for (const member of chat.participantIds) {
     try {
       // Don't seal to a member who has left the network (ghosted) or whom we've
@@ -639,8 +650,15 @@ function newOutgoing(chat: Chat | undefined, chatId: string, kind: MessageKind, 
 }
 
 /** Seal + relay an outgoing payload (1:1 peer or group fan-out). */
-function enqueueMessage(chat: Chat | undefined, messageId: string, payload: MessagePayload): Promise<void> {
-  return chat?.isGroup ? sealAndEnqueueGroup(chat, messageId, payload) : sealAndEnqueue(chat, messageId, payload);
+function enqueueMessage(
+  chat: Chat | undefined,
+  messageId: string,
+  payload: MessagePayload,
+  ttlOverrideMs?: number | null,
+): Promise<void> {
+  return chat?.isGroup
+    ? sealAndEnqueueGroup(chat, messageId, payload, ttlOverrideMs)
+    : sealAndEnqueue(chat, messageId, payload, ttlOverrideMs);
 }
 
 /** Reject an outbound message to a 1:1 peer who is ghosted (account terminated)
@@ -1447,6 +1465,8 @@ export async function sendMediaMessage(
     /** Caption typed alongside the media (the message body); receivers render it
      *  under the photo/video. Clamped to CAPTION_MAX. */
     caption?: string;
+    /** Per-message disappearing override (composer timer): undefined = chat default, null/0 = off. */
+    ttlOverrideMs?: number | null;
   },
 ): Promise<string> {
   const ts = now();
@@ -1487,6 +1507,8 @@ export async function sendMediaMessage(
     compressQuality: compressible ? (opts!.quality as 'sd' | 'hd' | 'fhd') : undefined,
     // The HD/SD/Original badge shown on photo/video bubbles (both sides).
     mediaQuality: kind === 'image' || kind === 'video' ? (opts?.quality ?? 'original') : undefined,
+    // Carry the composer's per-message disappearing override to the deferred seal (below).
+    ttlOverrideMs: opts?.ttlOverrideMs,
     jobAttempts: 0,
     receipts: chat?.isGroup
       ? chat.participantIds.map((contactId) => ({ contactId }))
@@ -1560,8 +1582,8 @@ async function sealMediaAndEnqueue(
     videoNote: message.videoNote,
     audio: message.audio,
   };
-  if (chat.isGroup) await sealAndEnqueueGroup(chat, message.id, payload);
-  else await sealAndEnqueue(chat, message.id, payload);
+  if (chat.isGroup) await sealAndEnqueueGroup(chat, message.id, payload, message.ttlOverrideMs);
+  else await sealAndEnqueue(chat, message.id, payload, message.ttlOverrideMs);
   // Remember the uploaded blob id so we can DELETE it from the server once every recipient
   // has downloaded the bytes (and on chat delete). Re-read the row to avoid clobbering a
   // concurrent status update from the send we just enqueued.
