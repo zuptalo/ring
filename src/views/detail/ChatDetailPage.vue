@@ -345,8 +345,9 @@
                   </svg>
                   <ion-icon :icon="downloadOutline" />
                 </span>
-                <!-- Attachment size, so a large clip is obvious before you spend the data. -->
-                <span v-if="m.mediaSize" class="dl-size">{{ formatBytes(m.mediaSize) }}</span>
+                <!-- Attachment size (climbs live while downloading), so a large clip is obvious
+                     before you spend the data. -->
+                <span v-if="m.mediaSize" class="dl-size">{{ dlSizeLabel(m) }}</span>
               </div>
               <!-- Audio/file not downloaded yet: a chip with the name/size and a download button. -->
               <button
@@ -363,7 +364,7 @@
                   <ion-icon :icon="m.id in downloadProgress ? downloadOutline : (m.kind === 'audio' ? musicalNotesOutline : downloadOutline)" />
                 </span>
                 <span>{{ m.pendingMedia.name || (m.kind === 'audio' ? 'Audio' : 'File') }}</span>
-                <span v-if="m.mediaSize" class="chip-size">{{ formatBytes(m.mediaSize) }}</span>
+                <span v-if="m.mediaSize" class="chip-size">{{ dlSizeLabel(m) }}</span>
               </button>
 
               <!-- Media removed from THIS device to free space: a placeholder so the
@@ -1310,6 +1311,14 @@ async function downloadPendingMedia(id: string): Promise<void> {
   } finally {
     delete downloadProgress[id];
   }
+}
+// The size label on a not-yet-downloaded attachment: just the total when idle, or a live
+// "downloaded / total" counter (e.g. "45.2 MB / 127.8 MB") that climbs while it downloads.
+function dlSizeLabel(m: Message): string {
+  const total = m.mediaSize || 0;
+  if (!total) return '';
+  const p = downloadProgress[m.id];
+  return p === undefined ? formatBytes(total) : `${formatBytes(p * total)} / ${formatBytes(total)}`;
 }
 
 
