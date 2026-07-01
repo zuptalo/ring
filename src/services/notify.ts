@@ -39,7 +39,6 @@ interface NotifyPrefs {
   showPreview: boolean;
   inappSounds: boolean;
   messageSound: string;
-  inappVibrate: boolean;
   inappStyle: string;
 }
 const PREF_DEFAULTS: NotifyPrefs = {
@@ -47,22 +46,20 @@ const PREF_DEFAULTS: NotifyPrefs = {
   showPreview: true,
   inappSounds: false,
   messageSound: 'note',
-  inappVibrate: true,
   inappStyle: 'banners',
 };
 let prefs: NotifyPrefs = { ...PREF_DEFAULTS };
 let prefsHydrated = false;
 
 async function loadPrefs(): Promise<void> {
-  const [showMessages, showPreview, inappSounds, messageSound, inappVibrate, inappStyle] = await Promise.all([
+  const [showMessages, showPreview, inappSounds, messageSound, inappStyle] = await Promise.all([
     getSetting<boolean>('notifications.message.show', PREF_DEFAULTS.showMessages),
     getSetting<boolean>('notifications.showPreview', PREF_DEFAULTS.showPreview),
     getSetting<boolean>('notifications.inapp.sounds', PREF_DEFAULTS.inappSounds),
     getSetting<string>('notifications.message.sound', PREF_DEFAULTS.messageSound),
-    getSetting<boolean>('notifications.inapp.vibrate', PREF_DEFAULTS.inappVibrate),
     getSetting<string>('notifications.inapp.style', PREF_DEFAULTS.inappStyle),
   ]);
-  prefs = { showMessages, showPreview, inappSounds, messageSound, inappVibrate, inappStyle };
+  prefs = { showMessages, showPreview, inappSounds, messageSound, inappStyle };
 }
 
 async function ensurePrefs(): Promise<NotifyPrefs> {
@@ -347,17 +344,10 @@ function targetUrl(n: IncomingNotice): string {
   return '/tabs/contacts'; // request
 }
 
-async function inAppSoundAndHaptics(): Promise<void> {
+async function inAppSound(): Promise<void> {
   const p = await ensurePrefs();
   if (p.inappSounds) {
     playTone(p.messageSound);
-  }
-  if (p.inappVibrate) {
-    try {
-      navigator.vibrate?.(40);
-    } catch {
-      /* unsupported */
-    }
   }
 }
 
@@ -432,7 +422,7 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
       // Viewing this chat while visible → still give a subtle sound (the user sees
       // the message inline). Every other suppress reason (muted / content=none /
       // in-app off / settle-swallowed) is fully silent.
-      if (n.chatId && n.chatId === activeChatId && appVisible()) await inAppSoundAndHaptics();
+      if (n.chatId && n.chatId === activeChatId && appVisible()) await inAppSound();
       return false;
     }
     if (owner === 'sw-notification') {
@@ -450,18 +440,23 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
       if (!n.pushWoken && (content !== 'none' || isMention)) {
         const showFull = content === 'full' && p.showPreview;
         const text = showFull ? n.body : isMention ? mentionBody : 'New message';
-        void notifyLocal(n.name, text, targetUrl(n), n.chatId);
+        // Preview off hides WHO it's from too, not just the body. A mention is an opt-in
+        // escalation and keeps naming the mentioner.
+        const title = p.showPreview || isMention ? n.name : 'Ring';
+        void notifyLocal(title, text, targetUrl(n), n.chatId);
       }
       return false;
     }
 
     // owner === 'page-banner': show the in-app banner/alert.
     const showFull = content === 'full' && p.showPreview;
-    await inAppSoundAndHaptics();
+    await inAppSound();
     if (p.inappStyle === 'none') return false; // sound only; no visible surface
     const url = targetUrl(n);
     const bodyText = showFull ? n.body : isMention ? mentionBody : 'New message';
-    const presented = await presentMessageBanner(n, bodyText, url, p.inappStyle);
+    // Preview off → the banner also drops the sender name + avatar (mention keeps the name).
+    const display = p.showPreview || isMention ? n : { ...n, name: 'Ring', avatar: '' };
+    const presented = await presentMessageBanner(display, bodyText, url, p.inappStyle);
     if (presented) notifyBannerPresented(); // tell the drain hand-off we claimed it
     return presented;
   }
@@ -488,7 +483,7 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
   // Visible: gated by the GLOBAL in-app master switch (FR-018; suppresses request
   // banners while leaving their web push intact).
   if (!(await inAppGloballyEnabled())) return false;
-  await inAppSoundAndHaptics();
+  await inAppSound();
   if (p.inappStyle === 'none') return false;
   const url = targetUrl(n);
   const bodyText = full ? n.body : '';
