@@ -3745,17 +3745,29 @@ async function onVideoNoteSend(blob: Blob, dur: number, poster?: string): Promis
 // source of this resolution can actually produce — no upscaling, no "4K" on a 720p clip
 // (spec 2007). `longEdge` is the largest source's longest pixel edge. When the source is
 // below the smallest tier it simply lists Original alone. Returns null on cancel.
-function pickQuality(longEdge?: number): Promise<Quality | null> {
+// This chat's default send quality: the per-chat override, else the global Upload-quality setting
+// (mapped onto the send tiers), else HD. Drives which option the Send-quality prompt pre-selects.
+async function resolvedSendQuality(): Promise<Quality> {
+  const perChat = chat.value?.sendQuality;
+  if (perChat) return perChat;
+  const global = await getSetting<string>('storage.uploadQuality', 'hd');
+  return global === 'standard' ? 'sd' : 'hd';
+}
+
+async function pickQuality(longEdge?: number): Promise<Quality | null> {
   const opts = availableQualities(longEdge);
   // Highest fidelity first (Original, then Full HD → SD), mirroring WhatsApp's ordering.
-  const tiers = opts.filter((q) => q !== 'original').reverse();
+  const ordered: Quality[] = ['original', ...opts.filter((q) => q !== 'original').reverse()];
+  // Float the chat's default to the top and mark it, so it's a one-tap send (spec: better default).
+  const def = await resolvedSendQuality();
+  if (ordered.includes(def)) ordered.sort((a, b) => (a === def ? -1 : b === def ? 1 : 0));
+  const label = (q: Quality): string => {
+    const base = q === 'original' ? 'Original quality' : q === 'sd' ? 'SD quality (smaller)' : `${qualityLabel(q)} quality`;
+    return q === def ? `${base} · Default` : base;
+  };
   return new Promise((resolve) => {
     const buttons: import('@ionic/vue').ActionSheetButton[] = [
-      { text: 'Original quality', handler: () => resolve('original') },
-      ...tiers.map((q) => ({
-        text: q === 'sd' ? 'SD quality (smaller)' : `${qualityLabel(q)} quality`,
-        handler: () => resolve(q),
-      })),
+      ...ordered.map((q) => ({ text: label(q), handler: () => resolve(q) })),
       { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
     ];
     void actionSheetController
