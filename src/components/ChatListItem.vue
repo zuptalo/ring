@@ -193,7 +193,16 @@ function more(): void {
    easy to tell apart from normal chats during a reveal session. Only renders while
    revealed (the row isn't in the list otherwise), so it leaks nothing when locked. */
 .hidden-row {
-  --background: var(--ring-hidden-tint, rgba(var(--ion-color-medium-rgb, 146, 148, 156), 0.1));
+  /* Spec 1025 US3: composite the subtle hidden tint over an OPAQUE item base. A translucent
+     --background let the swipe action buttons bleed through the sliding row (the row content looked
+     like it floated on top of them); an opaque background makes the buttons visible only in the
+     revealed area, like a normal row, while keeping the tint cue. */
+  --background: linear-gradient(
+      0deg,
+      var(--ring-hidden-tint, rgba(var(--ion-color-medium-rgb, 146, 148, 156), 0.1)),
+      var(--ring-hidden-tint, rgba(var(--ion-color-medium-rgb, 146, 148, 156), 0.1))
+    ),
+    var(--ion-item-background, var(--ion-background-color, #fff));
 }
 .hidden-ico {
   color: var(--ion-color-medium);
