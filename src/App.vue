@@ -54,6 +54,8 @@ import { useAppUpdate, checkForUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
 import { takePendingNav } from '@/services/pending-nav';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
+import { setAutoplayGifsEnabled } from '@/directives/autoplay-visible';
+import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import type { Message } from '@/db/types';
 
@@ -64,6 +66,12 @@ useSync();
 // Registers the service worker and prompts (with the version) when a new deploy is
 // ready, instead of silently reloading. See useAppUpdate + vite.config 'prompt'.
 useAppUpdate();
+
+// Push the Appearance → Animations "GIFs move automatically" preference into the feed autoplay
+// coordinator (its gate is synchronous, the setting is async), so turning it off actually stops
+// GIF/video autoplay.
+const { animGifs } = useAnimationPrefs();
+watch(animGifs, (on) => setAutoplayGifsEnabled(on !== false), { immediate: true });
 
 const router = useRouter();
 
@@ -96,7 +104,7 @@ watch(
       // via openWindow); now that we're unlocked and the tabs are reachable, route there. The
       // microtask defer lets the auth gate's default landing settle first so this wins.
       void takePendingNav().then((url) => {
-        if (url) void routeRelevant(url);
+        if (url) void routeRelevant(url, true); // cold start: seed Chats beneath the deep link
       });
     } else {
       clearWarm();
@@ -172,17 +180,26 @@ watch(
 
 // When opened from a notification, land on the relevant place: the deep-link the
 // service worker hands us, or, for a content-free push, the most pertinent tab.
-async function routeRelevant(url?: string): Promise<void> {
-  if (url) {
-    router.push(url);
-    return;
+// `coldStart` is true when we're launching fresh from a tapped notification: the deep-link
+// target is then the ONLY history entry, so a Back/swipe-back would underflow to a blank shell.
+// In that case seed the Chats home BENEATH the target (replace current → Chats, then push the
+// target) so the first Back always returns to the Chats list. Live in-app navigation keeps normal
+// push behaviour.
+async function routeRelevant(url?: string, coldStart = false): Promise<void> {
+  let target = url;
+  if (!target) {
+    if ((await countPendingRequests()) > 0) target = '/tabs/contacts';
+    else {
+      const unread = (await listChats()).find((c) => c.unread > 0); // newest-first
+      target = unread ? `/chat/${unread.id}` : '/tabs/chats';
+    }
   }
-  if ((await countPendingRequests()) > 0) {
-    router.push('/tabs/contacts');
-    return;
+  if (coldStart && target !== '/tabs/chats') {
+    await router.replace('/tabs/chats');
+    await router.push(target);
+  } else {
+    router.push(target);
   }
-  const unread = (await listChats()).find((c) => c.unread > 0); // newest-first
-  router.push(unread ? `/chat/${unread.id}` : '/tabs/chats');
 }
 
 // How long to wait for a drained message's in-app banner to render before giving

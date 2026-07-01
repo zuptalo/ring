@@ -36,6 +36,16 @@ export function setAutoplayMuted(muted: boolean): void {
 const PLAY_AT = 0.6;
 const STOP_AT = 0.25;
 
+// The Appearance → Animations "GIFs move automatically" preference (chats.animGifs). The gate here
+// is synchronous while the setting is async, so the app pushes the current value in via
+// setAutoplayGifsEnabled (wired from useAnimationPrefs in App.vue). Off = never autoplay.
+let gifsEnabled = true;
+export function setAutoplayGifsEnabled(on: boolean): void {
+  gifsEnabled = on;
+  if (!on) setActive(null);
+  else reconcile();
+}
+
 const registered = new Set<HTMLVideoElement>();
 const ratios = new Map<HTMLVideoElement, number>();
 let current: HTMLVideoElement | null = null;
@@ -88,7 +98,7 @@ function setActive(el: HTMLVideoElement | null): void {
 // Pick the most-visible registered video and make it the single active one; drop the
 // current one once it's mostly off screen.
 function reconcile(): void {
-  if (lowData() || suspended) {
+  if (lowData() || suspended || !gifsEnabled) {
     setActive(null);
     return;
   }
