@@ -249,10 +249,13 @@ export function noteForPayload(
   const showText = content === 'full' && showPreview;
   const preview = showText ? notifyPreview(payload) : 'New message';
   const chatId = chat?.id;
+  // "Show preview" off hides WHO it's from too, not just the body: use a generic title instead of
+  // the sender / group name. (Hidden chats and @mentions are handled above and keep their own rules.)
+  const title = showPreview ? (isGroup ? groupChat?.name || 'Group' : senderName) : 'Ring';
   return {
     note: {
       ids: [f.id as string],
-      title: isGroup ? groupChat?.name || 'Group' : senderName,
+      title,
       // Group previews prefix the sender (WhatsApp-style), but only when we know who
       // they are and full content is allowed, never the bare "Someone:" garble.
       body: isGroup && showText && known ? `${known}: ${preview}` : preview,
