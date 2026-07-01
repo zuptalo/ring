@@ -97,10 +97,15 @@
             <ion-label>Disappearing messages</ion-label>
             <ion-note slot="end">{{ ttlLabel }}</ion-note>
           </ion-item>
-          <ion-item button :detail="false" @click="openQuality">
+          <ion-item button :detail="false" @click="openQuality('photo')">
             <ion-icon slot="start" :icon="imagesOutline" />
-            <ion-label>Media quality</ion-label>
-            <ion-note slot="end">{{ qualityLabel }}</ion-note>
+            <ion-label>Photo quality</ion-label>
+            <ion-note slot="end">{{ qualityLabel('photo') }}</ion-note>
+          </ion-item>
+          <ion-item button :detail="false" @click="openQuality('video')">
+            <ion-icon slot="start" :icon="videocamOutline" />
+            <ion-label>Video quality</ion-label>
+            <ion-note slot="end">{{ qualityLabel('video') }}</ion-note>
           </ion-item>
           <ion-item button :detail="false" lines="none" @click="openPresenceOverride">
             <ion-icon slot="start" :icon="eyeOutline" />
@@ -164,7 +169,7 @@ import {
   alertController, actionSheetController,
 } from '@ionic/vue';
 import {
-  chatbubbleOutline, searchOutline, banOutline, imagesOutline,
+  chatbubbleOutline, searchOutline, banOutline, imagesOutline, videocamOutline,
   notificationsOutline, notificationsOffOutline, starOutline, timerOutline, eyeOutline, documentTextOutline,
   createOutline, cameraOutline, refreshOutline, personOutline, trashOutline,
 } from 'ionicons/icons';
@@ -359,21 +364,21 @@ const QUALITY_ROWS = [
   { q: 'fhd' as const, text: 'Full HD' },
   { q: 'original' as const, text: 'Original' },
 ];
-const qualityLabel = computed(() => {
-  const q = chat.value?.sendQuality;
+// Per-chat send-quality override for a kind (photos vs videos). "Default" clears it back to the
+// global Upload-quality setting for that kind.
+function qualityLabel(kind: 'photo' | 'video'): string {
+  const q = kind === 'photo' ? chat.value?.sendQualityPhoto : chat.value?.sendQualityVideo;
   return q ? (QUALITY_ROWS.find((r) => r.q === q)?.text ?? q) : 'Default';
-});
-// Per-chat send-quality default (pre-selects the composer's Send-quality prompt). "Default" clears
-// it back to the global Upload-quality setting.
-async function openQuality(): Promise<void> {
+}
+async function openQuality(kind: 'photo' | 'video'): Promise<void> {
   const id = chat.value?.id;
   if (!id) return;
   const sheet = await actionSheetController.create({
-    header: 'Media quality',
-    subHeader: 'Default quality for photos and videos sent in this chat:',
+    header: kind === 'photo' ? 'Photo quality' : 'Video quality',
+    subHeader: `Quality for ${kind === 'photo' ? 'photos' : 'videos'} sent in this chat:`,
     buttons: [
-      ...QUALITY_ROWS.map((r) => ({ text: r.text, handler: () => void setChatSendQuality(id, r.q) })),
-      { text: 'Use global default', handler: () => void setChatSendQuality(id, null) },
+      ...QUALITY_ROWS.map((r) => ({ text: r.text, handler: () => void setChatSendQuality(id, kind, r.q) })),
+      { text: 'Use global default', handler: () => void setChatSendQuality(id, kind, null) },
       { text: 'Cancel', role: 'cancel' as const },
     ],
   });

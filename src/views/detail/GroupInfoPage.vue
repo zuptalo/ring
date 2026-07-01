@@ -55,10 +55,15 @@
             <ion-label>Disappearing messages</ion-label>
             <ion-note slot="end">{{ ttlLabel }}</ion-note>
           </ion-item>
-          <ion-item button :detail="false" lines="none" @click="openQuality">
+          <ion-item button :detail="false" @click="openQuality('photo')">
             <ion-icon slot="start" :icon="imagesOutline" />
-            <ion-label>Media quality</ion-label>
-            <ion-note slot="end">{{ qualityLabel }}</ion-note>
+            <ion-label>Photo quality</ion-label>
+            <ion-note slot="end">{{ qualityLabel('photo') }}</ion-note>
+          </ion-item>
+          <ion-item button :detail="false" lines="none" @click="openQuality('video')">
+            <ion-icon slot="start" :icon="videocamOutline" />
+            <ion-label>Video quality</ion-label>
+            <ion-note slot="end">{{ qualityLabel('video') }}</ion-note>
           </ion-item>
         </ion-list>
 
@@ -159,7 +164,7 @@ import {
 import {
   personAddOutline, exitOutline, createOutline, cameraOutline, ellipsisHorizontal,
   imagesOutline, searchOutline, notificationsOutline, notificationsOffOutline, starOutline, timerOutline, atOutline,
-  chatbubbleOutline, documentTextOutline,
+  chatbubbleOutline, documentTextOutline, videocamOutline,
 } from 'ionicons/icons';
 import {
   getChat, listContacts, addMemberToGroup, removeMember, leaveGroup,
@@ -277,17 +282,17 @@ const QUALITY_ROWS = [
   { q: 'fhd' as const, text: 'Full HD' },
   { q: 'original' as const, text: 'Original' },
 ];
-const qualityLabel = computed(() => {
-  const q = chat.value?.sendQuality;
+function qualityLabel(kind: 'photo' | 'video'): string {
+  const q = kind === 'photo' ? chat.value?.sendQualityPhoto : chat.value?.sendQualityVideo;
   return q ? (QUALITY_ROWS.find((r) => r.q === q)?.text ?? q) : 'Default';
-});
-async function openQuality(): Promise<void> {
+}
+async function openQuality(kind: 'photo' | 'video'): Promise<void> {
   const sheet = await actionSheetController.create({
-    header: 'Media quality',
-    subHeader: 'Default quality for photos and videos sent in this group:',
+    header: kind === 'photo' ? 'Photo quality' : 'Video quality',
+    subHeader: `Quality for ${kind === 'photo' ? 'photos' : 'videos'} sent in this group:`,
     buttons: [
-      ...QUALITY_ROWS.map((r) => ({ text: r.text, handler: () => void setChatSendQuality(chatId, r.q) })),
-      { text: 'Use global default', handler: () => void setChatSendQuality(chatId, null) },
+      ...QUALITY_ROWS.map((r) => ({ text: r.text, handler: () => void setChatSendQuality(chatId, kind, r.q) })),
+      { text: 'Use global default', handler: () => void setChatSendQuality(chatId, kind, null) },
       { text: 'Cancel', role: 'cancel' as const },
     ],
   });

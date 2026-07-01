@@ -3312,16 +3312,18 @@ export async function collectUnconfirmedOutgoing(): Promise<string[]> {
   return ids.slice(-RECONCILE_ID_CAP);
 }
 
-/** Set (or clear) a chat's media send-quality override. null = fall back to the global setting.
- *  Purely local (own-data-synced); never leaves the device on the wire. */
+/** Set (or clear) a chat's per-kind media send-quality override. null = fall back to the global
+ *  setting for that kind. Purely local (own-data-synced); never leaves the device on the wire. */
 export async function setChatSendQuality(
   chatId: string,
+  kind: 'photo' | 'video',
   q: 'sd' | 'hd' | 'fhd' | 'original' | null,
 ): Promise<void> {
   const chat = await getChat(chatId);
   if (!chat) return;
-  if (q) chat.sendQuality = q;
-  else delete chat.sendQuality;
+  const field = kind === 'photo' ? 'sendQualityPhoto' : 'sendQualityVideo';
+  if (q) chat[field] = q;
+  else delete chat[field];
   chat.updatedAt = now();
   await put('chats', chat);
 }

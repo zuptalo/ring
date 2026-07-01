@@ -1121,8 +1121,8 @@ import { segmentEmoji, emojiOnlyCount } from '@/utils/emoji';
 import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
 import { jobProgress } from '@/services/media-jobs';
-import { generateVideoPoster, generateImageThumb, isAnimatedImage, readImageMeta, readVideoMeta } from '@/utils/media-meta';
-import { type Quality, availableQualities, qualityLabel, isPreservedImageMime } from '@/services/media-encode';
+import { generateVideoPoster, generateImageThumb, isAnimatedImage } from '@/utils/media-meta';
+import { type Quality } from '@/services/media-encode';
 import { openExternal } from '@/utils/external';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing } from '@/utils/text';
@@ -3630,22 +3630,11 @@ async function send() {
   // album carries the caption once (on the first item); individual messages each carry it.
   // Files are never part of an album.
   if (pendingMedia.value.length) {
-    // Ask the send quality once for the whole batch (photos/videos), as the chat composer
-    // has always done — quality is a per-chat choice (the HD-only rule is a Wall thing, not
-    // chats). GIF/WebP are sent untouched, so a batch with nothing compressible skips the
-    // no-op prompt. Cancelling keeps the staged media + the draft intact.
-    const compressible = pendingMedia.value.filter(
-      (it) => (it.kind === 'image' || it.kind === 'video') && !isPreservedImageMime(it.blob.type),
-    );
-    let quality: Quality = 'original';
-    if (compressible.length) {
-      const longEdge = await maxSourceLongEdge(
-        compressible.map((it) => ({ blob: it.blob, kind: it.kind as 'image' | 'video' })),
-      );
-      const picked = await pickQuality(longEdge);
-      if (picked === null) return; // cancelled
-      quality = picked;
-    }
+    // Quality is applied silently PER KIND from the resolved settings (photo vs video, per-chat
+    // override else the global Upload-quality) — no prompt. A source below the tier is never
+    // upscaled, so a high setting is safe; GIF/WebP images send untouched regardless.
+    const photoQ = await resolveSendQuality('image');
+    const videoQ = await resolveSendQuality('video');
     const items = pendingMedia.value.slice();
     pendingMedia.value = [];
     const caption = text;
@@ -3664,6 +3653,7 @@ async function send() {
       // A per-item caption (set by tapping the thumbnail) wins for that item; otherwise the
       // shared caption applies — once for an album (first item), or to each individual message.
       const cap = it.caption || (asAlbum ? (i === 0 ? caption : undefined) : caption);
+      const quality = it.kind === 'image' ? photoQ : it.kind === 'video' ? videoQ : 'original';
       await sendMediaMessage(
         chatId,
         it.kind,
@@ -3793,60 +3783,12 @@ async function onVideoNoteSend(blob: Blob, dur: number, poster?: string): Promis
 // source of this resolution can actually produce — no upscaling, no "4K" on a 720p clip
 // (spec 2007). `longEdge` is the largest source's longest pixel edge. When the source is
 // below the smallest tier it simply lists Original alone. Returns null on cancel.
-// This chat's default send quality: the per-chat override, else the global Upload-quality setting
-// (mapped onto the send tiers), else HD. Drives which option the Send-quality prompt pre-selects.
-async function resolvedSendQuality(): Promise<Quality> {
-  const perChat = chat.value?.sendQuality;
-  if (perChat) return perChat;
-  const global = await getSetting<string>('storage.uploadQuality', 'hd');
-  return global === 'standard' ? 'sd' : 'hd';
-}
-
-async function pickQuality(longEdge?: number): Promise<Quality | null> {
-  const opts = availableQualities(longEdge);
-  // Highest fidelity first (Original, then Full HD → SD), mirroring WhatsApp's ordering.
-  const ordered: Quality[] = ['original', ...opts.filter((q) => q !== 'original').reverse()];
-  // Float the chat's default to the top and mark it, so it's a one-tap send (spec: better default).
-  const def = await resolvedSendQuality();
-  if (ordered.includes(def)) ordered.sort((a, b) => (a === def ? -1 : b === def ? 1 : 0));
-  const label = (q: Quality): string => {
-    const base = q === 'original' ? 'Original quality' : q === 'sd' ? 'SD quality (smaller)' : `${qualityLabel(q)} quality`;
-    return q === def ? `${base} · Default` : base;
-  };
-  return new Promise((resolve) => {
-    const buttons: import('@ionic/vue').ActionSheetButton[] = [
-      ...ordered.map((q) => ({ text: label(q), handler: () => resolve(q) })),
-      { text: 'Cancel', role: 'cancel', handler: () => resolve(null) },
-    ];
-    void actionSheetController
-      .create({ header: 'Send quality', buttons })
-      .then((s) => {
-        // Tapping the backdrop also dismisses → treat as cancel.
-        s.onDidDismiss().then((d) => {
-          if (d.role === 'backdrop') resolve(null);
-        });
-        return s.present();
-      });
-  });
-}
-
-// The longest pixel edge across the chosen photos/videos (the largest source in the
-// batch), used to decide which quality tiers are worth offering. Best-effort + bounded
-// by the meta readers; an unreadable item contributes nothing.
-async function maxSourceLongEdge(
-  items: { blob: Blob; kind: 'image' | 'video' }[],
-): Promise<number | undefined> {
-  let max = 0;
-  for (const it of items) {
-    if (it.kind === 'image') {
-      const m = await readImageMeta(it.blob).catch(() => ({}) as { width?: number; height?: number });
-      if (m.width && m.height) max = Math.max(max, m.width, m.height);
-    } else {
-      const m = await readVideoMeta(it.blob).catch(() => ({}) as { width?: number; height?: number });
-      if (m.width && m.height) max = Math.max(max, m.width, m.height);
-    }
-  }
-  return max || undefined;
+// Resolve the send quality for a kind: the chat's per-kind override, else the global Upload-quality
+// setting for that kind (photos vs videos). Applied silently at send time — no prompt. A source
+// below the tier is never upscaled by the compressor, so a high setting is safe.
+async function resolveSendQuality(kind: 'image' | 'video'): Promise<Quality> {
+  if (kind === 'image') return chat.value?.sendQualityPhoto ?? (await getSetting<Quality>('storage.uploadQuality.photos', 'hd'));
+  return chat.value?.sendQualityVideo ?? (await getSetting<Quality>('storage.uploadQuality.videos', 'hd'));
 }
 
 async function onPick(e: Event, mode: 'auto' | 'file') {

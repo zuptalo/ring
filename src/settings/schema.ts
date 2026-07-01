@@ -119,6 +119,14 @@ const QUALITY: ChoiceOption[] = [
   { value: 'standard', label: 'Standard quality', note: 'Faster to send, smaller file size' },
   { value: 'hd', label: 'HD quality', note: 'Slower to send, can be 6 times larger' },
 ];
+// Upload-quality tiers (the actual send tiers). A source below a tier is never upscaled — it just
+// sends at its own resolution — so a high setting is safe. Original keeps full fidelity.
+const UPLOAD_QUALITY: ChoiceOption[] = [
+  { value: 'original', label: 'Original', note: 'Full quality, largest file' },
+  { value: 'fhd', label: 'Full HD (1080p)' },
+  { value: 'hd', label: 'HD (720p)' },
+  { value: 'sd', label: 'SD', note: 'Smaller, fastest to send' },
+];
 const AUTO_DOWNLOAD: ChoiceOption[] = [
   { value: 'never', label: 'Never' },
   { value: 'wifi', label: 'Wi-Fi' },
@@ -634,9 +642,13 @@ export const SETTINGS: Record<string, SettingNode> = {
     title: 'Upload quality',
     groups: [
       {
-        header: 'Quality',
-        items: [{ type: 'choice', key: 'storage.uploadQuality', default: 'hd', options: QUALITY }],
-        footer: 'Select the quality for photos and videos to be sent at in chats.',
+        header: 'Photos',
+        items: [{ type: 'choice', key: 'storage.uploadQuality.photos', default: 'hd', options: UPLOAD_QUALITY }],
+      },
+      {
+        header: 'Videos',
+        items: [{ type: 'choice', key: 'storage.uploadQuality.videos', default: 'hd', options: UPLOAD_QUALITY }],
+        footer: 'Photos and videos each send at their own quality. A chat can override this in its info menu.',
       },
     ],
   },

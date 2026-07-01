@@ -115,10 +115,11 @@ export interface Chat {
   // self-destruct after this many ms (carried inside the sealed payload, so they
   // disappear for everyone). Kept in sync with the peer via a `ttl` control signal.
   defaultTtlMs?: number;
-  // Per-chat media send-quality override (spec: quality configurable per chat). One of the send
-  // tiers ('sd'|'hd'|'fhd'|'original'); pre-selects the composer's Send-quality prompt for this chat.
-  // Absent = fall back to the global Upload-quality setting. Local + own-data-synced, never on the wire.
-  sendQuality?: 'sd' | 'hd' | 'fhd' | 'original';
+  // Per-chat media send-quality overrides, separately for photos and videos (a send tier:
+  // 'sd'|'hd'|'fhd'|'original'). Absent = fall back to the matching global Upload-quality setting.
+  // Local + own-data-synced, never on the wire.
+  sendQualityPhoto?: 'sd' | 'hd' | 'fhd' | 'original';
+  sendQualityVideo?: 'sd' | 'hd' | 'fhd' | 'original';
   // ---- Chats-tab organisation (all synced via own-data sync, LWW on updatedAt) ----
   // Marked a Favorite (drives the Favorites filter chip).
   favorite?: boolean;
