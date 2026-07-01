@@ -264,7 +264,25 @@ export interface ChatDraft {
   selStart?: number; // caret/selection in the text, to restore the cursor
   selEnd?: number;
   reply?: ReplyRef; // a reply you'd started but not sent
+  mediaCount?: number; // staged attachments (bytes live in the `draftMedia` store) — drives the badge
+  mediaLabel?: string; // e.g. 'Photo', 'Video', '3 attachments' — the Chats-list preview for media-only
   updatedAt: number;
+}
+
+// Staged (unsent) chat attachments for a draft, kept alongside ChatDraft so leaving/closing keeps
+// them too. Bytes are stored inline (NOT as Blobs) because an IDB Blob can read back broken on iOS
+// after a reload; we rebuild a fresh in-memory File from these when restoring the composer.
+export interface DraftMedia {
+  chatId: string;
+  items: DraftMediaItem[];
+  updatedAt: number;
+}
+export interface DraftMediaItem {
+  bytes: ArrayBuffer;
+  kind: 'image' | 'video' | 'file';
+  name: string;
+  mime: string;
+  caption?: string;
 }
 
 export interface Message {

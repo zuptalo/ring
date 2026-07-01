@@ -1010,7 +1010,7 @@ import {
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
-  backfillThumbTiers, getDraft, saveDraft, clearDraft,
+  backfillThumbTiers, getDraft, saveDraft, clearDraft, getDraftMedia, saveDraftMedia, clearDraftMedia,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
 import { hasRoomFor } from '@/services/storage-estimate';
@@ -1050,7 +1050,7 @@ import { normalizeOutgoing } from '@/utils/text';
 import { vEnterSend } from '@/directives/enter-send';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
-import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact } from '@/db/types';
+import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact, DraftMediaItem } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useChatHistory } from '@/composables/useChatHistory';
 import { LOOK_AHEAD_PX } from '@/utils/chat-window';
@@ -1825,11 +1825,25 @@ async function nativeComposer(): Promise<HTMLTextAreaElement | undefined> {
 async function loadDraft(): Promise<void> {
   if (draftLoaded) return; // once per mount; returning from a sub-page keeps the live draft as-is
   draftLoaded = true;
-  const d = await getDraft(chatId);
-  if (!d || draft.value.trim()) return; // nothing saved, or the user already started typing
-  draft.value = d.text ?? '';
-  if (d.reply && !replyingTo.value) replyingTo.value = d.reply;
-  if (d.text) {
+  const [d, dm] = await Promise.all([getDraft(chatId), getDraftMedia(chatId)]);
+  // Nothing saved, or the user already started composing before the (async) load resolved.
+  if ((!d && !dm) || draft.value.trim() || pendingMedia.value.length) return;
+  if (d) {
+    draft.value = d.text ?? '';
+    if (d.reply && !replyingTo.value) replyingTo.value = d.reply;
+  }
+  // Rebuild the staged attachments from their inline bytes as fresh in-memory files (always readable,
+  // unlike a Blob read back from IDB after a reload). Seed the bytes cache so the next save is free.
+  if (dm?.items.length) {
+    for (const it of dm.items) {
+      const file = new File([it.bytes], it.name || 'attachment', it.mime ? { type: it.mime } : undefined);
+      const id = crypto.randomUUID();
+      draftMediaBytes.set(id, it.bytes);
+      const url = it.kind === 'image' || it.kind === 'video' ? URL.createObjectURL(file) : undefined;
+      pendingMedia.value.push({ id, blob: file, kind: it.kind, url, caption: it.caption });
+    }
+  }
+  if (d?.text) {
     await nextTick();
     const native = await nativeComposer();
     if (native) {
@@ -1854,7 +1868,8 @@ async function persistDraft(): Promise<void> {
   if (editingMsg.value) return; // an in-progress edit rewrites a sent message, it isn't a draft
   const text = draft.value;
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
-  if (!text.trim() && !reply) {
+  const media = pendingMedia.value;
+  if (!text.trim() && !reply && !media.length) {
     await clearDraft(chatId);
     return;
   }
@@ -1865,13 +1880,67 @@ async function persistDraft(): Promise<void> {
     selStart: native?.selectionStart ?? undefined,
     selEnd: native?.selectionEnd ?? undefined,
     reply,
+    mediaCount: media.length || undefined,
+    mediaLabel: mediaLabelFor(media),
   });
 }
 
-// Sent → the draft is spent; drop the pending save and the stored copy.
+// The Chats-list preview for a media-only draft (no typed text).
+function mediaLabelFor(media: PendingMedia[]): string | undefined {
+  if (!media.length) return undefined;
+  if (media.length > 1) return `${media.length} attachments`;
+  const k = media[0].kind;
+  return k === 'image' ? 'Photo' : k === 'video' ? 'Video' : 'File';
+}
+
+// ---- staged attachments in the draft: keep the photos/videos/files you added but didn't send ----
+// Their bytes are stored inline (ArrayBuffer), NOT as Blobs — an IDB Blob can read back broken on iOS
+// after a reload. Persisted on each attachment change (add / remove / caption), not per keystroke, so
+// a caption you type doesn't rewrite megabytes each time. Bytes are cached by item id to avoid
+// re-reading a (possibly large) clip when only a caption changed.
+const draftMediaBytes = new Map<string, ArrayBuffer>();
+let draftMediaSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleDraftMediaSave(): void {
+  clearTimeout(draftMediaSaveTimer);
+  draftMediaSaveTimer = setTimeout(() => {
+    void persistDraftMedia();
+    void persistDraft(); // keep the drafts record's mediaCount/label (and existence) in step
+  }, 300);
+}
+
+async function persistDraftMedia(): Promise<void> {
+  const media = pendingMedia.value;
+  if (!media.length) {
+    await clearDraftMedia(chatId);
+    draftMediaBytes.clear();
+    return;
+  }
+  const items: DraftMediaItem[] = [];
+  for (const it of media) {
+    let bytes = draftMediaBytes.get(it.id);
+    if (!bytes) {
+      bytes = await it.blob.arrayBuffer();
+      draftMediaBytes.set(it.id, bytes);
+    }
+    items.push({
+      bytes,
+      kind: it.kind,
+      name: it.blob.name || 'attachment',
+      mime: it.blob.type || '',
+      caption: it.caption,
+    });
+  }
+  await saveDraftMedia(chatId, items);
+}
+
+// Sent → the draft is spent; drop the pending saves and the stored copies (text + attachments).
 function clearComposerDraft(): void {
   clearTimeout(draftSaveTimer);
+  clearTimeout(draftMediaSaveTimer);
+  draftMediaBytes.clear();
   void clearDraft(chatId);
+  void clearDraftMedia(chatId);
 }
 
 // A short text snapshot of a message for the quote (the media icon is rendered
@@ -2373,6 +2442,7 @@ async function editItemCaption(i: number): Promise<void> {
         handler: (d: { caption?: string }) => {
           const next = pendingMedia.value[i];
           if (next) next.caption = (d?.caption ?? '').slice(0, CAPTION_MAX).trim() || undefined;
+          scheduleDraftMediaSave(); // persist the per-item caption into the draft
         },
       },
     ],
@@ -2403,6 +2473,7 @@ function stageMedia(f: File, forceFile = false): 'audio' | 'staged' {
   const kind: 'image' | 'video' | 'file' = k === 'image' || k === 'video' ? k : 'file';
   const url = kind === 'image' || kind === 'video' ? URL.createObjectURL(f) : undefined;
   pendingMedia.value.push({ id: crypto.randomUUID(), blob: f, kind, url });
+  scheduleDraftMediaSave(); // keep the staged attachment in the draft
   return 'staged';
 }
 
@@ -2481,6 +2552,8 @@ function imageNameFromUrl(url: string, mime: string): string {
 function removePendingMedia(i: number): void {
   const [gone] = pendingMedia.value.splice(i, 1);
   if (gone?.url) URL.revokeObjectURL(gone.url);
+  if (gone) draftMediaBytes.delete(gone.id);
+  scheduleDraftMediaSave(); // reflect the removal in the draft (clears it when the last one goes)
 }
 
 function clearPendingMedia(): void {
