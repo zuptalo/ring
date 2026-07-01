@@ -917,6 +917,7 @@
               :aria-label="`Disappearing timer: ${msgTtlLabel}`"
               :color="effectiveTtlMs ? 'primary' : 'medium'"
               class="ttl-btn"
+              :class="{ 'has-badge': !!effectiveTtlMs }"
               @click="openMsgTtl"
             >
               <ion-icon slot="icon-only" :icon="timerOutline" />
@@ -5563,9 +5564,15 @@ function cancelRecording() {
 .ttl-btn {
   position: relative;
 }
+/* Shrink + lift the clock glyph so the duration badge has clear room underneath it (otherwise the
+   icon covers the text). Only when a badge is present. */
+.ttl-btn.has-badge ion-icon {
+  font-size: 20px;
+  transform: translateY(-4px);
+}
 .ttl-badge {
   position: absolute;
-  bottom: 1px;
+  bottom: 2px;
   left: 50%;
   transform: translateX(-50%);
   font-size: 9px;
