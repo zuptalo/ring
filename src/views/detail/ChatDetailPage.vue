@@ -2495,24 +2495,39 @@ function stageMedia(f: File, forceFile = false): 'audio' | 'staged' {
   const url = kind === 'image' || kind === 'video' ? URL.createObjectURL(f) : undefined;
   const id = crypto.randomUUID();
   pendingMedia.value.push({ id, blob: f, kind, url });
-  if (kind === 'video') void ensureVideoPoster(id, f); // decode a first-frame thumbnail for the tile
+  if (kind === 'video') void posterFromMaterialized(id, f);
   scheduleDraftMediaSave(); // keep the staged attachment in the draft
   return 'staged';
 }
 
-// Generate a staged video's first-frame poster off-screen and drop it onto the (reactive) item.
-// Matched by id since the row can shift if another item is removed while this resolves.
-async function ensureVideoPoster(id: string, blob: Blob): Promise<void> {
+// Generating a poster straight from a freshly-picked iOS video File is unreliable — the <video>
+// element often can't decode a frame from it within the timeout, so the tile stayed black until you
+// left and came back (which rebuilds the clip from bytes). Reading the bytes into a fully in-memory
+// blob first makes it decode reliably. We cache those bytes for the draft so they aren't read twice.
+async function posterFromMaterialized(id: string, f: File): Promise<void> {
   try {
-    const poster = await generateVideoPoster(blob);
-    const it = pendingMedia.value.find((m) => m.id === id);
-    if (it && poster) it.poster = poster;
+    const buf = await f.arrayBuffer();
+    draftMediaBytes.set(id, buf);
+    await ensureVideoPoster(id, new Blob([buf], { type: f.type || 'video/mp4' }));
+  } catch {
+    await ensureVideoPoster(id, f); // fall back to the raw file
+  }
+}
+
+// Generate a staged video's first-frame poster off-screen and drop it onto the (reactive) item.
+// Replace the array element (not mutate in place) so the tile repaints reliably; matched by id since
+// the row can shift if another item is removed while this resolves.
+async function ensureVideoPoster(id: string, blob: Blob): Promise<void> {
+  let poster: string | undefined;
+  try {
+    poster = await generateVideoPoster(blob);
   } catch {
     /* no frame (codec/timeout) — the tile falls back to a plain black video box */
-  } finally {
-    const it = pendingMedia.value.find((m) => m.id === id);
-    if (it) it.ready = true; // stop the spinner whether or not we got a frame
   }
+  const idx = pendingMedia.value.findIndex((m) => m.id === id);
+  if (idx < 0) return;
+  const cur = pendingMedia.value[idx];
+  pendingMedia.value[idx] = { ...cur, poster: poster ?? cur.poster, ready: true };
 }
 
 // Route a picked/pasted audio file into the title/artist review queue (its own flow).
