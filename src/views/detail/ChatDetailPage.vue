@@ -768,6 +768,8 @@
                 <span class="paste-file-name">{{ p.blob.name || 'File' }}</span>
               </div>
               <ion-icon v-if="p.caption" class="paste-cap-badge" :icon="chatbubbleEllipses" />
+              <!-- Top-left pen hints that tapping edits this item's caption (otherwise undiscoverable). -->
+              <span v-else class="paste-cap-hint"><ion-icon :icon="createOutline" /></span>
             </button>
             <button type="button" class="paste-x" aria-label="Remove attachment" @click="removePendingMedia(i)">
               <ion-icon :icon="closeOutline" />
@@ -945,6 +947,39 @@
       </ion-content>
     </ion-modal>
 
+    <!-- Per-item caption editor: a bottom sheet with a real ion-textarea so the field rides above the
+         keyboard (an alert input got pushed off-screen on iOS). -->
+    <ion-modal
+      :is-open="captionSheet.open"
+      :initial-breakpoint="0.6"
+      :breakpoints="[0, 0.6]"
+      class="caption-sheet"
+      @did-dismiss="captionSheet.open = false"
+      @did-present="focusCaptionInput"
+    >
+      <ion-content>
+        <div class="caption-sheet-body">
+          <div class="caption-sheet-title">Caption</div>
+          <ion-textarea
+            ref="captionInputEl"
+            :value="captionSheet.text"
+            placeholder="Add a caption…"
+            :maxlength="CAPTION_MAX"
+            :auto-grow="true"
+            :rows="2"
+            autocapitalize="sentences"
+            autocorrect="on"
+            class="caption-sheet-input"
+            @ion-input="onCaptionInput"
+          />
+          <div class="caption-sheet-actions">
+            <ion-button fill="clear" color="medium" @click="captionSheet.open = false">Cancel</ion-button>
+            <ion-button @click="saveItemCaption">Save</ion-button>
+          </div>
+        </div>
+      </ion-content>
+    </ion-modal>
+
     <!-- Full-screen album viewer -->
     <media-viewer
       :open="viewer.open"
@@ -1013,7 +1048,7 @@ import {
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
-  chevronDownOutline, chatbubbleEllipses, albumsOutline, imagesOutline,
+  chevronDownOutline, chatbubbleEllipses, albumsOutline, imagesOutline, createOutline,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, markChatRead, sendMediaMessage, sendMessage,
@@ -2439,36 +2474,29 @@ const pendingMedia = ref<PendingMedia[]>([]);
 // Multiple photos/videos: send as one album (default) or as separate messages.
 const sendAsAlbum = ref(true);
 
-// Caption a single staged item (tap its thumbnail). Per-item captions override the
-// shared caption typed in the composer for that one item (spec 1023). The shared caption
-// still applies to any item left without its own.
-async function editItemCaption(i: number): Promise<void> {
+// Caption a single staged item (tap its thumbnail). Per-item captions override the shared caption
+// typed in the composer for that one item (spec 1023). We use a bottom-sheet ion-modal with a real
+// ion-textarea (not an alert input) so the field rides ABOVE the keyboard instead of being shoved
+// off-screen the way the alert was on iOS.
+const captionSheet = ref<{ open: boolean; index: number; text: string }>({ open: false, index: -1, text: '' });
+const captionInputEl = ref<{ $el: HTMLIonTextareaElement } | null>(null);
+function editItemCaption(i: number): void {
   const item = pendingMedia.value[i];
   if (!item) return;
-  const alert = await alertController.create({
-    header: 'Caption',
-    inputs: [
-      {
-        name: 'caption',
-        type: 'textarea',
-        value: item.caption ?? '',
-        placeholder: 'Caption this item',
-        attributes: { maxlength: CAPTION_MAX, rows: 3 },
-      },
-    ],
-    buttons: [
-      { text: 'Cancel', role: 'cancel' },
-      {
-        text: 'Save',
-        handler: (d: { caption?: string }) => {
-          const next = pendingMedia.value[i];
-          if (next) next.caption = (d?.caption ?? '').slice(0, CAPTION_MAX).trim() || undefined;
-          scheduleDraftMediaSave(); // persist the per-item caption into the draft
-        },
-      },
-    ],
-  });
-  await alert.present();
+  captionSheet.value = { open: true, index: i, text: item.caption ?? '' };
+}
+function focusCaptionInput(): void {
+  void (captionInputEl.value?.$el as HTMLIonTextareaElement | undefined)?.setFocus?.();
+}
+function onCaptionInput(e: CustomEvent): void {
+  captionSheet.value.text = ((e.detail as { value?: string | null }).value ?? '').slice(0, CAPTION_MAX);
+}
+function saveItemCaption(): void {
+  const { index, text } = captionSheet.value;
+  const next = pendingMedia.value[index];
+  if (next) next.caption = text.trim() || undefined;
+  captionSheet.value.open = false;
+  scheduleDraftMediaSave(); // persist the per-item caption into the draft
 }
 // The Album/Individual choice only makes sense with 2+ image/video items.
 const albumChoiceVisible = computed(
@@ -2515,17 +2543,24 @@ async function posterFromMaterialized(id: string, f: File): Promise<void> {
 }
 
 // Generate a staged video's first-frame poster off-screen and drop it onto the (reactive) item.
-// Replace the array element (not mutate in place) so the tile repaints reliably; matched by id since
-// the row can shift if another item is removed while this resolves.
-async function ensureVideoPoster(id: string, blob: Blob): Promise<void> {
+// iOS frequently can't decode a frame right after a big multi-select (the reason the thumbnail only
+// used to appear after leaving + returning, once the page had settled). So on a null result we back
+// off and RETRY a few times, keeping the spinner up, instead of giving up to a black tile. The item
+// is updated by REPLACING it (not mutating in place) so the tile repaints reliably.
+async function ensureVideoPoster(id: string, blob: Blob, attempt = 0): Promise<void> {
   let poster: string | undefined;
   try {
     poster = await generateVideoPoster(blob);
   } catch {
-    /* no frame (codec/timeout) — the tile falls back to a plain black video box */
+    /* no frame yet */
   }
   const idx = pendingMedia.value.findIndex((m) => m.id === id);
-  if (idx < 0) return;
+  if (idx < 0) return; // item removed while we were decoding
+  if (!poster && attempt < 4) {
+    // Try again once the device has quieted down; leave the tile spinning meanwhile.
+    window.setTimeout(() => void ensureVideoPoster(id, blob, attempt + 1), 700 * (attempt + 1));
+    return;
+  }
   const cur = pendingMedia.value[idx];
   pendingMedia.value[idx] = { ...cur, poster: poster ?? cur.poster, ready: true };
 }
@@ -3751,7 +3786,13 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
     if (stageMedia(f, mode === 'file') === 'audio') audioFiles.push(f);
   }
   if (overCap) {
-    void appToast({ message: `You can attach up to ${MAX_STAGED_MEDIA} items at once.`, duration: 2200 });
+    // A blocking alert (not a toast) so it's read and acknowledged — the extra picks were dropped.
+    const a = await alertController.create({
+      header: 'Up to 10 at once',
+      message: `You can attach up to ${MAX_STAGED_MEDIA} items to one message. The first ${MAX_STAGED_MEDIA} were added; the rest weren’t.`,
+      buttons: ['Got it'],
+    });
+    await a.present();
   }
   if (audioFiles.length) {
     // The pending reply (if any) rides the first audio only when nothing else was staged
@@ -4331,6 +4372,46 @@ function cancelRecording() {
   border-radius: 50%;
   padding: 2px;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+/* Bottom-sheet caption editor. */
+.caption-sheet-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.caption-sheet-title {
+  font-size: 17px;
+  font-weight: 600;
+}
+.caption-sheet-input {
+  --background: var(--app-surface);
+  --padding-start: 12px;
+  --padding-end: 12px;
+  border-radius: 12px;
+  font-size: 16px;
+}
+.caption-sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+/* Pen hint in the top-left corner: tap the thumbnail to add a caption (until one exists, then the
+   filled badge above takes over at the bottom-left). */
+.paste-cap-hint {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
 }
 /* Album vs Individual choice for a multi-photo/video send. */
 /* Column so the send-as choice sits on its OWN row under the thumbnails (ion-toolbar would otherwise
