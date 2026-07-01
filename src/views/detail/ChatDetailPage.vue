@@ -771,7 +771,7 @@
               <!-- Top-left pen hints that tapping edits this item's caption (otherwise undiscoverable). -->
               <span v-else class="paste-cap-hint"><ion-icon :icon="createOutline" /></span>
             </button>
-            <button type="button" class="paste-x" aria-label="Remove attachment" @click="removePendingMedia(i)">
+            <button type="button" class="paste-x" aria-label="Remove attachment" @click="removePendingMedia(p.id)">
               <ion-icon :icon="closeOutline" />
             </button>
           </div>
@@ -1964,19 +1964,12 @@ function mediaLabelFor(media: PendingMedia[]): string | undefined {
 
 // ---- staged attachments in the draft: keep the photos/videos/files you added but didn't send ----
 // Their bytes are stored inline (ArrayBuffer), NOT as Blobs — an IDB Blob can read back broken on iOS
-// after a reload. Persisted on each attachment change (add / remove / caption), not per keystroke, so
-// a caption you type doesn't rewrite megabytes each time. Bytes are cached by item id to avoid
-// re-reading a (possibly large) clip when only a caption changed.
+// after a reload. The heavy bytes write is NOT done on every add/remove (serializing megabytes of
+// video into IndexedDB on each edit janked the composer, which made rapid removals misfire). Instead
+// it runs once when you LEAVE or background the chat — the only moments it needs to survive — while
+// the lightweight drafts record (mediaCount/label) is kept current per edit. Bytes are cached by
+// item id so the leave-time write doesn't re-read a (possibly large) clip.
 const draftMediaBytes = new Map<string, ArrayBuffer>();
-let draftMediaSaveTimer: ReturnType<typeof setTimeout> | undefined;
-
-function scheduleDraftMediaSave(): void {
-  clearTimeout(draftMediaSaveTimer);
-  draftMediaSaveTimer = setTimeout(() => {
-    void persistDraftMedia();
-    void persistDraft(); // keep the drafts record's mediaCount/label (and existence) in step
-  }, 300);
-}
 
 async function persistDraftMedia(): Promise<void> {
   const media = pendingMedia.value;
@@ -2006,7 +1999,6 @@ async function persistDraftMedia(): Promise<void> {
 // Sent → the draft is spent; drop the pending saves and the stored copies (text + attachments).
 function clearComposerDraft(): void {
   clearTimeout(draftSaveTimer);
-  clearTimeout(draftMediaSaveTimer);
   draftMediaBytes.clear();
   void clearDraft(chatId);
   void clearDraftMedia(chatId);
@@ -2517,7 +2509,7 @@ function saveItemCaption(): void {
   const next = pendingMedia.value[index];
   if (next) next.caption = text.trim() || undefined;
   captionSheet.value.open = false;
-  scheduleDraftMediaSave(); // persist the per-item caption into the draft
+  scheduleDraftSave(); // caption bytes are re-saved on leave; just touch the light drafts record now
 }
 // The Album/Individual choice only makes sense with 2+ image/video items.
 const albumChoiceVisible = computed(
@@ -2545,7 +2537,7 @@ function stageMedia(f: File, forceFile = false): 'audio' | 'staged' {
   const id = crypto.randomUUID();
   pendingMedia.value.push({ id, blob: f, kind, url });
   if (kind === 'video') void posterFromMaterialized(id, f);
-  scheduleDraftMediaSave(); // keep the staged attachment in the draft
+  scheduleDraftSave(); // update the light drafts record; the media bytes are saved on leave (below)
   return 'staged';
 }
 
@@ -2658,11 +2650,16 @@ function imageNameFromUrl(url: string, mime: string): string {
   return /\.[a-z0-9]+$/i.test(base) ? base : `${base}.${ext}`;
 }
 
-function removePendingMedia(i: number): void {
-  const [gone] = pendingMedia.value.splice(i, 1);
+// Remove by ID, not by v-for index: if the row re-renders slowly, repeated taps on one × would
+// otherwise reuse a stale index and delete whatever slid into that position (the reported "removes
+// the next ones too" bug). By id, a second tap on an already-removed item is simply a no-op.
+function removePendingMedia(id: string): void {
+  const idx = pendingMedia.value.findIndex((m) => m.id === id);
+  if (idx < 0) return;
+  const [gone] = pendingMedia.value.splice(idx, 1);
   if (gone?.url) URL.revokeObjectURL(gone.url);
   if (gone) draftMediaBytes.delete(gone.id);
-  scheduleDraftMediaSave(); // reflect the removal in the draft (clears it when the last one goes)
+  scheduleDraftSave(); // update the light drafts record now; heavy media bytes save on leave (below)
 }
 
 function clearPendingMedia(): void {
@@ -2925,9 +2922,10 @@ function onVisibilityChange(): void {
       scheduleShareHint();
     }
   } else {
-    // Backgrounded (incl. an iOS app close that starts here): flush the unsent message now, while we
-    // still can, so it survives a full termination.
+    // Backgrounded (incl. an iOS app close that starts here): flush the unsent message AND its staged
+    // attachments now, while we still can, so they survive a full termination.
     void persistDraft();
+    void persistDraftMedia();
     clearTimeout(shareHintTimer);
     dismissShareHintToast();
   }
@@ -2954,7 +2952,8 @@ function dismissShareHintToast(): void {
 onIonViewWillLeave(() => {
   viewActive.value = false;
   setActiveChat(null);
-  void persistDraft(); // navigating away within the app → save the unsent message
+  void persistDraft(); // navigating away within the app → save the unsent message …
+  void persistDraftMedia(); // … and its staged attachments (fires before unmount clears them)
   stopActivity(); // leaving the chat ends any outgoing activity indicator (spec 1009)
   clearTimeout(shareHintTimer);
   dismissShareHintToast(); // don't let the hint linger on other pages
