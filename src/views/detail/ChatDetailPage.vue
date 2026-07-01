@@ -947,33 +947,42 @@
       </ion-content>
     </ion-modal>
 
-    <!-- Per-item caption editor: a bottom sheet with a real ion-textarea so the field rides above the
-         keyboard (an alert input got pushed off-screen on iOS). -->
+    <!-- Per-item caption editor. A standard full ion-modal (header toolbar + ion-content) rather than
+         a partial sheet: ion-content handles the keyboard inset itself, so the field stays put instead
+         of being shoved off-screen the way the alert (and a breakpoint sheet) were on iOS. -->
     <ion-modal
       :is-open="captionSheet.open"
-      :initial-breakpoint="0.6"
-      :breakpoints="[0, 0.6]"
-      class="caption-sheet"
+      class="caption-modal"
       @did-dismiss="captionSheet.open = false"
       @did-present="focusCaptionInput"
     >
-      <ion-content>
-        <div class="caption-sheet-body">
-          <div class="caption-sheet-title">Caption</div>
-          <!-- Preview of exactly what's being captioned. For a video it's the generated poster —
-               the same frame that rides in the message — so it doubles as a quality check. -->
-          <div v-if="captionItem" class="caption-preview">
-            <img v-if="captionItem.kind === 'image' && captionItem.url" :src="captionItem.url" alt="Attachment preview" />
-            <template v-else-if="captionItem.kind === 'video'">
-              <img v-if="captionItem.poster" :src="captionItem.poster" alt="Video preview" />
-              <div v-else class="caption-preview-video"><ion-spinner name="crescent" /></div>
-              <ion-icon v-if="captionItem.poster" class="caption-preview-play" :icon="playCircle" />
-            </template>
-            <div v-else class="caption-preview-file">
-              <ion-icon :icon="documentOutline" />
-              <span>{{ captionItem.blob.name || 'File' }}</span>
-            </div>
+      <ion-header>
+        <ion-toolbar>
+          <ion-buttons slot="start">
+            <ion-button @click="captionSheet.open = false">Cancel</ion-button>
+          </ion-buttons>
+          <ion-title>Caption</ion-title>
+          <ion-buttons slot="end">
+            <ion-button strong @click="saveItemCaption">Save</ion-button>
+          </ion-buttons>
+        </ion-toolbar>
+      </ion-header>
+      <ion-content class="ion-padding">
+        <!-- Preview of exactly what's being captioned. For a video it's the generated poster —
+             the same frame that rides in the message — so it doubles as a quality check. -->
+        <div v-if="captionItem" class="caption-preview">
+          <img v-if="captionItem.kind === 'image' && captionItem.url" :src="captionItem.url" alt="Attachment preview" />
+          <template v-else-if="captionItem.kind === 'video'">
+            <img v-if="captionItem.poster" :src="captionItem.poster" alt="Video preview" />
+            <div v-else class="caption-preview-video"><ion-spinner name="crescent" /></div>
+            <ion-icon v-if="captionItem.poster" class="caption-preview-play" :icon="playCircle" />
+          </template>
+          <div v-else class="caption-preview-file">
+            <ion-icon :icon="documentOutline" />
+            <span>{{ captionItem.blob.name || 'File' }}</span>
           </div>
+        </div>
+        <ion-item lines="none" class="caption-input-item">
           <ion-textarea
             ref="captionInputEl"
             :value="captionSheet.text"
@@ -983,14 +992,9 @@
             :rows="2"
             autocapitalize="sentences"
             autocorrect="on"
-            class="caption-sheet-input"
             @ion-input="onCaptionInput"
           />
-          <div class="caption-sheet-actions">
-            <ion-button fill="clear" color="medium" @click="captionSheet.open = false">Cancel</ion-button>
-            <ion-button @click="saveItemCaption">Save</ion-button>
-          </div>
-        </div>
+        </ion-item>
       </ion-content>
     </ion-modal>
 
@@ -4390,21 +4394,12 @@ function cancelRecording() {
   padding: 2px;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
 }
-/* Bottom-sheet caption editor. */
-.caption-sheet-body {
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.caption-sheet-title {
-  font-size: 17px;
-  font-weight: 600;
-}
 /* Preview of the item being captioned, above the input. */
 .caption-preview {
   position: relative;
-  align-self: center;
+  display: flex;
+  justify-content: center;
+  margin: 0 auto;
   max-width: 100%;
 }
 .caption-preview img {
@@ -4453,17 +4448,14 @@ function cancelRecording() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.caption-sheet-input {
+.caption-input-item {
   --background: var(--app-surface);
   --padding-start: 12px;
   --padding-end: 12px;
+  --border-radius: 12px;
   border-radius: 12px;
+  margin-top: 16px;
   font-size: 16px;
-}
-.caption-sheet-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
 }
 /* Pen hint in the top-left corner: tap the thumbnail to add a caption (until one exists, then the
    filled badge above takes over at the bottom-left). */

@@ -2,7 +2,7 @@
  * Composer polish: a pen hint on each staged thumbnail, a bottom-sheet caption editor (not an alert),
  * and a blocking "up to 10" alert when a pick goes over.
  *
- *   HEADED=1 node drive/scenarios/chat-caption-sheet.mjs
+ *   HEADED=1 node drive/scenarios/chat-caption-modal.mjs
  */
 import { preflight, createAccount, pair, chatWith, shot, sweep, done, poll } from '../driver.mjs';
 
@@ -35,21 +35,21 @@ await shot(a, 'caption-pen-hints');
 
 // Tap a thumbnail → caption bottom sheet (a modal, not an alert) with a textarea.
 await a.page.evaluate(() => document.querySelector('.paste-tap')?.click());
-await poll(() => a.page.evaluate(() => !!document.querySelector('ion-modal.caption-sheet ion-textarea')), Boolean, { label: 'caption sheet' });
+await poll(() => a.page.evaluate(() => !!document.querySelector('ion-modal.caption-modal ion-textarea')), Boolean, { label: 'caption sheet' });
 const sheet = await a.page.evaluate(() => ({
-  isModal: !!document.querySelector('ion-modal.caption-sheet'),
-  hasTextarea: !!document.querySelector('.caption-sheet ion-textarea'),
-  hasSave: [...document.querySelectorAll('.caption-sheet ion-button')].some((x) => /save/i.test(x.textContent)),
+  isModal: !!document.querySelector('ion-modal.caption-modal'),
+  hasTextarea: !!document.querySelector('.caption-modal ion-textarea'),
+  hasSave: [...document.querySelectorAll('.caption-modal ion-button')].some((x) => /save/i.test(x.textContent)),
 }));
 console.log('caption sheet:', JSON.stringify(sheet));
-await shot(a, 'caption-sheet');
+await shot(a, 'caption-modal');
 await a.page.evaluate(() => {
-  const btns = [...document.querySelectorAll('.caption-sheet ion-button')];
+  const btns = [...document.querySelectorAll('.caption-modal ion-button')];
   btns.find((x) => /cancel/i.test(x.textContent))?.click();
 });
 
 // Over-cap: pick 12 → a blocking alert appears.
-await poll(() => a.page.evaluate(() => !document.querySelector('ion-modal.caption-sheet')), Boolean, { label: 'sheet closed' });
+await poll(() => a.page.evaluate(() => !document.querySelector('ion-modal.caption-modal')), Boolean, { label: 'sheet closed' });
 await a.page.setInputFiles(
   'input[type=file][multiple]',
   Array.from({ length: 12 }, (_, i) => ({ name: `q${i}.png`, mimeType: 'image/png', buffer: PNG })),
