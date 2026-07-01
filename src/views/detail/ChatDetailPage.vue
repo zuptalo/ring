@@ -1443,7 +1443,7 @@ const viewerItems = computed(() => {
     return {
       id: m.id,
       url: mi?.url ?? '', // '' until this item's window is resolved
-      thumb: mi?.stripUrl || mi?.posterUrl || m.posterData || mi?.url || '', // strip tier (spec 1014)
+      thumb: mi?.posterUrl || m.posterData || mi?.stripUrl || mi?.url || '', // large poster tier for the full-screen viewer (spec 1025 US4)
       kind: m.kind === 'video' ? 'video' : 'image',
       caption: m.body,
       senderName: m.outgoing ? 'You' : chat.value?.isGroup ? m.senderName : chat.value?.name ?? m.senderName,
@@ -5260,6 +5260,16 @@ function cancelRecording() {
 }
 .ttl-left ion-icon {
   font-size: 13px;
+}
+/* Spec 1025 US5: give the disappearing countdown clear separation from the timestamp. Outgoing keeps
+   it to the LEFT of the timestamp; incoming moves it to the RIGHT (order:1 places it after the
+   bare timestamp text node inside .time). */
+.msg-foot.out .ttl-left {
+  margin-right: 6px;
+}
+.msg-foot.in .ttl-left {
+  order: 1;
+  margin-left: 6px;
 }
 /* Direction-aware bottom row (spec 1008): the react button sits opposite the
    timestamp — sent → time+tick right / react left; received → time left / react
