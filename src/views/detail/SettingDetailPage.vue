@@ -379,7 +379,8 @@ const AUTO_DOWNLOAD_DEFAULTS: Record<string, string> = {
   'storage.autoDownload.audio': 'wifi',
   'storage.autoDownload.video': 'wifi',
   'storage.autoDownload.documents': 'wifi',
-  'storage.uploadQuality': 'hd',
+  'storage.uploadQuality.photos': 'hd',
+  'storage.uploadQuality.videos': 'hd',
   'storage.downloadQuality': 'hd',
 };
 
