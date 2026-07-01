@@ -960,6 +960,20 @@
       <ion-content>
         <div class="caption-sheet-body">
           <div class="caption-sheet-title">Caption</div>
+          <!-- Preview of exactly what's being captioned. For a video it's the generated poster —
+               the same frame that rides in the message — so it doubles as a quality check. -->
+          <div v-if="captionItem" class="caption-preview">
+            <img v-if="captionItem.kind === 'image' && captionItem.url" :src="captionItem.url" alt="Attachment preview" />
+            <template v-else-if="captionItem.kind === 'video'">
+              <img v-if="captionItem.poster" :src="captionItem.poster" alt="Video preview" />
+              <div v-else class="caption-preview-video"><ion-spinner name="crescent" /></div>
+              <ion-icon v-if="captionItem.poster" class="caption-preview-play" :icon="playCircle" />
+            </template>
+            <div v-else class="caption-preview-file">
+              <ion-icon :icon="documentOutline" />
+              <span>{{ captionItem.blob.name || 'File' }}</span>
+            </div>
+          </div>
           <ion-textarea
             ref="captionInputEl"
             :value="captionSheet.text"
@@ -2480,6 +2494,9 @@ const sendAsAlbum = ref(true);
 // off-screen the way the alert was on iOS.
 const captionSheet = ref<{ open: boolean; index: number; text: string }>({ open: false, index: -1, text: '' });
 const captionInputEl = ref<{ $el: HTMLIonTextareaElement } | null>(null);
+// The item being captioned — drives the preview shown above the input (a video's is the very poster
+// that gets embedded in the message, so it doubles as a quality check).
+const captionItem = computed(() => pendingMedia.value[captionSheet.value.index]);
 function editItemCaption(i: number): void {
   const item = pendingMedia.value[i];
   if (!item) return;
@@ -4383,6 +4400,58 @@ function cancelRecording() {
 .caption-sheet-title {
   font-size: 17px;
   font-weight: 600;
+}
+/* Preview of the item being captioned, above the input. */
+.caption-preview {
+  position: relative;
+  align-self: center;
+  max-width: 100%;
+}
+.caption-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 12px;
+  object-fit: contain;
+  background: #000;
+}
+.caption-preview-video {
+  width: 160px;
+  height: 120px;
+  border-radius: 12px;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.caption-preview-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 40px;
+  color: #fff;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.6));
+  pointer-events: none;
+}
+.caption-preview-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--app-surface);
+  max-width: 100%;
+}
+.caption-preview-file ion-icon {
+  font-size: 22px;
+  flex: none;
+}
+.caption-preview-file span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .caption-sheet-input {
   --background: var(--app-surface);
