@@ -73,20 +73,21 @@ generic.
 ### User Story 3 - Hidden-chat rows reveal their swipe actions cleanly (Priority: P2)
 
 After entering the PIN and revealing hidden chats, the user swipes a hidden-chat row left or right.
-The action buttons underneath appear immediately, and the row's name, avatar, date, and eye icon sit
-on top of those buttons over a transparent background (so the buttons read clearly and the row does
-not look broken or doubled).
+The action buttons underneath appear immediately, and the row's name, avatar, date, and eye icon
+stay on an opaque background that slides cleanly over the buttons, so the buttons are only visible in
+the revealed area and never bleed through under the row content (today the near-transparent hidden
+row lets the buttons show through and the content looks like it floats on top of them).
 
-**Why this priority**: The current reveal is visually broken (delayed buttons, opaque overlap),
-which undermines confidence in a sensitive, PIN-gated area.
+**Why this priority**: The current reveal is visually broken (buttons bleed through the translucent
+row), which undermines confidence in a sensitive, PIN-gated area.
 
 **Independent Test**: Unlock hidden chats, swipe a row both directions, and confirm the buttons show
-immediately with the row content layered on a transparent background.
+immediately and the row content sits on an opaque background with no bleed-through.
 
 **Acceptance Scenarios**:
 
 1. **Given** hidden chats are revealed, **When** the user swipes a hidden-chat row, **Then** the underlying action buttons are visible immediately.
-2. **Given** a row is swiped open, **When** the user looks at it, **Then** the name, avatar, date, and eye icon appear over the buttons on a transparent background.
+2. **Given** a row is swiped open, **When** the user looks at it, **Then** the name, avatar, date, and eye icon sit on an opaque background and the buttons are only visible in the revealed area (no bleed-through).
 
 ---
 
@@ -228,7 +229,7 @@ self-test control remains (or, if kept, it produces a meaningful result).
 **Hidden-chat swipe actions (US3)**
 
 - **FR-008**: Swiping a revealed hidden-chat row left or right MUST reveal the underlying action buttons immediately.
-- **FR-009**: While a hidden-chat row is swiped open, its name, avatar, date, and eye icon MUST render on top of the action buttons over a transparent background.
+- **FR-009**: While a hidden-chat row is swiped open, its name, avatar, date, and eye icon MUST render on an opaque background so the action buttons are only visible in the revealed area and do not bleed through under the row content.
 
 **Media viewer video poster (US4)**
 
@@ -270,7 +271,7 @@ self-test control remains (or, if kept, it produces a meaningful result).
 
 - **SC-001**: In 100% of cold-start notification deep-link cases (all six types), pressing Back lands on the Chats list and never on a blank view or the browser.
 - **SC-002**: With "Show preview" off, 0% of normal-chat notifications reveal sender or content; with it on, previews appear. In 100% of hidden-chat cases the notification stays generic regardless of the setting.
-- **SC-003**: Swiping a revealed hidden-chat row shows its action buttons with no perceptible delay, with the row content legible over a transparent background.
+- **SC-003**: Swiping a revealed hidden-chat row shows its action buttons with no perceptible delay, with the row content on an opaque background and no button bleed-through.
 - **SC-004**: A video in the full-screen viewer fills at least the same frame proportion as a photo of the same aspect ratio, with no tiny-thumbnail blank margins, on a high-density display.
 - **SC-005**: Every disappearing message shows measurable spacing between timestamp and countdown, and incoming messages place the countdown to the right of the timestamp 100% of the time.
 - **SC-006**: The Calls list and detail show `YYYY-MM-DD` dates, the swapped button order, and totals that match the sum of the underlying call records (audio minutes, video minutes, and data per kind and combined).
