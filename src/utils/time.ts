@@ -46,6 +46,13 @@ export function dayLabel(ts: number): string {
   return new Date(ts).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
+/** ISO-style local calendar date, e.g. "2026-06-19" (used in the Calls list + detail). */
+export function formatDay(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 /** Full local date + time, e.g. "2026-06-04, 01:10" (used in the media viewer). */
 export function formatFull(ts: number): string {
   const d = new Date(ts);

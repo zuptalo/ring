@@ -30,6 +30,27 @@
         </ion-toolbar>
       </ion-header>
 
+      <!-- Usage totals (spec 1025 US6): minutes and data for audio, video, and combined. -->
+      <ion-list v-if="totalsCalls.length" :inset="true" class="call-totals">
+        <ion-list-header>
+          <ion-label>Totals</ion-label>
+        </ion-list-header>
+        <ion-item lines="none">
+          <ion-icon slot="start" :icon="callOutline" color="medium" />
+          <ion-label>Audio calls</ion-label>
+          <ion-note slot="end">{{ totals.audioMinutes }} min · {{ formatBytes(totals.audioBytes) }}</ion-note>
+        </ion-item>
+        <ion-item lines="none">
+          <ion-icon slot="start" :icon="videocamOutline" color="medium" />
+          <ion-label>Video calls</ion-label>
+          <ion-note slot="end">{{ totals.videoMinutes }} min · {{ formatBytes(totals.videoBytes) }}</ion-note>
+        </ion-item>
+        <ion-item lines="none">
+          <ion-label>Data used</ion-label>
+          <ion-note slot="end">{{ formatBytes(totals.combinedBytes) }}</ion-note>
+        </ion-item>
+      </ion-list>
+
       <ion-list>
         <ion-list-header>
           <ion-label>Recent</ion-label>
@@ -55,7 +76,7 @@
                 {{ typeLabel(group) }}
               </p>
             </ion-label>
-            <ion-note slot="end">{{ formatTime(group.timestamp) }}</ion-note>
+            <ion-note slot="end">{{ formatDay(group.timestamp) }}</ion-note>
             <ion-button
               slot="end"
               fill="clear"
@@ -151,12 +172,14 @@ import {
   addOutline, callOutline, videocamOutline, arrowUpOutline, arrowDownOutline,
   informationCircleOutline, trashOutline, peopleOutline,
 } from 'ionicons/icons';
-import { deleteCalls, listCallGroups, markCallsSeen, listContacts } from '@/db/queries';
+import { deleteCalls, listCallGroups, listCallsForTotals, markCallsSeen, listContacts } from '@/db/queries';
 import type { CallGroup } from '@/db/queries';
 import type { Call } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { warmCalls, warmCallsLoaded, warmWhenIdle } from '@/composables/warmStores';
-import { formatTime } from '@/utils/time';
+import { formatDay } from '@/utils/time';
+import { formatBytes } from '@/utils/bytes';
+import { computeCallTotals } from '@/utils/call-totals';
 
 const PAGE = 15;
 const router = useRouter();
@@ -178,6 +201,10 @@ const calls = useLiveQuery(
 const loaded = calls.loaded;
 watch(search, () => (visible.value = PAGE));
 const visibleCalls = computed(() => calls.value.slice(0, visible.value));
+
+// Usage totals (spec 1025 US6): all-time, over non-hidden calls, independent of the search filter.
+const totalsCalls = useLiveQuery(() => listCallsForTotals(), ['calls'], [] as Call[]);
+const totals = computed(() => computeCallTotals(totalsCalls.value));
 
 /* ---- New call modal ---- */
 const newOpen = ref(false);
