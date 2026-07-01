@@ -1840,19 +1840,36 @@ export async function markSendFailed(messageId: string): Promise<void> {
 
 /* ---- media auto-download (videos can be deferred + fetched on demand) ---- */
 
-/** Whether to auto-download an incoming video, per Settings → Storage and data →
- *  Media auto-download → Video ('never' | 'wifi' | 'wifi-cellular') and the
- *  network. iOS Safari exposes no network type, so there we can't tell Wi-Fi from
- *  cellular, so any non-'never' setting auto-downloads. */
-async function shouldAutoDownloadVideo(): Promise<boolean> {
-  const mode = await getSetting<string>('storage.autoDownload.video', 'wifi');
-  if (mode === 'never') return false;
-  if (mode === 'wifi-cellular') return true;
-  // mode === 'wifi': only on Wi-Fi/ethernet (or when the type is unknown, e.g. iOS).
+// On Wi-Fi/ethernet (or an unknown type, e.g. iOS Safari which exposes no network type).
+function onUnmeteredOrUnknown(): boolean {
   const conn = (navigator as unknown as { connection?: { type?: string } }).connection;
   const type = conn?.type;
   if (!type || type === 'unknown') return true;
   return type === 'wifi' || type === 'ethernet';
+}
+
+/** Whether to auto-download an incoming attachment, per Settings → Storage and data → Media
+ *  auto-download (a per-kind 'never' | 'wifi' | 'wifi-cellular' choice), the network, AND a size
+ *  limit (anything larger is left for a manual tap). Voice notes and round video notes always
+ *  download — they're small and expected to play instantly. Uses the media metadata (kind + size). */
+async function shouldAutoDownloadMedia(kind: MessageKind, videoNote: boolean, size: number): Promise<boolean> {
+  if (kind === 'voice') return true; // voice messages are always downloaded
+  if (kind === 'video' && videoNote) return true; // round video notes always download
+  const key =
+    kind === 'image'
+      ? 'storage.autoDownload.photos'
+      : kind === 'video'
+        ? 'storage.autoDownload.video'
+        : kind === 'audio'
+          ? 'storage.autoDownload.audio'
+          : 'storage.autoDownload.documents'; // files
+  const mode = await getSetting<string>(key, kind === 'image' ? 'wifi-cellular' : 'wifi');
+  if (mode === 'never') return false;
+  // Size cap (MB; '0' = no limit): a big attachment is left for a manual tap regardless of network.
+  const limitMb = Number(await getSetting<string>('storage.autoDownloadLimit', '16')) || 0;
+  if (limitMb > 0 && size > limitMb * 1024 * 1024) return false;
+  if (mode === 'wifi-cellular') return true;
+  return onUnmeteredOrUnknown();
 }
 
 /** Spec 1014: persist the thumbnail tiers on a Media record from its bubble-tier blob — store it as
@@ -4489,7 +4506,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   let durationSec: number | undefined = payload.mediaRef?.durationSec;
   let pendingMedia: MediaRef | undefined;
   if (payload.mediaRef) {
-    const defer = kind === 'video' && !payload.videoNote && !(await shouldAutoDownloadVideo());
+    const defer = !(await shouldAutoDownloadMedia(kind, !!payload.videoNote, payload.mediaRef.size));
     if (defer) {
       pendingMedia = payload.mediaRef; // fetched later via downloadMessageMedia
     } else {

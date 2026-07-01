@@ -381,7 +381,7 @@ const AUTO_DOWNLOAD_DEFAULTS: Record<string, string> = {
   'storage.autoDownload.documents': 'wifi',
   'storage.uploadQuality.photos': 'hd',
   'storage.uploadQuality.videos': 'hd',
-  'storage.downloadQuality': 'hd',
+  'storage.autoDownloadLimit': '16',
 };
 
 const ACTIONS: Record<string, () => void | Promise<void>> = {
