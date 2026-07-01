@@ -63,11 +63,18 @@ export async function encryptBlob(blob: Blob): Promise<{ ciphertext: Blob; fileK
   return { ciphertext: new Blob([part(packed)], { type: 'application/octet-stream' }), fileKey };
 }
 
-export async function decryptBlob(ciphertext: Blob, fileKey: Uint8Array, mime: string): Promise<Blob> {
-  const packed = new Uint8Array(await ciphertext.arrayBuffer());
+/** Decrypt already-in-memory ciphertext bytes. Kept separate from decryptBlob so the streaming
+ *  download path can decrypt straight from the bytes it assembled, without a Blob→arrayBuffer
+ *  round-trip (which would hold a second full copy — a memory spike that fails on mobile for a
+ *  large clip). */
+export function decryptBytes(packed: Uint8Array, fileKey: Uint8Array, mime: string): Blob {
   const { nonce, ct } = unpackBlob(packed);
   const plain = aeadOpen(fileKey, nonce, ct); // throws if key wrong / tampered
   return new Blob([part(plain)], { type: mime });
+}
+
+export async function decryptBlob(ciphertext: Blob, fileKey: Uint8Array, mime: string): Promise<Blob> {
+  return decryptBytes(new Uint8Array(await ciphertext.arrayBuffer()), fileKey, mime);
 }
 
 /* ---- blob store (backend: HTTP /v1/blobs) ---- */
@@ -117,32 +124,66 @@ export function uploadBlob(ciphertext: Blob, onProgress?: (p: number) => void): 
 }
 
 /** Download ciphertext by id from the backend, or null if absent (404). */
-export async function downloadBlob(
-  blobId: string,
-  onProgress?: (fraction: number) => void,
-): Promise<Blob | null> {
+export async function downloadBlob(blobId: string): Promise<Blob | null> {
   const res = await fetch(`${apiBaseUrl()}/v1/blobs/${encodeURIComponent(blobId)}`, {
     headers: authHeaders(),
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`download blob failed: ${res.status}`);
-  // Without a progress callback (or a readable body), just take the blob directly.
-  if (!onProgress || !res.body) return res.blob();
-  // Stream the body so we can report download progress against Content-Length.
-  const total = Number(res.headers.get('Content-Length')) || 0;
-  const reader = res.body.getReader();
-  const chunks: BlobPart[] = [];
-  let received = 0;
+  return res.blob();
+}
+
+/** Stream ciphertext bytes by id, reporting progress (0..1) against Content-Length. Assembles into
+ *  ONE preallocated buffer (not a chunk array + Blob + arrayBuffer) so a large clip doesn't spike
+ *  memory on mobile. Returns null if the blob is gone (404). */
+async function downloadCipherBytes(
+  blobId: string,
+  onProgress: (fraction: number) => void,
+): Promise<Uint8Array | null> {
+  const res = await fetch(`${apiBaseUrl()}/v1/blobs/${encodeURIComponent(blobId)}`, {
+    headers: authHeaders(),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`download blob failed: ${res.status}`);
   onProgress(0);
+  if (!res.body) {
+    const buf = new Uint8Array(await res.arrayBuffer());
+    onProgress(1);
+    return buf;
+  }
+  const reader = res.body.getReader();
+  const total = Number(res.headers.get('Content-Length')) || 0;
+  if (total > 0) {
+    // Known length: fill one buffer in place — no per-chunk copies kept around.
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf.set(value, off);
+      off += value.length;
+      onProgress(Math.min(1, off / total));
+    }
+    onProgress(1);
+    return off === total ? buf : buf.subarray(0, off);
+  }
+  // Unknown length (chunked): collect then concatenate once.
+  const chunks: Uint8Array[] = [];
+  let received = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value);
     received += value.length;
-    if (total > 0) onProgress(Math.min(1, received / total));
+  }
+  const buf = new Uint8Array(received);
+  let off = 0;
+  for (const c of chunks) {
+    buf.set(c, off);
+    off += c.length;
   }
   onProgress(1);
-  return new Blob(chunks, { type: res.headers.get('Content-Type') || 'application/octet-stream' });
+  return buf;
 }
 
 /** Delete a blob we uploaded (owner-authed server-side). Called once every recipient has
@@ -188,7 +229,14 @@ export async function receiveIncomingMedia(
   ref: MediaRef,
   onProgress?: (fraction: number) => void,
 ): Promise<Blob | null> {
-  const ciphertext = await downloadBlob(ref.blobId, onProgress);
+  // With a progress callback, stream into one buffer and decrypt from those bytes directly
+  // (memory-lean, for large clips on mobile). Without one, the plain Blob path is simplest.
+  if (onProgress) {
+    const packed = await downloadCipherBytes(ref.blobId, onProgress);
+    if (!packed) return null;
+    return decryptBytes(packed, b64urlToBytes(ref.fileKey), ref.mime);
+  }
+  const ciphertext = await downloadBlob(ref.blobId);
   if (!ciphertext) return null;
   return decryptBlob(ciphertext, b64urlToBytes(ref.fileKey), ref.mime);
 }
