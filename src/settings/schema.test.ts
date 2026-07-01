@@ -52,3 +52,26 @@ describe('settings schema', () => {
     expect(searchSettings('chat backup')).toHaveLength(0);
   });
 });
+
+describe('settings schema — spec 1025 cleanup', () => {
+  it('has exactly one Animations entry (the duplicate was removed)', () => {
+    const anim = everyItem().filter((i) => 'title' in i && i.title === 'Animations');
+    expect(anim).toHaveLength(1);
+  });
+
+  it('has no in-app Vibrate toggle (a PWA no-op, removed)', () => {
+    const keys = new Set(
+      everyItem()
+        .filter((i): i is Extract<SettingItem, { key: string }> => 'key' in i)
+        .map((i) => i.key),
+    );
+    expect(keys.has('notifications.inapp.vibrate')).toBe(false);
+  });
+
+  it('Help version is no longer the stale hardcoded 0.1.0', () => {
+    const version = SETTINGS.help.groups
+      .flatMap((g) => g.items)
+      .find((i) => 'title' in i && i.title === 'Version');
+    expect(version && 'value' in version ? version.value : '').not.toBe('0.1.0');
+  });
+});
