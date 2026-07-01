@@ -738,6 +738,7 @@
            out as the caption when Send is tapped. Picked AND pasted media land here
            (spec 1023), so library photos can be captioned just like a paste. -->
       <ion-toolbar v-if="pendingMedia.length" class="paste-bar">
+       <div class="paste-stack">
         <div class="paste-row">
           <div
             v-for="(p, i) in pendingMedia"
@@ -753,18 +754,14 @@
               @click="editItemCaption(i)"
             >
               <img v-if="p.kind === 'image' && p.url" :src="p.url" alt="Attachment" />
-              <template v-else-if="p.kind === 'video' && p.url">
-                <video
-                  :src="p.url"
-                  muted
-                  playsinline
-                  preload="metadata"
-                  @loadeddata="p.ready = true"
-                />
-                <!-- Large clips take a moment to decode a first frame; show a spinner over the black
-                     tile until then so it reads as "loading", not broken. -->
-                <ion-spinner v-if="!p.ready" name="crescent" class="paste-loading" />
-                <ion-icon v-else class="paste-play" :icon="playCircle" />
+              <template v-else-if="p.kind === 'video'">
+                <!-- iOS never paints a frame into a <video> until it's played, so we generate a
+                     first-frame poster off-screen (canvas) and show that. Spinner until it settles. -->
+                <img v-if="p.poster" :src="p.poster" alt="Attachment" />
+                <div v-else class="paste-vid">
+                  <ion-spinner v-if="!p.ready" name="crescent" class="paste-loading" />
+                </div>
+                <ion-icon class="paste-play" :icon="playCircle" />
               </template>
               <div v-else class="paste-file">
                 <ion-icon :icon="documentOutline" />
@@ -777,17 +774,26 @@
             </button>
           </div>
         </div>
-        <!-- 2+ photos/videos: send as one swipeable album (default) or separate messages. -->
+        <!-- 2+ photos/videos: send as one swipeable album (default) or separate messages. On its own
+             row (not squeezed beside the thumbnails) with a lead-in label so the choice is clear. -->
         <div v-if="albumChoiceVisible" class="send-mode">
+          <span class="send-mode-label">Send as</span>
           <ion-segment
             :value="sendAsAlbum ? 'album' : 'individual'"
             mode="ios"
             @ion-change="sendAsAlbum = ($event.detail.value as string) === 'album'"
           >
-            <ion-segment-button value="album"><ion-label>Album</ion-label></ion-segment-button>
-            <ion-segment-button value="individual"><ion-label>Individual</ion-label></ion-segment-button>
+            <ion-segment-button value="album">
+              <ion-icon :icon="albumsOutline" />
+              <ion-label>Album</ion-label>
+            </ion-segment-button>
+            <ion-segment-button value="individual">
+              <ion-icon :icon="imagesOutline" />
+              <ion-label>Separate</ion-label>
+            </ion-segment-button>
           </ion-segment>
         </div>
+       </div>
       </ion-toolbar>
       <!-- A still-pending (un-accepted) friend request: lock the composer until
            the other side accepts. -->
@@ -1007,7 +1013,7 @@ import {
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
   imageOutline, musicalNotesOutline, calendarOutline, checkmarkCircle, ellipseOutline,
-  chevronDownOutline, chatbubbleEllipses,
+  chevronDownOutline, chatbubbleEllipses, albumsOutline, imagesOutline,
 } from 'ionicons/icons';
 import {
   getChat, getContact, listContacts, markChatRead, sendMediaMessage, sendMessage,
@@ -1850,6 +1856,7 @@ async function loadDraft(): Promise<void> {
       draftMediaBytes.set(id, it.bytes);
       const url = it.kind === 'image' || it.kind === 'video' ? URL.createObjectURL(file) : undefined;
       pendingMedia.value.push({ id, blob: file, kind: it.kind, url, caption: it.caption });
+      if (it.kind === 'video') void ensureVideoPoster(id, file); // rebuild the tile thumbnail
     }
   }
   if (d?.text) {
@@ -2422,7 +2429,8 @@ interface PendingMedia {
   kind: 'image' | 'video' | 'file';
   url?: string; // object URL for an image/video preview; files show a chip instead
   caption?: string; // optional per-item caption (overrides the shared one for this item)
-  ready?: boolean; // a video whose first frame has decoded (until then the tile shows a spinner)
+  poster?: string; // a video's first-frame thumbnail (data URL); a <video> tile paints black on iOS
+  ready?: boolean; // a video's poster generation has settled (succeeded or gave up) — stop the spinner
 }
 // Cap on staged attachments per message (photos + videos + files). The iOS library picker itself
 // can't be limited, so onPick trims the overflow to this.
@@ -2485,9 +2493,26 @@ function stageMedia(f: File, forceFile = false): 'audio' | 'staged' {
   if (k === 'audio') return 'audio';
   const kind: 'image' | 'video' | 'file' = k === 'image' || k === 'video' ? k : 'file';
   const url = kind === 'image' || kind === 'video' ? URL.createObjectURL(f) : undefined;
-  pendingMedia.value.push({ id: crypto.randomUUID(), blob: f, kind, url });
+  const id = crypto.randomUUID();
+  pendingMedia.value.push({ id, blob: f, kind, url });
+  if (kind === 'video') void ensureVideoPoster(id, f); // decode a first-frame thumbnail for the tile
   scheduleDraftMediaSave(); // keep the staged attachment in the draft
   return 'staged';
+}
+
+// Generate a staged video's first-frame poster off-screen and drop it onto the (reactive) item.
+// Matched by id since the row can shift if another item is removed while this resolves.
+async function ensureVideoPoster(id: string, blob: Blob): Promise<void> {
+  try {
+    const poster = await generateVideoPoster(blob);
+    const it = pendingMedia.value.find((m) => m.id === id);
+    if (it && poster) it.poster = poster;
+  } catch {
+    /* no frame (codec/timeout) — the tile falls back to a plain black video box */
+  } finally {
+    const it = pendingMedia.value.find((m) => m.id === id);
+    if (it) it.ready = true; // stop the spinner whether or not we got a frame
+  }
 }
 
 // Route a picked/pasted audio file into the title/artist review queue (its own flow).
@@ -4203,14 +4228,16 @@ function cancelRecording() {
   padding: 6px 6px 0 0;
 }
 .paste-thumb img,
-.paste-thumb video {
+.paste-thumb video,
+.paste-thumb .paste-vid {
   width: 64px;
   height: 64px;
   object-fit: cover;
   border-radius: 10px;
   display: block;
 }
-.paste-thumb video {
+/* Black box behind a staged video while its poster is being generated (or if it couldn't be). */
+.paste-thumb .paste-vid {
   background: #000;
 }
 /* Play glyph over a staged video's poster frame. */
@@ -4291,11 +4318,37 @@ function cancelRecording() {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
 }
 /* Album vs Individual choice for a multi-photo/video send. */
+/* Column so the send-as choice sits on its OWN row under the thumbnails (ion-toolbar would otherwise
+   flex the two side by side and squeeze the segment). */
+.paste-stack {
+  display: flex;
+  flex-direction: column;
+}
 .send-mode {
-  padding: 2px 12px 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px 8px;
+}
+.send-mode-label {
+  font-size: 13px;
+  color: var(--app-text-muted);
+  flex: 0 0 auto;
 }
 .send-mode ion-segment {
-  max-width: 240px;
+  flex: 1 1 auto;
+  max-width: 320px;
+}
+.send-mode ion-segment-button {
+  min-height: 30px;
+}
+.send-mode ion-segment-button ion-icon {
+  font-size: 15px;
+  margin-right: 5px;
+}
+/* Icon + label on one line inside each segment button. */
+.send-mode ion-segment-button::part(native) {
+  flex-direction: row;
 }
 .paste-x {
   position: absolute;
