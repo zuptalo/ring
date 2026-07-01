@@ -355,6 +355,9 @@ export function installTestHook(): void {
     setGroupAvatar: (chatId: string, dataUrl: string) => dbSetGroupAvatar(chatId, dataUrl),
     leaveGroup: (chatId: string) => dbLeaveGroup(chatId),
     sendChatMessage: (chatId: string, body: string) => dbSendMessage(chatId, body),
+    // Send with a per-message disappearing override (exercises the composer-timer plumbing).
+    sendChatMessageTtl: (chatId: string, body: string, ttlMs: number | null) =>
+      dbSendMessage(chatId, body, undefined, undefined, undefined, ttlMs),
     /** Send a group message that @mentions the given member ids (spec 1020). */
     sendWithMentions: (chatId: string, body: string, mentions: string[], everyone = false) =>
       dbSendMessage(chatId, body, undefined, mentions, everyone),
@@ -441,6 +444,7 @@ export function installTestHook(): void {
         reactions: m.reactions ?? [],
         replyTo: m.replyTo ?? null,
         albumId: m.albumId ?? null,
+        expiresAt: m.expiresAt ?? null, // disappearing messages: when this self-destructs
         deleted: !!m.deleted,
         editedAt: m.editedAt ?? null,
         location: m.location ?? null,
