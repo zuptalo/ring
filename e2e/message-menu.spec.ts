@@ -68,7 +68,6 @@ test('a single tap on an image opens the viewer directly (no menu step)', async 
     ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
   });
   await a.page.getByRole('button', { name: 'Send' }).click();
-  await a.page.getByText('Original quality').click();
 
   const image = a.page.locator('.bubble .bubble-image').last();
   await expect(image).toBeVisible({ timeout: 30_000 });

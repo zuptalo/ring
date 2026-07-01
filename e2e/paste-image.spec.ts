@@ -44,7 +44,6 @@ test('pasted image sends with the typed caption', async ({ browser }) => {
   // Type the caption below the thumbnail and send (Original skips compression).
   await composer.pressSequentially('From my clipboard', { delay: 15 });
   await a.page.getByRole('button', { name: 'Send' }).click();
-  await a.page.getByText('Original quality').click();
 
   // Sender side: an image bubble with the caption under the photo, staging row gone.
   await expect(a.page.locator('.bubble .bubble-image').last()).toBeVisible({ timeout: 30_000 });
