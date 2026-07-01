@@ -1928,12 +1928,16 @@ export async function backfillThumbTiers(mediaIds: string[], max = 16): Promise<
   return upgraded;
 }
 
-/** Download a deferred video's full clip (auto-download off, or manual tap). */
-export async function downloadMessageMedia(messageId: string): Promise<void> {
+/** Download a deferred attachment's full bytes (auto-download off/over-limit, or manual tap).
+ *  Reports download progress (0..1) via onProgress for the bubble's download ring. */
+export async function downloadMessageMedia(
+  messageId: string,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
   const m = await getMessage(messageId);
   if (!m?.pendingMedia || m.mediaId) return;
   const ref = m.pendingMedia;
-  const blob = await receiveIncomingMedia(ref);
+  const blob = await receiveIncomingMedia(ref, onProgress);
   if (!blob) throw new Error('download failed');
   const mediaId = uid();
   await put<Media>('media', {

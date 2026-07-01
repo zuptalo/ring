@@ -117,13 +117,32 @@ export function uploadBlob(ciphertext: Blob, onProgress?: (p: number) => void): 
 }
 
 /** Download ciphertext by id from the backend, or null if absent (404). */
-export async function downloadBlob(blobId: string): Promise<Blob | null> {
+export async function downloadBlob(
+  blobId: string,
+  onProgress?: (fraction: number) => void,
+): Promise<Blob | null> {
   const res = await fetch(`${apiBaseUrl()}/v1/blobs/${encodeURIComponent(blobId)}`, {
     headers: authHeaders(),
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`download blob failed: ${res.status}`);
-  return res.blob();
+  // Without a progress callback (or a readable body), just take the blob directly.
+  if (!onProgress || !res.body) return res.blob();
+  // Stream the body so we can report download progress against Content-Length.
+  const total = Number(res.headers.get('Content-Length')) || 0;
+  const reader = res.body.getReader();
+  const chunks: BlobPart[] = [];
+  let received = 0;
+  onProgress(0);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total > 0) onProgress(Math.min(1, received / total));
+  }
+  onProgress(1);
+  return new Blob(chunks, { type: res.headers.get('Content-Type') || 'application/octet-stream' });
 }
 
 /** Delete a blob we uploaded (owner-authed server-side). Called once every recipient has
@@ -163,9 +182,13 @@ export async function prepareOutgoingMedia(
   };
 }
 
-/** Download + decrypt the media a message refers to; null if the blob is gone. */
-export async function receiveIncomingMedia(ref: MediaRef): Promise<Blob | null> {
-  const ciphertext = await downloadBlob(ref.blobId);
+/** Download + decrypt the media a message refers to; null if the blob is gone. Reports download
+ *  progress (0..1) via onProgress when given, for the manual-download progress ring. */
+export async function receiveIncomingMedia(
+  ref: MediaRef,
+  onProgress?: (fraction: number) => void,
+): Promise<Blob | null> {
+  const ciphertext = await downloadBlob(ref.blobId, onProgress);
   if (!ciphertext) return null;
   return decryptBlob(ciphertext, b64urlToBytes(ref.fileKey), ref.mime);
 }
