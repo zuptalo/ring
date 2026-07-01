@@ -1809,8 +1809,10 @@ function linkParts(body: string): Array<{ text: string; url?: string }> {
 }
 // A bubble whose main content is a single photo/video → render with a thin frame
 // (narrow padding) hugging the media, rather than the normal text padding.
+// A photo/video bubble uses the tight edge-to-edge media frame — whether it's downloaded (mediaId)
+// OR still pending (not-yet-downloaded), so the not-downloaded placeholder is framed identically.
 const mediaBubble = (m: Message) =>
-  !m.deleted && !!m.mediaId && (m.kind === 'image' || (m.kind === 'video' && !m.videoNote));
+  !m.deleted && (!!m.mediaId || !!m.pendingMedia) && (m.kind === 'image' || (m.kind === 'video' && !m.videoNote));
 
 // A media message whose blob was cleaned up locally to free space (not the same as
 // a sender-deleted message, nor a not-yet-downloaded one) → show a placeholder.
