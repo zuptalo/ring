@@ -156,7 +156,7 @@
             swipeId === m.id ? swipeDx : 0,
             selecting,
             isSelected(m.id),
-            downloadingMedia[m.id],
+            downloadProgress[m.id],
             groupRunStart(i),
             senderAvatar(m.senderId),
           ]"
@@ -338,9 +338,15 @@
                 <img v-if="m.posterData" class="bubble-image" :src="m.posterData" :alt="m.kind" />
                 <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 <span class="dl-btn">
-                  <ion-spinner v-if="downloadingMedia[m.id]" name="crescent" />
-                  <ion-icon v-else :icon="downloadOutline" />
+                  <!-- Circular progress around the download glyph while fetching. -->
+                  <svg v-if="m.id in downloadProgress" class="dl-ring" viewBox="0 0 36 36" aria-hidden="true">
+                    <circle class="dl-ring-track" cx="18" cy="18" r="16" pathLength="100" />
+                    <circle class="dl-ring-fill" cx="18" cy="18" r="16" pathLength="100" :stroke-dasharray="`${(downloadProgress[m.id] || 0) * 100} 100`" />
+                  </svg>
+                  <ion-icon :icon="downloadOutline" />
                 </span>
+                <!-- Attachment size, so a large clip is obvious before you spend the data. -->
+                <span v-if="m.mediaSize" class="dl-size">{{ formatBytes(m.mediaSize) }}</span>
               </div>
               <!-- Audio/file not downloaded yet: a chip with the name/size and a download button. -->
               <button
@@ -349,8 +355,13 @@
                 class="file-chip pending-chip"
                 @click.stop="downloadPendingMedia(m.id)"
               >
-                <ion-spinner v-if="downloadingMedia[m.id]" name="crescent" />
-                <ion-icon v-else :icon="m.kind === 'audio' ? musicalNotesOutline : downloadOutline" />
+                <span class="chip-ico">
+                  <svg v-if="m.id in downloadProgress" class="dl-ring" viewBox="0 0 36 36" aria-hidden="true">
+                    <circle class="dl-ring-track" cx="18" cy="18" r="16" pathLength="100" />
+                    <circle class="dl-ring-fill" cx="18" cy="18" r="16" pathLength="100" :stroke-dasharray="`${(downloadProgress[m.id] || 0) * 100} 100`" />
+                  </svg>
+                  <ion-icon :icon="m.id in downloadProgress ? downloadOutline : (m.kind === 'audio' ? musicalNotesOutline : downloadOutline)" />
+                </span>
                 <span>{{ m.pendingMedia.name || (m.kind === 'audio' ? 'Audio' : 'File') }}</span>
                 <span v-if="m.mediaSize" class="chip-size">{{ formatBytes(m.mediaSize) }}</span>
               </button>
@@ -1286,16 +1297,18 @@ function closeSearch() {
 }
 
 // Fetch a deferred (not-yet-downloaded) video's full clip on tap.
-const downloadingMedia = reactive<Record<string, boolean>>({});
+// Per-message download progress (0..1) while a deferred attachment is being fetched; presence in the
+// map means "downloading now" and drives the circular progress ring on the download button.
+const downloadProgress = reactive<Record<string, number>>({});
 async function downloadPendingMedia(id: string): Promise<void> {
-  if (downloadingMedia[id]) return;
-  downloadingMedia[id] = true;
+  if (id in downloadProgress) return;
+  downloadProgress[id] = 0;
   try {
-    await downloadMessageMedia(id);
+    await downloadMessageMedia(id, (f) => (downloadProgress[id] = f));
   } catch {
     /* leave it pending so the user can tap again */
   } finally {
-    delete downloadingMedia[id];
+    delete downloadProgress[id];
   }
 }
 
@@ -5007,6 +5020,55 @@ function cancelRecording() {
 .dl-btn ion-spinner {
   width: 26px;
   height: 26px;
+}
+/* Circular download-progress ring around the download glyph (SVG, pathLength=100 so the fill
+   dasharray is a direct percentage). */
+.dl-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg); /* start the fill at 12 o'clock */
+}
+.dl-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.3);
+  stroke-width: 3;
+}
+.dl-ring-fill {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.2s linear;
+}
+/* The attachment size badge on a not-yet-downloaded photo/video. */
+.dl-size {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* Icon + progress ring wrapper inside a pending audio/file chip. */
+.chip-ico {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+.chip-ico .dl-ring-track {
+  stroke: var(--app-border);
+}
+.chip-ico .dl-ring-fill {
+  stroke: var(--ion-color-primary);
 }
 /* Link preview card (privacy-safe: domain + icon, no remote fetch). */
 .link-card {
