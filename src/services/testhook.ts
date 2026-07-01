@@ -150,7 +150,7 @@ import { get, getAll, put, bulkPut } from '@/db/idb';
 import { initialsAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
-import type { Chat, FriendRequest, Media, Message, Post, OutboxPost } from '@/db/types';
+import type { Call, Chat, FriendRequest, Media, Message, Post, OutboxPost } from '@/db/types';
 import {
   startDirectCall,
   startGroupCall,
@@ -791,6 +791,24 @@ export function installTestHook(): void {
     },
     /** Number of distinct active senders in a conversation (for group coalescing tests). */
     activityCount: (conversationKey: string): number => activityFor(conversationKey).length,
+
+    /** Spec 1025 (US6): seed a completed call-log record so the Calls tab can be checked (ISO
+     *  dates, usage totals). Dev-only. */
+    seedCall: async (opts: { video: boolean; durationSec: number; bytes?: number; ts: number; contactId?: string }): Promise<void> => {
+      await put<Call>('calls', {
+        id: uid(),
+        contactId: opts.contactId ?? 'seed-peer',
+        name: 'Seed Peer',
+        avatar: initialsAvatar('Seed Peer'),
+        direction: 'outgoing',
+        missed: false,
+        video: opts.video,
+        durationSec: opts.durationSec,
+        bytes: opts.bytes,
+        timestamp: opts.ts,
+        updatedAt: opts.ts,
+      });
+    },
 
     /* ---- media storage cleanup ---- */
     /** Seed a fake media blob + a message linking it (for storage tests). */
