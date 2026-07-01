@@ -156,7 +156,7 @@
             swipeId === m.id ? swipeDx : 0,
             selecting,
             isSelected(m.id),
-            downloadingVideo[m.id],
+            downloadingMedia[m.id],
             groupRunStart(i),
             senderAvatar(m.senderId),
           ]"
@@ -328,19 +328,32 @@
                 </a>
               </template>
 
-              <!-- Video not downloaded yet: the sent thumbnail + a download button
-                   (auto-download is off, or it's a manual fetch). -->
+              <!-- Photo/video not downloaded yet (auto-download off, over the size limit, or a manual
+                   fetch): the sent thumbnail + a download button. -->
               <div
-                v-if="m.kind === 'video' && !m.videoNote && !m.mediaId && m.pendingMedia"
+                v-if="((m.kind === 'video' && !m.videoNote) || m.kind === 'image') && !m.mediaId && m.pendingMedia"
                 class="video-poster pending"
-                @click.stop="downloadVideo(m.id)"
+                @click.stop="downloadPendingMedia(m.id)"
               >
-                <img v-if="m.posterData" class="bubble-image" :src="m.posterData" alt="video" />
+                <img v-if="m.posterData" class="bubble-image" :src="m.posterData" :alt="m.kind" />
                 <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 <span class="dl-btn">
-                  <ion-spinner v-if="downloadingVideo[m.id]" name="crescent" />
+                  <ion-spinner v-if="downloadingMedia[m.id]" name="crescent" />
                   <ion-icon v-else :icon="downloadOutline" />
-                </span>              </div>
+                </span>
+              </div>
+              <!-- Audio/file not downloaded yet: a chip with the name/size and a download button. -->
+              <button
+                v-else-if="(m.kind === 'audio' || m.kind === 'file') && !m.mediaId && m.pendingMedia"
+                type="button"
+                class="file-chip pending-chip"
+                @click.stop="downloadPendingMedia(m.id)"
+              >
+                <ion-spinner v-if="downloadingMedia[m.id]" name="crescent" />
+                <ion-icon v-else :icon="m.kind === 'audio' ? musicalNotesOutline : downloadOutline" />
+                <span>{{ m.pendingMedia.name || (m.kind === 'audio' ? 'Audio' : 'File') }}</span>
+                <span v-if="m.mediaSize" class="chip-size">{{ formatBytes(m.mediaSize) }}</span>
+              </button>
 
               <!-- Media removed from THIS device to free space: a placeholder so the
                    chat still shows something was here (distinct from a sender-deleted
@@ -1127,6 +1140,7 @@ import { openExternal } from '@/utils/external';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing } from '@/utils/text';
 import { vEnterSend } from '@/directives/enter-send';
+import { formatBytes } from '@/utils/bytes';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
 import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact, DraftMediaItem } from '@/db/types';
@@ -1261,16 +1275,16 @@ function closeSearch() {
 }
 
 // Fetch a deferred (not-yet-downloaded) video's full clip on tap.
-const downloadingVideo = reactive<Record<string, boolean>>({});
-async function downloadVideo(id: string): Promise<void> {
-  if (downloadingVideo[id]) return;
-  downloadingVideo[id] = true;
+const downloadingMedia = reactive<Record<string, boolean>>({});
+async function downloadPendingMedia(id: string): Promise<void> {
+  if (downloadingMedia[id]) return;
+  downloadingMedia[id] = true;
   try {
     await downloadMessageMedia(id);
   } catch {
     /* leave it pending so the user can tap again */
   } finally {
-    delete downloadingVideo[id];
+    delete downloadingMedia[id];
   }
 }
 
@@ -5510,6 +5524,28 @@ function cancelRecording() {
   font-size: 14px;
   color: inherit;
   text-decoration: none;
+}
+/* Not-yet-downloaded audio/file: a tappable chip with a download glyph and the size. */
+.pending-chip {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 0;
+  max-width: 100%;
+}
+.pending-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pending-chip .chip-size {
+  flex: none;
+  opacity: 0.7;
+  font-size: 12px;
+}
+.pending-chip ion-spinner {
+  width: 18px;
+  height: 18px;
 }
 .empty {
   text-align: center;

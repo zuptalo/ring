@@ -127,6 +127,15 @@ const UPLOAD_QUALITY: ChoiceOption[] = [
   { value: 'hd', label: 'HD (720p)' },
   { value: 'sd', label: 'SD', note: 'Smaller, fastest to send' },
 ];
+// Auto-download size cap (MB, as strings for the choice store; '0' = no limit).
+const SIZE_LIMIT: ChoiceOption[] = [
+  { value: '2', label: '2 MB' },
+  { value: '8', label: '8 MB' },
+  { value: '16', label: '16 MB' },
+  { value: '50', label: '50 MB' },
+  { value: '100', label: '100 MB' },
+  { value: '0', label: 'No limit' },
+];
 const AUTO_DOWNLOAD: ChoiceOption[] = [
   { value: 'never', label: 'Never' },
   { value: 'wifi', label: 'Wi-Fi' },
@@ -621,7 +630,7 @@ export const SETTINGS: Record<string, SettingNode> = {
         header: 'Media quality',
         items: [
           { type: 'link', id: 'media-upload-quality', title: 'Upload quality', icon: 'image' },
-          { type: 'link', id: 'media-download-quality', title: 'Auto-download quality', icon: 'download' },
+          { type: 'link', id: 'media-download-limit', title: 'Auto-download size limit', icon: 'download' },
         ],
       },
       {
@@ -652,14 +661,15 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
     ],
   },
-  'media-download-quality': {
-    id: 'media-download-quality',
-    title: 'Auto-download quality',
+  'media-download-limit': {
+    id: 'media-download-limit',
+    title: 'Auto-download size limit',
     groups: [
       {
-        header: 'Quality',
-        items: [{ type: 'choice', key: 'storage.downloadQuality', default: 'hd', options: QUALITY }],
-        footer: 'Select the quality for photos and videos to be automatically downloaded in.',
+        header: 'Limit',
+        items: [{ type: 'choice', key: 'storage.autoDownloadLimit', default: '16', options: SIZE_LIMIT }],
+        footer:
+          'Attachments larger than this are left for you to download with a tap, even where auto-download is on. Voice messages always download.',
       },
     ],
   },
