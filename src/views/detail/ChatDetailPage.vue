@@ -754,8 +754,17 @@
             >
               <img v-if="p.kind === 'image' && p.url" :src="p.url" alt="Attachment" />
               <template v-else-if="p.kind === 'video' && p.url">
-                <video :src="p.url" muted playsinline preload="metadata" />
-                <ion-icon class="paste-play" :icon="playCircle" />
+                <video
+                  :src="p.url"
+                  muted
+                  playsinline
+                  preload="metadata"
+                  @loadeddata="p.ready = true"
+                />
+                <!-- Large clips take a moment to decode a first frame; show a spinner over the black
+                     tile until then so it reads as "loading", not broken. -->
+                <ion-spinner v-if="!p.ready" name="crescent" class="paste-loading" />
+                <ion-icon v-else class="paste-play" :icon="playCircle" />
               </template>
               <div v-else class="paste-file">
                 <ion-icon :icon="documentOutline" />
@@ -2413,7 +2422,11 @@ interface PendingMedia {
   kind: 'image' | 'video' | 'file';
   url?: string; // object URL for an image/video preview; files show a chip instead
   caption?: string; // optional per-item caption (overrides the shared one for this item)
+  ready?: boolean; // a video whose first frame has decoded (until then the tile shows a spinner)
 }
+// Cap on staged attachments per message (photos + videos + files). The iOS library picker itself
+// can't be limited, so onPick trims the overflow to this.
+const MAX_STAGED_MEDIA = 10;
 const pendingMedia = ref<PendingMedia[]>([]);
 // Multiple photos/videos: send as one album (default) or as separate messages.
 const sendAsAlbum = ref(true);
@@ -3684,9 +3697,21 @@ async function onPick(e: Event, mode: 'auto' | 'file') {
   // Picked media now STAGES like a paste (spec 1023) so it can be captioned before
   // sending, and several photos/videos can go as an album or individually — see send().
   // Audio keeps its own title/artist review path.
+  // The iOS picker can't be capped (no `max` on a file input), so enforce the limit here: stage up to
+  // MAX_STAGED_MEDIA attachments and tell the user if the pick went over. Audio routes to its own
+  // queue and isn't counted against this.
   const audioFiles: File[] = [];
+  let overCap = false;
   for (const f of files) {
+    const isAudio = mediaKindOf(f, mode === 'file') === 'audio';
+    if (!isAudio && pendingMedia.value.length >= MAX_STAGED_MEDIA) {
+      overCap = true;
+      continue;
+    }
     if (stageMedia(f, mode === 'file') === 'audio') audioFiles.push(f);
+  }
+  if (overCap) {
+    void appToast({ message: `You can attach up to ${MAX_STAGED_MEDIA} items at once.`, duration: 2200 });
   }
   if (audioFiles.length) {
     // The pending reply (if any) rides the first audio only when nothing else was staged
@@ -4198,6 +4223,16 @@ function cancelRecording() {
   color: #fff;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
   pointer-events: none;
+}
+/* Spinner over a staged video whose first frame hasn't decoded yet (large clips take a moment). */
+.paste-loading {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 22px;
+  height: 22px;
+  color: #fff;
 }
 /* A staged non-media file shows a labelled chip instead of a thumbnail. */
 .paste-file {
