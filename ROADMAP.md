@@ -46,6 +46,7 @@ Specs are grouped by category band; status moves
 | [1020](specs/1020-mentions-group-chats/spec.md) | @mentions in group chats | 🔵 in-review |
 | [1021](specs/1021-support-contributions/spec.md) | Support the project (pay-what-you-want contributions) | 🔵 in-review |
 | [1024](specs/1024-resilient-posting-and-storage/spec.md) | Resilient posting & on-device storage management | 🔵 in-review |
+| [1025](specs/1025-app-ux-polish/spec.md) | App-wide UX polish and fixes | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
