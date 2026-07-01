@@ -47,10 +47,20 @@ await poll(
   Boolean,
   { label: 'caption restored' },
 );
+// Both attachments (the photo and the voice clip) should be staged in the composer.
+await poll(
+  () => me.page.evaluate(() => document.querySelectorAll('.stage-thumb').length),
+  (n) => n === 2,
+  { label: 'photo + voice restored' },
+);
 const restored = await me.page.evaluate(() => {
   const ta = document.querySelector('ion-textarea');
-  const voiceTiles = document.querySelectorAll('.album-stage .stage-thumb, .voice-thumb, ion-item').length;
-  return { caption: ta?.value || '', hasVoiceTile: document.body.innerText.toLowerCase().includes('voice') || voiceTiles > 0 };
+  return {
+    caption: ta?.value || '',
+    stagedTiles: document.querySelectorAll('.stage-thumb').length,
+    hasImageTile: !!document.querySelector('.stage-thumb img'),
+    hasVoiceTile: !!document.querySelector('.stage-voice'),
+  };
 });
 console.log('restored in composer:', JSON.stringify(restored));
 await shot(me, 'interrupted-composer');

@@ -77,7 +77,9 @@ async function uploadOne(id: string): Promise<void> {
         lifetime: rec.lifetime ?? '72h',
         media: rec.items.length
           ? rec.items.map((it) => ({
-              blob: it.blob,
+              // Rebuild a fresh in-memory Blob from the inline bytes (always readable, unlike a Blob
+              // read back from IDB after a restart). Fall back to a legacy stored Blob if present.
+              blob: it.bytes ? new Blob([it.bytes], { type: it.mime }) : (it.blob as Blob),
               kind: it.kind,
               name: it.name,
               durationSec: it.durationSec,
@@ -172,18 +174,20 @@ export async function recoverInterruptedPosts(): Promise<{ recovered: number; di
       await deletePendingPost(rec.id);
       continue;
     }
-    const voice = rec.items.filter((it) => it.kind === 'voice');
-    const droppedMedia = rec.items.some((it) => it.kind !== 'voice');
-    if (rec.body?.trim() || voice.length) {
-      rec.items = voice; // keep in-app recordings; library photos/videos can't be re-read → drop them
+    // Everything is stored as inline bytes, so keep the WHOLE post — caption, voice, photos and
+    // videos all survive — and hand it back as a draft to finish. Older records that only have a
+    // legacy Blob (no bytes) for photos/videos can't be re-read after the restart, so those items
+    // are dropped; the caption and any voice (which always had bytes) still come back.
+    const usable = rec.items.filter((it) => !!it.bytes);
+    if (rec.body?.trim() || usable.length) {
+      rec.items = usable;
       rec.status = 'interrupted';
       rec.error = undefined;
-      rec.droppedMedia = droppedMedia;
       rec.attempts = 0;
       await updatePendingPost(rec);
       recoveredN += 1;
     } else {
-      await deletePendingPost(rec.id); // pure library-media post with no caption — nothing to keep
+      await deletePendingPost(rec.id); // nothing readable to keep
       discarded += 1;
     }
     lastProgressWrite.delete(rec.id);

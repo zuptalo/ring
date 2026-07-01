@@ -456,7 +456,6 @@ export interface OutboxPost {
   // finish in the composer; 'canceled' = discarded.
   status: 'uploading' | 'failed' | 'canceled' | 'interrupted';
   error?: string; // last failure reason (free-space, network…)
-  droppedMedia?: boolean; // 'interrupted' posts: there WERE photos/videos we couldn't keep → "re-add"
   attempts: number; // worker attempts; guards the auto-retry-once
   createdLocally: number; // ms at Share — ordering ONLY (NOT the post's createdAt)
   updatedAt: number; // change-bus / last-write
@@ -464,12 +463,12 @@ export interface OutboxPost {
 
 export interface OutboxItem {
   localId: string;
-  blob: Blob; // cached working copy (plaintext, local-only; deleted on finalize/cancel)
-  // VOICE only: the clip's bytes stored inline (not as a Blob). A Blob retrieved from IndexedDB
-  // after a full app reload can be unreadable on iOS (its arrayBuffer() hangs), which would stall the
-  // re-upload of a recovered draft. An ArrayBuffer is stored inline and always reads back, so we
-  // rebuild a fresh in-memory Blob from this when restoring the draft into the composer.
+  // The item's bytes stored INLINE (not as a Blob). A Blob read back from IndexedDB after a full app
+  // reload can be unreadable on iOS (its arrayBuffer() hangs), which stalled re-uploads and stopped
+  // recovered posts from keeping their media; an ArrayBuffer always reads back. We rebuild a fresh
+  // in-memory Blob from this both for the upload and when restoring the post into the composer.
   bytes?: ArrayBuffer;
+  blob?: Blob; // legacy/back-compat: older queued items stored the working copy as a Blob
   kind: 'image' | 'video' | 'voice';
   name: string;
   mime: string;

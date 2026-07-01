@@ -2344,19 +2344,16 @@ export async function enqueuePendingPost(input: {
   }[];
 }): Promise<string> {
   const id = uid();
-  // The cached blobs only need to outlive the COMPOSER (the upload runs in-session, while the app is
-  // open and the picked files are still readable). We deliberately do NOT try to make library media
-  // survive a full app close — an iOS File handle doesn't, and a half-resumed upload was unreliable.
-  // On a cold restart these posts are recovered as drafts instead (see recoverInterruptedPosts).
-  // EXCEPTION: an in-app VOICE recording IS kept across a restart (it's part of the recovered draft),
-  // so we stash its bytes inline as an ArrayBuffer — an IDB Blob can read back broken on iOS, an
-  // ArrayBuffer doesn't. Small clips, so the read is cheap.
+  // Read every item's bytes and store them INLINE (as an ArrayBuffer, not a Blob). This is what lets
+  // a post survive a full app close: a Blob read back from IDB after a restart can be unreadable on
+  // iOS, an ArrayBuffer always reads back. So an interrupted post keeps its photos/videos/voice and
+  // can be finished from the recovered draft. The read happens once here, at Share (in-session, while
+  // the picked files are still readable).
   const items: OutboxItem[] = [];
   for (const it of input.items) {
     items.push({
       localId: uid(),
-      blob: it.blob,
-      bytes: it.kind === 'voice' ? await it.blob.arrayBuffer() : undefined,
+      bytes: await it.blob.arrayBuffer(),
       kind: it.kind,
       name: it.name,
       mime: it.mime,

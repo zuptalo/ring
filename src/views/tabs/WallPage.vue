@@ -72,8 +72,7 @@
           <ion-progress-bar v-if="pp.status === 'uploading'" :value="pp.progress" class="pbar" />
           <p class="pending-note">
             <template v-if="pp.status === 'interrupted'">
-              The app closed before this finished.
-              {{ pp.droppedMedia ? 'Your caption and voice are saved. Re-add your photos or videos to post.' : 'Tap Finish to post it.' }}
+              The app closed before this finished. Everything you added is saved. Tap Finish to post it.
             </template>
             <template v-else>
               {{ pp.count ? pp.count + (pp.count > 1 ? ' items' : ' item') : 'Text post' }} ·

@@ -15,7 +15,6 @@ export interface PendingView {
   count: number; // number of media items
   progress: number; // 0..1 overall (mean of per-item progress)
   body: string;
-  droppedMedia: boolean; // interrupted posts: there were photos/videos we couldn't keep
 }
 
 export function usePendingPosts(): { pending: ComputedRef<PendingView[]> } {
@@ -30,7 +29,6 @@ export function usePendingPosts(): { pending: ComputedRef<PendingView[]> } {
         count: p.items.length,
         progress: p.items.length ? p.items.reduce((s, it) => s + it.progress, 0) / p.items.length : 0,
         body: p.body,
-        droppedMedia: !!p.droppedMedia,
       })),
   );
   return { pending };
