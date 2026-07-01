@@ -53,18 +53,33 @@
           </ion-item>
           <ion-item button :detail="false" lines="none" @click="openExternal('https://ko-fi.com/zuptalo')">
             <ion-icon slot="start" :icon="cafeOutline" color="primary" />
-            <ion-label color="primary">Ko-fi</ion-label>
+            <ion-label class="ion-text-wrap">
+              <span class="opt-name">Ko-fi</span>
+              <p class="opt-desc">One-off or monthly, no fees taken.</p>
+            </ion-label>
             <ion-icon slot="end" :icon="openOutline" color="medium" />
           </ion-item>
           <ion-item button :detail="false" lines="none" @click="openExternal('https://liberapay.com/zuptalo')">
             <ion-icon slot="start" :icon="heartOutline" color="primary" />
-            <ion-label color="primary">Liberapay</ion-label>
+            <ion-label class="ion-text-wrap">
+              <span class="opt-name">Liberapay</span>
+              <p class="opt-desc">Recurring donations, open-source friendly.</p>
+            </ion-label>
             <ion-icon slot="end" :icon="openOutline" color="medium" />
           </ion-item>
           <ion-item button :detail="false" lines="none" @click="openExternal('https://github.com/sponsors/zuptalo')">
             <ion-icon slot="start" :icon="logoGithub" color="primary" />
-            <ion-label color="primary">GitHub Sponsors</ion-label>
+            <ion-label class="ion-text-wrap">
+              <span class="opt-name">GitHub Sponsors</span>
+              <p class="opt-desc">Sponsor from your GitHub account.</p>
+            </ion-label>
             <ion-icon slot="end" :icon="openOutline" color="medium" />
+          </ion-item>
+          <!-- Share the canonical support link (Web Share, clipboard fallback) so someone can
+               contribute without installing the app. -->
+          <ion-item button :detail="false" lines="none" @click="shareSupport">
+            <ion-icon slot="start" :icon="shareSocialOutline" color="primary" />
+            <ion-label color="primary">Share a link to support Ring</ion-label>
           </ion-item>
         </ion-list>
 
@@ -77,19 +92,55 @@
 <script setup lang="ts">
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
-  IonContent, IonList, IonItem, IonLabel, IonIcon,
+  IonContent, IonList, IonItem, IonLabel, IonIcon, toastController,
 } from '@ionic/vue';
-import { cafeOutline, heartOutline, logoGithub, openOutline } from 'ionicons/icons';
+import { cafeOutline, heartOutline, logoGithub, openOutline, shareSocialOutline } from 'ionicons/icons';
 import { openExternal } from '@/utils/external';
 
 const appVersion = __APP_VERSION__;
 // Donation links open in the system browser on tap (openExternal); nothing from any
 // platform loads until then, so opening this page never reaches out on its own.
+
+// The canonical "support Ring" link: the repository, where the FUNDING.yml Sponsor button
+// surfaces every funding option — so a friend can contribute without installing the app.
+const SUPPORT_URL = 'https://github.com/zuptalo/ring';
+async function shareSupport(): Promise<void> {
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: 'Support Ring',
+        text: 'Support Ring, a private end-to-end-encrypted messenger.',
+        url: SUPPORT_URL,
+      });
+    } catch {
+      /* user cancelled the share sheet */
+    }
+    return;
+  }
+  // No Web Share on this device: copy the link so it can still be shared.
+  try {
+    await navigator.clipboard?.writeText(SUPPORT_URL);
+    const toast = await toastController.create({ message: 'Support link copied', duration: 1500 });
+    await toast.present();
+  } catch {
+    /* clipboard unavailable */
+  }
+}
 </script>
 
 <style scoped>
 .about {
   padding-bottom: max(env(safe-area-inset-bottom, 0px), 24px);
+}
+/* Funding option: primary-coloured platform name + a muted one-line description. */
+.opt-name {
+  color: var(--ion-color-primary);
+  font-weight: 500;
+}
+.opt-desc {
+  color: var(--app-text-muted);
+  font-size: 13px;
+  margin-top: 2px;
 }
 .brand {
   text-align: center;
