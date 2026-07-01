@@ -188,6 +188,10 @@ defineExpose({ playing, elapsed, total, progress, rate, pipActive, toggle, pause
   justify-content: center;
 }
 .vid-el {
+  /* Fill the frame (letterboxed) so the poster matches photo presentation instead of sizing to the
+     poster's intrinsic pixels — otherwise a small poster tier floats tiny in a large blank area. */
+  width: 100%;
+  height: 100%;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
