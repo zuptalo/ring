@@ -1909,7 +1909,7 @@ async function loadDraft(): Promise<void> {
       draftMediaBytes.set(id, it.bytes);
       const url = it.kind === 'image' || it.kind === 'video' ? URL.createObjectURL(file) : undefined;
       pendingMedia.value.push({ id, blob: file, kind: it.kind, url, caption: it.caption });
-      if (it.kind === 'video') void ensureVideoPoster(id, file); // rebuild the tile thumbnail
+      if (it.kind === 'video') queueVideoPoster(id); // rebuild the tile thumbnail
     }
   }
   if (d?.text) {
@@ -2536,46 +2536,58 @@ function stageMedia(f: File, forceFile = false): 'audio' | 'staged' {
   const url = kind === 'image' || kind === 'video' ? URL.createObjectURL(f) : undefined;
   const id = crypto.randomUUID();
   pendingMedia.value.push({ id, blob: f, kind, url });
-  if (kind === 'video') void posterFromMaterialized(id, f);
+  if (kind === 'video') queueVideoPoster(id); // decode a first-frame thumbnail (serialized + retried)
   scheduleDraftSave(); // update the light drafts record; the media bytes are saved on leave (below)
   return 'staged';
 }
 
-// Generating a poster straight from a freshly-picked iOS video File is unreliable — the <video>
-// element often can't decode a frame from it within the timeout, so the tile stayed black until you
-// left and came back (which rebuilds the clip from bytes). Reading the bytes into a fully in-memory
-// blob first makes it decode reliably. We cache those bytes for the draft so they aren't read twice.
-async function posterFromMaterialized(id: string, f: File): Promise<void> {
+// Video poster generation is SERIALIZED through this queue. Decoding a frame right after a big
+// multi-select is flaky on iOS (why the tile stayed black until you left + came back, once the page
+// had settled); doing several at once made it worse. One at a time — with a breath between — mimics
+// the calm re-open that always works. Each item still retries a few times before giving up.
+const posterQueue: Array<() => Promise<void>> = [];
+let posterQueueRunning = false;
+function queueVideoPoster(id: string, attempt = 0): void {
+  posterQueue.push(() => attemptVideoPoster(id, attempt));
+  if (!posterQueueRunning) void runPosterQueue();
+}
+async function runPosterQueue(): Promise<void> {
+  posterQueueRunning = true;
   try {
-    const buf = await f.arrayBuffer();
-    draftMediaBytes.set(id, buf);
-    await ensureVideoPoster(id, new Blob([buf], { type: f.type || 'video/mp4' }));
-  } catch {
-    await ensureVideoPoster(id, f); // fall back to the raw file
+    while (posterQueue.length) {
+      const task = posterQueue.shift();
+      if (task) await task();
+      await new Promise((r) => window.setTimeout(r, 150)); // let the decoder settle between clips
+    }
+  } finally {
+    posterQueueRunning = false;
   }
 }
 
-// Generate a staged video's first-frame poster off-screen and drop it onto the (reactive) item.
-// iOS frequently can't decode a frame right after a big multi-select (the reason the thumbnail only
-// used to appear after leaving + returning, once the page had settled). So on a null result we back
-// off and RETRY a few times, keeping the spinner up, instead of giving up to a black tile. The item
-// is updated by REPLACING it (not mutating in place) so the tile repaints reliably.
-async function ensureVideoPoster(id: string, blob: Blob, attempt = 0): Promise<void> {
+// One decode attempt for a staged video's first-frame poster. On failure it RE-QUEUES itself (after a
+// backoff) rather than looping in place, so a stubborn clip doesn't hold up the others' turns — each
+// clip's later retries interleave with the rest. Gives up to a plain black tile after a few tries.
+// The item is updated by REPLACING it (not mutating in place) so the tile repaints reliably.
+async function attemptVideoPoster(id: string, attempt: number): Promise<void> {
+  const item = pendingMedia.value.find((m) => m.id === id);
+  if (!item || item.kind !== 'video') return; // removed while queued
   let poster: string | undefined;
   try {
-    poster = await generateVideoPoster(blob);
+    poster = await generateVideoPoster(item.blob);
   } catch {
     /* no frame yet */
   }
   const idx = pendingMedia.value.findIndex((m) => m.id === id);
   if (idx < 0) return; // item removed while we were decoding
-  if (!poster && attempt < 4) {
-    // Try again once the device has quieted down; leave the tile spinning meanwhile.
-    window.setTimeout(() => void ensureVideoPoster(id, blob, attempt + 1), 700 * (attempt + 1));
+  if (poster) {
+    pendingMedia.value[idx] = { ...pendingMedia.value[idx], poster, ready: true };
     return;
   }
-  const cur = pendingMedia.value[idx];
-  pendingMedia.value[idx] = { ...cur, poster: poster ?? cur.poster, ready: true };
+  if (attempt < 5) {
+    window.setTimeout(() => queueVideoPoster(id, attempt + 1), 600 * (attempt + 1)); // retry later
+    return;
+  }
+  pendingMedia.value[idx] = { ...pendingMedia.value[idx], ready: true }; // give up: black tile + play
 }
 
 // Route a picked/pasted audio file into the title/artist review queue (its own flow).
@@ -4316,11 +4328,12 @@ function cancelRecording() {
 .paste-thumb .paste-vid {
   background: #000;
 }
-/* Play glyph over a staged video's poster frame. */
+/* Play glyph over a staged video's poster frame. Dead-centered so it lands exactly where the
+   loading spinner was (no jump when the poster arrives). */
 .paste-play {
   position: absolute;
-  left: calc(50% - 3px);
-  top: calc(50% + 3px);
+  left: 50%;
+  top: 50%;
   transform: translate(-50%, -50%);
   font-size: 26px;
   color: #fff;
