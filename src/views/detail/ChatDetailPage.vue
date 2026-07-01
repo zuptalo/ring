@@ -452,15 +452,19 @@
               <!-- Direction-aware foot: react button opposite the timestamp; sent →
                    time+tick right / react left, received → time left / react right. -->
               <div class="msg-foot" :class="m.outgoing ? 'out' : 'in'">
+                <!-- React button. On a disappearing message it becomes a melting face 🫠 that melts
+                     further as the message nears expiry (exact time-left is on the message info page);
+                     it still opens the reaction picker on tap, and stays visible past the react cap. -->
                 <button
-                  v-if="myEmojisFor(m).length < MAX_REACTIONS_PER_USER"
+                  v-if="myEmojisFor(m).length < MAX_REACTIONS_PER_USER || m.expiresAt"
                   type="button"
                   class="react-btn"
-                  aria-label="React"
+                  :aria-label="m.expiresAt ? `Disappearing message` : 'React'"
                   @click.stop="openQuickReact(m, $event)"
                   @pointerdown.prevent
                 >
-                  <ion-icon :icon="happyOutline" />
+                  <span v-if="m.expiresAt" class="ttl-melt" :style="{ '--frac': ttlFrac(m) }" :title="`Disappears in ${ttlLeft(m.expiresAt)}`" role="img">🫠</span>
+                  <ion-icon v-else :icon="happyOutline" />
                 </button>
                 <span class="time">
                   <span v-if="m.editedAt" class="edited">edited</span>
@@ -600,14 +604,15 @@
               </div>
               <div class="msg-foot" :class="item.messages[0].outgoing ? 'out' : 'in'">
                 <button
-                  v-if="myEmojisFor(item.messages[0]).length < MAX_REACTIONS_PER_USER"
+                  v-if="myEmojisFor(item.messages[0]).length < MAX_REACTIONS_PER_USER || item.messages[0].expiresAt"
                   type="button"
                   class="react-btn"
-                  aria-label="React"
+                  :aria-label="item.messages[0].expiresAt ? 'Disappearing message' : 'React'"
                   @click.stop="openQuickReact(item.messages[0], $event)"
                   @pointerdown.prevent
                 >
-                  <ion-icon :icon="happyOutline" />
+                  <span v-if="item.messages[0].expiresAt" class="ttl-melt" :style="{ '--frac': ttlFrac(item.messages[0]) }" :title="`Disappears in ${ttlLeft(item.messages[0].expiresAt!)}`" role="img">🫠</span>
+                  <ion-icon v-else :icon="happyOutline" />
                 </button>
                 <span class="time">
                   <!-- Count to the LEFT of the clock so the clock + tick stay put as it toggles. -->
@@ -2421,6 +2426,34 @@ function fmtTtl(ms: number): string {
   if (ms >= TTL_DAY) return `${Math.round(ms / TTL_DAY)}d`;
   if (ms >= HOUR) return `${Math.round(ms / HOUR)}h`;
   return `${Math.round(ms / MIN)}m`;
+}
+
+// A slowly-ticking clock so each disappearing message's "left" indicator stays current without a
+// per-second timer (windows are minutes-to-days). Reads drive template re-render every 30s.
+const nowMs = ref(Date.now());
+let ttlTick: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  ttlTick = setInterval(() => (nowMs.value = Date.now()), 30_000);
+});
+onUnmounted(() => clearInterval(ttlTick));
+
+// Compact "time left before this disappears" for a message's expiresAt (e.g. "1d", "3h", "5m", "9s").
+function ttlLeft(expiresAt: number): string {
+  const s = Math.max(0, Math.floor((expiresAt - nowMs.value) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+// Fraction of a disappearing message's life REMAINING (1 = just sent, 0 = about to vanish). Drives
+// how far the melting face has "melted". Base = the message timestamp the expiry was stamped from.
+function ttlFrac(m: { expiresAt?: number; timestamp: number }): number {
+  if (!m.expiresAt) return 1;
+  const total = m.expiresAt - m.timestamp;
+  if (total <= 0) return 0;
+  return Math.max(0, Math.min(1, (m.expiresAt - nowMs.value) / total));
 }
 const msgTtlShort = computed(() => (effectiveTtlMs.value ? fmtTtl(effectiveTtlMs.value) : ''));
 const msgTtlLabel = computed(() => {
@@ -5149,6 +5182,18 @@ function cancelRecording() {
   display: inline-flex;
   align-items: center;
   gap: 3px;
+}
+/* Disappearing message: the react button shows a melting face 🫠 that melts further (squishes, drips
+   down, blurs, fades) as the message nears expiry. --frac is the fraction of life REMAINING. */
+.ttl-melt {
+  font-size: 18px;
+  line-height: 1;
+  display: inline-block;
+  transform-origin: center bottom;
+  transform: translateY(calc((1 - var(--frac, 1)) * 3px)) scaleY(calc(0.6 + var(--frac, 1) * 0.4));
+  filter: blur(calc((1 - var(--frac, 1)) * 0.7px));
+  opacity: calc(0.45 + var(--frac, 1) * 0.55);
+  transition: transform 0.6s linear, opacity 0.6s linear, filter 0.6s linear;
 }
 /* Direction-aware bottom row (spec 1008): the react button sits opposite the
    timestamp — sent → time+tick right / react left; received → time left / react
