@@ -422,10 +422,6 @@ export const SETTINGS: Record<string, SettingNode> = {
     title: 'Chats',
     groups: [
       {
-        items: [{ type: 'link', id: 'chats-animations', title: 'Animations', icon: 'palette' }],
-        footer: 'Choose whether emoji and GIFs move automatically.',
-      },
-      {
         items: [{ type: 'toggle', title: 'Save to Photos', key: 'chats.saveToPhotos', default: false }],
         footer: 'Automatically save photos and videos you receive to your device.',
       },
@@ -607,7 +603,6 @@ export const SETTINGS: Record<string, SettingNode> = {
       {
         items: [
           { type: 'toggle', title: 'Sounds', key: 'notifications.inapp.sounds', default: false },
-          { type: 'toggle', title: 'Vibrate', key: 'notifications.inapp.vibrate', default: true },
         ],
       },
     ],
@@ -699,7 +694,9 @@ export const SETTINGS: Record<string, SettingNode> = {
     id: 'help',
     title: 'Help',
     groups: [
-      { items: [{ type: 'stat', title: 'Version', value: '0.1.0' }] },
+      // Vite replaces __APP_VERSION__ at build time; the typeof guard keeps it defined under vitest
+      // (which does not apply the build define), so importing the schema in a unit test never throws.
+      { items: [{ type: 'stat', title: 'Version', value: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0' }] },
       {
         header: 'Developer',
         items: [{ type: 'route', title: 'Run self-test', path: '/settings/selftest', icon: 'shield' }],
