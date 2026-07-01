@@ -148,6 +148,10 @@ func TestBlobUploadDownload(t *testing.T) {
 	if rr.Code != http.StatusOK || rr.Body.String() != "ENCRYPTED-BYTES" {
 		t.Fatalf("download mismatch: status=%d body=%q", rr.Code, rr.Body.String())
 	}
+	// Content-Length must be present so the client can render an accurate download progress bar.
+	if got := rr.Result().Header.Get("Content-Length"); got != strconv.Itoa(len("ENCRYPTED-BYTES")) {
+		t.Fatalf("download Content-Length = %q, want %d", got, len("ENCRYPTED-BYTES"))
+	}
 
 	// Unknown id → 404; no auth → 401.
 	if rr := do(t, srv, http.MethodGet, "/v1/blobs/nope", token, ""); rr.Code != http.StatusNotFound {
