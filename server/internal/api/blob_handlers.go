@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"ring/server/internal/auth"
 	"ring/server/internal/httpx"
@@ -73,7 +74,11 @@ func (h *Handlers) downloadBlob(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "blob not found")
 		return
 	}
+	// Set Content-Length explicitly so the client can show an accurate download progress
+	// bar. Without it Go streams the body chunked (no length), and the receiver can only
+	// tell "started" vs "done" — the progress ring would jump instead of filling smoothly.
 	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.Itoa(len(bytes)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(bytes)
 }
