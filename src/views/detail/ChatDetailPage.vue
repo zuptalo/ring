@@ -920,8 +920,11 @@
               :class="{ 'has-badge': !!effectiveTtlMs }"
               @click="openMsgTtl"
             >
-              <ion-icon slot="icon-only" :icon="timerOutline" />
-              <span v-if="effectiveTtlMs" class="ttl-badge">{{ msgTtlShort }}</span>
+              <!-- Icon + duration stacked vertically so the badge sits cleanly under the clock. -->
+              <span class="ttl-stack">
+                <ion-icon :icon="timerOutline" aria-hidden="true" />
+                <span v-if="effectiveTtlMs" class="ttl-badge">{{ msgTtlShort }}</span>
+              </span>
             </ion-button>
             <ion-button
               v-if="draft.trim() || pendingMedia.length"
@@ -5561,20 +5564,27 @@ function cancelRecording() {
   overflow-y: auto;
 }
 /* Disappearing-timer button: the duration badge tucks under the timer glyph. */
+/* Keep the button compact even without the icon-only slot (which we drop to stack icon + badge). */
 .ttl-btn {
-  position: relative;
+  --padding-start: 6px;
+  --padding-end: 6px;
 }
-/* Shrink + lift the clock glyph so the duration badge has clear room underneath it (otherwise the
-   icon covers the text). Only when a badge is present. */
-.ttl-btn.has-badge ion-icon {
-  font-size: 20px;
-  transform: translateY(-4px);
+.ttl-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  gap: 1px;
+}
+/* A hair smaller than a plain icon-only button so the icon + duration together fit the toolbar row. */
+.ttl-stack ion-icon {
+  font-size: 21px;
+}
+.ttl-btn.has-badge .ttl-stack ion-icon {
+  font-size: 19px;
 }
 .ttl-badge {
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  transform: translateX(-50%);
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
