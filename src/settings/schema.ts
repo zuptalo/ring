@@ -630,12 +630,12 @@ export const SETTINGS: Record<string, SettingNode> = {
         header: 'Media quality',
         items: [
           { type: 'link', id: 'media-upload-quality', title: 'Upload quality', icon: 'image' },
-          { type: 'link', id: 'media-download-limit', title: 'Auto-download size limit', icon: 'download' },
         ],
       },
       {
         header: 'Media auto-download',
         items: [
+          { type: 'link', id: 'media-download-limit', title: 'Auto-download size limit', icon: 'download' },
           { type: 'link', id: 'storage-autodownload-photos', title: 'Photos', icon: 'image' },
           { type: 'link', id: 'storage-autodownload-audio', title: 'Audio', icon: 'music' },
           { type: 'link', id: 'storage-autodownload-video', title: 'Video', icon: 'video' },
