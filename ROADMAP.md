@@ -45,7 +45,7 @@ Specs are grouped by category band; status moves
 | [1019](specs/1019-hidden-chats-pin/spec.md) | Hidden Chats Locked Behind a PIN | 🔵 in-review |
 | [1020](specs/1020-mentions-group-chats/spec.md) | @mentions in group chats | 🔵 in-review |
 | [1021](specs/1021-support-contributions/spec.md) | Support the project (pay-what-you-want contributions) | 🟡 in-progress |
-| [1024](specs/1024-resilient-posting-and-storage/spec.md) | Resilient posting & on-device storage management | ⚪ planned |
+| [1024](specs/1024-resilient-posting-and-storage/spec.md) | Resilient posting & on-device storage management | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
