@@ -18,7 +18,7 @@ import {
   getContact,
   getChat,
   addContactWithId,
-  startDirectChat,
+  sessionChatIdForPeer,
   createCall,
   finishCall,
   markCallMissed,
@@ -1242,7 +1242,7 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
   }
   const contact = await getContact(contactId);
   if (!contact) return;
-  const chatId = await startDirectChat(contact);
+  const chatId = await sessionChatIdForPeer(contact); // may be a hidden 1:1 (knock-knock, spec 1027)
   const callId = uid();
 
   callMeta.value = {
@@ -1646,7 +1646,7 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
     contact = await getContact(from);
   }
   if (!contact) return;
-  const chatId = await startDirectChat(contact);
+  const chatId = await sessionChatIdForPeer(contact); // may be a hidden 1:1 (knock-knock, spec 1027)
 
   // Per-chat call mute (spec 1015 FR-022a): a muted or web-push-off chat silences
   // its incoming calls too. The caller/chat is resolvable here (the app is live), so
@@ -2055,7 +2055,7 @@ async function presentSecondDirect(
     contact = await getContact(from);
   }
   if (!contact) return busy();
-  const chatId = await startDirectChat(contact);
+  const chatId = await sessionChatIdForPeer(contact); // may be a hidden 1:1 (knock-knock, spec 1027)
   const offerChat = await getChat(chatId);
   if ((offerChat?.mutedUntil && offerChat.mutedUntil > Date.now()) || offerChat?.notifyWebPush === false) return;
   const signal = await openSealedSignal(chatId, frame.ciphertext);

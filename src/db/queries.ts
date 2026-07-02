@@ -30,6 +30,8 @@ import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/link-preview';
 import { ensureHiddenLoaded, isRevealed, isHiddenKnown } from '@/services/hidden-state';
 import { hiddenCallKeys } from '@/db/hidden-calls';
+import { routeInboundFrom } from '@/db/inbound-route';
+import { resolveInboundDirectChat } from '@/services/hidden-pair';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
   EditSignal, EraseSignal, LinkPreviewSignal,
@@ -3156,7 +3158,9 @@ export async function acceptRequest(id: string): Promise<void> {
     await dropRequest(id);
     return;
   }
-  const chatId = await startDirectChat(contact);
+  // Session carrier, not user intent: accepting must ride the existing ratchet
+  // (which may live under a HIDDEN 1:1) and must not mint a pair conversation.
+  const chatId = await sessionChatIdForPeer(contact);
   await setChatPending(chatId, false);
   await markContactConnected(id);
   const card = await ownCard('accept');
@@ -3633,7 +3637,9 @@ export async function requestFriend(peerUserId: string): Promise<void> {
   const contact = await getContact(peerUserId);
   if (!contact) return;
   await markContactConnected(peerUserId);
-  const chatId = await startDirectChat(contact); // visible (connected → not pending)
+  // Session carrier (rides a hidden 1:1's ratchet when one exists) — the chat
+  // row this creates for a brand-new friend is visible, same as before.
+  const chatId = await sessionChatIdForPeer(contact);
   const card = await ownCard('profile');
   await sendCard(await getChat(chatId), card);
   await setCardShared(chatId);
@@ -4083,6 +4089,38 @@ export async function startDirectChat(contact: Contact): Promise<string> {
     }
     return placeholder.id;
   }
+  return createDirectChatRow(contact);
+}
+
+/**
+ * The 1:1 RATCHET SESSION CARRIER for a peer (spec 1027). Sessions are keyed by
+ * the plain 1:1 chat's id, so everything that seals/opens pairwise traffic —
+ * call signalling, contact cards, friend-request/accept flows — must resolve to
+ * the chat that actually holds the session: the visible plain 1:1, else the
+ * HIDDEN plain 1:1 (hiding must never fork the ratchet or resurrect a visible
+ * row — bug B1 applied to calls too), else a fresh plain 1:1 for a genuinely
+ * new peer. Never a pair conversation (group-modeled threads carry no 1:1
+ * session). Unlike startDirectChat this is NOT a user-intent entry: it never
+ * lifts a hidden-reset block and never creates a pair conversation.
+ *
+ * An unknown hidden set only degrades the visible-vs-hidden PREFERENCE (both
+ * are the same session container), so no fail-closed gate is needed here — no
+ * visibility decision is being made.
+ */
+export async function sessionChatIdForPeer(contact: Contact): Promise<string> {
+  const hidden = await ensureHiddenLoaded();
+  const chats = await getAll<Chat>('chats');
+  const existing = resolveInboundDirectChat(chats, hidden, contact.id);
+  if (existing) return existing.id;
+  return createDirectChatRow(contact);
+}
+
+/** Create the plain 1:1 chat row for a contact (the session-carrying channel —
+ *  exactly one per peer, INV-3). Split from startDirectChat so the inbound path
+ *  (receiveIncomingInner) can create the row for a genuinely new peer WITHOUT
+ *  startDirectChat's user-initiated semantics (reset-block lifting, and the
+ *  pair-conversation branch used when a hidden 1:1 already exists). */
+async function createDirectChatRow(contact: Contact): Promise<string> {
   const ts = now();
   const id = uid();
   const ttl = await defaultTimerMs();
@@ -4401,6 +4439,29 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     return;
   }
 
+  // Rule R stage 1 (spec 1027, fixes B1): resolve the SESSION chat for this peer
+  // before touching anything. The old code used startDirectChat here, which
+  // refuses hidden chats — so hiding your only 1:1 made the next inbound frame
+  // mint a fresh VISIBLE chat with no session (spurious re-key, visible content,
+  // orphaned hidden thread). The resolver prefers the visible plain 1:1, falls
+  // back to the HIDDEN plain 1:1 (content lands there silently), honors the
+  // hidden-reset peer block, and fails closed while the hidden set is unknown.
+  const route = await routeInboundFrom(from);
+  if (route.kind === 'blocked') {
+    // Hidden-chat reset block (FR-018): the user destroyed this conversation and
+    // its re-download must leave no trace — ack so the relay drops its copy, but
+    // create no contact/chat/session, send no re-key request, show nothing. The
+    // block lifts only when the user deliberately starts a new chat with them.
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
+  if (route.kind === 'defer') {
+    // Hidden set not decryptable yet (fail closed) — park the frame with the
+    // locked-keystore queue; it drains once the set is known.
+    await queuePendingIncoming(from, remoteId, ciphertext);
+    return;
+  }
+
   // Friends-only messaging: only people you've connected with can put message CONTENT in
   // your inbox. We can't drop here, though: connection CARDS (friend request, invite
   // auto-connect, accept) and other control payloads must always be processed, because
@@ -4408,12 +4469,11 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   // by shared membership. So we open first, apply any card/control payload below, and gate
   // only actual 1:1 content. Capture whether we knew this peer (and had a chat with them)
   // BEFORE creating the provisional contact/chat needed to open the packet, so unsolicited
-  // content can be dropped again without leaving a trace.
+  // content can be dropped again without leaving a trace. (A hidden chat always counts as
+  // "had a chat before" — the trace-removal below must never delete it.)
   const hadContactBefore = !!(await getContact(from));
   const knewSenderBefore = hadContactBefore || (await isPeerConnected(from));
-  const hadDirectChatBefore = (await getAll<Chat>('chats')).some(
-    (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from,
-  );
+  const hadDirectChatBefore = route.kind === 'chat';
 
   let contact = await getContact(from);
   if (!contact) {
@@ -4426,7 +4486,12 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     void hydrateContactFromDirectory(from);
   }
   if (!contact) return;
-  const chatId = await startDirectChat(contact);
+  // The session carrier: the resolved 1:1 (visible or hidden), or a fresh plain
+  // 1:1 for a genuinely new peer. Deliberately NOT startDirectChat — that is the
+  // user-initiated entry which (a) lifts reset blocks and (b) creates a pair
+  // conversation when a hidden 1:1 exists; an inbound frame must do neither
+  // (the pair conversation carries no 1:1 session).
+  const chatId = route.kind === 'chat' ? route.chatId : await createDirectChatRow(contact);
 
   let payload;
   try {

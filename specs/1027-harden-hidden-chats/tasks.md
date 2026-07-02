@@ -28,8 +28,8 @@ design ids (R1–R10, D1–D7, INV-1..3, rule R) refer to research.md / plan.md 
 
 **Purpose**: The pure per-person predicate/routing module every story consumes (R8, INV-1..3).
 
-- [ ] T003 (#596) Write failing unit tests for the pure invariant module in `src/services/hidden-pair.test.ts`: `chatsWithPeer` (plain 1:1s + pair conversations counted, multi-member groups excluded), `canHide` (INV-1), `canUnhide` (INV-2), `resolveInboundDirectChat` (rule R steps 2–3; never returns a pair conversation), including the legacy hidden+visible plain-1:1 state (INV-3 violation tolerated read-only)
-- [ ] T004 (#597) Implement `src/services/hidden-pair.ts` as a pure leaf (no idb imports; user-facing `reason` copy follows the UI voice rules) until T003 is green
+- [x] T003 (#596) Write failing unit tests for the pure invariant module in `src/services/hidden-pair.test.ts`: `chatsWithPeer` (plain 1:1s + pair conversations counted, multi-member groups excluded), `canHide` (INV-1), `canUnhide` (INV-2), `resolveInboundDirectChat` (rule R steps 2–3; never returns a pair conversation), including the legacy hidden+visible plain-1:1 state (INV-3 violation tolerated read-only)
+- [x] T004 (#597) Implement `src/services/hidden-pair.ts` as a pure leaf (no idb imports; user-facing `reason` copy follows the UI voice rules) until T003 is green
 
 **Checkpoint**: invariant semantics locked in by unit tests — story phases can begin.
 
@@ -45,14 +45,14 @@ calls stay empty of B, no rekey traffic, reveal shows the message in the hidden 
 
 ### Tests (write first, must FAIL)
 
-- [ ] T005 (#598) [P] [US1] Failing vitest for inbound routing in `src/db/queries.receive.hidden.test.ts` (fake idb): sole 1:1 hidden → inbound frame lands in the hidden chat, creates no new chat row, requests no rekey; group frame from the same peer resurrects nothing; unknown hidden set → frame re-queued (fail closed)
-- [ ] T006 (#599) [P] [US1] Failing Playwright e2e in `e2e/hidden-coexist.spec.ts` (part 1): A hides the chat with B (PIN created on first hide), chat leaves list/search, B sends a message, A's chat list stays empty, badge updates, reveal shows the message inside the hidden thread
+- [x] T005 (#598) [P] [US1] Failing vitest for inbound routing in `src/db/queries.receive.hidden.test.ts` (fake idb): sole 1:1 hidden → inbound frame lands in the hidden chat, creates no new chat row, requests no rekey; group frame from the same peer resurrects nothing; unknown hidden set → frame re-queued (fail closed)
+- [x] T006 (#599) [P] [US1] Failing Playwright e2e in `e2e/hidden-coexist.spec.ts` (part 1): A hides the chat with B (PIN created on first hide), chat leaves list/search, B sends a message, A's chat list stays empty, badge updates, reveal shows the message inside the hidden thread
 
 ### Implementation
 
-- [ ] T007 (#600) [US1] Replace the blind `startDirectChat` call in `receiveIncomingInner` (`src/db/queries.ts:4429`) with rule R resolution via `resolveInboundDirectChat` + peer-block check + fail-closed requeue (D2); pre-decrypt session id now always matches the thread that holds the ratchet
-- [ ] T008 (#601) [US1] Update the `hadDirectChatBefore` / unsolicited-content cleanup path in `receiveIncomingInner` so a hidden chat is never deleted or exposed by the friends-only trace-removal branch (`src/db/queries.ts:4414`, `:4518`)
-- [ ] T009 (#602) [P] [US1] Drive scenario `drive/scenarios/hidden-coexist.mjs` (part 1: hide → inbound lands hidden silently) against the live dev stack
+- [x] T007 (#600) [US1] Replace the blind `startDirectChat` call in `receiveIncomingInner` (`src/db/queries.ts:4429`) with rule R resolution via `resolveInboundDirectChat` + peer-block check + fail-closed requeue (D2); pre-decrypt session id now always matches the thread that holds the ratchet
+- [x] T008 (#601) [US1] Update the `hadDirectChatBefore` / unsolicited-content cleanup path in `receiveIncomingInner` so a hidden chat is never deleted or exposed by the friends-only trace-removal branch (`src/db/queries.ts:4414`, `:4518`)
+- [x] T009 (#602) [P] [US1] Drive scenario `drive/scenarios/hidden-coexist.mjs` (part 1: hide → inbound lands hidden silently) against the live dev stack
 
 **Checkpoint**: hiding your only chat with a person is safe — MVP fix shipped.
 

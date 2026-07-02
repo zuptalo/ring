@@ -386,6 +386,14 @@ export function installTestHook(): void {
       const all = await getAll<{ id: string; isGroup: boolean; participantIds: string[] }>('chats');
       return all.find((c) => !c.isGroup && c.participantIds[0] === peerId)?.id ?? '';
     },
+    /** ALL conversation ids with a peer — plain 1:1s AND pair conversations —
+     *  for the spec-1027 per-person invariant asserts (no duplicate threads). */
+    chatsWith: async (peerId: string): Promise<{ id: string; isGroup: boolean }[]> => {
+      const all = await getAll<{ id: string; isGroup: boolean; participantIds: string[] }>('chats');
+      return all
+        .filter((c) => c.participantIds.length === 1 && c.participantIds[0] === peerId)
+        .map((c) => ({ id: c.id, isGroup: c.isGroup }));
+    },
     /** The VISIBLE (non-pending) 1:1 chat id for a peer, or '' if hidden/none. */
     visibleChatWith: async (peerId: string): Promise<string> =>
       (await listChats()).find((c) => !c.isGroup && c.participantIds[0] === peerId)?.id ?? '',

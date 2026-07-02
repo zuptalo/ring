@@ -5,18 +5,21 @@
  * outbox, since real-time signalling that can't be delivered now is useless.
  */
 import { sealForChat, openPacket, clearSession } from '@/services/messaging';
-import { getContact, startDirectChat } from '@/db/queries';
+import { getContact, sessionChatIdForPeer } from '@/db/queries';
 import type { CallSignal, QosReport } from '@/services/crypto/message';
 import { sendLive } from '@/composables/useSync';
 import type { CallAnswerFrame, CallIceFrame, CallOfferFrame, CallKind } from '@/services/transport';
 
 export type { CallSignal };
 
-/** Resolve the 1:1 ratchet chat id for a peer (creating the chat if needed). */
+/** Resolve the 1:1 ratchet chat id for a peer (creating the chat if needed).
+ *  Uses the session-carrier resolver, NOT startDirectChat: the session may live
+ *  under a HIDDEN 1:1 (spec 1027 knock-knock — calls ride it without
+ *  resurrecting a visible chat or forking the ratchet). */
 export async function chatIdForPeer(peerUserId: string): Promise<string | null> {
   const contact = await getContact(peerUserId);
   if (!contact) return null;
-  return startDirectChat(contact);
+  return sessionChatIdForPeer(contact);
 }
 
 // An ad-hoc group call meshes between EVERY pair of participants, but the initiator's
@@ -34,7 +37,7 @@ const CALL_SESSION_PREFIX = 'callsess:';
  *  established 1:1 session, or an ephemeral call-scoped one for a non-contact co-member. */
 export async function meshSessionChatId(peerUserId: string): Promise<string> {
   const contact = await getContact(peerUserId);
-  if (contact) return startDirectChat(contact);
+  if (contact) return sessionChatIdForPeer(contact); // may be a hidden 1:1 — see chatIdForPeer
   return CALL_SESSION_PREFIX + peerUserId;
 }
 
