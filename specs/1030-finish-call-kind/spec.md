@@ -34,17 +34,30 @@ This spec finishes them:
    mid-ring, and when a promoted peer never follows in.
 
 Everything is client-only and mesh-only: no new server capability, no new wire
-frame, and all kind reconciliation reuses the existing consent-gated video upgrade
-rather than inventing anything.
+frame, and all kind reconciliation reuses the existing per-participant group-video
+mechanism rather than inventing anything.
+
+## Clarifications
+
+### Session 2026-07-02
+
+- Q: When a merge makes an audio call eligible to become video (≤ 4 people), how does
+  the switch to video happen, given Ring group calls have no room-wide consent? → A:
+  Offer it PER PARTICIPANT — the merge makes the call video-capable, and each person
+  turns on their camera via the normal control; NO camera is enabled without that
+  person's own tap (no auto-camera, no room-wide consent prompt). This is the existing
+  group-video model; the 1:1 `requestVideoUpgrade` consent flow is NOT used for the
+  merged (group) call.
 
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - The call becomes video when it makes sense (Priority: P1)
 
 You're in an audio call. You merge in someone who was video-calling you. If the
-combined call has room for video (4 or fewer people), everyone is offered the usual
-"turn on video?" consent and the call becomes video. If the call is already bigger
-than the video limit, it stays audio and the new person simply joins audio-only.
+combined call has room for video (4 or fewer people), the call becomes video-capable
+and each person can turn their camera on with the normal control — no one's camera
+turns on by itself. If the call is already bigger than the video limit, it stays
+audio and the new person simply joins audio-only.
 
 **Why this priority**: Completes the merge behaviour promised in 1028 (clarification
 2) and avoids the surprise of a video caller silently landing as audio with no path
@@ -58,11 +71,12 @@ audio-only.
 **Acceptance Scenarios**:
 
 1. **Given** an audio call with a combined headcount of 4 or fewer after the merge,
-   **When** a video caller is merged in, **Then** the existing consent-gated
-   video-upgrade flow runs and, on acceptance, the call becomes video.
+   **When** a video caller is merged in, **Then** the call becomes video-capable and
+   each participant may enable their own camera via the normal control (no camera is
+   auto-enabled).
 2. **Given** an audio call whose combined headcount would exceed the video limit,
-   **When** a video caller is merged in, **Then** no upgrade is offered and the
-   merged person joins audio-only while the call stays audio.
+   **When** a video caller is merged in, **Then** the call stays audio-only and the
+   merged person joins audio-only (video is not enabled for anyone).
 3. **Given** a video call, **When** an audio-only participant is merged in, **Then**
    the call stays video and that participant may turn on their camera via the normal
    control.
@@ -174,10 +188,10 @@ roster, tiles, and connectivity are correct on every device with no orphaned sta
 
 ### Edge Cases
 
-- **Kind upgrade declined**: if the offered video upgrade is declined, the call stays
-  audio and the merged party stays audio-only (no half-video state).
-- **Merge that would exceed the video cap via upgrade**: never auto-upgrades past 4;
-  the call stays audio.
+- **Nobody turns on video after a merge makes the call video-capable**: it simply
+  behaves as an audio call until someone enables their camera (no forced state).
+- **Merge that would exceed the video cap**: never becomes video-capable past 4; the
+  call stays audio for everyone.
 - **Group-invite fold with a shared member**: deduped to one participant/one leg.
 - **Group-invite fold over the combined cap**: blocked with a reason; nothing changes.
 - **Cue for a burst of joiners**: each genuinely-new participant is acknowledged; a
@@ -190,14 +204,17 @@ roster, tiles, and connectivity are correct on every device with no orphaned sta
 ### Functional Requirements
 
 - **FR-001**: On a merge where the merged party's kind differs from the active call and
-  the combined headcount is at most the video cap (4), the system MUST run the EXISTING
-  consent-gated video-upgrade flow so participants opt in; the call becomes video on
-  acceptance and stays audio on decline (no partial-video state).
+  the combined headcount is at most the video cap (4), the system MUST make the call
+  video-capable so each participant can enable their own camera via the existing
+  per-participant control; NO camera is enabled without that participant's own action
+  (no auto-camera, no room-wide consent prompt).
 - **FR-002**: When the combined headcount would exceed the video cap, the system MUST
-  NOT offer an upgrade; the merged party joins audio-only and the call stays audio.
+  NOT make the call video-capable; the merged party joins audio-only and the call stays
+  audio for everyone.
 - **FR-003**: Kind reconciliation MUST behave coherently whether the active call was a
-  just-promoted 1:1 or an already-group call, and MUST reuse the existing upgrade
-  mechanism (no new upgrade scheme).
+  just-promoted 1:1 or an already-group call, and MUST reuse the existing
+  per-participant group-video mechanism (no new upgrade scheme, and NOT the 1:1
+  `requestVideoUpgrade` consent flow).
 - **FR-004**: When a genuinely new participant joins the active call (promotion,
   add-people, or merge), the system MUST show a brief transient "{name} joined the call"
   cue naming the joiner (or a generic "Someone joined the call" for a non-contact).
@@ -234,8 +251,8 @@ roster, tiles, and connectivity are correct on every device with no orphaned sta
 ### Key Entities *(include if feature involves data)*
 
 - **Merge (kind reconciliation)**: the decision, from the active call's kind, the merged
-  party's kind, and the combined headcount, of whether to run the consent-gated upgrade
-  (combined ≤ 4) or stay audio (> 4).
+  party's kind, and the combined headcount, of whether the call becomes video-capable
+  (combined ≤ 4 — cameras allowed per participant) or stays audio-only (> 4).
 - **Join cue**: a transient, informational message naming a genuinely-new participant;
   derived from a roster diff (new members only), never persisted.
 - **Combined roster (group-invite merge)**: the distinct union of the current call's
@@ -243,10 +260,11 @@ roster, tiles, and connectivity are correct on every device with no orphaned sta
 
 ## Zero-Knowledge Impact *(mandatory — Constitution Principle I)*
 
-- **What crosses the wire**: Nothing new. Kind upgrade reuses the existing
-  `call-upgrade-*` flow; the cue is purely local (a roster diff already delivered);
-  group-invite merge reuses the existing ring/roster/leg signalling. No new frame, field,
-  or request.
+- **What crosses the wire**: Nothing new. Making a call video-capable reuses the
+  existing per-participant group-video path (a participant enabling their camera
+  renegotiates their own legs, as today); the cue is purely local (a roster diff already
+  delivered); group-invite merge reuses the existing ring/roster/leg signalling. No new
+  frame, field, or request.
 - **What is encrypted / protected**: All SDP/ICE stays end-to-end encrypted over each
   pair's session; media is peer-to-peer. The server never sees media or content.
 - **What metadata is unavoidably visible**: Unchanged from today's group calls — the
@@ -260,9 +278,10 @@ roster, tiles, and connectivity are correct on every device with no orphaned sta
 
 ### Measurable Outcomes
 
-- **SC-001**: Merging a video caller into a small audio call ends with a video call in
-  100% of trials where the combined headcount is ≤ 4 and participants accept the
-  upgrade; when the headcount is > 4, the merge stays audio in 100% of trials.
+- **SC-001**: Merging a video caller into an audio call makes the call video-capable
+  (cameras allowed, per-participant) in 100% of trials where the combined headcount is
+  ≤ 4, and keeps it audio-only in 100% of trials where the headcount is > 4; no camera
+  is ever auto-enabled.
 - **SC-002**: Every existing participant sees a "{name} joined the call" cue for a
   genuinely-new joiner in 100% of trials, and 0 cues fire for a reconnect or the local
   user's own join.
@@ -284,8 +303,9 @@ roster, tiles, and connectivity are correct on every device with no orphaned sta
   `convertActiveToRoom`, `sendJoinRoom`, `addPeople`, the capacity gate, and the
   `joinroom` signal already exist (this spec depends on the merged 1028 promotion/merge
   work).
-- **Kind reconciliation reuses the existing consent-gated upgrade** (`call-upgrade-*` /
-  the group video path); no new upgrade mechanism.
+- **Kind reconciliation reuses the existing per-participant group-video mechanism**
+  (making the call video-capable so each person's camera toggle works); no new upgrade
+  mechanism, and not the 1:1 `requestVideoUpgrade` consent flow.
 - **The cue reuses the existing toast/cue infra** and resolves names from contacts / the
   roster owner map.
 - **Caps unchanged** (4 video / 8 audio) and the **single-held-slot** rule unchanged.
