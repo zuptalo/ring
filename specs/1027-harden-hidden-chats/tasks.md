@@ -143,15 +143,15 @@ rekey; A explicitly starts a chat with B → works again.
 
 ### Tests (write first, must FAIL)
 
-- [ ] T030 (#623) [P] [US5] Failing vitest in `src/services/hidden-chats-reset.test.ts` (extend): reset records `hiddenPeer:<peer>` localOnly tombstones for hidden plain-1:1 peers BEFORE deleting data (FR-024 ordering) and keeps id tombstones for pair/group threads; extend `src/services/hidden-chats.zk.test.ts` so BOTH the `hiddenPeer:` blocks AND `badge.lastCount` are asserted to never enter a sync payload (FR-019)
-- [ ] T031 (#624) [P] [US5] Failing vitest in `src/db/queries.receive.hidden.test.ts` (extend): inbound 1:1 frame from a `hiddenPeer:`-blocked peer is acked + dropped — no rekey request, no contact/chat/message writes, no notification; group-card re-creation for a tombstoned group id is dropped
-- [ ] T032 (#625) [P] [US5] Failing Playwright e2e in `e2e/hidden-reset.spec.ts`: hide → reset from Settings → B sends a live message → no chat (hidden or visible) appears and nothing identifies B; A starts a new chat with B from Contacts → conversation works (block lifted)
+- [x] T030 (#623) [P] [US5] Failing vitest in `src/services/hidden-chats-reset.test.ts` (extend): reset records `hiddenPeer:<peer>` localOnly tombstones for hidden plain-1:1 peers BEFORE deleting data (FR-024 ordering) and keeps id tombstones for pair/group threads; extend `src/services/hidden-chats.zk.test.ts` so BOTH the `hiddenPeer:` blocks AND `badge.lastCount` are asserted to never enter a sync payload (FR-019)
+- [x] T031 (#624) [P] [US5] Failing vitest in `src/db/queries.receive.hidden.test.ts` (extend): inbound 1:1 frame from a `hiddenPeer:`-blocked peer is acked + dropped — no rekey request, no contact/chat/message writes, no notification; group-card re-creation for a tombstoned group id is dropped
+- [x] T032 (#625) [P] [US5] Failing Playwright e2e in `e2e/hidden-reset.spec.ts`: hide → reset from Settings → B sends a live message → no chat (hidden or visible) appears and nothing identifies B; A starts a new chat with B from Contacts → conversation works (block lifted)
 
 ### Implementation
 
-- [ ] T033 (#626) [US5] Write `hiddenPeer:` localOnly tombstones in `src/services/hidden-chats-reset.ts` (step 1, before deletes)
-- [ ] T034 (#627) [US5] Consume the peer block in rule R step 4 in `src/db/queries.ts` `receiveIncomingInner` (ack + drop, no trace) and consult group-id tombstones in `ensureGroupChat`/`handleGroupCard`
-- [ ] T035 (#628) [P] [US5] Drive scenario `drive/scenarios/hidden-reset-relay.mjs`: reset then live inbound message leaves no trace
+- [x] T033 (#626) [US5] Write `hiddenPeer:` localOnly tombstones in `src/services/hidden-chats-reset.ts` (step 1, before deletes)
+- [x] T034 (#627) [US5] Consume the peer block in rule R step 4 in `src/db/queries.ts` `receiveIncomingInner` (ack + drop, no trace) and consult group-id tombstones in `ensureGroupChat`/`handleGroupCard`
+- [x] T035 (#628) [P] [US5] Drive scenario `drive/scenarios/hidden-reset-relay.mjs`: reset then live inbound message leaves no trace
 
 **Checkpoint**: FR-018 satisfied end-to-end, including the relay path.
 

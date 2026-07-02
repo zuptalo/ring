@@ -10,13 +10,16 @@ import { dirname, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const ownsync = readFileSync(resolve(root, 'src/services/ownsync.ts'), 'utf8');
+const ownsyncKeys = readFileSync(resolve(root, 'src/services/ownsync-keys.ts'), 'utf8');
 
-// The hidden-chats storage keys (mirrors hidden-chats.ts SET_KEY/PIN_KEY + prefs).
-const HIDDEN_KEYS = ['privacy.hiddenChats', 'privacy.hiddenPin', 'privacy.hiddenChatsEnabled', 'privacy.hiddenChatsGrace', 'privacy.hiddenChatsBiometric'];
+// The hidden-chats storage keys (mirrors hidden-chats.ts SET_KEY/PIN_KEY + prefs),
+// plus the spec-1027 device-local badge cache (already preference-filtered, but a
+// per-device number that must never ride the snapshot to other devices).
+const HIDDEN_KEYS = ['privacy.hiddenChats', 'privacy.hiddenPin', 'privacy.hiddenChatsEnabled', 'privacy.hiddenChatsGrace', 'privacy.hiddenChatsBiometric', 'badge.lastCount'];
 
 describe('zero-knowledge: hidden state never syncs', () => {
   it('no hidden-chats key appears in the synced-pref allowlist', () => {
-    const block = ownsync.match(/SYNCED_PREF_KEYS[^\]]*\]/s)?.[0] ?? '';
+    const block = ownsyncKeys.match(/SYNCED_PREF_KEYS[^\]]*\]/s)?.[0] ?? '';
     expect(block).not.toEqual('');
     for (const k of HIDDEN_KEYS) expect(block).not.toContain(k);
   });
@@ -31,5 +34,12 @@ describe('zero-knowledge: hidden state never syncs', () => {
     const tombstones = readFileSync(resolve(root, 'src/db/tombstones.ts'), 'utf8');
     // listTombstones must filter out localOnly markers before uploading.
     expect(tombstones).toMatch(/listTombstones[\s\S]*filter[\s\S]*!t\.localOnly/);
+  });
+
+  it('hidden-reset peer blocks are localOnly by construction (spec 1027 FR-018/FR-019)', () => {
+    const tombstones = readFileSync(resolve(root, 'src/db/tombstones.ts'), 'utf8');
+    // recordHiddenPeerBlock hard-codes localOnly: true — combined with the
+    // listTombstones filter above, a hiddenPeer: block can never be uploaded.
+    expect(tombstones).toMatch(/recordHiddenPeerBlock[\s\S]{0,400}localOnly:\s*true/);
   });
 });

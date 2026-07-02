@@ -5,7 +5,7 @@
  */
 import { bulkPut, clearStore, get, getAll, getByIndex, put, remove } from './idb';
 import { enqueue, removeOutboxByFrameId } from './outbox';
-import { recordTombstone, clearHiddenPeerBlock } from './tombstones';
+import { recordTombstone, isTombstoned, clearTombstone, clearHiddenPeerBlock } from './tombstones';
 import { callLogPreview } from './calllog';
 import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
@@ -1275,6 +1275,10 @@ export async function acceptGroupInvite(groupId: string): Promise<void> {
   if (!r) return;
   const self = getSelfUserId() ?? '';
   const ts = now();
+  // Accepting an invite is the deliberate re-engagement that lifts a
+  // hidden-chats-reset block on this conversation id (spec 1027 FR-018 —
+  // mirrors startDirectChat lifting the 1:1 peer block).
+  await clearTombstone('chats', groupId);
   const roster = r.roster ?? [];
   for (const m of roster) {
     if (!m.id || m.id === self) continue;
@@ -4338,6 +4342,11 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
   }
 
   const participantIds = card.members.map((m) => m.id).filter((id) => id !== self);
+  // A create/update card must not silently re-materialize a conversation wiped
+  // by a hidden-chats reset (spec 1027 FR-018; the reset tombstone is PERMANENT
+  // so it wins over any card timestamp). A fresh INVITE still reaches the user —
+  // accepting it is the deliberate re-engagement that ends the block.
+  if (!existing && (await isTombstoned('chats', card.groupId, card.at || now()))) return;
   // Empty card.name → auto-derive a display name from the other members.
   const autoName = !card.name;
   const displayName = card.name || autoDisplayName(card.members, self);
@@ -4375,6 +4384,11 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
 /** Ensure a group chat exists locally (placeholder if a message beats its card). */
 async function ensureGroupChat(groupId: string, from: string): Promise<void> {
   if (await getChat(groupId)) return;
+  // A wiped hidden group/pair conversation must not be re-materialized by a
+  // bare group message (spec 1027 FR-018): the reset's PERMANENT localOnly
+  // tombstone outlasts any timestamp. Ordinary old deletions don't block —
+  // their tombstones predate a genuinely new message.
+  if (await isTombstoned('chats', groupId, now())) return;
   const self = getSelfUserId() ?? '';
   await put<Chat>('chats', {
     id: groupId,
