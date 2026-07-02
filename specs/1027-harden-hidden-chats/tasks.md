@@ -68,14 +68,14 @@ everywhere immediately — open hidden chat is kicked out; deep links blocked (f
 
 ### Tests (write first, must FAIL)
 
-- [ ] T010 (#603) [P] [US2] Failing vitest for the relock hook in `src/services/hidden-state.test.ts`: `registerRelockHook` fires on `setRevealed(false)` and `clearHiddenState`, not on `setRevealed(true)`
-- [ ] T011 (#604) [P] [US2] Failing Playwright e2e in `e2e/hidden-privacy.spec.ts` (relock section): reveal → open hidden chat → trigger relock (grace `immediately` + background/foreground via test hook) → route is `/tabs/chats`; direct navigation to `/chat/<hiddenId>` while relocked redirects; wrong PIN in search bar reveals nothing and clears nothing (no oracle, FR-008 — behavioral assertion only; timing parity is architectural, Argon2id runs identically on both outcomes per SC-007)
+- [x] T010 (#603) [P] [US2] Failing vitest for the relock hook in `src/services/hidden-state.test.ts`: `registerRelockHook` fires on `setRevealed(false)` and `clearHiddenState`, not on `setRevealed(true)`
+- [x] T011 (#604) [P] [US2] Failing Playwright e2e in `e2e/hidden-privacy.spec.ts` (relock section): reveal → open hidden chat → trigger relock (grace `immediately` + background/foreground via test hook) → route is `/tabs/chats`; direct navigation to `/chat/<hiddenId>` while relocked redirects; wrong PIN in search bar reveals nothing and clears nothing (no oracle, FR-008 — behavioral assertion only; timing parity is architectural, Argon2id runs identically on both outcomes per SC-007)
 
 ### Implementation
 
-- [ ] T012 (#605) [US2] Add `registerRelockHook(fn)` to `src/services/hidden-state.ts` (leaf discipline: router imports the leaf, never the reverse) and invoke it from `setRevealed(false)` / `clearHiddenState`
-- [ ] T013 (#606) [US2] Register the hook + `beforeEach` guard in `src/router/index.ts`: active route is a hidden conversation on relock → `router.replace('/tabs/chats')`; navigation to a hidden conversation while not revealed → redirect (D5)
-- [ ] T014 (#607) [P] [US2] Drive scenario `drive/scenarios/hidden-kickout.mjs`: grace expiry while inside the open hidden chat kicks out to the Chats list
+- [x] T012 (#605) [US2] Add `registerRelockHook(fn)` to `src/services/hidden-state.ts` (leaf discipline: router imports the leaf, never the reverse) and invoke it from `setRevealed(false)` / `clearHiddenState`
+- [x] T013 (#606) [US2] Register the hook + `beforeEach` guard in `src/router/index.ts`: active route is a hidden conversation on relock → `router.replace('/tabs/chats')`; navigation to a hidden conversation while not revealed → redirect (D5)
+- [x] T014 (#607) [P] [US2] Drive scenario `drive/scenarios/hidden-kickout.mjs`: grace expiry while inside the open hidden chat kicks out to the Chats list
 
 **Checkpoint**: relock is airtight across grace expiry, auto-lock, deep links, back stack.
 
