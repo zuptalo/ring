@@ -141,9 +141,14 @@ export function setRevealed(v: boolean): void {
  *  relock: even without an active reveal session an open hidden chat (e.g. a
  *  stale deep link) must be left when the keystore locks. */
 export function clearHiddenState(): void {
+  // Order matters: the relock hook decides the kick-out by testing whether the
+  // CURRENT route's id is hidden, so it must run while `ids` still holds the
+  // set AND `revealed` is already false (the hook early-returns while revealed).
+  // Clearing `ids` first would make `isHiddenId` always false → the kick-out
+  // would silently no-op on the keystore-lock/wipe path (spec 1027 FR-009).
+  revealed = false;
+  relockHook?.();
   ids = new Set();
   loaded = false;
-  revealed = false;
   refreshLists();
-  relockHook?.();
 }

@@ -16,6 +16,7 @@ import {
   setHiddenIdsCache,
   clearHiddenState,
   isRevealed,
+  isHiddenId,
 } from './hidden-state';
 
 let fired: number;
@@ -51,6 +52,25 @@ describe('registerRelockHook', () => {
     clearHiddenState();
     expect(fired).toBe(1);
     expect(isRevealed()).toBe(false);
+  });
+
+  it('clearHiddenState fires the hook while ids are STILL known and revealed is already false', () => {
+    // Regression (spec 1027 security review): clearing ids before firing the
+    // hook made the router kick-out no-op on the keystore-lock/wipe path —
+    // isHiddenId(currentRouteId) was always false. The hook must be able to
+    // both see the hidden ids AND observe revealed===false at fire time.
+    setHiddenIdsCache(['open-hidden']);
+    setRevealed(true);
+    let idKnownAtFire: boolean | null = null;
+    let revealedAtFire: boolean | null = null;
+    registerRelockHook(() => {
+      idKnownAtFire = isHiddenId('open-hidden');
+      revealedAtFire = isRevealed();
+    });
+    clearHiddenState();
+    expect(idKnownAtFire).toBe(true); // ids still populated when the hook ran
+    expect(revealedAtFire).toBe(false); // ...and no longer revealed (hook won't early-return)
+    expect(isHiddenId('open-hidden')).toBe(false); // cleared afterwards
   });
 
   it('fires on clearHiddenState even when not revealed (deep-link defense)', () => {

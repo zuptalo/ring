@@ -210,10 +210,21 @@ router.beforeEach((to) => {
   return true;
 });
 
+// A route whose `:id` is a conversation id that could be hidden. BOTH the 1:1
+// chat detail (`/chat/:id` + its info/media/starred sub-pages) AND the group
+// detail (`/group/:id`) carry the conversation id as `:id` — and a hidden PAIR
+// CONVERSATION (spec 1027 coexistence: a group-modeled 1:1) routes to
+// `/group/:id`, where the member list IS the hidden person's identity. Guarding
+// only `/chat/` would leave that surface (and hidden multi-member groups) open.
+function hiddenChatRouteId(path: string, id: unknown): string | null {
+  return (path.startsWith('/chat/') || path.startsWith('/group/')) && typeof id === 'string'
+    ? id
+    : null;
+}
+
 // Hidden chats (spec 1027, FR-009): the reveal PIN is the ONLY door. Navigating
 // to a hidden conversation while relocked — a deep link, a stale notification
-// tap, back-stack restoration — bounces to the Chats list. Covers /chat/:id and
-// its sub-pages (info/media/starred), which all carry the chat id as :id.
+// tap, back-stack restoration — bounces to the Chats list.
 //
 // Cold-start hole: at the first navigation the hidden set may not have
 // decrypted yet, so `isHiddenId` can only say "not known to be hidden" and the
@@ -222,8 +233,8 @@ router.beforeEach((to) => {
 // the set decrypts, `setHiddenIdsCache` fires the relock hook below, which
 // re-runs this check against the now-known set and ejects if needed.
 router.beforeEach((to) => {
-  const id = to.params.id;
-  if (to.path.startsWith('/chat/') && typeof id === 'string') {
+  const id = hiddenChatRouteId(to.path, to.params.id);
+  if (id !== null) {
     if (!isHiddenKnown()) void ensureHiddenLoaded();
     if (isHiddenId(id) && !isRevealed()) return '/tabs/chats';
   }
@@ -246,8 +257,8 @@ watch(isUnlocked, (v) => {
 registerRelockHook(() => {
   if (isRevealed()) return;
   const cur = router.currentRoute.value;
-  const id = cur.params.id;
-  if (cur.path.startsWith('/chat/') && typeof id === 'string' && isHiddenId(id)) {
+  const id = hiddenChatRouteId(cur.path, cur.params.id);
+  if (id !== null && isHiddenId(id)) {
     void router.replace('/tabs/chats');
   }
 });

@@ -52,6 +52,33 @@ test('relock kicks an open hidden chat out, and the door guard blocks deep links
   await expect.poll(() => path(a), { timeout: 15_000 }).toBe('/tabs/chats');
 });
 
+test('relock kick-out and the door guard also cover a hidden PAIR CONVERSATION at /group/:id (FR-009)', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const a = await createAccount(await browser.newContext(), 'PRIVAC11');
+  const b = await createAccount(await browser.newContext(), 'PRIVAC12');
+  await pair(a, b);
+
+  // A pair conversation (spec 1027 coexistence) is group-modeled, so it lives at
+  // /group/:id — where the member list is the hidden person's identity. Create
+  // one via the hidden-start path and hide it.
+  await ev(a, () => (window as any).__ringTest.setGlobalSetting('privacy.hiddenChatsEnabled', true));
+  await ev(a, (pin: string) => (window as any).__ringTest.hiddenSetPin(pin), '1234');
+  const pairId = await ev(a, (id: string) => (window as any).__ringTest.hiddenStartChat(id), b.id);
+
+  // Reveal, open the pair conversation's INFO page (/group/:id).
+  expect(await ev(a, (p: string) => (window as any).__ringTest.hiddenReveal(p), '1234')).toBe(true);
+  await ev(a, (id: string) => (window as any).__ringTest.navigate(`/group/${id}`), pairId);
+  await expect.poll(() => path(a)).toBe(`/group/${pairId}`);
+
+  // Relock while on the hidden group-info page → kicked out at once.
+  await ev(a, () => (window as any).__ringTest.hiddenRelock());
+  await expect.poll(() => path(a), { timeout: 10_000 }).toBe('/tabs/chats');
+
+  // Door guard: navigating straight to the hidden /group/:id while relocked bounces.
+  await ev(a, (id: string) => (window as any).__ringTest.navigate(`/group/${id}`), pairId);
+  await expect.poll(() => path(a), { timeout: 10_000 }).toBe('/tabs/chats');
+});
+
 test('a wrong PIN in the search bar reveals nothing and gives no signal (FR-008)', async ({ browser }) => {
   test.setTimeout(120_000);
   const a = await createAccount(await browser.newContext(), 'PRIVAC03');
