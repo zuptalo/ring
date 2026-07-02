@@ -19,8 +19,8 @@ meshes (3–4) + 2-person proxies; the **video** path is drive/real-device only.
 
 **Purpose**: The pure cap math every add path depends on (blocks US2/US3/US6).
 
-- [ ] T001 (#639) [P] Failing unit tests in `src/services/call/capacity.test.ts`: `capOf` (video 4 / audio 8), `headcount` (distinct roster ∪ invited ∪ self), `remainingSlots`, `canAdd` — incl. invited-counts-against-cap, the 5th-video / 9th-audio boundaries, and the US6 combined-headcount case
-- [ ] T002 (#640) Implement `src/services/call/capacity.ts` (`capOf`/`headcount`/`remainingSlots`/`canAdd`, kind-specific reason copy) until T001 is green
+- [x] T001 (#639) [P] Failing unit tests in `src/services/call/capacity.test.ts`: `capOf` (video 4 / audio 8), `headcount` (distinct roster ∪ invited ∪ self), `remainingSlots`, `canAdd` — incl. invited-counts-against-cap, the 5th-video / 9th-audio boundaries, and the US6 combined-headcount case
+- [x] T002 (#640) Implement `src/services/call/capacity.ts` (`capOf`/`headcount`/`remainingSlots`/`canAdd`, kind-specific reason copy) until T001 is green
 - [ ] T003 (#641) Wire `callRemainingSlots()` in `src/composables/useCall.ts` to `capacity.ts` (reads the active call's kind + roster + invited)
 
 **Checkpoint**: cap math locked by unit tests.
@@ -31,7 +31,7 @@ meshes (3–4) + 2-person proxies; the **video** path is drive/real-device only.
 
 **Purpose**: The one new wire element (sealed, opaque to the server) + its receive path. R2/D1.
 
-- [ ] T004 (#642) [P] Extend the `CallSignal` union in `src/services/transport.ts` with `{ type: 'joinroom', roomId, kind }` (sealed payload only — rides the existing `call-ice` frame, no new transport frame)
+- [x] T004 (#642) [P] Extend the `CallSignal` union in `src/services/transport.ts` with `{ type: 'joinroom', roomId, kind }` (sealed payload only — rides the existing `call-ice` frame, no new transport frame)
 - [ ] T005 (#643) [P] Failing unit test in `src/services/call/signalling.test.ts` (or nearest): a `joinroom` `CallSignal` seals and opens round-trip over a pair's session (reusing `sealForChat`/`openPacket`), and its payload carries ONLY `{roomId, kind}` — assert the serialized signal contains no name/contact/plaintext beyond an opaque room id + the kind enum (FR-017 zero-knowledge bound)
 - [ ] T006 (#644) Implement `sendJoinRoom(chatId, peerUserId, callId, roomId, kind)` in `src/services/call/signalling.ts` (mirrors `sendHoldResume`)
 - [ ] T007 (#645) Add the `joinroom` dispatch case to `handleCallFrame`/`call-ice` handling in `src/composables/useCall.ts`: on receipt, auto-join the room (reuse the shared capture), tear the prior 1:1 PC down on leg-connect, and surface the join cue (US1 cue wired in Phase 3)
@@ -51,7 +51,7 @@ A, B, AND C (assert from B, a non-initiator).
 ### Tests (write first, must FAIL)
 
 - [ ] T008 (#646) [P] [US2] Failing Playwright e2e `e2e/call-add-merge.spec.ts` (part 1, audio 3→4): A/B/C in a group audio call, A adds D via Add people, D joins and meshes with every existing participant (verified from B)
-- [ ] T009 (#647) [P] [US2] Failing unit test for the pure invite-planning helper — dedup an id list against `roster ∪ invited` and clamp to `remainingSlots` — in a small pure module (e.g. `src/services/call/invite-plan.ts` + `.test.ts`), so `inviteToRoom`'s decision is testable without WebRTC
+- [x] T009 (#647) [P] [US2] Failing unit test for the pure invite-planning helper — dedup an id list against `roster ∪ invited` and clamp to `remainingSlots` — in a small pure module (e.g. `src/services/call/invite-plan.ts` + `.test.ts`), so `inviteToRoom`'s decision is testable without WebRTC
 
 ### Implementation
 

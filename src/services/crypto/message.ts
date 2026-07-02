@@ -93,7 +93,10 @@ export interface CallSignal {
   // max quality it wants/can use. Same trick: sealed inside the existing call-ice frame, coarse
   // enums + a counter ONLY (never raw bitrate/IP/location — Principle IX, FR-011), so the server
   // still only relays opaque ciphertext and can't tell it from any other sealed call signal.
-  type: 'offer' | 'answer' | 'ice' | 'key' | 'streamid' | 'hold' | 'resume' | 'qos';
+  // 'joinroom' (spec 1028): promote/merge — tell this peer to join a mesh room (carries only the
+  // opaque `roomId` + `kind` below). Same sealed-inside-call-ice trick as hold/resume/qos, so no
+  // new frame type reaches the server; it can't tell a promotion from any other sealed signal.
+  type: 'offer' | 'answer' | 'ice' | 'key' | 'streamid' | 'hold' | 'resume' | 'qos' | 'joinroom';
   kind?: 'audio' | 'video'; // on offer
   sdp?: string; // offer/answer
   sdpType?: RTCSdpType; // offer/answer
