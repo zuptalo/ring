@@ -43,6 +43,8 @@ import { syncState } from '@/composables/useSync';
 import { startLoopTone, stopLoopTone, playTone, cue, type ToneName } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
 import { VIDEO_MAX } from '@/services/call/types';
+import { remainingSlots, canAdd } from '@/services/call/capacity';
+import { planInvite } from '@/services/call/invite-plan';
 import {
   type Tier,
   type ControllerState,
@@ -1509,6 +1511,41 @@ export async function recallMember(memberId: string): Promise<void> {
   markNotJoining(memberId, false);
   armMemberRingTimer(memberId);
   await sendRecall(memberId, meta.roomId, meta.kind, meta.invited ?? []);
+}
+
+/** Free participant slots left in the ACTIVE call for its kind (spec 1028) — 0 when
+ *  there is no active call. Drives the Add-people gate (picker disables past this). */
+export function callRemainingSlots(): number {
+  const meta = callMeta.value;
+  if (!meta) return 0;
+  return remainingSlots(meta.kind, meta.roster, meta.invited ?? [], getSelfUserId() ?? '');
+}
+
+/**
+ * Add people to the ACTIVE call (spec 1028, US2). MVP scope: only while already
+ * in a GROUP call — promoting a 1:1 into a mesh (and merging an incoming caller)
+ * is the deferred follow-up, so a 1:1 has no add path yet. Rings each fresh,
+ * capacity-fitting id into the room via the existing in-room `call-ring` seam
+ * (same as recallMember); the roster/leg machinery meshes them on accept. Cap is
+ * enforced pre-emptively here (planInvite clamps + canAdd reason) with the server
+ * `JoinIfRoom` as the authoritative backstop.
+ */
+export async function addPeople(ids: string[]): Promise<void> {
+  const meta = callMeta.value;
+  if (!meta?.isGroup || !meta.roomId) return; // 1:1 add (via promotion) is deferred
+  const self = getSelfUserId() ?? '';
+  const plan = planInvite(meta.kind, meta.roster, meta.invited ?? [], self, ids);
+  for (const id of plan.toRing) {
+    meta.invited = [...(meta.invited ?? []), id];
+    markNotJoining(id, false);
+    armMemberRingTimer(id);
+    await sendRecall(id, meta.roomId, meta.kind, meta.invited);
+  }
+  // Anyone who didn't fit the cap → tell the user why (kind-specific copy).
+  if (plan.dropped.length) {
+    const gate = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1);
+    await toast(gate.ok ? 'Some people are already in the call' : gate.reason);
+  }
 }
 
 /** Tap "Remove from call" on a non-joiner's tile → stop ringing them, drop them from the
@@ -3059,5 +3096,9 @@ export function useCall() {
     setVideoQuality,
     acceptUpgrade,
     rejectUpgrade,
+    addPeople,
+    callRemainingSlots,
+    recallMember,
+    cancelInvite,
   };
 }

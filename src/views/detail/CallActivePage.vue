@@ -357,10 +357,28 @@
           >
             <ion-icon :icon="videocamOutline" />
           </button>
+          <!-- Add people to the call (group calls, spec 1028). Hidden when the call
+               is already at its kind's cap (4 video / 8 audio). -->
+          <button
+            v-if="canAddPeople"
+            class="ctl"
+            aria-label="Add people"
+            @click.stop="addPeopleOpen = true"
+          >
+            <ion-icon :icon="personAddOutline" />
+          </button>
           <button class="ctl hangup" aria-label="Hang up" @click.stop="hangup">
             <ion-icon :icon="callOutline" />
           </button>
         </div>
+        <ContactPicker
+          :open="addPeopleOpen"
+          :contacts="addPeopleContacts"
+          title="Add to call"
+          empty-text="No more contacts to add"
+          @close="addPeopleOpen = false"
+          @select="onAddPeople"
+        />
 
         <!-- DIAG(call-video): temporary on-screen diagnostics. A production deploy
              hides server logs and an iPhone's Safari console isn't readable, so the
@@ -400,11 +418,12 @@
 import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { IonPage, IonContent, IonAvatar, IonIcon, IonSpinner, actionSheetController } from '@ionic/vue';
 import Emoji from '@/components/Emoji.vue';
+import ContactPicker from '@/components/ContactPicker.vue';
 import {
   micOutline, micOffOutline, videocamOutline, videocamOffOutline, callOutline,
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
-  cellularOutline, informationCircleOutline, personOutline, refreshOutline,
+  cellularOutline, informationCircleOutline, personOutline, personAddOutline, refreshOutline,
   chatbubbleEllipsesOutline, pauseOutline, swapHorizontalOutline,
 } from 'ionicons/icons';
 import router from '@/router';
@@ -417,7 +436,7 @@ import {
   upgradePending, upgradeRequest, acceptUpgrade, rejectUpgrade,
   audioOutputId, isIOS, refreshAudioOutputs, audioRoute, availableRoutes, setRoute,
   iosSpeaker, setIosSpeakerphone,
-  notJoining, busyMembers, recallMember, cancelInvite,
+  notJoining, busyMembers, recallMember, cancelInvite, addPeople, callRemainingSlots,
   acceptCall, rejectCall, declineWithMessage,
   heldCall, remoteHeld, groupHeldPeers, resumeCountdown, peerResumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
   setGroupTileSize,
@@ -625,6 +644,25 @@ interface Tile {
 // synchronously (mirrors ChatDetailPage). Updates live if a contact card changes.
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
 const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c])));
+
+// Add people to the call (spec 1028, US2). MVP scope: group calls only — promoting
+// a 1:1 into a mesh is the deferred follow-up. The button appears when there's a
+// live group call with room left under its kind's cap; the picker excludes anyone
+// already in the room or ringing.
+const addPeopleOpen = ref(false);
+const canAddPeople = computed(() => !!callMeta.value?.isGroup && callRemainingSlots() > 0);
+const addPeopleContacts = computed(() => {
+  const inCall = new Set([
+    getSelfUserId() ?? '',
+    ...(callMeta.value?.roster ?? []),
+    ...(callMeta.value?.invited ?? []),
+  ]);
+  return contacts.value.filter((c) => !inCall.has(c.id));
+});
+async function onAddPeople(c: { userId: string }): Promise<void> {
+  addPeopleOpen.value = false;
+  await addPeople([c.userId]);
+}
 
 // Our own chosen name + avatar (shown on our own tile). Reactive so a rename mid-call
 // propagates, and shared with the rest of the app via useSelfProfile.

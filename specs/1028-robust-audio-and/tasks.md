@@ -21,7 +21,7 @@ meshes (3–4) + 2-person proxies; the **video** path is drive/real-device only.
 
 - [x] T001 (#639) [P] Failing unit tests in `src/services/call/capacity.test.ts`: `capOf` (video 4 / audio 8), `headcount` (distinct roster ∪ invited ∪ self), `remainingSlots`, `canAdd` — incl. invited-counts-against-cap, the 5th-video / 9th-audio boundaries, and the US6 combined-headcount case
 - [x] T002 (#640) Implement `src/services/call/capacity.ts` (`capOf`/`headcount`/`remainingSlots`/`canAdd`, kind-specific reason copy) until T001 is green
-- [ ] T003 (#641) Wire `callRemainingSlots()` in `src/composables/useCall.ts` to `capacity.ts` (reads the active call's kind + roster + invited)
+- [x] T003 (#641) Wire `callRemainingSlots()` in `src/composables/useCall.ts` to `capacity.ts` (reads the active call's kind + roster + invited)
 
 **Checkpoint**: cap math locked by unit tests.
 
@@ -50,13 +50,13 @@ A, B, AND C (assert from B, a non-initiator).
 
 ### Tests (write first, must FAIL)
 
-- [ ] T008 (#646) [P] [US2] Failing Playwright e2e `e2e/call-add-merge.spec.ts` (part 1, audio 3→4): A/B/C in a group audio call, A adds D via Add people, D joins and meshes with every existing participant (verified from B)
+- [x] T008 (#646) [P] [US2] Failing Playwright e2e `e2e/call-add-merge.spec.ts` (part 1, audio 3→4): A/B/C in a group audio call, A adds D via Add people, D joins and meshes with every existing participant (verified from B)
 - [x] T009 (#647) [P] [US2] Failing unit test for the pure invite-planning helper — dedup an id list against `roster ∪ invited` and clamp to `remainingSlots` — in a small pure module (e.g. `src/services/call/invite-plan.ts` + `.test.ts`), so `inviteToRoom`'s decision is testable without WebRTC
 
 ### Implementation
 
-- [ ] T010 (#648) [US2] Implement `inviteToRoom(ids)` in `src/composables/useCall.ts`: dedup vs `roster ∪ invited`, `canAdd` gate, add to `meta.invited`, `call-ring` each (reuses the in-room `call-ring` seam)
-- [ ] T011 (#649) [US2] Add an **Add people** button + existing contact-picker entry in `src/views/detail/CallActivePage.vue`, gated by `callRemainingSlots()`; confirm → `addPeople(ids)` (which for a group call is just `inviteToRoom`)
+- [x] T010 (#648) [US2] Implement `inviteToRoom(ids)` in `src/composables/useCall.ts`: dedup vs `roster ∪ invited`, `canAdd` gate, add to `meta.invited`, `call-ring` each (reuses the in-room `call-ring` seam)
+- [x] T011 (#649) [US2] Add an **Add people** button + existing contact-picker entry in `src/views/detail/CallActivePage.vue`, gated by `callRemainingSlots()`; confirm → `addPeople(ids)` (which for a group call is just `inviteToRoom`)
 - [ ] T012 (#650) [P] [US2] Extend `drive/scenarios/group-call-4.mjs` to add a 4th participant mid-call and assert the full mesh; also assert no camera/mic re-prompt on the adder (SC-006 on the add path, complementing the merge-path assertion in T015)
 
 **Checkpoint**: you can grow an existing group call — MVP add path.
@@ -74,11 +74,11 @@ never disturbed by a refusal.
 
 ### Tests (write first, must FAIL)
 
-- [ ] T013 (#651) [P] [US3] Failing Playwright e2e `e2e/call-add-cap.spec.ts`: audio call at 8 → Add people blocked with reason; video call at 4 → blocked; a call one below cap → allowed; assert the existing call is undisturbed when an over-cap attempt is refused
+- [x] T013 (#651) [P] [US3] Failing Playwright e2e `e2e/call-add-cap.spec.ts`: audio call at 8 → Add people blocked with reason; video call at 4 → blocked; a call one below cap → allowed; assert the existing call is undisturbed when an over-cap attempt is refused
 
 ### Implementation
 
-- [ ] T014 (#652) [US3] Enforce `canAdd` in the picker (disable selections past `callRemainingSlots()`) and as a guard in `addPeople`/`mergeIncoming`/`mergeGroupInvite` before any ring; surface the kind-specific reason (stock Ionic, Principle XI)
+- [x] T014 (#652) [US3] Enforce `canAdd` in the picker (disable selections past `callRemainingSlots()`) and as a guard in `addPeople`/`mergeIncoming`/`mergeGroupInvite` before any ring; surface the kind-specific reason (stock Ionic, Principle XI)
 
 **Checkpoint**: no add can exceed 4 video / 8 audio, and the user learns why up front.
 

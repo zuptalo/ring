@@ -116,6 +116,7 @@ import {
   removeHidden as hcRemove,
   getHiddenSet as hcGetSet,
 } from '@/services/hidden-chats';
+import { setCallCapsForTest } from '@/services/call/types';
 import { startHiddenChat as hcStartChat } from '@/services/hidden-chats-start';
 import { resetHiddenChats as hcReset } from '@/services/hidden-chats-reset';
 import { canHide, canUnhide } from '@/services/hidden-pair';
@@ -157,6 +158,8 @@ import type { Call, Chat, FriendRequest, Media, Message, Post, OutboxPost } from
 import {
   startDirectCall,
   startGroupCall,
+  addPeople,
+  callRemainingSlots,
   acceptCall,
   rejectCall,
   hangupCall,
@@ -1277,6 +1280,16 @@ export function installTestHook(): void {
     accept: () => acceptCall(),
     reject: () => rejectCall(),
     hangup: () => hangupCall(),
+    /** Add people to the ACTIVE group call (spec 1028, US2): ring them into the room. */
+    addPeople: (ids: string[]) => addPeople(ids),
+    /** Free participant slots left in the active call (for cap-gate asserts). */
+    callRemainingSlots: () => callRemainingSlots(),
+    /** Dev/e2e: shrink the CLIENT caps so the pre-emptive add gate can be tested
+     *  without a real 8-person call (mirrors the server's call-config override). */
+    setCallCaps: (video?: number, audio?: number) => setCallCapsForTest(video, audio),
+    /** The active call's roster (who's actually in the room) + invited (ringing). */
+    callRoster: () => callMeta.value?.roster ?? [],
+    callInvited: () => callMeta.value?.invited ?? [],
     /** Toggle the mic (drives the mute/unmute cues). */
     toggleMute: () => toggleMute(),
     /** Toggle video: 1:1 audio->video sends a consent request; group is immediate. */
