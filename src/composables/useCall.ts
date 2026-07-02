@@ -18,7 +18,7 @@ import {
   getContact,
   getChat,
   addContactWithId,
-  startDirectChat,
+  sessionChatIdForPeer,
   createCall,
   finishCall,
   markCallMissed,
@@ -27,13 +27,10 @@ import {
   sendMessage,
   getSetting,
 } from '@/db/queries';
-import { groupAvatar, initialsAvatar } from '@/db/avatars';
-import { isHidden } from '@/services/hidden-chats';
+import { groupAvatar } from '@/db/avatars';
 
 // Pre-answer identity for a call whose conversation is hidden (spec 1019, FR-019):
 // the incoming surface must reveal nothing identifying. A neutral name + avatar.
-const HIDDEN_CALL_NAME = 'Private caller';
-const hiddenCallAvatar = (): string => initialsAvatar('•');
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
@@ -1242,7 +1239,7 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
   }
   const contact = await getContact(contactId);
   if (!contact) return;
-  const chatId = await startDirectChat(contact);
+  const chatId = await sessionChatIdForPeer(contact); // may be a hidden 1:1 (knock-knock, spec 1027)
   const callId = uid();
 
   callMeta.value = {
@@ -1466,7 +1463,6 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
   // A real group chat lends its name/avatar; an ad-hoc room has none, so derive a title
   // from the people involved (server stays blind to it).
   const chat = await getChat(roomId);
-  const hiddenRoom = await isHidden(roomId); // FR-019: hidden group → generic pre-answer identity
   callMeta.value = {
     callId: roomId,
     isGroup: true,
@@ -1477,8 +1473,11 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
     // roster once we join.
     roster: [...new Set([frame.from, ...(frame.members ?? [])])],
     invited: participants,
-    name: hiddenRoom ? HIDDEN_CALL_NAME : chat?.name || (await deriveGroupCallTitle(participants)),
-    avatar: hiddenRoom ? hiddenCallAvatar() : chat?.avatar || groupAvatar(roomId),
+    // Spec 1027 knock-knock (FR-013, supersedes 1019 FR-019): a live incoming
+    // call ALWAYS rings with full identity — you must be able to decide and
+    // answer. Hiding governs at-rest surfaces (list, history), never the ring.
+    name: chat?.name || (await deriveGroupCallTitle(participants)),
+    avatar: chat?.avatar || groupAvatar(roomId),
   };
   setState('incoming');
   presentIncoming(); // full-screen if the app is being opened for this call; else the banner
@@ -1646,7 +1645,7 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
     contact = await getContact(from);
   }
   if (!contact) return;
-  const chatId = await startDirectChat(contact);
+  const chatId = await sessionChatIdForPeer(contact); // may be a hidden 1:1 (knock-knock, spec 1027)
 
   // Per-chat call mute (spec 1015 FR-022a): a muted or web-push-off chat silences
   // its incoming calls too. The caller/chat is resolvable here (the app is live), so
@@ -1666,7 +1665,6 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
   }
 
   const kind: CallKind = signal.kind ?? 'audio';
-  const hiddenCall = await isHidden(chatId); // FR-019: no identity on the pre-answer surface
   callMeta.value = {
     callId: frame.callId,
     isGroup: false,
@@ -1675,8 +1673,10 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
     peerUserId: from,
     chatId,
     roster: [from],
-    name: hiddenCall ? HIDDEN_CALL_NAME : contact.name,
-    avatar: hiddenCall ? hiddenCallAvatar() : contact.avatar,
+    // Spec 1027 knock-knock (FR-013, supersedes 1019 FR-019): full caller
+    // identity on the ring, always — hiding never suppresses a live call.
+    name: contact.name,
+    avatar: contact.avatar,
   };
   pendingOffer = { sdp: signal.sdp, sdpType: signal.sdpType ?? 'offer' };
   await createCall({ callId: frame.callId, contactId: from, direction: 'incoming', video: kind === 'video' });
@@ -2055,7 +2055,7 @@ async function presentSecondDirect(
     contact = await getContact(from);
   }
   if (!contact) return busy();
-  const chatId = await startDirectChat(contact);
+  const chatId = await sessionChatIdForPeer(contact); // may be a hidden 1:1 (knock-knock, spec 1027)
   const offerChat = await getChat(chatId);
   if ((offerChat?.mutedUntil && offerChat.mutedUntil > Date.now()) || offerChat?.notifyWebPush === false) return;
   const signal = await openSealedSignal(chatId, frame.ciphertext);

@@ -263,5 +263,5 @@ but the subject is the real lever.)
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/1026-friends-only-and-settings-refinements/plan.md`
+`specs/1027-harden-hidden-chats/plan.md`
 <!-- SPECKIT END -->

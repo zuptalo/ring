@@ -48,6 +48,7 @@ Specs are grouped by category band; status moves
 | [1024](specs/1024-resilient-posting-and-storage/spec.md) | Resilient posting & on-device storage management | 🔵 in-review |
 | [1025](specs/1025-app-ux-polish/spec.md) | App-wide UX polish and fixes | 🔵 in-review |
 | [1026](specs/1026-friends-only-and-settings-refinements/spec.md) | Friends-only messaging with privacy, settings and help refinements | 🔵 in-review |
+| [1027](specs/1027-harden-hidden-chats/spec.md) | Harden Hidden Chats + One-Hidden-One-Visible Per Person | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

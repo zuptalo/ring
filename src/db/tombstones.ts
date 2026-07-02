@@ -69,3 +69,39 @@ export async function clearTombstone(store: StoreName, recordId: string): Promis
 export async function listTombstones(): Promise<Tombstone[]> {
   return (await getAll<Tombstone>('tombstones')).filter((t) => !t.localOnly);
 }
+
+/* ---- hidden-chat reset peer blocks (spec 1027, FR-018) ----
+ *
+ * A Hidden Chats reset wipes the hidden conversations, but a 1:1 chat id is
+ * local-random — the peer's NEXT live message would simply mint a new chat id,
+ * sailing past any chat-id tombstone and re-materializing the conversation as a
+ * visible chat. So the relay-path block is keyed by the PEER, not the chat:
+ * rows in the same tombstones store under the logical namespace 'hiddenPeer'
+ * (not an idb store — just the key prefix). Always localOnly: the block must
+ * never sync, exactly like the reset itself. It is lifted only by an explicit
+ * user re-engagement (startDirectChat), mirroring how a deleted contact's
+ * tombstone is lifted by a deliberate re-add. */
+
+const PEER_NS = 'hiddenPeer';
+
+/** Permanently block inbound 1:1 content from this peer on THIS device. */
+export async function recordHiddenPeerBlock(peerId: string): Promise<void> {
+  const t: Tombstone = {
+    id: key(PEER_NS, peerId),
+    store: PEER_NS,
+    recordId: peerId,
+    deletedAt: Number.MAX_SAFE_INTEGER, // permanent until explicitly lifted
+    localOnly: true,
+  };
+  await put<Tombstone>('tombstones', t);
+}
+
+/** Is inbound 1:1 content from this peer blocked by a hidden-chat reset? */
+export async function hasHiddenPeerBlock(peerId: string): Promise<boolean> {
+  return !!(await get<Tombstone>('tombstones', key(PEER_NS, peerId)));
+}
+
+/** Lift the block — the user deliberately started a new chat with this peer. */
+export async function clearHiddenPeerBlock(peerId: string): Promise<void> {
+  await remove('tombstones', key(PEER_NS, peerId));
+}

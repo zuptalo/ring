@@ -1,6 +1,15 @@
 import { createRouter, createWebHistory } from '@ionic/vue-router';
 import type { RouteRecordRaw } from 'vue-router';
+import { watch } from 'vue';
 import { isAuthenticated } from '@/services/auth';
+import { isUnlocked } from '@/services/crypto/identity';
+import {
+  ensureHiddenLoaded,
+  isHiddenId,
+  isHiddenKnown,
+  isRevealed,
+  registerRelockHook,
+} from '@/services/hidden-state';
 // The four bottom-tab pages are eager-loaded (static imports), NOT lazy
 // `() => import()` chunks. They are the app's core surface, reached within
 // seconds of launch and already SW-precached; lazy-splitting them only bought a
@@ -199,6 +208,59 @@ router.beforeEach((to) => {
     return '/auth';
   }
   return true;
+});
+
+// A route whose `:id` is a conversation id that could be hidden. BOTH the 1:1
+// chat detail (`/chat/:id` + its info/media/starred sub-pages) AND the group
+// detail (`/group/:id`) carry the conversation id as `:id` — and a hidden PAIR
+// CONVERSATION (spec 1027 coexistence: a group-modeled 1:1) routes to
+// `/group/:id`, where the member list IS the hidden person's identity. Guarding
+// only `/chat/` would leave that surface (and hidden multi-member groups) open.
+function hiddenChatRouteId(path: string, id: unknown): string | null {
+  return (path.startsWith('/chat/') || path.startsWith('/group/')) && typeof id === 'string'
+    ? id
+    : null;
+}
+
+// Hidden chats (spec 1027, FR-009): the reveal PIN is the ONLY door. Navigating
+// to a hidden conversation while relocked — a deep link, a stale notification
+// tap, back-stack restoration — bounces to the Chats list.
+//
+// Cold-start hole: at the first navigation the hidden set may not have
+// decrypted yet, so `isHiddenId` can only say "not known to be hidden" and the
+// guard fails open. We don't bounce blind (that would break notification taps
+// into ordinary chats), we CLOSE the hole instead: kick the load here and once
+// the set decrypts, `setHiddenIdsCache` fires the relock hook below, which
+// re-runs this check against the now-known set and ejects if needed.
+router.beforeEach((to) => {
+  const id = hiddenChatRouteId(to.path, to.params.id);
+  if (id !== null) {
+    if (!isHiddenKnown()) void ensureHiddenLoaded();
+    if (isHiddenId(id) && !isRevealed()) return '/tabs/chats';
+  }
+  return true;
+});
+
+// The load above no-ops while the keystore is locked (fail-closed, stays
+// unknown); retry the moment it unlocks so the recheck can run even on a page
+// that never queries the chat list (a cold-loaded chat detail).
+watch(isUnlocked, (v) => {
+  if (v && !isHiddenKnown()) void ensureHiddenLoaded();
+});
+
+// ...and when a reveal session ENDS (grace expiry, manual relock, keystore
+// auto-lock, wipe) — or the hidden set becomes KNOWN after a cold start that
+// deep-linked straight into a hidden chat — leave it at once (the "kick out").
+// The `!isRevealed()` check keeps set mutations during an active reveal (e.g.
+// hiding another chat while browsing) from ejecting the user. The hook lives in
+// the hidden-state leaf so the state module never imports the router.
+registerRelockHook(() => {
+  if (isRevealed()) return;
+  const cur = router.currentRoute.value;
+  const id = hiddenChatRouteId(cur.path, cur.params.id);
+  if (id !== null && isHiddenId(id)) {
+    void router.replace('/tabs/chats');
+  }
 });
 
 // Tabs are terminal (WhatsApp-style): the iOS PWA back-swipe walks the browser

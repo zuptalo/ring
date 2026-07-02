@@ -19,7 +19,7 @@
  */
 import { attemptDeviceUnlock } from './crypto/identity';
 import { previewPacket } from './messaging';
-import { readHiddenSet } from './hidden-chats';
+import { readHiddenSet, readHiddenSetOrNull } from './hidden-chats';
 import { readSessionToken, readSessionUserId } from './session';
 import { get, getAll, put } from '@/db/idb';
 import { notifyPreview } from '@/utils/notify-preview';
@@ -61,6 +61,12 @@ export interface SwNote {
 export interface PreviewResult {
   notes: SwNote[];
   pending: number;
+  // The pending count the app-icon BADGE may use (spec 1027, B4): equal to
+  // `pending` under badge mode 'always'; under 'never'/'revealed' only frames
+  // that decrypted AND resolved to a provably NON-hidden chat. A frame we can't
+  // classify (undecryptable, already-shown, unknown chat) is never counted —
+  // privacy beats accuracy on the badge when the user opted hidden chats out.
+  badgePending: number;
   // suppressed: there was something to alert on but the user's global "Show
   // notifications" toggle withheld it → caller skips the generic placeholder AND
   // doesn't badge (nothing to count for the user).
@@ -369,7 +375,7 @@ export async function previewPending(): Promise<PreviewResult> {
     console.warn('[sw-inbox] no session token → generic');
     // Couldn't even authenticate to fetch the queue → uncertain; a real message likely woke us, so
     // honor the placeholder (newUnshown) rather than silently dropping a possible message.
-    return { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: true };
+    return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true };
   }
 
   // Kick the device unlock NOW, IN PARALLEL with the fetch below (spec 2010
@@ -401,21 +407,26 @@ export async function previewPending(): Promise<PreviewResult> {
     }
     if (!res.ok) {
       console.warn('[sw-inbox] /relay/pending not ok', res.status);
-      return { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: true, reason: `relay-${res.status}` };
+      return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true, reason: `relay-${res.status}` };
     }
     frames = ((await res.json()) as { frames?: MsgFrame[] }).frames ?? [];
   } catch (e) {
     console.warn('[sw-inbox] /relay/pending fetch failed', e);
-    return { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: true, reason: 'relay-error' };
+    return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true, reason: 'relay-error' };
   }
   // No pending frames: the message was already drained (page / a prior straggler) or this push carried
   // no queued message (a settings / own-data sync wake). Nothing genuinely new → no placeholder (2016).
-  if (!frames.length) return { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: false, reason: 'no-frames' };
+  if (!frames.length) return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: false, reason: 'no-frames' };
 
   // Queued message frames = the undelivered backlog → the app-icon badge. Known
   // from the fetch alone, so the badge is right even if we can't decrypt.
   const pending = frames.filter((f) => f.t === 'msg' && !!f.id).length;
   console.info('[sw-inbox] fetched frames', { total: frames.length, pending });
+
+  // Badge mode (spec 1027, B4): under 'never'/'revealed' only frames we can
+  // POSITIVELY attribute to a non-hidden chat may bump the badge.
+  const badgeMode = await setting<string>('privacy.hiddenChatsBadge', 'always');
+  const badgeAll = badgeMode === 'always';
 
   const showMessages = await setting<boolean>('notifications.message.show', true);
 
@@ -431,7 +442,9 @@ export async function previewPending(): Promise<PreviewResult> {
     // Locked but there ARE pending msg frames we couldn't decrypt → a genuinely-new message warrants
     // the placeholder (newUnshown). If only non-msg frames are queued (pending === 0) there's nothing
     // new to announce here.
-    return { notes: [], pending, suppressed: !showMessages, silenced: false, newUnshown: pending > 0, reason: 'locked' };
+    // Locked → nothing is classifiable, so a non-'always' badge adds nothing
+    // here (unreadCount's badge.lastCount fallback still covers the stored part).
+    return { notes: [], pending, badgePending: badgeAll ? pending : 0, suppressed: !showMessages, silenced: false, newUnshown: pending > 0, reason: 'locked' };
   }
 
   const showPreview = await setting<boolean>('notifications.showPreview', true);
@@ -445,6 +458,7 @@ export async function previewPending(): Promise<PreviewResult> {
   const seen = new Set(shown);
 
   const raw: SwNote[] = [];
+  let badgeable = 0; // frames provably in a NON-hidden chat (badge modes never/revealed)
   let withheldMessage = false;
   let silencedMessage = false; // a message intentionally silenced by per-chat prefs
   let decryptFailed = 0; // frames we couldn't decrypt (cold start / session not reachable)
@@ -459,6 +473,14 @@ export async function previewPending(): Promise<PreviewResult> {
       continue; // can't decrypt this one (session not reachable yet) → leave it for the page
     }
     seen.add(f.id);
+    // Classify for the badge (spec 1027): the frame counts only when its chat
+    // resolves AND is provably not hidden. Same resolution noteForPayload uses.
+    if (!badgeAll) {
+      const bChat = payload.groupId
+        ? chats.find((c) => c.id === payload.groupId)
+        : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === f.from);
+      if (bChat && !hidden.has(bChat.id)) badgeable += 1;
+    }
     const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '');
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
@@ -488,7 +510,7 @@ export async function previewPending(): Promise<PreviewResult> {
   // When every fetched frame was already shown (all-seen), decryptFailed === 0 and notes is empty →
   // newUnshown is false → the caller shows NO new placeholder (kills the burst extra-generic).
   const newUnshown = decryptFailed > 0;
-  return { notes, pending, suppressed, silenced, newUnshown, reason };
+  return { notes, pending, badgePending: badgeAll ? pending : badgeable, suppressed, silenced, newUnshown, reason };
 }
 
 /**
@@ -518,10 +540,21 @@ export async function markShown(ids: string[]): Promise<void> {
 
 /** Best-effort unread total from the on-device chats. The SW can't persist the new
  *  message (read-only preview), so the push handler adds the count of fresh
- *  notifications on top for the app-icon badge. */
+ *  notifications on top for the app-icon badge.
+ *
+ *  Honors `privacy.hiddenChatsBadge` (spec 1027, B4): 'never' excludes hidden
+ *  chats; 'revealed' behaves as 'never' here because the reveal session is
+ *  page-memory-only and the SW must never assume it. When the hidden set can't
+ *  be decrypted (locked), fall back to `badge.lastCount` — the page's last
+ *  successfully computed, already preference-filtered total — rather than
+ *  guessing in either direction. */
 export async function unreadCount(): Promise<number> {
   const chats = await getAll<Chat>('chats');
-  return chats.reduce((n, c) => n + (c.unread || 0), 0);
+  const mode = await setting<string>('privacy.hiddenChatsBadge', 'always');
+  if (mode === 'always') return chats.reduce((n, c) => n + (c.unread || 0), 0);
+  const hidden = await readHiddenSetOrNull();
+  if (!hidden) return (await setting<number | null>('badge.lastCount', null)) ?? 0;
+  return chats.reduce((n, c) => n + (hidden.has(c.id) ? 0 : c.unread || 0), 0);
 }
 
 /* ---- friend-request (connection) lifecycle notifications (spec 1015 US2) ---- */

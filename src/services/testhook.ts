@@ -104,6 +104,7 @@ import {
   setCloseFriend as dbSetCloseFriend,
   listCloseFriends as dbListCloseFriends,
   listFriends as dbListFriends,
+  listCallGroups as dbListCallGroups,
   countUnread as dbCountUnread,
   setContactLocalProfile as dbSetContactLocalProfile,
   resetContactToRemote as dbResetContactToRemote,
@@ -117,6 +118,8 @@ import {
 } from '@/services/hidden-chats';
 import { startHiddenChat as hcStartChat } from '@/services/hidden-chats-start';
 import { resetHiddenChats as hcReset } from '@/services/hidden-chats-reset';
+import { canHide, canUnhide } from '@/services/hidden-pair';
+import { hiddenIdsSync } from '@/services/hidden-state';
 import { revealWithPin as hcReveal, relockHidden as hcRelock } from '@/composables/useHiddenChats';
 import { downloadBlob } from '@/services/media-transfer';
 import {
@@ -386,6 +389,14 @@ export function installTestHook(): void {
       const all = await getAll<{ id: string; isGroup: boolean; participantIds: string[] }>('chats');
       return all.find((c) => !c.isGroup && c.participantIds[0] === peerId)?.id ?? '';
     },
+    /** ALL conversation ids with a peer — plain 1:1s AND pair conversations —
+     *  for the spec-1027 per-person invariant asserts (no duplicate threads). */
+    chatsWith: async (peerId: string): Promise<{ id: string; isGroup: boolean }[]> => {
+      const all = await getAll<{ id: string; isGroup: boolean; participantIds: string[] }>('chats');
+      return all
+        .filter((c) => c.participantIds.length === 1 && c.participantIds[0] === peerId)
+        .map((c) => ({ id: c.id, isGroup: c.isGroup }));
+    },
     /** The VISIBLE (non-pending) 1:1 chat id for a peer, or '' if hidden/none. */
     visibleChatWith: async (peerId: string): Promise<string> =>
       (await listChats()).find((c) => !c.isGroup && c.participantIds[0] === peerId)?.id ?? '',
@@ -400,6 +411,15 @@ export function installTestHook(): void {
     hiddenIds: async (): Promise<string[]> => [...(await hcGetSet())],
     /** Start a distinct hidden chat with a contact; returns the new chat id. */
     hiddenStartChat: (contactId: string) => hcStartChat(contactId),
+    /** The per-person pair-invariant verdicts the actions sheet uses (spec 1027). */
+    hiddenCanHide: async (chatId: string) =>
+      canHide(await getAll<Chat>('chats'), hiddenIdsSync(), chatId),
+    hiddenCanUnhide: async (chatId: string) =>
+      canUnhide(await getAll<Chat>('chats'), hiddenIdsSync(), chatId),
+    /** The Calls-tab rows' contact ids (what listCallGroups shows) — for the
+     *  spec-1027 knock-knock asserts: hidden peers never appear while relocked. */
+    callHistoryContactIds: async (): Promise<string[]> =>
+      (await dbListCallGroups()).map((g) => g.contactId),
     /** Reveal (verify PIN → start session). Returns whether the PIN was correct. */
     hiddenReveal: (pin: string) => hcReveal(pin),
     /** End the reveal session. */

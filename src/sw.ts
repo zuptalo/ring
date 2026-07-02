@@ -412,7 +412,7 @@ async function showMessageNotification(): Promise<void> {
   // later wakes find everything shown and re-assert silently. Delivery receipts are unaffected.
   await serializeNotify(async () => {
   const preview = previewPending(); // started once; awaited twice (race, then settle)
-  let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: false };
+  let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: false };
   let timedOut = false; // spec 2014: distinguish a slow cold start from a fetched-but-undecryptable result
   try {
     result = await Promise.race([
@@ -475,7 +475,7 @@ async function showMessageNotification(): Promise<void> {
   // we actually learned from the fetch. When the fetch failed/timed out, pending is
   // 0 and we badge from the stored unread alone rather than inventing a "+1" that
   // teaches a wrong count. A suppressed (notifications-off) push adds nothing.
-  await updateAppBadge(result.suppressed ? 0 : pending);
+  await updateAppBadge(result.suppressed ? 0 : result.badgePending);
   }); // end the initial serialized section (release the lock before the straggler sleeps)
 
   // Catch stragglers from a rapid burst (see STRAGGLER_WINDOW_MS): re-fetch the
@@ -499,7 +499,7 @@ async function showMessageNotification(): Promise<void> {
         await closeByTag(GENERIC_TAG);
         await showNotes(more.notes);
         await markShown(allIds(more.notes));
-        await updateAppBadge(more.suppressed ? 0 : more.pending);
+        await updateAppBadge(more.suppressed ? 0 : more.badgePending);
       }
       return false;
     });

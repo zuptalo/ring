@@ -371,9 +371,9 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
   // (Requests / system notices have no chat and always-surface semantics — handled
   // below the predicate, unchanged.)
   if (n.kind === 'message') {
-    // Hidden chats (spec 1019): a LOCKED hidden chat must leave no foreground trace —
-    // never a banner, sound, or a name/content notification. (When revealed, the user
-    // is actively in hidden mode → fall through to the normal policy.)
+    // Hidden chats (spec 1019, tightened by 1027 FR-012): a LOCKED hidden chat
+    // must leave no trace on ANY path the platform doesn't force. (When
+    // revealed, the user is actively in hidden mode → normal policy.)
     if (n.chatId && !isRevealed() && (await ensureHiddenLoaded()).has(n.chatId)) {
       if (appVisible()) {
         // Foreground: stay completely silent (no banner, no sound). Claim it so a
@@ -382,11 +382,10 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
         notifyBannerPresented();
         return true;
       }
-      // Backgrounded but connected via WS (no push woke us): the OS push didn't cover
-      // this, so bridge a GENERIC, content-free notification — NEVER the sender name or
-      // message text — mirroring the SW's hidden-chat handling. A push-woken drain
-      // leaves the (already-generic) OS notification to the SW.
-      if (!n.pushWoken) void notifyLocal('Ring', 'New message', '/tabs/chats', undefined);
+      // Backgrounded: fully silent — badge only. The old generic local-
+      // notification bridge is gone (spec 1027 B6): the page never shows
+      // anything for a hidden chat; only a PUSH-woken delivery may surface the
+      // generic banner, and that one belongs to the SW (platform contract).
       return false;
     }
     const p = await ensurePrefs();
