@@ -92,14 +92,14 @@ visible thread is blocked; delete visible → Unhide works.
 
 ### Tests (write first, must FAIL)
 
-- [ ] T015 (#608) [P] [US3] Failing vitest for `startDirectChat` in `src/db/queries.start-direct.test.ts`: hidden plain 1:1 exists → creates a visible pair conversation (isGroup, single participant) and lifts any `hiddenPeer:` block; visible exists → returns it (never a second visible); hidden pair conversation + no plain 1:1 → creates a plain 1:1
-- [ ] T016 (#609) [P] [US3] Failing Playwright e2e in `e2e/hidden-coexist.spec.ts` (part 2): A starts a new chat with B from Contacts → fresh visible thread appears while hidden stays hidden; A↔B exchange messages in BOTH threads (B replies in each) and each message lands only in its own thread; Hide on the visible thread is blocked with the reason; Unhide on the hidden thread is blocked while the visible exists; delete visible → Unhide succeeds
+- [x] T015 (#608) [P] [US3] Failing vitest for `startDirectChat` in `src/db/queries.start-direct.test.ts`: hidden plain 1:1 exists → creates a visible pair conversation (isGroup, single participant) and lifts any `hiddenPeer:` block; visible exists → returns it (never a second visible); hidden pair conversation + no plain 1:1 → creates a plain 1:1
+- [x] T016 (#609) [P] [US3] Failing Playwright e2e in `e2e/hidden-coexist.spec.ts` (part 2): A starts a new chat with B from Contacts → fresh visible thread appears while hidden stays hidden; A↔B exchange messages in BOTH threads (B replies in each) and each message lands only in its own thread; Hide on the visible thread is blocked with the reason; Unhide on the hidden thread is blocked while the visible exists; delete visible → Unhide succeeds
 
 ### Implementation
 
-- [ ] T017 (#610) [US3] Extend `startDirectChat` in `src/db/queries.ts:4059` per contract: hidden-chat-with-peer branch creates the visible pair conversation (reuse the `createGroup('', [peer])` mechanism from `src/services/hidden-chats-start.ts`) and calls `clearTombstone('hiddenPeer:<peer>')`
-- [ ] T018 (#611) [US3] Gate Hide/Unhide in `src/components/ChatActionsSheet.vue` via `canHide`/`canUnhide` — blocked entry renders disabled with the reason text (stock Ionic only, Principle XI)
-- [ ] T019 (#612) [P] [US3] Extend `drive/scenarios/hidden-coexist.mjs` (part 2: coexistence + blocked Hide/Unhide journey), including an SC-004 volume loop — ≥100 messages split across both threads with zero cross-thread leaks asserted
+- [x] T017 (#610) [US3] Extend `startDirectChat` in `src/db/queries.ts:4059` per contract: hidden-chat-with-peer branch creates the visible pair conversation (reuse the `createGroup('', [peer])` mechanism from `src/services/hidden-chats-start.ts`) and calls `clearTombstone('hiddenPeer:<peer>')`
+- [x] T018 (#611) [US3] Gate Hide/Unhide in `src/components/ChatActionsSheet.vue` via `canHide`/`canUnhide` — blocked entry renders disabled with the reason text (stock Ionic only, Principle XI)
+- [x] T019 (#612) [P] [US3] Extend `drive/scenarios/hidden-coexist.mjs` (part 2: coexistence + blocked Hide/Unhide journey), including an SC-004 volume loop — ≥100 messages split across both threads with zero cross-thread leaks asserted
 
 **Checkpoint**: the per-person model is fully user-reachable and enforced.
 

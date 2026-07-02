@@ -10,6 +10,7 @@ import {
   chatsWithPeer,
   canHide,
   canUnhide,
+  planStartDirectChat,
   resolveInboundDirectChat,
 } from './hidden-pair';
 
@@ -106,6 +107,48 @@ describe('canUnhide (INV-2: at most one visible chat per person)', () => {
 
   it('always allows unhiding a multi-member group', () => {
     expect(canUnhide([bigGroup('g'), oneToOne('a')], hidden('g'), 'g')).toEqual({ ok: true });
+  });
+});
+
+describe('planStartDirectChat (user-initiated "start a conversation")', () => {
+  it('opens the existing visible plain 1:1', () => {
+    const chats = [oneToOne('v')];
+    expect(planStartDirectChat(chats, hidden(), P)).toEqual({ action: 'open', chatId: 'v' });
+  });
+
+  it('opens the existing visible pair conversation (the coexistence steady state)', () => {
+    const chats = [oneToOne('h'), pairConv('p')];
+    expect(planStartDirectChat(chats, hidden('h'), P)).toEqual({ action: 'open', chatId: 'p' });
+  });
+
+  it('creates a pair conversation when the only chat is a hidden plain 1:1 (FR-004)', () => {
+    const chats = [oneToOne('h')];
+    expect(planStartDirectChat(chats, hidden('h'), P)).toEqual({ action: 'createPair' });
+  });
+
+  it('creates a plain 1:1 when the hidden thread is a pair conversation and no 1:1 exists', () => {
+    const chats = [pairConv('hp')];
+    expect(planStartDirectChat(chats, hidden('hp'), P)).toEqual({ action: 'createOneToOne' });
+  });
+
+  it('creates a plain 1:1 for a brand-new peer', () => {
+    expect(planStartDirectChat([], hidden(), P)).toEqual({ action: 'createOneToOne' });
+  });
+
+  it('never resolves to a hidden chat (the #544 loophole stays closed)', () => {
+    const chats = [oneToOne('h'), pairConv('hp')];
+    const plan = planStartDirectChat(chats, hidden('h', 'hp'), P);
+    // Both threads hidden (legacy INV-1 breach): nothing visible may open.
+    expect(plan.action).not.toBe('open');
+  });
+
+  it('prefers the non-pending plain 1:1, then the pair conversation, then a pending placeholder', () => {
+    const chats = [oneToOne('pend', { pending: true }), pairConv('p'), oneToOne('v')];
+    expect(planStartDirectChat(chats, hidden(), P)).toEqual({ action: 'open', chatId: 'v' });
+    expect(planStartDirectChat([oneToOne('pend', { pending: true }), pairConv('p')], hidden(), P))
+      .toEqual({ action: 'open', chatId: 'p' });
+    expect(planStartDirectChat([oneToOne('pend', { pending: true })], hidden(), P))
+      .toEqual({ action: 'open', chatId: 'pend' });
   });
 });
 

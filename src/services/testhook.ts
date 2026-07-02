@@ -117,6 +117,8 @@ import {
 } from '@/services/hidden-chats';
 import { startHiddenChat as hcStartChat } from '@/services/hidden-chats-start';
 import { resetHiddenChats as hcReset } from '@/services/hidden-chats-reset';
+import { canHide, canUnhide } from '@/services/hidden-pair';
+import { hiddenIdsSync } from '@/services/hidden-state';
 import { revealWithPin as hcReveal, relockHidden as hcRelock } from '@/composables/useHiddenChats';
 import { downloadBlob } from '@/services/media-transfer';
 import {
@@ -408,6 +410,11 @@ export function installTestHook(): void {
     hiddenIds: async (): Promise<string[]> => [...(await hcGetSet())],
     /** Start a distinct hidden chat with a contact; returns the new chat id. */
     hiddenStartChat: (contactId: string) => hcStartChat(contactId),
+    /** The per-person pair-invariant verdicts the actions sheet uses (spec 1027). */
+    hiddenCanHide: async (chatId: string) =>
+      canHide(await getAll<Chat>('chats'), hiddenIdsSync(), chatId),
+    hiddenCanUnhide: async (chatId: string) =>
+      canUnhide(await getAll<Chat>('chats'), hiddenIdsSync(), chatId),
     /** Reveal (verify PIN → start session). Returns whether the PIN was correct. */
     hiddenReveal: (pin: string) => hcReveal(pin),
     /** End the reveal session. */

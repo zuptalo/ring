@@ -30,9 +30,19 @@
           <ion-icon slot="start" :icon="chat.locked ? lockOpenOutline : lockClosedOutline" />
           <ion-label>{{ chat.locked ? 'Unlock chat' : 'Lock chat' }}</ion-label>
         </ion-item>
-        <ion-item v-if="hiddenEnabled || hidden" button :detail="false" @click="toggleHidden">
+        <ion-item
+          v-if="hiddenEnabled || hidden"
+          button
+          :detail="false"
+          :disabled="!pairVerdict.ok"
+          @click="toggleHidden"
+        >
           <ion-icon slot="start" :icon="hidden ? eyeOutline : eyeOffOutline" />
-          <ion-label>{{ hidden ? 'Unhide chat' : 'Hide chat' }}</ion-label>
+          <ion-label>
+            {{ hidden ? 'Unhide chat' : 'Hide chat' }}
+            <!-- The per-person rule (spec 1027 INV-1/INV-2): say WHY it's blocked. -->
+            <p v-if="!pairVerdict.ok" class="pair-reason">{{ pairVerdict.reason }}</p>
+          </ion-label>
         </ion-item>
         <ion-item button :detail="false" @click="toggleFavorite">
           <ion-icon slot="start" :icon="chat.favorite ? heart : heartOutline" />
@@ -77,7 +87,9 @@ import {
 import { lockConfigured } from '@/services/chat-lock';
 import { addHidden, removeHidden } from '@/services/hidden-chats';
 import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
-import { isHiddenId } from '@/services/hidden-state';
+import { isHiddenId, hiddenIdsSync } from '@/services/hidden-state';
+import { canHide, canUnhide } from '@/services/hidden-pair';
+import { getAll } from '@/db/idb';
 import type { Chat } from '@/db/types';
 
 const props = defineProps<{ chat: Chat | null; isOpen: boolean }>();
@@ -92,10 +104,20 @@ const muted = computed(() => !!props.chat?.mutedUntil && props.chat.mutedUntil >
 // (reachable while revealed). `hidden` reflects the local hidden set.
 const hidden = computed(() => (props.chat ? isHiddenId(props.chat.id) : false));
 const hiddenEnabled = ref(false);
+// Per-person one-hidden/one-visible rule (spec 1027, INV-1/INV-2): the action is
+// disabled — with the reason as its caption — when hiding would make a second
+// hidden chat with the same person, or unhiding a second visible one.
+const pairVerdict = ref<{ ok: true } | { ok: false; reason: string }>({ ok: true });
 watch(
-  () => props.isOpen,
-  async (open) => {
-    if (open) hiddenEnabled.value = await getSetting<boolean>('privacy.hiddenChatsEnabled', false);
+  () => [props.isOpen, props.chat?.id] as const,
+  async ([open]) => {
+    if (!open) return;
+    hiddenEnabled.value = await getSetting<boolean>('privacy.hiddenChatsEnabled', false);
+    const c = props.chat;
+    if (!c) return;
+    const chats = await getAll<Chat>('chats');
+    const set = hiddenIdsSync();
+    pairVerdict.value = isHiddenId(c.id) ? canUnhide(chats, set, c.id) : canHide(chats, set, c.id);
   },
 );
 
@@ -103,10 +125,12 @@ async function toggleHidden(): Promise<void> {
   const c = props.chat;
   if (!c) return;
   if (isHiddenId(c.id)) {
+    if (!canUnhide(await getAll<Chat>('chats'), hiddenIdsSync(), c.id).ok) return; // INV-2
     await removeHidden(c.id); // permanent unhide → returns to the normal list
     emit('dismiss');
     return;
   }
+  if (!canHide(await getAll<Chat>('chats'), hiddenIdsSync(), c.id).ok) return; // INV-1
   if (!(await ensureHiddenPin())) {
     emit('dismiss'); // user cancelled PIN creation
     return;
@@ -253,5 +277,13 @@ async function confirmRemove(): Promise<void> {
 .actions ion-icon {
   font-size: 22px;
   color: var(--ion-text-color);
+}
+/* Why Hide/Unhide is blocked (spec 1027 per-person rule) — quiet caption under
+   the disabled label, using the stock muted token. */
+.pair-reason {
+  font-size: 12px;
+  color: var(--ion-color-medium);
+  margin: 2px 0 0;
+  white-space: normal;
 }
 </style>

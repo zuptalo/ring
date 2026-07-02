@@ -69,6 +69,37 @@ export function canUnhide(chats: Chat[], hidden: ReadonlySet<string>, chatId: st
   return { ok: true };
 }
 
+export type StartDirectPlan =
+  | { action: 'open'; chatId: string }
+  | { action: 'createPair' }
+  | { action: 'createOneToOne' };
+
+/**
+ * The user-initiated "start a conversation with this person" decision (spec
+ * 1027 FR-004, wired by `startDirectChat`). Never resolves to a hidden chat —
+ * starting a chat from a contact must not open a PIN-locked conversation (the
+ * #544 loophole). Preference among the VISIBLE chats with the peer: the real
+ * plain 1:1, then a pair conversation, then a pending request placeholder.
+ * When nothing visible exists the channel of the NEW thread is forced by
+ * INV-3: a hidden plain 1:1 already owns the peer's ratchet → create a pair
+ * conversation (the distinct group-modeled channel); otherwise a plain 1:1.
+ */
+export function planStartDirectChat(
+  chats: Chat[],
+  hidden: ReadonlySet<string>,
+  peerId: string,
+): StartDirectPlan {
+  const withPeer = chatsWithPeer(chats, peerId);
+  const visible = withPeer.filter((c) => !hidden.has(c.id));
+  const open =
+    visible.find((c) => !c.isGroup && !c.pending) ??
+    visible.find((c) => c.isGroup) ??
+    visible[0];
+  if (open) return { action: 'open', chatId: open.id };
+  const hiddenPlain = withPeer.some((c) => !c.isGroup && hidden.has(c.id));
+  return hiddenPlain ? { action: 'createPair' } : { action: 'createOneToOne' };
+}
+
 /**
  * Rule R stage 1 — pre-decrypt session resolution for an inbound frame from
  * `peerId` (spec 1027 D2). Every frame from a peer rides the per-peer 1:1

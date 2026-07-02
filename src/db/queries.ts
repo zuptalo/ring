@@ -5,7 +5,7 @@
  */
 import { bulkPut, clearStore, get, getAll, getByIndex, put, remove } from './idb';
 import { enqueue, removeOutboxByFrameId } from './outbox';
-import { recordTombstone } from './tombstones';
+import { recordTombstone, clearHiddenPeerBlock } from './tombstones';
 import { callLogPreview } from './calllog';
 import { uid } from '@/utils/uid';
 import { capitalizeFirst } from '@/utils/text';
@@ -31,7 +31,7 @@ import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/
 import { ensureHiddenLoaded, isRevealed, isHiddenKnown } from '@/services/hidden-state';
 import { hiddenCallKeys } from '@/db/hidden-calls';
 import { routeInboundFrom } from '@/db/inbound-route';
-import { resolveInboundDirectChat } from '@/services/hidden-pair';
+import { resolveInboundDirectChat, planStartDirectChat } from '@/services/hidden-pair';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
   EditSignal, EraseSignal, LinkPreviewSignal,
@@ -4063,31 +4063,34 @@ async function defaultTimerMs(): Promise<number | null> {
 }
 
 export async function startDirectChat(contact: Contact): Promise<string> {
+  // The USER-INTENT entry ("start a conversation with this person"), distinct
+  // from sessionChatIdForPeer (the crypto-container resolver). Spec 1027:
+  //   - never resolves to a hidden chat (the 1019/#544 rule — a PIN-locked
+  //     conversation must not open without the PIN);
+  //   - when the person's only thread is a HIDDEN plain 1:1, the fresh visible
+  //     chat is a PAIR CONVERSATION (group-modeled, its own sender-key channel)
+  //     because the hidden thread owns the peer's one 1:1 ratchet (INV-3) — a
+  //     second plain 1:1 would steer the peer's replies-to-the-hidden-thread
+  //     into the visible one;
+  //   - as a deliberate re-engagement it lifts any hidden-reset peer block
+  //     (FR-018) — inbound frames never do.
+  await clearHiddenPeerBlock(contact.id);
   const chats = await getAll<Chat>('chats');
-  // NEVER resolve to a hidden chat (spec 1019): starting a chat from the contact must
-  // not open a PIN-locked hidden conversation — that would reveal it without the PIN.
-  // A hidden chat coexists with a normal one; this path only ever uses/creates the
-  // normal (non-hidden) chat, creating a fresh one when the sole match is hidden.
   const hiddenSet = await ensureHiddenLoaded();
-  const matches = chats.filter(
-    (c) =>
-      !c.isGroup &&
-      c.participantIds.length === 1 &&
-      c.participantIds[0] === contact.id &&
-      !hiddenSet.has(c.id),
-  );
-  // Prefer a real (visible) chat over an unaccepted-request placeholder.
-  const visible = matches.find((c) => !c.pending);
-  if (visible) return visible.id;
-  const placeholder = matches[0];
-  if (placeholder) {
+  const plan = planStartDirectChat(chats, hiddenSet, contact.id);
+  if (plan.action === 'open') {
+    const chat = chats.find((c) => c.id === plan.chatId);
     // Opening a chat with an already-accepted friend → make it visible.
-    if (placeholder.pending && (await isPeerConnected(contact.id))) {
-      placeholder.pending = false;
-      placeholder.updatedAt = now();
-      await put('chats', placeholder);
+    if (chat?.pending && (await isPeerConnected(contact.id))) {
+      chat.pending = false;
+      chat.updatedAt = now();
+      await put('chats', chat);
     }
-    return placeholder.id;
+    return plan.chatId;
+  }
+  if (plan.action === 'createPair') {
+    // Same mechanism as startHiddenChat (spec 1019 US2), on the visible side.
+    return createGroup('', [contact.id]);
   }
   return createDirectChatRow(contact);
 }

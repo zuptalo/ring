@@ -62,3 +62,62 @@ test('hiding the only 1:1 keeps it receiving silently — no visible resurrectio
   await ev(a, (c: string) => (window as any).__ringTest.sendChatMessage(c, 'reply from hiding'), aChat);
   await expect.poll(() => bodies(b, bChat), { timeout: 20_000 }).toContain('reply from hiding');
 });
+
+test('one hidden + one visible chat per person: coexistence, isolation, and blocked Hide/Unhide (US3)', async ({ browser }) => {
+  test.setTimeout(150_000);
+  const a = await createAccount(await browser.newContext(), 'COEXIST3');
+  const b = await createAccount(await browser.newContext(), 'COEXIST4');
+  await pair(a, b);
+
+  // Establish + hide the 1:1.
+  await ev(a, (id: string) => (window as any).__ringTest.startChat(id), b.id);
+  const hiddenChat = await ev(a, (id: string) => (window as any).__ringTest.chatWith(id), b.id);
+  const bChat = await ev(b, (id: string) => (window as any).__ringTest.startChat(id), a.id);
+  await ev(b, (c: string) => (window as any).__ringTest.sendChatMessage(c, 'seed'), bChat);
+  await expect.poll(() => bodies(a, hiddenChat), { timeout: 20_000 }).toContain('seed');
+  await ev(a, (pin: string) => (window as any).__ringTest.hiddenSetPin(pin), '1234');
+  await ev(a, (id: string) => (window as any).__ringTest.hiddenAdd(id), hiddenChat);
+  await expect.poll(() => visibleIds(a)).not.toContain(hiddenChat);
+
+  // FR-004: starting a NEW conversation with the same person creates a fresh
+  // VISIBLE thread — a pair conversation (distinct channel), no PIN involved —
+  // while the hidden thread stays hidden.
+  const visibleChat = await ev(a, (id: string) => (window as any).__ringTest.startChat(id), b.id);
+  expect(visibleChat).not.toBe(hiddenChat);
+  await expect.poll(() => visibleIds(a)).toContain(visibleChat);
+  expect(await visibleIds(a)).not.toContain(hiddenChat);
+  const threads = await chatsWith(a, b.id);
+  expect(threads).toHaveLength(2);
+  expect(threads.find((t) => t.id === visibleChat)?.isGroup).toBe(true); // pair conversation
+
+  // FR-005 isolation, both directions. B sees the pair conversation appear (a
+  // normal new conversation from their side) and replies in each thread.
+  await ev(a, (c: string) => (window as any).__ringTest.sendChatMessage(c, 'open hello'), visibleChat);
+  await expect.poll(() => bodies(b, visibleChat), { timeout: 20_000 }).toContain('open hello'); // group ids are shared
+  await ev(b, (c: string) => (window as any).__ringTest.sendChatMessage(c, 'open reply'), visibleChat);
+  await ev(b, (c: string) => (window as any).__ringTest.sendChatMessage(c, 'secret reply'), bChat);
+  await expect.poll(() => bodies(a, visibleChat), { timeout: 20_000 }).toContain('open reply');
+  await expect.poll(() => bodies(a, hiddenChat), { timeout: 20_000 }).toContain('secret reply');
+  // Zero cross-contamination.
+  expect(await bodies(a, visibleChat)).not.toContain('secret reply');
+  expect(await bodies(a, hiddenChat)).not.toContain('open reply');
+  expect(await bodies(a, hiddenChat)).not.toContain('open hello');
+
+  // INV-1: hiding the visible thread is blocked while the hidden one exists.
+  const hideVerdict = await ev(a, (id: string) => (window as any).__ringTest.hiddenCanHide(id), visibleChat);
+  expect(hideVerdict.ok).toBe(false);
+  expect(hideVerdict.reason).toMatch(/already have a hidden chat/i);
+
+  // INV-2: unhiding is blocked while the visible thread exists.
+  const unhideVerdict = await ev(a, (id: string) => (window as any).__ringTest.hiddenCanUnhide(id), hiddenChat);
+  expect(unhideVerdict.ok).toBe(false);
+  expect(unhideVerdict.reason).toMatch(/already have a chat/i);
+
+  // Delete the visible thread → unhide becomes possible and works.
+  await ev(a, (id: string) => (window as any).__ringTest.deleteChat(id), visibleChat);
+  await expect
+    .poll(async () => (await ev(a, (id: string) => (window as any).__ringTest.hiddenCanUnhide(id), hiddenChat)).ok)
+    .toBe(true);
+  await ev(a, (id: string) => (window as any).__ringTest.hiddenRemove(id), hiddenChat);
+  await expect.poll(() => visibleIds(a)).toContain(hiddenChat);
+});
