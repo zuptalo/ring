@@ -201,6 +201,9 @@ import {
   incomingSecond,
   recordConnect,
   connectMarksSnapshot,
+  joinCuesShown,
+  mergeGroupInvite,
+  setGroupIdleMsForTest,
 } from '@/composables/useCall';
 
 /**
@@ -1285,11 +1288,18 @@ export function installTestHook(): void {
     addPeople: (ids: string[]) => addPeople(ids),
     /** Merge the pending second incoming DIRECT caller into the current call (spec 1028, US1). */
     mergeIncoming: () => mergeIncoming(),
+    /** Fold the pending second incoming GROUP INVITE into the current call (spec 1030, US3). */
+    mergeGroupInvite: () => mergeGroupInvite(),
+    /** The userIds announced as "{name} joined the call" this call (spec 1030, US2). */
+    joinCues: () => joinCuesShown(),
     /** Free participant slots left in the active call (for cap-gate asserts). */
     callRemainingSlots: () => callRemainingSlots(),
     /** Dev/e2e: shrink the CLIENT caps so the pre-emptive add gate can be tested
      *  without a real 8-person call (mirrors the server's call-config override). */
     setCallCaps: (video?: number, audio?: number) => setCallCapsForTest(video, audio),
+    /** Dev/e2e: shrink the lone-in-the-room timeout so the promotion-timeout path
+     *  (spec 1030, US5) runs in seconds instead of 60s. */
+    setGroupIdleMs: (ms: number) => setGroupIdleMsForTest(ms),
     /** The active call's roster (who's actually in the room) + invited (ringing). */
     callRoster: () => callMeta.value?.roster ?? [],
     callInvited: () => callMeta.value?.invited ?? [],
@@ -1366,6 +1376,8 @@ export function installTestHook(): void {
      *  of the receiver track's muted attribute (unreliable in headless Chromium). */
     inboundVideoFrames: () => inboundVideoFrames(),
     localTracks: () => localStream.value?.getTracks().length ?? 0,
+    /** Local VIDEO tracks only — asserts the no-auto-camera invariant (spec 1030, US1). */
+    localVideoTracks: () => localStream.value?.getVideoTracks().length ?? 0,
   };
   (window as unknown as { __ringTest: typeof api }).__ringTest = api;
 }

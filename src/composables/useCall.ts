@@ -45,6 +45,7 @@ import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/t
 import { VIDEO_MAX } from '@/services/call/types';
 import { remainingSlots, canAdd } from '@/services/call/capacity';
 import { planInvite } from '@/services/call/invite-plan';
+import { newJoiners } from '@/services/call/join-cue';
 import {
   type Tier,
   type ControllerState,
@@ -494,6 +495,35 @@ const GRACE_MS = 18_000; // mid-call: tolerate a blip/handoff before ending (mat
 // Group calls: the set of OTHER participants that actually joined during the call
 // (accumulated from call-roster frames), for the call log + Calls-tab record.
 const groupJoined = new Set<string>();
+
+// (spec 1030 US2) Join-cue bookkeeping: everyone already announced as "joined the
+// call" this call, and whether the FIRST roster snapshot was consumed. Members in
+// that first snapshot were here before us (or are us) — people we walked in on,
+// not joiners — so they seed `announcedJoiners` silently; every LATER update cues
+// each not-yet-announced member exactly once. A reconnect doesn't change room
+// membership and a re-broadcast is deduped by the set, so neither re-fires
+// (INV-4). Reset per call (enterGroupCall). joinCueLog is dev/e2e introspection.
+const announcedJoiners = new Set<string>();
+let joinCuePrimed = false;
+const joinCueLog: string[] = [];
+
+/** Dev/e2e: the userIds announced as "joined the call" this call, in order. */
+export function joinCuesShown(): string[] {
+  return [...joinCueLog];
+}
+
+/** "{name} joined the call" (spec 1030 US2): the name comes from the local
+ *  contacts store, "Someone" for a non-contact — resolved on-device only (the
+ *  server never sees a name; zero-knowledge). */
+async function announceJoinCue(id: string): Promise<void> {
+  let name = '';
+  try {
+    name = (await getContact(id))?.name ?? '';
+  } catch {
+    /* contact lookup failing must never break the roster update */
+  }
+  await toast(`${name || 'Someone'} joined the call`);
+}
 
 // Group calls (caller side): invitees we've stopped ringing — the ~30s reminder window
 // elapsed without them joining. Their tile then offers recall (ring again) / remove. A
@@ -1376,6 +1406,11 @@ async function enterGroupCall(
     avatar,
   };
   setState('connecting');
+  // (spec 1030 US2) Fresh join-cue bookkeeping for this call: nobody announced yet,
+  // and the first roster snapshot we receive seeds (not cues) the announced set.
+  announcedJoiners.clear();
+  joinCuePrimed = false;
+  joinCueLog.length = 0;
   // Start the per-invitee give-up timers so a member who never joins flips to the
   // recall/remove tile after the reminder window. EVERY participant arms these (not just the
   // initiator) so anyone in the call can ring a no-show again or remove them (spec 0004): a
@@ -1453,10 +1488,19 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
   if (!roomId || !frame.from) return;
   // Already ringing/connected for this room → ignore duplicate invites.
   if (callMeta.value?.roomId === roomId) return;
+  // Already prompting for this room in the waiting slot → a server re-ring; keep the prompt.
+  if (incomingSecond.value?.roomId === roomId) return;
   if (callState.value !== 'idle') {
-    // Busy in another call → tell the caller we're unavailable instead of letting their tile
-    // for us ring forever, and stop their server-side re-ring of us (spec 0004 US2).
-    void sendGroupBusy(frame.from, roomId);
+    // (spec 1030 US3) In a call: a group invite used to be auto-busied — silently
+    // declined with no way to combine the calls. Now, when the single waiting slot
+    // is free, it's raised as the second-incoming prompt (Add to call / Accept &
+    // hold / Decline), like a direct second caller. The busy fallback remains for
+    // a taken slot (spec 2009: at most one waiter) or a locked device.
+    if (canRaiseSecondIncoming() && isUnlockedNow()) {
+      await presentSecondGroup(frame, roomId);
+    } else {
+      void sendGroupBusy(frame.from, roomId);
+    }
     return;
   }
   if (!isUnlockedNow()) return; // locked → can't decrypt the sealed signalling; skip the ring
@@ -1496,6 +1540,86 @@ async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invi
     void sendGroupLeave(roomId);
     void teardown('timeout');
   }, RING_TIMEOUT_MS);
+}
+
+/** A group invite arriving while we're in a call and the waiting slot is free (spec 1030
+ *  US3): stash it as the second-incoming prompt — offering Add to call (fold it into the
+ *  current call), Accept & hold, or Decline — instead of the old silent auto-busy.
+ *  Mirrors presentSecondDirect; the call-waiting cue rides the incomingSecond watcher. */
+async function presentSecondGroup(
+  frame: Extract<CallFrame, { t: 'call-group-invite' }>,
+  roomId: string,
+): Promise<void> {
+  const from = frame.from ?? '';
+  const self = getSelfUserId() ?? '';
+  // The invite's people (initiator + named members, minus ourselves): the fold's
+  // ring list and the prompt's title source.
+  const participants = [...new Set([from, ...(frame.members ?? [])])].filter((id) => id && id !== self);
+  const chat = await getChat(roomId);
+  incomingSecond.value = {
+    kind: 'group',
+    callId: roomId,
+    from,
+    roomId,
+    name: chat?.name || (await deriveGroupCallTitle(participants)),
+    avatar: chat?.avatar || groupAvatar(roomId),
+    callKind: frame.kind ?? 'audio',
+    members: participants,
+  };
+  // If unanswered within the ring window, drop the prompt and stop the server's
+  // re-ring of us (same as letting a foreground group invite lapse).
+  setTimeout(() => {
+    if (incomingSecond.value?.roomId === roomId) {
+      incomingSecond.value = null;
+      void sendGroupLeave(roomId);
+    }
+  }, RING_TIMEOUT_MS);
+}
+
+/**
+ * Fold the pending second incoming GROUP INVITE into the current call (spec 1030,
+ * US3) — "Add to call" for a whole group. Gated on the combined DISTINCT headcount
+ * (a member already in/ringing in our call counts once — FR-007); then a 1:1 is
+ * promoted first if needed, the invite's not-yet-present members are rung into OUR
+ * room (they consent by answering, exactly like add-people), and we leave the
+ * invite's own room so we're never in two rooms at once (FR-008, INV-5). When the
+ * fold wouldn't fit the cap it's blocked with the kind-specific reason and BOTH
+ * calls stay exactly as they were (the prompt is kept so Hold/Decline still work).
+ */
+export async function mergeGroupInvite(): Promise<void> {
+  const inc = incomingSecond.value;
+  if (!inc || inc.kind !== 'group' || !inc.roomId) return;
+  const meta = callMeta.value;
+  if (!meta || callState.value === 'idle') return;
+  const self = getSelfUserId() ?? '';
+  // Distinct newcomers = the invite's members not already in (or ringing into) our
+  // call; on a 1:1 the roster already carries the peer, so the math is uniform.
+  const present = new Set([self, ...meta.roster, ...(meta.invited ?? [])]);
+  const newcomers = [...new Set(inc.members ?? [])].filter((id) => id && !present.has(id));
+  const gate = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, newcomers.length);
+  if (!gate.ok) {
+    await toast(gate.reason);
+    return; // both calls unchanged; the invite stays in the waiting slot
+  }
+  const inviteRoomId = inc.roomId;
+  incomingSecond.value = null;
+  // The promote+ring section holds the add-in-flight guard so a swap/park can't
+  // interleave with the conversion (spec 1030 FR-010).
+  await withAddInFlight(async () => {
+    await ensureActiveIsRoom(); // promote a 1:1 first (no-op if already a room)
+    const m = callMeta.value;
+    if (!m?.isGroup || !m.roomId) return;
+    const plan = planInvite(m.kind, m.roster, m.invited ?? [], self, newcomers);
+    for (const id of plan.toRing) {
+      m.invited = [...(m.invited ?? []), id];
+      markNotJoining(id, false);
+      armMemberRingTimer(id);
+      await sendRecall(id, m.roomId, m.kind, m.invited);
+    }
+  });
+  // Leave the invite's own room: we fold people into OUR call, we don't join theirs
+  // (and the server stops re-ringing us for it).
+  void sendGroupLeave(inviteRoomId);
 }
 
 /** Accept the current incoming GROUP call → join the room (no members → no re-ring). */
@@ -1540,6 +1664,16 @@ async function convertActiveToRoom(
   direction: 'incoming' | 'outgoing',
 ): Promise<void> {
   const stream = localStream.value ?? undefined;
+  // (spec 1030 US1/T008) A VIDEO 1:1 being folded into an AUDIO room: drop the live
+  // camera track before entering, so the merged caller joins audio-only — in an
+  // audio-kind room video is strictly per-participant OPT-IN via the normal control
+  // (a camera-carrying join would publish video the room's kind doesn't reflect and
+  // desync the self-view state). The camera is one tap away again once inside.
+  if (kind === 'audio' && stream?.getVideoTracks().length) {
+    setLocalVideoTrack(null, true);
+    cameraOff.value = false; // reset the toggle state for the (audio) room
+  }
+  const prevPeer = callMeta.value?.peerUserId; // the 1:1 peer who will follow us in
   if (pc) {
     pc.onicecandidate = null;
     pc.ontrack = null;
@@ -1558,6 +1692,12 @@ async function convertActiveToRoom(
   reprimeBytes = true; // re-baseline byte counters against the new mesh session
   if (callMeta.value) callMeta.value.tornDown = true; // the old 1:1 meta is retired
   await enterGroupCall(roomId, kind, name, avatar, direction, [], stream);
+  // (spec 1030 US2) The 1:1 peer following us into the promoted room isn't a new
+  // arrival — they were already in the call — so seed them as announced (no
+  // "joined the call" cue for the promotion itself). Safe against a fast follow:
+  // a roster frame is a WS macrotask, so it can't land between enterGroupCall
+  // resolving and this line.
+  if (prevPeer) announcedJoiners.add(prevPeer);
 }
 
 /**
@@ -1587,20 +1727,27 @@ async function ensureActiveIsRoom(): Promise<void> {
  */
 export async function addPeople(ids: string[]): Promise<void> {
   if (!callMeta.value || callState.value === 'idle') return;
-  await ensureActiveIsRoom(); // promote a 1:1 first (no-op if already a room)
-  const meta = callMeta.value;
-  if (!meta?.isGroup || !meta.roomId) return;
-  const self = getSelfUserId() ?? '';
-  const plan = planInvite(meta.kind, meta.roster, meta.invited ?? [], self, ids);
-  for (const id of plan.toRing) {
-    meta.invited = [...(meta.invited ?? []), id];
-    markNotJoining(id, false);
-    armMemberRingTimer(id);
-    await sendRecall(id, meta.roomId, meta.kind, meta.invited);
-  }
+  // The whole promote+ring section holds the add-in-flight guard so a swap/park
+  // can't interleave with the conversion (spec 1030 FR-010).
+  const dropped = await withAddInFlight(async () => {
+    await ensureActiveIsRoom(); // promote a 1:1 first (no-op if already a room)
+    const meta = callMeta.value;
+    if (!meta?.isGroup || !meta.roomId) return [];
+    const self = getSelfUserId() ?? '';
+    const plan = planInvite(meta.kind, meta.roster, meta.invited ?? [], self, ids);
+    for (const id of plan.toRing) {
+      meta.invited = [...(meta.invited ?? []), id];
+      markNotJoining(id, false);
+      armMemberRingTimer(id);
+      await sendRecall(id, meta.roomId, meta.kind, meta.invited);
+    }
+    return plan.dropped;
+  });
   // Anyone who didn't fit the cap → tell the user why (kind-specific copy).
-  if (plan.dropped.length) {
-    const gate = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1);
+  if (dropped.length) {
+    const meta = callMeta.value;
+    const self = getSelfUserId() ?? '';
+    const gate = meta ? canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1) : { ok: true as const };
     await toast(gate.ok ? 'Some people are already in the call' : gate.reason);
   }
 }
@@ -1632,7 +1779,15 @@ async function onGroupIceFailed(): Promise<void> {
 
 // Lone-in-the-room timeout: a group call where nobody else joins ends after a grace
 // window (the group-call analogue of the 1:1 dial timeout), instead of hanging.
-const GROUP_NOBODY_MS = 60_000;
+// A live `let` ONLY so the dev/e2e harness can shrink it (like setCallCapsForTest) to
+// exercise the promotion-timeout path (spec 1030 US5) in seconds; production never
+// calls the setter, so it stays 60s.
+let GROUP_NOBODY_MS = 60_000;
+
+/** Dev/e2e only: shrink the lone-in-the-room timeout. Never called in production. */
+export function setGroupIdleMsForTest(ms: number): void {
+  GROUP_NOBODY_MS = ms;
+}
 let groupIdleTimer: ReturnType<typeof setTimeout> | null = null;
 function armGroupIdleTimeout(): void {
   if (groupIdleTimer) return; // already counting down
@@ -1867,11 +2022,38 @@ export async function acceptCall(): Promise<void> {
 
 /* ---- call waiting (spec 0005): hold the active call, take a second, swap, drop ---- */
 
+/* (spec 1030 US4, FR-010) The add-in-flight guard. A promotion/add converts the ACTIVE
+ * call (close the 1:1 pc → mint a room → re-enter as a mesh) across several awaits; a
+ * swap/park interleaving mid-conversion would capture a half-built call into the held
+ * slot (a dead pc, no group session yet) — a half-open connection. Every add/merge path
+ * claims this slot for its critical section, and swapCalls/parkActiveAsHeld drain it
+ * before touching the active call. Adds also serialize against EACH OTHER, so two
+ * concurrent adds can't both promote. */
+let addInFlight: Promise<void> | null = null;
+
+async function withAddInFlight<T>(fn: () => Promise<T>): Promise<T> {
+  while (addInFlight) await addInFlight; // serialize behind any add already converting
+  let release!: () => void;
+  addInFlight = new Promise<void>((r) => (release = r));
+  try {
+    return await fn();
+  } finally {
+    addInFlight = null;
+    release();
+  }
+}
+
+/** Wait until no promotion/add is converting the active call (no-op when idle). */
+async function drainAddInFlight(): Promise<void> {
+  while (addInFlight) await addInFlight;
+}
+
 /** Pause the current ACTIVE call and move it into the held slot, keeping its connection +
  *  ICE alive. 1:1: detach the senders + send a sealed hold to the peer. Group: pause every
  *  leg (MeshSession.pause). The active singleton refs are then cleared for the new call to
  *  populate — we do NOT teardown. */
 async function parkActiveAsHeld(): Promise<void> {
+  await drainAddInFlight(); // never park a call mid-promotion (spec 1030 FR-010)
   const meta = callMeta.value;
   if (!meta) return;
   bankActiveTime(meta); // freeze the parked call's duration clock — held time isn't talk time
@@ -1947,6 +2129,7 @@ async function restoreHeldCall(): Promise<void> {
  *  held one into the active slot, and park the just-paused call as the new held. The shared
  *  camera/mic stays live (no re-capture) — only which call sends it changes. */
 export async function swapCalls(): Promise<void> {
+  await drainAddInFlight(); // an add/promotion completes before the swap parks it (FR-010)
   const slot = heldSlot;
   const activeMeta = callMeta.value;
   if (!slot || !activeMeta) return;
@@ -2093,23 +2276,34 @@ async function connectSecondDirect(
 export async function mergeIncoming(): Promise<void> {
   const inc = incomingSecond.value;
   if (!inc || inc.kind !== 'direct' || !inc.from || !inc.chatId) return;
-  await ensureActiveIsRoom(); // promote the active 1:1 (no-op if already a room)
-  const meta = callMeta.value;
-  if (!meta?.roomId) return;
-  const self = getSelfUserId() ?? '';
-  const gate = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1);
-  if (!gate.ok) {
-    await toast(gate.reason);
-    return; // leave the caller in the waiting slot so the user can still hold/decline
+  // Gate BEFORE promoting: on a 1:1 the roster already carries the peer, so the
+  // distinct headcount is right either way, and a blocked merge leaves the active
+  // call exactly as it was (still a 1:1).
+  {
+    const meta = callMeta.value;
+    if (!meta) return;
+    const self = getSelfUserId() ?? '';
+    const gate = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1);
+    if (!gate.ok) {
+      await toast(gate.reason);
+      return; // leave the caller in the waiting slot so the user can still hold/decline
+    }
   }
-  // Tell the caller to join our room instead of the 1:1 they dialed; they show as a
-  // "ringing" tile until their leg connects.
-  await sendJoinRoom(inc.chatId, inc.from, inc.callId, meta.roomId, meta.kind);
-  meta.invited = [...(meta.invited ?? []), inc.from];
-  markNotJoining(inc.from, false);
-  armMemberRingTimer(inc.from);
-  incomingSecond.value = null;
-  secondIce = [];
+  // The promote+ring section holds the add-in-flight guard so a swap/park can't
+  // interleave with the conversion (spec 1030 FR-010).
+  await withAddInFlight(async () => {
+    await ensureActiveIsRoom(); // promote the active 1:1 (no-op if already a room)
+    const meta = callMeta.value;
+    if (!meta?.roomId) return;
+    // Tell the caller to join our room instead of the 1:1 they dialed; they show as a
+    // "ringing" tile until their leg connects.
+    await sendJoinRoom(inc.chatId!, inc.from!, inc.callId, meta.roomId, meta.kind);
+    meta.invited = [...(meta.invited ?? []), inc.from!];
+    markNotJoining(inc.from!, false);
+    armMemberRingTimer(inc.from!);
+    incomingSecond.value = null;
+    secondIce = [];
+  });
 }
 
 /** Accept the pending second incoming call (US1): put the current call on hold and connect
@@ -3082,6 +3276,19 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         markNotJoining(id, false);
         markMemberBusy(id, false); // a free device joined → no longer "unavailable" (US2)
       }
+      // (spec 1030 US2) "{name} joined the call": the first roster of a call seeds
+      // silently (whoever is already in the room was here before us, or is us);
+      // every later update announces each genuinely-new member exactly once.
+      if (!joinCuePrimed) {
+        joinCuePrimed = true;
+        for (const id of frame.members) announcedJoiners.add(id);
+      } else {
+        for (const id of newJoiners(announcedJoiners, frame.members, self)) {
+          announcedJoiners.add(id);
+          joinCueLog.push(id);
+          void announceJoinCue(id);
+        }
+      }
       const afterSet = new Set(after);
       const left = [...before].filter((id) => !afterSet.has(id));
       // Someone who WAS in the room and is now gone has left → drop them from the invited set
@@ -3194,6 +3401,7 @@ export function useCall() {
     rejectUpgrade,
     addPeople,
     mergeIncoming,
+    mergeGroupInvite,
     callRemainingSlots,
     recallMember,
     cancelInvite,

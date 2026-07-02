@@ -82,4 +82,34 @@ describe('canAdd', () => {
     // One more (a 5th) → blocked.
     expect(canAdd('video', [SELF, 'a'], [], SELF, 3).ok).toBe(false);
   });
+
+  // (spec 1030, T011) Group-invite fold gate: `n` is the count of DISTINCT
+  // newcomers — the invite's members minus anyone already in/ringing in our call
+  // — so a shared member is counted once across the two rosters (FR-007).
+  describe('group-invite fold — distinct union of two rosters (spec 1030 US3)', () => {
+    // Current audio call: self + a. Incoming invite room: c + b + a (a is shared).
+    const roster = [SELF, 'a'];
+    const inviteMembers = ['c', 'b', 'a'];
+    const distinctNewcomers = inviteMembers.filter((id) => !new Set([SELF, ...roster]).has(id));
+
+    it('a member in both rosters is counted once', () => {
+      expect(distinctNewcomers).toEqual(['c', 'b']); // 'a' shared → not a newcomer
+      // Combined distinct = self, a, c, b = 4 ≤ audio cap → fits.
+      expect(canAdd('audio', roster, [], SELF, distinctNewcomers.length)).toEqual({ ok: true });
+    });
+
+    it('blocks the fold when the combined DISTINCT headcount exceeds the cap', () => {
+      // Video cap 4: self + a (2) folding 3 distinct newcomers → 5 → blocked with reason.
+      const r = canAdd('video', roster, [], SELF, 3);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toMatch(/video calls.*4/i);
+    });
+
+    it('the fits vs does-not-fit boundary sits exactly at the cap', () => {
+      // Audio cap 8: self + 5 in room = 6. Two newcomers fit (8), three don't (9).
+      const six = [SELF, 'a', 'b', 'c', 'd', 'e'];
+      expect(canAdd('audio', six, [], SELF, 2).ok).toBe(true);
+      expect(canAdd('audio', six, [], SELF, 3).ok).toBe(false);
+    });
+  });
 });

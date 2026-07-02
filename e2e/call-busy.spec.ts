@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   createAccount, pair, startCall, startGroup, accept, hangup,
   waitCallState, waitRemotes, callState, busyMemberIds, resetCallConfig,
+  hasSecondIncoming, rejectSecond,
 } from './helpers';
 
 /**
@@ -48,7 +49,7 @@ test('a second 1:1 call to someone in a call is offered Accept & hold (call wait
   await ctxC.close();
 });
 
-test('a group invite to a busy member resolves to "unavailable" on the caller', async ({ browser }) => {
+test('a group invite to a busy member resolves to "unavailable" on the caller once declined', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const ctxC = await browser.newContext();
@@ -65,9 +66,15 @@ test('a group invite to a busy member resolves to "unavailable" on the caller', 
   await accept(b);
   await waitCallState(a, ['connected']);
 
-  // C starts a group call ringing A (who is busy). A should auto-reply busy, so C marks A
-  // as unavailable rather than ringing them indefinitely.
+  // C starts a group call ringing A (who is busy). Since spec 1030 (US3) an in-call A
+  // with a FREE waiting slot is no longer silently auto-busied — the invite is offered
+  // as the second-incoming prompt (Add to call / Accept & hold / Decline) instead…
   await startGroup(c, 'busy-group-room', 'audio', [a.id]);
+  await a.page.waitForFunction(() => !!(window as any).__ringTest.hasSecondIncoming(), null, { timeout: 15_000 });
+  expect(await hasSecondIncoming(a)).toBe(true);
+  // …and DECLINING it sends the busy, so C marks A unavailable rather than ringing
+  // them indefinitely (the auto-busy still applies when the slot is taken — spec 2009).
+  await rejectSecond(a);
   await c.page.waitForFunction(
     (id: string) => (window as any).__ringTest.busyMemberIds().includes(id),
     a.id,

@@ -53,4 +53,30 @@ describe('planInvite', () => {
   it('an empty request is a no-op', () => {
     expect(planInvite('audio', [SELF, 'a'], [], SELF, [])).toEqual({ toRing: [], dropped: [] });
   });
+
+  // (spec 1030, T011) Group-invite fold: the request is the INVITE's member list.
+  // A member in both the invite and the current call must resolve to one
+  // participant (never re-rung), and the fold clamps like any other add.
+  describe('group-invite fold (spec 1030 US3)', () => {
+    it('a shared member is not re-rung — one participant, one leg', () => {
+      // Current call: self + a + b. Invite room: c (initiator) + b (shared) + self.
+      const r = planInvite('audio', [SELF, 'a', 'b'], [], SELF, ['c', 'b', SELF]);
+      expect(r.toRing).toEqual(['c']); // b and self already present — deduped
+      expect(r.dropped).toEqual([]);
+    });
+
+    it('a shared member who is still RINGING in our call is also deduped', () => {
+      const r = planInvite('audio', [SELF, 'a'], ['b'], SELF, ['b', 'c']);
+      expect(r.toRing).toEqual(['c']);
+      expect(r.dropped).toEqual([]);
+    });
+
+    it('clamps the fold to the remaining capacity of the combined call', () => {
+      // audio cap 8: self + 5 in room = 6, remaining 2; invite brings 3 fresh → 1 dropped.
+      const roster = [SELF, 'a', 'b', 'c', 'd', 'e'];
+      const r = planInvite('audio', roster, [], SELF, ['f', 'g', 'h']);
+      expect(r.toRing).toEqual(['f', 'g']);
+      expect(r.dropped).toEqual(['h']);
+    });
+  });
 });
