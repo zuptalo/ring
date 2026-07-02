@@ -21,3 +21,19 @@ export function openExternal(url: string): void {
   a.click();
   a.remove();
 }
+
+/**
+ * Hand a `tel:` / `sms:` / `mailto:` URI off to the OS's own app (spec 1029).
+ * Unlike openExternal these must NOT open a blank browser tab — they're app
+ * launches — so no `target="_blank"`: a same-frame anchor click lets the OS
+ * intercept the scheme. If no handler exists the click is a graceful no-op
+ * (the caller always also offers Copy).
+ */
+export function openScheme(uri: string): void {
+  const a = document.createElement('a');
+  a.href = uri;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
