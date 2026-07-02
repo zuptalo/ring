@@ -53,3 +53,37 @@ export function emojiOnlyCount(body: string): number {
   }
   return count;
 }
+
+/* ---- Noto image fallback (used by Emoji.vue) ----
+ * The Noto emoji set is served from our own cached proxy at /v1/emoji/<codepoints>/512.webp.
+ * When an emoji has no asset there, the renderer must fall back to the platform's native glyph
+ * instead of sitting on a broken image. The attempt sequence is:
+ *   0 = full codepoint sequence, 1 = retry without the FE0F variation selector, 2 = native glyph.
+ * These helpers are pure so the fallback logic is unit-testable without a DOM. */
+
+/** Whether an emoji string carries a U+FE0F variation selector. */
+export function hasVariationSelector(emoji: string): boolean {
+  return [...emoji].some((c) => c.codePointAt(0) === 0xfe0f);
+}
+
+/** Underscore-joined hex codepoints for the asset path; optionally drop the FE0F selector. */
+export function emojiCodepoints(emoji: string, dropVariationSelector = false): string {
+  return [...emoji]
+    .map((c) => c.codePointAt(0) ?? 0)
+    .filter((cp) => !(dropVariationSelector && cp === 0xfe0f))
+    .map((cp) => cp.toString(16))
+    .join('_');
+}
+
+/** Attempt index at which we give up on an image and render the native glyph. */
+export const EMOJI_ATTEMPT_NATIVE = 2;
+
+/**
+ * The next attempt after an image-load error. The FE0F-less retry (attempt 1) only helps when
+ * there IS an FE0F to drop; otherwise it would produce an identical URL, the browser would not
+ * refetch, no further error would fire, and the broken image would stick forever — so in that
+ * case skip straight to the native glyph.
+ */
+export function nextEmojiAttempt(emoji: string, attempt: number): number {
+  return attempt === 0 && hasVariationSelector(emoji) ? 1 : EMOJI_ATTEMPT_NATIVE;
+}
