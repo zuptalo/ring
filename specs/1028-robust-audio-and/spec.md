@@ -4,7 +4,10 @@
 
 **Created**: 2026-07-02
 
-**Status**: in-progress
+**Status**: in-review
+<!-- The four deferred items (kind upgrade on merge, join cue, group-invite merge,
+     churn robustness) are completed by spec 1030 (feat/1030-finish-call-kind);
+     both specs ship with that branch's PR into develop. -->
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category

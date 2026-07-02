@@ -24,10 +24,10 @@ never for self or a reconnect.
 **Independent Test**: A+B+C in a group audio call; A adds D → every existing
 participant sees a cue naming D; force a reconnect of an existing participant → no cue.
 
-- [ ] T001 [P] [US2] Failing unit tests in `src/services/call/join-cue.test.ts`: `newJoiners(announced, roster, selfId)` — excludes self, dedups vs already-announced, returns multiple genuinely-new members, empty roster → none
-- [ ] T002 [US2] Implement `src/services/call/join-cue.ts` (`newJoiners`) until T001 is green
-- [ ] T003 [P] [US2] Failing Playwright e2e `e2e/call-join-cue.spec.ts` (audio): A/B/C in a group call, A adds D, every existing participant sees a "{name} joined the call" cue naming D; a forced reconnect of an existing participant shows NO cue; no cue for the local user's own join
-- [ ] T004 [US2] Wire the cue into the `call-roster` handler in `src/composables/useCall.ts`: maintain a per-call `announced` set (reset on new call), and for each `newJoiners(...)` toast "{name} joined the call" via `appToast` (name from contacts / stream-owner map; "Someone" for a non-contact)
+- [X] T001 [P] [US2] Failing unit tests in `src/services/call/join-cue.test.ts`: `newJoiners(announced, roster, selfId)` — excludes self, dedups vs already-announced, returns multiple genuinely-new members, empty roster → none
+- [X] T002 [US2] Implement `src/services/call/join-cue.ts` (`newJoiners`) until T001 is green
+- [X] T003 [P] [US2] Failing Playwright e2e `e2e/call-join-cue.spec.ts` (audio): A/B/C in a group call, A adds D, every existing participant sees a "{name} joined the call" cue naming D; a forced reconnect of an existing participant shows NO cue; no cue for the local user's own join
+- [X] T004 [US2] Wire the cue into the `call-roster` handler in `src/composables/useCall.ts`: maintain a per-call `announced` set (reset on new call), and for each `newJoiners(...)` toast "{name} joined the call" via `appToast` (name from contacts / stream-owner map; "Someone" for a non-contact)
 
 **Checkpoint**: growing a call is legible — every new arrival is acknowledged once.
 
@@ -42,10 +42,10 @@ control offered, no auto-camera); a call > 4 stays audio-only.
 works for one participant without enabling others' cameras; a >4 audio group → turning
 on video is refused.
 
-- [ ] T005 [P] [US1] Failing unit tests in `src/services/call/merge-kind.test.ts`: `videoCapableAfterMerge(activeKind, combinedHeadcount)` — video call → true; audio ≤ VIDEO_MAX → true; audio > VIDEO_MAX → false
-- [ ] T006 [US1] Implement `src/services/call/merge-kind.ts` (`videoCapableAfterMerge`) until T005 is green
-- [ ] T007 [P] [US1] Failing Playwright e2e `e2e/call-merge-kind.spec.ts` (audio): after promoting/merging into a ≤4 audio group, the "Turn on video" affordance is present and one participant turning it on does NOT enable others' cameras (no auto-camera); after a >4 audio group, turning on video is refused with the cap reason
-- [ ] T008 [US1] Ensure `meta.kind`/roster are correct after promotion/merge so the existing `toggleVideoMode` gate (≤ VIDEO_MAX) and the "Turn on video" affordance apply — fix only what T007 exposes (expected minimal/no behavioural change beyond confirmation); the merged video caller opts in via the same control
+- [X] T005 [P] [US1] Failing unit tests in `src/services/call/merge-kind.test.ts`: `videoCapableAfterMerge(activeKind, combinedHeadcount)` — video call → true; audio ≤ VIDEO_MAX → true; audio > VIDEO_MAX → false
+- [X] T006 [US1] Implement `src/services/call/merge-kind.ts` (`videoCapableAfterMerge`) until T005 is green
+- [X] T007 [P] [US1] Failing Playwright e2e `e2e/call-merge-kind.spec.ts` (audio): after promoting/merging into a ≤4 audio group, the "Turn on video" affordance is present and one participant turning it on does NOT enable others' cameras (no auto-camera); after a >4 audio group, turning on video is refused with the cap reason
+- [X] T008 [US1] Ensure `meta.kind`/roster are correct after promotion/merge so the existing `toggleVideoMode` gate (≤ VIDEO_MAX) and the "Turn on video" affordance apply — fix only what T007 exposes (expected minimal/no behavioural change beyond confirmation); the merged video caller opts in via the same control
 
 **Checkpoint**: kind reconciliation matches the per-participant clarification.
 
@@ -59,8 +59,8 @@ promotion/add.
 **Independent Test**: Active call X + held call Y; merge a caller into X; Y stays
 held/paused and swaps correctly; single-held rule holds throughout.
 
-- [ ] T009 [P] [US4] Failing Playwright e2e `e2e/call-merge-held.spec.ts` (audio): A active on X while holding Y; merge an incoming caller into X; assert Y is still held + paused and swaps back correctly, and at most one call is ever held
-- [ ] T010 [US4] Add the `addInFlight` guard in `src/composables/useCall.ts` (set around `ensureActiveIsRoom`+`inviteToRoom`); make `swapCalls`/`parkActiveAsHeld` await it (or no-op with a toast) so a swap can't park mid-conversion (FR-010); confirm merge/add never read/write `heldSlot`
+- [X] T009 [P] [US4] Failing Playwright e2e `e2e/call-merge-held.spec.ts` (audio): A active on X while holding Y; merge an incoming caller into X; assert Y is still held + paused and swaps back correctly, and at most one call is ever held; ALSO cover the FR-010 race: trigger a swap while the promotion/add is still in flight and assert it completes or cancels cleanly with no half-open connection (a unit-level test of the `addInFlight` guard is an acceptable substitute if the e2e race proves too timing-sensitive to force deterministically)
+- [X] T010 [US4] Add the `addInFlight` guard in `src/composables/useCall.ts` (set around `ensureActiveIsRoom`+`inviteToRoom`); make `swapCalls`/`parkActiveAsHeld` await it (or no-op with a toast) so a swap can't park mid-conversion (FR-010); confirm merge/add never read/write `heldSlot`
 
 **Checkpoint**: hold/swap (specs 0005/2009) fully intact alongside merge.
 
@@ -75,11 +75,11 @@ call within the combined cap, dedup shared members, block over cap.
 Add to call; choosing it folds C(+D) into A's call within the cap; a member in both
 dedups to one; an over-cap fold is blocked with a reason leaving both calls unchanged.
 
-- [ ] T011 [P] [US3] Failing unit tests: combined-headcount cap for a group fold — extend `src/services/call/capacity.test.ts` / `invite-plan.test.ts` for the distinct union of two rosters (fits vs over-cap; a shared member counted once)
-- [ ] T012 [P] [US3] Failing Playwright e2e `e2e/call-group-merge.spec.ts` (audio): A+B in a call, C starts a group inviting A(+D); A's second-incoming prompt offers Add to call; folding brings C(+D) into A's call within cap, a shared member resolves to one participant, and a separate over-cap case is blocked with a reason (both calls unchanged)
-- [ ] T013 [US3] In `handleGroupInvite` (`src/composables/useCall.ts`): when `callState !== 'idle'` AND `canRaiseSecondIncoming()`, raise `incomingSecond` as `kind:'group'` (roomId + members) instead of `sendGroupBusy`; keep auto-busy when no slot is free (spec 2009)
-- [ ] T014 [US3] Implement `mergeGroupInvite()` in `src/composables/useCall.ts`: `canAdd` over the combined distinct headcount → block with reason if over cap; else `ensureActiveIsRoom()` → `inviteToRoom(members − present)` (planInvite dedups) → `sendGroupLeave(inviteRoomId)` → clear the slot; export it in the `useCall()` accessor + a testhook
-- [ ] T015 [US3] Show **Add to call** for a `kind:'group'` second-incoming in `src/views/detail/CallActivePage.vue` (alongside Hold + Decline), wired to `mergeGroupInvite`
+- [X] T011 [P] [US3] Failing unit tests: combined-headcount cap for a group fold — extend `src/services/call/capacity.test.ts` / `invite-plan.test.ts` for the distinct union of two rosters (fits vs over-cap; a shared member counted once)
+- [X] T012 [P] [US3] Failing Playwright e2e `e2e/call-group-merge.spec.ts` (audio): A+B in a call, C starts a group inviting A(+D); A's second-incoming prompt offers Add to call; folding brings C(+D) into A's call within cap, a shared member resolves to one participant, A has left the invite's own room after the fold (never in two rooms at once — FR-008), and a separate over-cap case is blocked with a reason (both calls unchanged)
+- [X] T013 [US3] In `handleGroupInvite` (`src/composables/useCall.ts`): when `callState !== 'idle'` AND `canRaiseSecondIncoming()`, raise `incomingSecond` as `kind:'group'` (roomId + members) instead of `sendGroupBusy`; keep auto-busy when no slot is free (spec 2009)
+- [X] T014 [US3] Implement `mergeGroupInvite()` in `src/composables/useCall.ts`: `canAdd` over the combined distinct headcount → block with reason if over cap; else `ensureActiveIsRoom()` → `inviteToRoom(members − present)` (planInvite dedups) → `sendGroupLeave(inviteRoomId)` → clear the slot; export it in the `useCall()` accessor + a testhook
+- [X] T015 [US3] Show **Add to call** for a `kind:'group'` second-incoming in `src/views/detail/CallActivePage.vue` (alongside Hold + Decline), wired to `mergeGroupInvite`
 
 **Checkpoint**: the richest merge path works, cap-bounded and dedup-correct.
 
@@ -94,9 +94,9 @@ orphaned connections.
 **Independent Test**: Scripted churn on an audio mesh; final roster/tiles/connectivity
 correct on every device with no orphaned state.
 
-- [ ] T016 [P] [US5] Failing Playwright e2e `e2e/call-churn.spec.ts` (audio): concurrent join+leave converges to the correct roster with no stuck tile; two callers adding the SAME new person → one participant/one leg (dedup); an invitee reloading mid-ring returns and joins cleanly (no duplicate)
-- [ ] T017 [P] [US5] Drive scenario `drive/scenarios/call-add-churn.mjs` for harder multi-party churn on the live stack
-- [ ] T018 [US5] Add/verify the promotion-timeout path: a promoted 1:1 whose peer never follows and where no one else joins ends cleanly via the existing `armGroupIdleTimeout` with no orphaned ringing tile; harden `applyRoster`/`inviteToRoom`/the cue against whatever T016/T017 expose (reuse the serialized `rosterChain` + set semantics — no new mechanism)
+- [X] T016 [P] [US5] Failing Playwright e2e `e2e/call-churn.spec.ts` (audio): concurrent join+leave converges to the correct roster with no stuck tile; two callers adding the SAME new person → one participant/one leg (dedup); an invitee reloading mid-ring returns and joins cleanly (no duplicate)
+- [X] T017 [P] [US5] Drive scenario `drive/scenarios/call-add-churn.mjs` for harder multi-party churn on the live stack
+- [X] T018 [US5] Add/verify the promotion-timeout path: a promoted 1:1 whose peer never follows and where no one else joins ends cleanly via the existing `armGroupIdleTimeout` with no orphaned ringing tile; harden `applyRoster`/`inviteToRoom`/the cue against whatever T016/T017 expose (reuse the serialized `rosterChain` + set semantics — no new mechanism)
 
 **Checkpoint**: growing a call is reliable under pressure.
 
@@ -104,11 +104,11 @@ correct on every device with no orphaned state.
 
 ## Phase 6: Video validation, cleanup & gates
 
-- [ ] T019 [P] Drive scenario `drive/scenarios/merge-video.mjs`: merge into a ≤4 call, turn cameras on per participant, confirm video flows among 3 (real device / live stack — NOT headless CI); screenshot the grid
-- [ ] T020 Verify **no `server/` diff** (FR-013): `cd server && go build ./... && go vet ./... && go test ./...` green AND `git diff --stat origin/develop -- server/` is empty; STOP + escalate if a server change appears necessary
-- [ ] T021 Run ALL existing call e2e + unit green (SC-006): `calls`, `call-waiting`, `call-waiting-slot`, `call-caps`, `call-reinvite`, `call-promote`, `call-merge`, `call-add-merge`, `call-add-cap`, plus the call unit tests
-- [ ] T022 Full gates: `npm run build`, `npx vitest run` (coverage floors), `npm run test:e2e`, `cd server && go build/vet/test`
-- [ ] T023 Bump spec `**Status**:` to `in-review` → `make roadmap`; and bump spec 1028 `**Status**:` if all its remaining items are now complete
+- [X] T019 [P] Drive scenario `drive/scenarios/merge-video.mjs`: merge into a ≤4 call, turn cameras on per participant, confirm video flows among 3 (real device / live stack — NOT headless CI); screenshot the grid
+- [X] T020 Verify **no `server/` diff** (FR-013): `cd server && go build ./... && go vet ./... && go test ./...` green AND `git diff --stat origin/develop -- server/` is empty; STOP + escalate if a server change appears necessary
+- [X] T021 Run ALL existing call e2e + unit green (SC-006): `calls`, `call-waiting`, `call-waiting-slot`, `call-caps`, `call-reinvite`, `call-promote`, `call-merge`, `call-add-merge`, `call-add-cap`, plus the call unit tests
+- [X] T022 Full gates: `npm run build`, `npx vitest run` (coverage floors), `npm run test:e2e`, `cd server && go build/vet/test`
+- [X] T023 Bump spec `**Status**:` to `in-review` → `make roadmap`; and bump spec 1028 `**Status**:` if all its remaining items are now complete
 
 ---
 

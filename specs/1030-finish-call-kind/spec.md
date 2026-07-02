@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-02
 
-**Status**: planned
+**Status**: in-review
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
@@ -203,11 +203,11 @@ roster, tiles, and connectivity are correct on every device with no orphaned sta
 
 ### Functional Requirements
 
-- **FR-001**: On a merge where the merged party's kind differs from the active call and
-  the combined headcount is at most the video cap (4), the system MUST make the call
-  video-capable so each participant can enable their own camera via the existing
-  per-participant control; NO camera is enabled without that participant's own action
-  (no auto-camera, no room-wide consent prompt).
+- **FR-001**: After any merge whose combined headcount is at most the video cap (4),
+  the system MUST make (or keep) the call video-capable — regardless of the merged
+  party's original call kind — so each participant can enable their own camera via the
+  existing per-participant control; NO camera is enabled without that participant's own
+  action (no auto-camera, no room-wide consent prompt).
 - **FR-002**: When the combined headcount would exceed the video cap, the system MUST
   NOT make the call video-capable; the merged party joins audio-only and the call stays
   audio for everyone.
