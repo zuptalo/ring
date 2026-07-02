@@ -378,6 +378,13 @@ with a clear reason when the combined distinct headcount would exceed the cap.
 - **Key fetch for added, unconnected people**: Reuses the existing same-room gate that
   already lets ad-hoc call co-members fetch each other's prekey bundles for the call's
   duration — no new server permission.
+- **Trust of the `joinroom` signal**: It is only accepted from an authenticated pair
+  session (sealed and opened over the existing per-pair Double Ratchet), so it cannot be
+  forged or replayed by the server or a third party. A `joinroom` carrying an
+  unexpected room id is inert on its own — a device only ever participates in mesh legs
+  it can establish and decrypt, so a spurious room id pulls it into nothing it can
+  observe. Being added still requires the added party to answer their own ring
+  (FR-015).
 - **Why this is safe**: Mesh-only, no server media, no new frame types or fields, no
   new server capability — the feature composes existing encrypted signalling and the
   existing membership/cap enforcement.
