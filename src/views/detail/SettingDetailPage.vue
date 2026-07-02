@@ -125,12 +125,12 @@
             </ion-item>
 
             <!-- static note -->
-            <ion-item v-else-if="item.type === 'note'" lines="none">
+            <ion-item v-else-if="item.type === 'note'" lines="none" class="group-note">
               <ion-label class="ion-text-wrap"><p>{{ item.text }}</p></ion-label>
             </ion-item>
           </template>
 
-          <ion-item v-if="group.footer" lines="none">
+          <ion-item v-if="group.footer" lines="none" class="group-footer">
             <ion-note class="ion-text-wrap">{{ group.footer }}</ion-note>
           </ion-item>
         </ion-list>
@@ -144,6 +144,24 @@
     </ion-content>
   </ion-page>
 </template>
+
+<style scoped>
+/* Footer captions and static note paragraphs are multi-line and, as the last row of an
+   inset card, otherwise sit flush against its rounded bottom edge. Give the text a little
+   breathing room below so it doesn't crowd the border. */
+.group-footer,
+.group-note {
+  --inner-padding-bottom: 10px;
+}
+
+/* Description text (help paragraphs + group captions) defaults to Ionic's dim step colour,
+   which is hard to read on both themes. Use the app's secondary token so it stays legible
+   while still reading as secondary to the setting titles. */
+.group-note p,
+.group-footer ion-note {
+  color: var(--app-text-secondary);
+}
+</style>
 
 <script lang="ts">
 // Module-scoped scroll cache. This single component renders every settings

@@ -68,10 +68,50 @@ describe('settings schema — spec 1025 cleanup', () => {
     expect(keys.has('notifications.inapp.vibrate')).toBe(false);
   });
 
-  it('Help version is no longer the stale hardcoded 0.1.0', () => {
-    const version = SETTINGS.help.groups
+});
+
+describe('settings schema — spec 1026 (friends-only & refinements)', () => {
+  it('US2: no "Advanced" sub-page and nothing links to it (FR-006)', () => {
+    expect(settingNode('privacy-advanced')).toBeUndefined();
+    expect(everyItem().some((i) => i.type === 'link' && i.id === 'privacy-advanced')).toBe(false);
+  });
+
+  it('US2: no "Block unknown account messages" control anywhere (FR-007)', () => {
+    const hasBlockUnknown = everyItem().some((i) => 'key' in i && i.key === 'privacy.blockUnknown');
+    expect(hasBlockUnknown).toBe(false);
+  });
+
+  it('US2: "Disable link previews" sits directly on the Privacy page (FR-008)', () => {
+    const items = SETTINGS.privacy.groups.flatMap((g) => g.items);
+    const toggle = items.find((i) => 'key' in i && i.key === 'privacy.disableLinkPreviews');
+    expect(toggle?.type).toBe('toggle');
+  });
+
+  it('US3: Help links ≥8 how-to topics that all resolve (FR-011)', () => {
+    const links = SETTINGS.help.groups
       .flatMap((g) => g.items)
-      .find((i) => 'title' in i && i.title === 'Version');
-    expect(version && 'value' in version ? version.value : '').not.toBe('0.1.0');
+      .filter((i): i is Extract<SettingItem, { type: 'link' }> => i.type === 'link' && i.id.startsWith('help-'));
+    expect(links.length).toBeGreaterThanOrEqual(8);
+    for (const l of links) expect(settingNode(l.id), `missing node ${l.id}`).toBeDefined();
+  });
+
+  it('US3: Help no longer shows the app version (FR-012)', () => {
+    const hasStat = SETTINGS.help.groups.flatMap((g) => g.items).some((i) => i.type === 'stat');
+    expect(hasStat).toBe(false);
+  });
+
+  it('US3: the developer self-test is still reachable from Help (FR-013)', () => {
+    const hasSelfTest = SETTINGS.help.groups
+      .flatMap((g) => g.items)
+      .some((i) => i.type === 'route' && i.path === '/settings/selftest');
+    expect(hasSelfTest).toBe(true);
+  });
+
+  it('US4: resetting auto-download requires confirmation (FR-014)', () => {
+    const reset = everyItem().find(
+      (i): i is Extract<SettingItem, { type: 'action' }> =>
+        i.type === 'action' && i.action === 'reset-autodownload',
+    );
+    expect(reset?.confirm && reset.confirm.length > 0).toBe(true);
   });
 });

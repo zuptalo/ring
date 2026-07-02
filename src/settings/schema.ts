@@ -281,9 +281,9 @@ export const SETTINGS: Record<string, SettingNode> = {
         ],
       },
       {
-        items: [
-          { type: 'link', id: 'privacy-advanced', title: 'Advanced', icon: 'shield' },
-        ],
+        items: [{ type: 'toggle', title: 'Disable link previews', key: 'privacy.disableLinkPreviews', default: false }],
+        footer:
+          'When this is on, Ring stops making previews for the links you share, so those sites cannot get a peek at your IP address.',
       },
     ],
   },
@@ -294,7 +294,7 @@ export const SETTINGS: Record<string, SettingNode> = {
       {
         items: [{ type: 'toggle', title: 'Enable hidden chats', key: 'privacy.hiddenChatsEnabled', default: false }],
         footer:
-          'Hide chats behind a separate PIN. A hidden chat is removed from your chat list, search, calls, and notification previews until you type the PIN into the chat search bar. Hiding stays on this device only — it never leaves your phone.',
+          'Hide chats behind a separate PIN. A hidden chat is removed from your chat list, search, calls, and notification previews until you type the PIN into the chat search bar. Hiding stays on this device only, and it never leaves your phone.',
       },
       {
         items: [{ type: 'action', title: 'Set or change PIN', action: 'hidden-set-pin', icon: 'key' }],
@@ -318,7 +318,7 @@ export const SETTINGS: Record<string, SettingNode> = {
             action: 'hidden-reset',
             danger: true,
             confirm:
-              'This permanently deletes every hidden chat on this device and cannot be undone — they will not come back from the server. Continue?',
+              'This permanently deletes every hidden chat on this device and cannot be undone. They will not come back from the server. Continue?',
           },
         ],
         footer: 'Forgot your PIN? Resetting permanently deletes the hidden chats on this device so they can never be exposed.',
@@ -395,27 +395,10 @@ export const SETTINGS: Record<string, SettingNode> = {
         header: 'Require passcode after being away for',
         items: [{ type: 'choice', key: 'privacy.appLock.timeout', default: '1m', options: APP_LOCK_TIMEOUT }],
         footer:
-          'When a passcode is set and Ring has been in the background longer than this, it asks for your passcode again on return. “Never” skips that on-return prompt — but fully closing and reopening Ring still asks for your passcode.',
+          'When a passcode is set and Ring has been in the background longer than this, it asks for your passcode again on return. “Never” skips that prompt on return, but fully closing and reopening Ring still asks for your passcode.',
       },
     ],
   },
-  'privacy-advanced': {
-    id: 'privacy-advanced',
-    title: 'Advanced',
-    groups: [
-      {
-        items: [{ type: 'toggle', title: 'Block unknown account messages', key: 'privacy.blockUnknown', default: false }],
-        footer:
-          'Block messages from people who aren’t in your contacts. They’ll need to send you a contact request first.',
-      },
-      {
-        items: [{ type: 'toggle', title: 'Disable link previews', key: 'privacy.disableLinkPreviews', default: false }],
-        footer:
-          'To help protect your IP address from being inferred by third-party websites, previews for the links you share in chats will no longer be generated.',
-      },
-    ],
-  },
-
   /* ===== CHATS ===== */
   chats: {
     id: 'chats',
@@ -533,7 +516,7 @@ export const SETTINGS: Record<string, SettingNode> = {
         items: [
           { type: 'toggle', title: 'In-call sounds', key: 'notifications.callSounds', default: true },
         ],
-        footer: 'Subtle cues during a call — connecting, reconnecting, mute/unmute, camera on/off, and a quiet tone for a message that arrives while you’re on a call.',
+        footer: 'Subtle cues during a call, like connecting, reconnecting, mute and unmute, camera on and off, and a quiet tone for a message that arrives while you’re on a call.',
       },
       {
         header: 'Home screen notifications',
@@ -582,7 +565,7 @@ export const SETTINGS: Record<string, SettingNode> = {
     groups: [
       {
         items: [{ type: 'toggle', title: 'In-app notifications', key: 'notifications.inapp.enabled', default: true }],
-        footer: 'Master switch for banners that appear while Ring is open. When off, no in-app banner is shown for any chat — system (lock-screen) notifications and the app badge are unaffected.',
+        footer: 'Master switch for banners that appear while Ring is open. When off, no in-app banner is shown for any chat. System (lock-screen) notifications and the app badge are unaffected.',
       },
       {
         header: 'Alert style',
@@ -635,7 +618,7 @@ export const SETTINGS: Record<string, SettingNode> = {
           { type: 'link', id: 'storage-autodownload-audio', title: 'Audio', icon: 'music' },
           { type: 'link', id: 'storage-autodownload-video', title: 'Video', icon: 'video' },
           { type: 'link', id: 'storage-autodownload-documents', title: 'Documents', icon: 'document' },
-          { type: 'action', title: 'Reset auto-download settings', action: 'reset-autodownload' },
+          { type: 'action', title: 'Reset auto-download settings', action: 'reset-autodownload', confirm: 'This puts every download choice back to the way it started.' },
         ],
         footer: 'Voice messages are always automatically downloaded.',
       },
@@ -690,17 +673,182 @@ export const SETTINGS: Record<string, SettingNode> = {
   },
 
   /* ===== HELP ===== */
+  // A small set of plain-language how-tos, each its own schema node rendered as
+  // static `note` paragraphs. The version lives on the About page (which styles it
+  // properly), so Help no longer duplicates it. The Developer group keeps the
+  // on-device self-test.
   help: {
     id: 'help',
     title: 'Help',
     groups: [
-      // Vite replaces __APP_VERSION__ at build time; the typeof guard keeps it defined under vitest
-      // (which does not apply the build define), so importing the schema in a unit test never throws.
-      { items: [{ type: 'stat', title: 'Version', value: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0' }] },
+      {
+        header: 'How Ring works',
+        items: [
+          { type: 'link', id: 'help-privacy', title: 'How Ring keeps chats private', icon: 'lock' },
+          { type: 'link', id: 'help-getting-started', title: 'Getting started', icon: 'person' },
+          { type: 'link', id: 'help-contacts', title: 'Adding people', icon: 'people' },
+          { type: 'link', id: 'help-chats', title: 'Chats and groups', icon: 'chat' },
+          { type: 'link', id: 'help-disappearing', title: 'Disappearing messages', icon: 'time' },
+          { type: 'link', id: 'help-hidden', title: 'Hidden chats and app lock', icon: 'eyeOff' },
+          { type: 'link', id: 'help-calls', title: 'Voice and video calls', icon: 'call' },
+          { type: 'link', id: 'help-recovery', title: 'Your recovery key', icon: 'key' },
+        ],
+      },
       {
         header: 'Developer',
         items: [{ type: 'route', title: 'Run self-test', path: '/settings/selftest', icon: 'shield' }],
-        footer: 'Runs the on-device encryption & sync checks in this browser.',
+        footer: 'Runs the encryption and sync checks right here in your browser.',
+      },
+    ],
+  },
+  'help-privacy': {
+    id: 'help-privacy',
+    title: 'How Ring keeps chats private',
+    groups: [
+      {
+        items: [
+          { type: 'note', text: 'Ring is end-to-end encrypted. Your messages, calls and keys are scrambled on your device, and only the person you are talking to can open them.' },
+          { type: 'note', text: 'The server just passes sealed data along. It never sees your messages, media, contacts or profile, so nobody in the middle can read your stuff.' },
+          { type: 'note', text: 'There is no phone number and no ads, and you only get in by invitation.' },
+        ],
+      },
+      {
+        header: 'What you control',
+        items: [
+          { type: 'note', text: 'Head into Privacy to choose who sees your last seen, online status, profile photo and about. You can pick everyone, just your contacts, or nobody.' },
+          { type: 'note', text: 'Seen receipts and typing indicators go both ways. Turn them off and you stop sharing them, and you stop seeing other people’s too.' },
+          { type: 'note', text: 'You can also switch off link previews so the sites you link to cannot get a peek at your IP address.' },
+        ],
+      },
+    ],
+  },
+  'help-getting-started': {
+    id: 'help-getting-started',
+    title: 'Getting started',
+    groups: [
+      {
+        header: 'Joining',
+        items: [
+          { type: 'note', text: 'Ring is invite only. On the welcome screen tap Have Invitation Code and type in the code a friend gave you.' },
+          { type: 'note', text: 'Pick a username you like. It stays with you and cannot be changed later, so go with something you are happy with.' },
+          { type: 'note', text: 'You will see a recovery key once. Save it somewhere safe before you carry on, because it is your only way back in if you lose this device.' },
+          { type: 'note', text: 'Then set your name and photo, and if you want, allow notifications so you hear about new messages and calls.' },
+        ],
+      },
+      {
+        header: 'Already have an account?',
+        items: [
+          { type: 'note', text: 'On a new device, tap Have Recovery Key on the welcome screen and enter the key you saved to bring your account back.' },
+        ],
+      },
+    ],
+  },
+  'help-contacts': {
+    id: 'help-contacts',
+    title: 'Adding people',
+    groups: [
+      {
+        items: [
+          { type: 'note', text: 'In the Contacts tab, tap the plus button. From there you can invite someone, scan a friend’s QR code, show your own, or browse the directory.' },
+          { type: 'note', text: 'Invite someone by giving the invite a nickname so you remember who it is for, then share the link and code. When they join with it, the two of you connect on your own, no accepting needed.' },
+          { type: 'note', text: 'To use a QR code, tap Show my QR code for someone to scan, or Scan a friend’s QR to add them. Your username and full ID are right there to copy too.' },
+          { type: 'note', text: 'Sent invites show up under Invited with a countdown, and you can extend or cancel them from the three dots menu.' },
+        ],
+      },
+      {
+        header: 'Requests and blocking',
+        items: [
+          { type: 'note', text: 'Only people you have connected with can message you, so add someone before you start chatting. Friend requests show up with Accept or Decline, you can swipe a contact to delete them, and anyone you block sits at the bottom of the list.' },
+        ],
+      },
+    ],
+  },
+  'help-chats': {
+    id: 'help-chats',
+    title: 'Chats and groups',
+    groups: [
+      {
+        header: 'Direct chats',
+        items: [
+          { type: 'note', text: 'In the Chats tab, tap the compose button at the top and pick a contact to start a direct chat. Tapping a friend in Contacts opens the same chat.' },
+        ],
+      },
+      {
+        header: 'Groups',
+        items: [
+          { type: 'note', text: 'Start a group from the compose menu or the plus menu in Contacts. Give it a name if you like, tap the people to add, then hit Create.' },
+          { type: 'note', text: 'Open Group info any time to change the name or photo, add more people, see who is in it, remove someone, or leave.' },
+        ],
+      },
+      {
+        header: 'Reactions and replies',
+        items: [
+          { type: 'note', text: 'Tap the reaction button on a message for quick emoji, or press and hold a message for reply, forward, edit and more.' },
+        ],
+      },
+    ],
+  },
+  'help-disappearing': {
+    id: 'help-disappearing',
+    title: 'Disappearing messages',
+    groups: [
+      {
+        items: [
+          { type: 'note', text: 'Disappearing messages delete themselves for everyone after a set time, and they show a little clock with how long is left.' },
+          { type: 'note', text: 'For a whole chat, open the chat or group info and set Disappearing messages. Pick 24 hours, 7 days, 90 days, or off, and it covers new messages from everyone there.' },
+          { type: 'note', text: 'For just your next message, tap the clock in the composer. It turns green when what you send will disappear.' },
+          { type: 'note', text: 'To start new chats this way by default, set a timer under Privacy, in Default message timer. It only touches new direct chats, not the ones you already have.' },
+        ],
+      },
+    ],
+  },
+  'help-hidden': {
+    id: 'help-hidden',
+    title: 'Hidden chats and app lock',
+    groups: [
+      {
+        header: 'Hidden chats',
+        items: [
+          { type: 'note', text: 'A hidden chat drops out of your chat list, search, calls and notification previews, and you open it with its own PIN.' },
+          { type: 'note', text: 'Turn it on under Privacy, in Hidden chats, and set a PIN. Then swipe a conversation, tap More, and hide it. There is no button for making a brand new hidden chat on purpose.' },
+          { type: 'note', text: 'To bring them back, type your hidden chats PIN into the search bar at the top of Chats. Hiding stays on this device and never leaves your phone.' },
+          { type: 'note', text: 'Forgot the PIN? Reset PIN and delete hidden chats is your only way out, and it wipes those chats on this device for good.' },
+        ],
+      },
+      {
+        header: 'App lock',
+        items: [
+          { type: 'note', text: 'Turn on App lock under Privacy to ask for a passcode every time you open Ring. You can set how long Ring waits before it asks again.' },
+          { type: 'note', text: 'With app lock on, notifications in the background only say New message instead of showing a preview.' },
+        ],
+      },
+    ],
+  },
+  'help-calls': {
+    id: 'help-calls',
+    title: 'Voice and video calls',
+    groups: [
+      {
+        items: [
+          { type: 'note', text: 'Start a call from a chat with the video or phone button at the top. Tapping a call in your history dials the same kind again.' },
+          { type: 'note', text: 'While you are on a call you can mute, turn the camera on or off, switch where the sound comes out, and hang up. You can move an audio call up to video too, and the other side gets asked first.' },
+          { type: 'note', text: 'Group calls ring everyone, up to 8 people on audio and 4 on video.' },
+          { type: 'note', text: 'Calls are end-to-end encrypted. The sound and video go straight between devices, and no server ever sees or hears them.' },
+        ],
+      },
+    ],
+  },
+  'help-recovery': {
+    id: 'help-recovery',
+    title: 'Your recovery key',
+    groups: [
+      {
+        items: [
+          { type: 'note', text: 'Your recovery key is a one time code you get when you sign up. It is the only way to bring your account back on a new device.' },
+          { type: 'note', text: 'Nobody can get it back for you, not even Ring, so keep it somewhere safe and private.' },
+          { type: 'note', text: 'To restore, tap Have Recovery Key on the welcome screen and type in the code.' },
+          { type: 'note', text: 'You can make a new one under Account, in Recovery key, then Generate new recovery key. The old one stops working right away, so do this if you think it might have leaked.' },
+        ],
       },
     ],
   },
