@@ -79,6 +79,30 @@ export async function sendSealedSignal(
 }
 
 /**
+ * Send a sealed "join this room" control signal (spec 1028). Tells a 1:1 peer to
+ * follow us into a mesh room — promoting the 1:1 into a group, or merging an
+ * incoming caller into our current call. Carried inside an EXISTING `call-ice`
+ * frame (the hold/resume trick): no new transport frame, no server change, and
+ * the relay can't tell it from any other sealed call signal. The payload is only
+ * the opaque `roomId` + `kind` (FR-017). Sent over the pair's 1:1 session, so the
+ * frame itself has no roomId (it's not a mesh leg).
+ */
+export function sendJoinRoom(
+  chatId: string,
+  peerUserId: string,
+  callId: string,
+  roomId: string,
+  kind: CallKind,
+): Promise<boolean> {
+  return sendSealedSignal('call-ice', chatId, peerUserId, callId, {
+    callId,
+    type: 'joinroom',
+    roomId,
+    kind,
+  });
+}
+
+/**
  * Send a sealed hold/resume control signal for a call (spec 0005). Carried over an EXISTING
  * `call-ice` frame so there is NO new transport frame and NO server change — the relay
  * forwards opaque ciphertext exactly as for offer/answer/ICE, and the receiver dispatches on

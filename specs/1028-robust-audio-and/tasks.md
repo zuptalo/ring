@@ -32,9 +32,9 @@ meshes (3–4) + 2-person proxies; the **video** path is drive/real-device only.
 **Purpose**: The one new wire element (sealed, opaque to the server) + its receive path. R2/D1.
 
 - [x] T004 (#642) [P] Extend the `CallSignal` union in `src/services/transport.ts` with `{ type: 'joinroom', roomId, kind }` (sealed payload only — rides the existing `call-ice` frame, no new transport frame)
-- [ ] T005 (#643) [P] Failing unit test in `src/services/call/signalling.test.ts` (or nearest): a `joinroom` `CallSignal` seals and opens round-trip over a pair's session (reusing `sealForChat`/`openPacket`), and its payload carries ONLY `{roomId, kind}` — assert the serialized signal contains no name/contact/plaintext beyond an opaque room id + the kind enum (FR-017 zero-knowledge bound)
-- [ ] T006 (#644) Implement `sendJoinRoom(chatId, peerUserId, callId, roomId, kind)` in `src/services/call/signalling.ts` (mirrors `sendHoldResume`)
-- [ ] T007 (#645) Add the `joinroom` dispatch case to `handleCallFrame`/`call-ice` handling in `src/composables/useCall.ts`: on receipt, auto-join the room (reuse the shared capture), tear the prior 1:1 PC down on leg-connect, and surface the join cue (US1 cue wired in Phase 3)
+- [x] T005 (#643) [P] Failing unit test in `src/services/call/signalling.test.ts` (or nearest): a `joinroom` `CallSignal` seals and opens round-trip over a pair's session (reusing `sealForChat`/`openPacket`), and its payload carries ONLY `{roomId, kind}` — assert the serialized signal contains no name/contact/plaintext beyond an opaque room id + the kind enum (FR-017 zero-knowledge bound)
+- [x] T006 (#644) Implement `sendJoinRoom(chatId, peerUserId, callId, roomId, kind)` in `src/services/call/signalling.ts` (mirrors `sendHoldResume`)
+- [x] T007 (#645) Add the `joinroom` dispatch case to `handleCallFrame`/`call-ice` handling in `src/composables/useCall.ts`: on receipt, auto-join the room (reuse the shared capture), tear the prior 1:1 PC down on leg-connect, and surface the join cue (US1 cue wired in Phase 3)
 
 **Checkpoint**: a device can be told to join a room over the sealed channel.
 
@@ -95,15 +95,15 @@ unaffected.
 
 ### Tests (write first, must FAIL)
 
-- [ ] T015 (#653) [P] [US1] Failing Playwright e2e `e2e/call-add-merge.spec.ts` (part 2, audio 1:1→3): A+B in a 1:1, A promotes and merges incoming C → three-way audio mesh; assert B auto-followed (no ring shown to B) and saw the "{name} joined the call" cue (SC-008), and A's capture was reused (no second gUM — SC-006)
+- [x] T015 (#653) [P] [US1] Failing Playwright e2e `e2e/call-add-merge.spec.ts` (part 2, audio 1:1→3): A+B in a 1:1, A promotes and merges incoming C → three-way audio mesh; assert B auto-followed (no ring shown to B) and saw the "{name} joined the call" cue (SC-008), and A's capture was reused (no second gUM — SC-006)
 - [ ] T016 (#654) [P] [US1] Failing unit test for kind reconciliation (D4): video caller + audio call ≤4 → wants-upgrade true; >4 → audio-only; pure decision function
 
 ### Implementation
 
-- [ ] T017 (#655) [US1] Implement `ensureActiveIsRoom()` in `src/composables/useCall.ts` (R2): if active is 1:1, mint `roomId`, `MeshSession(roomId, kind).start(existingStream)`, `sendJoinRoom` to the existing peer, tear down the 1:1 PC on leg-connect; idempotent if already a room; add the promotion timeout / clean half-formed-room fallback (R7)
-- [ ] T018 (#656) [US1] Implement `mergeIncoming()` (`ensureActiveIsRoom()` → `sendJoinRoom` to the incoming caller so they join instead of a 1:1 answer) + the "{name} joined the call" cue on `joinroom`/new roster member, via existing toast/cue infra
+- [x] T017 (#655) [US1] Implement `ensureActiveIsRoom()` in `src/composables/useCall.ts` (R2): if active is 1:1, mint `roomId`, `MeshSession(roomId, kind).start(existingStream)`, `sendJoinRoom` to the existing peer, tear down the 1:1 PC on leg-connect; idempotent if already a room; add the promotion timeout / clean half-formed-room fallback (R7)
+- [x] T018 (#656) [US1] Implement `mergeIncoming()` (`ensureActiveIsRoom()` → `sendJoinRoom` to the incoming caller so they join instead of a 1:1 answer) + the "{name} joined the call" cue on `joinroom`/new roster member, via existing toast/cue infra
 - [ ] T019 (#657) [US1] Kind reconciliation after merge: if wanted AND combined ≤ `VIDEO_MAX`, run the existing consent-gated `requestVideoUpgrade`; else audio-only (reuse — no new mechanism)
-- [ ] T020 (#658) [US1] Add the **Add to call** action for a direct incoming caller in `src/components/IncomingCallOverlay.vue` (alongside Hold/Decline) → `mergeIncoming`
+- [x] T020 (#658) [US1] Add the **Add to call** action for a direct incoming caller in `src/components/IncomingCallOverlay.vue` (alongside Hold/Decline) → `mergeIncoming`
 
 **Checkpoint**: the headline capability works on audio; capture reused; peer auto-follows.
 
@@ -175,7 +175,7 @@ every device with no orphaned ringing or duplicate.
 
 ## Phase 9: Polish & Cross-Cutting
 
-- [ ] T029 (#667) [P] Fix the misleading "SFU" comments in `src/composables/useCall.ts` (~L1346, ~L1526) to say "mesh session"; `rg` the tree for dead SFU identifiers and remove any unreachable remnants (no behaviour change) (FR-016)
+- [x] T029 (#667) [P] Fix the misleading "SFU" comments in `src/composables/useCall.ts` (~L1346, ~L1526) to say "mesh session"; `rg` the tree for dead SFU identifiers and remove any unreachable remnants (no behaviour change) (FR-016)
 - [ ] T030 (#668) Verify **no `server/` diff** is needed and FR-017 holds: `cd server && go build ./... && go vet ./... && go test ./...` green with the server untouched (constitution I/VI); confirm `git diff --stat origin/develop -- server/` is empty; if a gap is found, STOP and escalate before adding any server capability
 - [ ] T031 (#669) [P] Drive scenario `drive/scenarios/promote-1to1-video.mjs`: promote a 1:1 to a 3-way VIDEO call on the live stack (real-device/interactive — NOT headless CI); capture a screenshot of the 3-tile grid
 - [ ] T032 (#670) Run ALL existing call e2e + unit tests and confirm green (SC-007): `call-waiting`, `call-waiting-slot`, `call-caps`, `call-reinvite`, `calls`, `call-adaptive`, `call-quality`, `call-busy`, `call-connect-speed`, plus `quality`/`duration`/`slots` unit tests

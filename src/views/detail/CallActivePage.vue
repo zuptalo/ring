@@ -75,6 +75,14 @@
           </div>
           <div class="cw-actions">
             <button class="cw-btn cw-decline" aria-label="Decline second call" @click.stop="rejectSecond">Decline</button>
+            <!-- Merge the caller into the current call (spec 1028) — direct callers only,
+                 and only when there's room under the cap. Sits alongside Hold. -->
+            <button
+              v-if="incomingSecond.kind === 'direct' && callRemainingSlots() > 0"
+              class="cw-btn cw-accept"
+              aria-label="Add caller to this call"
+              @click.stop="mergeIncoming"
+            >Add to call</button>
             <button class="cw-btn cw-accept" aria-label="Hold current call and answer" @click.stop="acceptAndHold">Accept &amp; hold</button>
           </div>
         </div>
@@ -438,7 +446,7 @@ import {
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite, addPeople, callRemainingSlots,
   acceptCall, rejectCall, declineWithMessage,
-  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, peerResumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, swapCalls,
+  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, peerResumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, mergeIncoming, swapCalls,
   setGroupTileSize,
   type AudioRoute,
 } from '@/composables/useCall';
@@ -645,12 +653,13 @@ interface Tile {
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
 const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c])));
 
-// Add people to the call (spec 1028, US2). MVP scope: group calls only — promoting
-// a 1:1 into a mesh is the deferred follow-up. The button appears when there's a
-// live group call with room left under its kind's cap; the picker excludes anyone
-// already in the room or ringing.
+// Add people to the call (spec 1028, US2). Available on a CONNECTED call — 1:1 or
+// group — with room left under its kind's cap; adding on a 1:1 promotes it into a
+// mesh first. The picker excludes anyone already in the room or ringing.
 const addPeopleOpen = ref(false);
-const canAddPeople = computed(() => !!callMeta.value?.isGroup && callRemainingSlots() > 0);
+const canAddPeople = computed(
+  () => !!callMeta.value && callState.value === 'connected' && callRemainingSlots() > 0,
+);
 const addPeopleContacts = computed(() => {
   const inCall = new Set([
     getSelfUserId() ?? '',

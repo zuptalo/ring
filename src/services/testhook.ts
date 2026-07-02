@@ -159,6 +159,7 @@ import {
   startDirectCall,
   startGroupCall,
   addPeople,
+  mergeIncoming,
   callRemainingSlots,
   acceptCall,
   rejectCall,
@@ -1280,8 +1281,10 @@ export function installTestHook(): void {
     accept: () => acceptCall(),
     reject: () => rejectCall(),
     hangup: () => hangupCall(),
-    /** Add people to the ACTIVE group call (spec 1028, US2): ring them into the room. */
+    /** Add people to the ACTIVE call (spec 1028, US2): promote a 1:1 if needed, ring them in. */
     addPeople: (ids: string[]) => addPeople(ids),
+    /** Merge the pending second incoming DIRECT caller into the current call (spec 1028, US1). */
+    mergeIncoming: () => mergeIncoming(),
     /** Free participant slots left in the active call (for cap-gate asserts). */
     callRemainingSlots: () => callRemainingSlots(),
     /** Dev/e2e: shrink the CLIENT caps so the pre-emptive add gate can be tested
