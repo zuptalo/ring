@@ -105,10 +105,21 @@ export async function getHiddenSet(): Promise<Set<string>> {
  * already shows a generic, content-free notification in that case.
  */
 export async function readHiddenSet(): Promise<Set<string>> {
+  return (await readHiddenSetOrNull()) ?? new Set();
+}
+
+/**
+ * Like readHiddenSet, but distinguishes "no chats hidden" (a set) from "can't
+ * know — keystore locked" (null). The SW badge needs the difference (spec 1027
+ * B4): under badge mode 'never'/'revealed' an unreadable set must fall back to
+ * the last preference-filtered count, not be mistaken for "nothing hidden"
+ * (which would count hidden unreads against the user's explicit choice).
+ */
+export async function readHiddenSetOrNull(): Promise<Set<string> | null> {
   try {
     return await loadSet();
   } catch {
-    return new Set();
+    return null;
   }
 }
 

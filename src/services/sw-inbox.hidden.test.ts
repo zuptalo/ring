@@ -38,4 +38,53 @@ describe('noteForPayload — hidden chats', () => {
     const { note } = noteForPayload(frame, payload, [chat], contacts, true, true);
     expect(note!.title).toBe('Peer One');
   });
+
+  // ---- spec 1027 FR-012 pins ----
+
+  it('the hidden note is byte-identical (visible fields) to the previews-off generic', () => {
+    // A hidden chat's banner must be indistinguishable from ordinary
+    // previews-off traffic — crowd anonymity, since the platform forces SOME
+    // notification on a push wake. Same title, same body; the tap target is the
+    // Chats tab (a previews-off note may still deep-link, which reveals nothing
+    // on the lock screen — only title/body render there).
+    const hiddenNote = noteForPayload(
+      frame, payload, [oneToOne('chat-h')], contacts, true, true, new Set(['chat-h']),
+    ).note!;
+    const previewsOff = noteForPayload(
+      frame, payload, [oneToOne('chat-v')], contacts, true, /* showPreview */ false, new Set(),
+    ).note!;
+    expect(hiddenNote.title).toBe(previewsOff.title);
+    expect(hiddenNote.body).toBe(previewsOff.body);
+    expect(hiddenNote.url).toBe('/tabs/chats');
+    expect(hiddenNote.tag).toBe('ring:chat-h'); // internal per-chat tag → bursts coalesce
+  });
+
+  it('hidden is decided BEFORE the @mention escalation (a mention never unmasks)', () => {
+    const group: Chat = {
+      id: 'grp-1', name: 'Group', isGroup: true, participantIds: ['peer-1'], createdBy: 'peer-1',
+    } as unknown as Chat;
+    const mentionPayload = { text: 'psst @me', groupId: 'grp-1', mentions: ['me'] } as any;
+    const { note } = noteForPayload(
+      frame, mentionPayload, [group], contacts, true, true, new Set(['grp-1']), 'me',
+    );
+    expect(note!.title).toBe('Ring');
+    expect(note!.body).toBe('New message');
+    expect(JSON.stringify(note)).not.toContain('mention');
+  });
+
+  it('hidden is decided BEFORE per-chat mute/content silencers (never silently dropped)', () => {
+    const chat = {
+      ...oneToOne('chat-m'),
+      mutedUntil: Date.now() + 60_000,
+      notifyContent: 'none',
+    } as Chat;
+    const { note, silenced } = noteForPayload(
+      frame, payload, [chat], contacts, true, true, new Set(['chat-m']),
+    );
+    // A hidden chat's push must still yield the generic note (platform contract),
+    // not the silenced/no-notification outcome mute would otherwise pick.
+    expect(silenced).toBeFalsy();
+    expect(note!.title).toBe('Ring');
+    expect(note!.body).toBe('New message');
+  });
 });

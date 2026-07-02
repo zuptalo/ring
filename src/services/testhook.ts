@@ -104,6 +104,7 @@ import {
   setCloseFriend as dbSetCloseFriend,
   listCloseFriends as dbListCloseFriends,
   listFriends as dbListFriends,
+  listCallGroups as dbListCallGroups,
   countUnread as dbCountUnread,
   setContactLocalProfile as dbSetContactLocalProfile,
   resetContactToRemote as dbResetContactToRemote,
@@ -415,6 +416,10 @@ export function installTestHook(): void {
       canHide(await getAll<Chat>('chats'), hiddenIdsSync(), chatId),
     hiddenCanUnhide: async (chatId: string) =>
       canUnhide(await getAll<Chat>('chats'), hiddenIdsSync(), chatId),
+    /** The Calls-tab rows' contact ids (what listCallGroups shows) — for the
+     *  spec-1027 knock-knock asserts: hidden peers never appear while relocked. */
+    callHistoryContactIds: async (): Promise<string[]> =>
+      (await dbListCallGroups()).map((g) => g.contactId),
     /** Reveal (verify PIN → start session). Returns whether the PIN was correct. */
     hiddenReveal: (pin: string) => hcReveal(pin),
     /** End the reveal session. */

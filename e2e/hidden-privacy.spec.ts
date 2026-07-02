@@ -78,3 +78,38 @@ test('a wrong PIN in the search bar reveals nothing and gives no signal (FR-008)
   await expect.poll(() => visibleIds(a), { timeout: 15_000 }).toContain(chat);
   await expect(search).toHaveValue('');
 });
+
+test('the badge honors always/never/revealed for hidden chats without suppressing visible ones (US4 / FR-015)', async ({ browser }) => {
+  test.setTimeout(150_000);
+  const a = await createAccount(await browser.newContext(), 'PRIVAC05');
+  const b = await createAccount(await browser.newContext(), 'PRIVAC06');
+  const c = await createAccount(await browser.newContext(), 'PRIVAC07');
+  await pair(a, b);
+  await pair(a, c);
+  const badge = (): Promise<number> => ev(a, () => (window as any).__ringTest.unreadBadge());
+
+  // One unread in the (soon hidden) chat with B, one unread in the visible chat with C.
+  const hiddenChat = await hiddenOneToOne(a, b, '1234');
+  const bChat = await ev(b, (id: string) => (window as any).__ringTest.startChat(id), a.id);
+  const cChat = await ev(c, (id: string) => (window as any).__ringTest.startChat(id), a.id);
+  await ev(b, (id: string) => (window as any).__ringTest.sendChatMessage(id, 'hidden unread'), bChat);
+  await ev(c, (id: string) => (window as any).__ringTest.sendChatMessage(id, 'visible unread'), cChat);
+  await expect.poll(badge, { timeout: 20_000 }).toBe(2); // default 'always': both count
+
+  // 'never': the hidden unread vanishes from the badge, the visible one stays.
+  await ev(a, () => (window as any).__ringTest.setGlobalSetting('privacy.hiddenChatsBadge', 'never'));
+  await expect.poll(badge, { timeout: 10_000 }).toBe(1);
+  // Another hidden-chat message never bumps it in 'never'.
+  await ev(b, (id: string) => (window as any).__ringTest.sendChatMessage(id, 'still hidden'), bChat);
+  await a.page.waitForTimeout(2000);
+  expect(await badge()).toBe(1);
+
+  // 'revealed': counts hidden unreads only during an active reveal session.
+  await ev(a, () => (window as any).__ringTest.setGlobalSetting('privacy.hiddenChatsBadge', 'revealed'));
+  expect(await badge()).toBe(1); // relocked → excluded
+  expect(await ev(a, (p: string) => (window as any).__ringTest.hiddenReveal(p), '1234')).toBe(true);
+  await expect.poll(badge, { timeout: 10_000 }).toBe(3); // revealed → 2 hidden + 1 visible
+  await ev(a, () => (window as any).__ringTest.hiddenRelock());
+  await expect.poll(badge, { timeout: 10_000 }).toBe(1); // relock → excluded again
+  void hiddenChat;
+});

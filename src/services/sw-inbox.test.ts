@@ -20,7 +20,7 @@ function decision(r: PreviewResult, timedOut = false): 'notes' | 'generic' | 'no
   return 'generic';
 }
 
-const base: PreviewResult = { notes: [], pending: 0, suppressed: false, silenced: false, newUnshown: false };
+const base: PreviewResult = { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: false };
 const note = { ids: ['m1'], title: 'Alice', body: 'hi', url: '/', tag: 'chat-1' };
 
 describe('spec 2016 — generic placeholder gating (isNothingNew)', () => {

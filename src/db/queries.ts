@@ -32,6 +32,7 @@ import { ensureHiddenLoaded, isRevealed, isHiddenKnown } from '@/services/hidden
 import { hiddenCallKeys } from '@/db/hidden-calls';
 import { routeInboundFrom } from '@/db/inbound-route';
 import { resolveInboundDirectChat, planStartDirectChat } from '@/services/hidden-pair';
+import { computeUnreadTotal, type HiddenBadgeMode } from '@/db/badge-count';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
   EditSignal, EraseSignal, LinkPreviewSignal,
@@ -3798,20 +3799,25 @@ export async function resolveAlert(id: string): Promise<void> {
 /* ---- badge counts ---- */
 
 export async function countUnread(): Promise<number> {
-  // How hidden chats (spec 1019) affect the unread badge is user-chosen
-  // (privacy.hiddenChatsBadge):
-  //   'always'   (default) — hidden chats count, so you always know something is
-  //               waiting (the badge can hint a hidden chat exists; the user opted in).
-  //   'revealed' — hidden chats count only during an active reveal session.
-  //   'never'    — hidden chats never contribute, so the badge can't betray one.
-  const mode = await getSetting<string>('privacy.hiddenChatsBadge', 'always');
+  // Preference semantics + the fail-closed-without-collateral rule live in the
+  // pure `computeUnreadTotal` (spec 1027, fixes B4): in modes never/revealed an
+  // UNKNOWN hidden set (locked at cold open) no longer zeroes the whole badge —
+  // it falls back to `badge.lastCount`, the last successfully computed and
+  // already preference-filtered total (device-local, never synced; it equals
+  // what the OS badge showed a moment ago, so it leaks nothing).
+  const mode = (await getSetting<string>('privacy.hiddenChatsBadge', 'always')) as HiddenBadgeMode;
   const chats = await getAll<Chat>('chats');
-  if (mode === 'always') return chats.reduce((n, c) => n + (c.unread || 0), 0);
-  // 'never' / 'revealed' need the hidden set to know what to exclude.
-  const hidden = await ensureHiddenLoaded();
-  if (!isHiddenKnown()) return 0; // unknown set (locked at open) → fail closed
-  const countHidden = mode === 'revealed' && isRevealed();
-  return chats.reduce((n, c) => n + (!countHidden && hidden.has(c.id) ? 0 : c.unread || 0), 0);
+  let hidden: ReadonlySet<string> | null = null;
+  if (mode !== 'always') {
+    const set = await ensureHiddenLoaded();
+    hidden = isHiddenKnown() ? set : null;
+  }
+  const last = await getSetting<number | null>('badge.lastCount', null);
+  const { total, fresh } = computeUnreadTotal(chats, mode, hidden, isRevealed(), last);
+  // Persist only real computations (the fallback would just rewrite itself),
+  // and only on change (this runs on every badge refresh).
+  if (fresh && total !== last) await setSetting('badge.lastCount', total);
+  return total;
 }
 
 export async function countMissedUnseen(): Promise<number> {

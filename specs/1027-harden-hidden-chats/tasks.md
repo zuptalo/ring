@@ -116,19 +116,19 @@ silent/generic per path; badge across always/never/revealed; call history clean 
 
 ### Tests (write first, must FAIL)
 
-- [ ] T020 (#613) [P] [US4] Failing vitest in `src/services/notify.hidden.test.ts`: backgrounded-but-connected hidden-chat message produces NO local notification (B6); foreground stays silent and claims the banner
-- [ ] T021 (#614) [P] [US4] Failing/pinning vitest in `src/services/sw-inbox.hidden.test.ts` (extend): the hidden generic note byte-equals the previews-off generic (`Ring` / `New message` / `/tabs/chats`) and is decided before mention/mute/content branches; burst frames coalesce under the internal tag
-- [ ] T022 (#615) [P] [US4] Failing vitest in `src/services/sw-inbox.badge.test.ts`: SW `unreadCount()` across `always`/`never`/`revealed` × (hidden set readable / locked): `revealed` ≡ `never` in the SW, hidden chats excluded, locked → falls back to `badge.lastCount`, unclassifiable pending frames not counted
-- [ ] T023 (#616) [P] [US4] Failing vitest in `src/db/queries.badge.test.ts`: page `countUnread()` persists `badge.lastCount` on success and returns it (not 0) when the set is unknown in `never`/`revealed` modes; visible-chat counts never suppressed (B4)
-- [ ] T024 (#617) [P] [US4] Failing Playwright e2e in `e2e/hidden-call.spec.ts` (2-person call per CI constraints): B calls A whose chat with B is hidden → incoming overlay shows B's name and avatar and the call is answerable (knock-knock, FR-013); after hangup the Calls tab shows no entry for B while relocked, and reveal shows it (FR-014)
-- [ ] T025 (#618) [P] [US4] Failing Playwright e2e in `e2e/hidden-privacy.spec.ts` (badge/notify section): hidden-chat message produces no visible notification UI while badge reflects ALL THREE modes — `always`, `never`, and `revealed` (hidden unreads counted only during an active reveal, excluded again after relock)
+- [x] T020 (#613) [P] [US4] Failing vitest in `src/services/notify.hidden.test.ts`: backgrounded-but-connected hidden-chat message produces NO local notification (B6); foreground stays silent and claims the banner
+- [x] T021 (#614) [P] [US4] Failing/pinning vitest in `src/services/sw-inbox.hidden.test.ts` (extend): the hidden generic note byte-equals the previews-off generic (`Ring` / `New message` / `/tabs/chats`) and is decided before mention/mute/content branches; burst frames coalesce under the internal tag
+- [x] T022 (#615) [P] [US4] Failing vitest in `src/services/sw-inbox.badge.test.ts`: SW `unreadCount()` across `always`/`never`/`revealed` × (hidden set readable / locked): `revealed` ≡ `never` in the SW, hidden chats excluded, locked → falls back to `badge.lastCount`, unclassifiable pending frames not counted
+- [x] T023 (#616) [P] [US4] Failing vitest in `src/db/queries.badge.test.ts`: page `countUnread()` persists `badge.lastCount` on success and returns it (not 0) when the set is unknown in `never`/`revealed` modes; visible-chat counts never suppressed (B4)
+- [x] T024 (#617) [P] [US4] Failing Playwright e2e in `e2e/hidden-call.spec.ts` (2-person call per CI constraints): B calls A whose chat with B is hidden → incoming overlay shows B's name and avatar and the call is answerable (knock-knock, FR-013); after hangup the Calls tab shows no entry for B while relocked, and reveal shows it (FR-014)
+- [x] T025 (#618) [P] [US4] Failing Playwright e2e in `e2e/hidden-privacy.spec.ts` (badge/notify section): hidden-chat message produces no visible notification UI while badge reflects ALL THREE modes — `always`, `never`, and `revealed` (hidden unreads counted only during an active reveal, excluded again after relock)
 
 ### Implementation
 
-- [ ] T026 (#619) [US4] Remove the backgrounded-but-connected generic bridge from the hidden branch of `notifyIncoming` in `src/services/notify.ts:389` (path becomes badge-only; D6)
-- [ ] T027 (#620) [US4] Implement the badge cache in `src/db/queries.ts` `countUnread` (persist + fallback `badge.lastCount`) and add the key to the own-sync exclusion list next to the hidden keys (R5, D4)
-- [ ] T028 (#621) [US4] Apply the badge preference in `src/services/sw-inbox.ts` `unreadCount()` per contract (readHiddenSet exclusion, `revealed` ≡ `never`, `badge.lastCount` fallback, unclassifiable pending frames uncounted)
-- [ ] T029 (#622) [P] [US4] Update `drive/scenarios/hidden-notify.mjs` for the new fully-silent non-push expectation and `drive/scenarios/hidden-badge.mjs` for the cache-backed modes
+- [x] T026 (#619) [US4] Remove the backgrounded-but-connected generic bridge from the hidden branch of `notifyIncoming` in `src/services/notify.ts:389` (path becomes badge-only; D6)
+- [x] T027 (#620) [US4] Implement the badge cache in `src/db/queries.ts` `countUnread` (persist + fallback `badge.lastCount`) and add the key to the own-sync exclusion list next to the hidden keys (R5, D4)
+- [x] T028 (#621) [US4] Apply the badge preference in `src/services/sw-inbox.ts` `unreadCount()` per contract (readHiddenSet exclusion, `revealed` ≡ `never`, `badge.lastCount` fallback, unclassifiable pending frames uncounted)
+- [x] T029 (#622) [P] [US4] Update `drive/scenarios/hidden-notify.mjs` for the new fully-silent non-push expectation and `drive/scenarios/hidden-badge.mjs` for the cache-backed modes
 
 **Checkpoint**: the privacy contract (knock-knock + badge only) holds on every delivery path.
 
