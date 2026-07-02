@@ -49,6 +49,8 @@ Specs are grouped by category band; status moves
 | [1025](specs/1025-app-ux-polish/spec.md) | App-wide UX polish and fixes | 🔵 in-review |
 | [1026](specs/1026-friends-only-and-settings-refinements/spec.md) | Friends-only messaging with privacy, settings and help refinements | 🔵 in-review |
 | [1027](specs/1027-harden-hidden-chats/spec.md) | Harden Hidden Chats + One-Hidden-One-Visible Per Person | 🔵 in-review |
+| [1028](specs/1028-robust-audio-and/spec.md) | Robust Calls + Add-to-Call (Merge Incoming, Add People) | 🟡 in-progress |
+| [1029](specs/1029-tap-phone-and-email/spec.md) | Tap a Phone Number or Email in Messages & Posts | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

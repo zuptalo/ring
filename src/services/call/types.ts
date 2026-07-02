@@ -7,8 +7,19 @@ export type { CallKind };
 // group call holds at most VIDEO_MAX, an audio one at most AUDIO_MAX; the audio→video upgrade
 // is blocked once a call has more than VIDEO_MAX participants. The client enforces these
 // pre-emptively (picker + upgrade gate); the server enforces them authoritatively at join.
-export const VIDEO_MAX = 4;
-export const AUDIO_MAX = 8;
+//
+// Exported as live `let` bindings (not `const`) ONLY so the dev/e2e harness can shrink them —
+// mirroring the server's SetVideoMaxForTest — to exercise the pre-emptive add gate (spec 1028)
+// without spinning up a real 8-person call. Production never calls the setter, so these stay 4/8.
+export let VIDEO_MAX = 4;
+export let AUDIO_MAX = 8;
+
+/** Dev/e2e only: override the client-side caps (the pre-emptive add gate reads these). Pass
+ *  `undefined` to leave a cap unchanged. Never called in production builds. */
+export function setCallCapsForTest(video?: number, audio?: number): void {
+  if (video != null) VIDEO_MAX = video;
+  if (audio != null) AUDIO_MAX = audio;
+}
 
 /**
  * Call lifecycle:

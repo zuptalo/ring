@@ -3,7 +3,7 @@
     <ion-header>
       <ion-toolbar>
         <ion-buttons slot="start"><ion-button @click="$emit('close')">Cancel</ion-button></ion-buttons>
-        <ion-title>Share contact</ion-title>
+        <ion-title>{{ title ?? 'Share contact' }}</ion-title>
       </ion-toolbar>
       <ion-toolbar>
         <ion-searchbar
@@ -20,7 +20,7 @@
           <ion-label>{{ c.name }}</ion-label>
         </ion-item>
       </ion-list>
-      <div v-if="!filtered.length" class="empty"><ion-note>No contacts to share</ion-note></div>
+      <div v-if="!filtered.length" class="empty"><ion-note>{{ emptyText ?? 'No contacts to share' }}</ion-note></div>
     </ion-content>
   </ion-modal>
 </template>
@@ -33,7 +33,9 @@ import {
 } from '@ionic/vue';
 import type { Contact, SharedContact } from '@/db/types';
 
-const props = defineProps<{ open: boolean; contacts: Contact[] }>();
+// `title`/`emptyText` let callers repurpose the picker (e.g. "Add to call", spec
+// 1028) without changing the default "Share contact" behaviour.
+const props = defineProps<{ open: boolean; contacts: Contact[]; title?: string; emptyText?: string }>();
 const emit = defineEmits<{ (e: 'close'): void; (e: 'select', c: SharedContact): void }>();
 
 const q = ref('');

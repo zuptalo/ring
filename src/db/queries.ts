@@ -3817,10 +3817,12 @@ export async function countUnread(): Promise<number> {
     hidden = isHiddenKnown() ? set : null;
   }
   const last = await getSetting<number | null>('badge.lastCount', null);
-  const { total, fresh } = computeUnreadTotal(chats, mode, hidden, isRevealed(), last);
-  // Persist only real computations (the fallback would just rewrite itself),
-  // and only on change (this runs on every badge refresh).
-  if (fresh && total !== last) await setSetting('badge.lastCount', total);
+  const { total, cacheable } = computeUnreadTotal(chats, mode, hidden, isRevealed(), last);
+  // Persist ONLY a hidden-excluded total (cacheable), so the never/revealed
+  // cold-open fallback can never reuse an always-mode (hidden-inclusive) or
+  // revealed-while-revealed value — the mode-at-write leak (spec 1028). Only on
+  // change (this runs on every badge refresh).
+  if (cacheable && total !== last) await setSetting('badge.lastCount', total);
   return total;
 }
 

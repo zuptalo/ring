@@ -440,7 +440,13 @@
                 >@{{ p.mention.name }}</span><span
                   v-else-if="p.everyone"
                   class="mention everyone"
-                >@everyone</span><animated-emoji
+                >@everyone</span><a
+                  v-else-if="p.contact"
+                  class="msg-link"
+                  role="button"
+                  :href="p.contact.kind === 'phone' ? telHref(p.contact.raw) : mailtoHref(p.contact.raw)"
+                  @click.stop.prevent="presentEntityActions(p.contact)"
+                >{{ p.contact.raw }}</a><animated-emoji
                   v-else-if="p.emoji"
                   :emoji="p.emoji"
                   :animate="animEmoji"
@@ -1160,6 +1166,8 @@ import { jobProgress } from '@/services/media-jobs';
 import { generateVideoPoster, generateImageThumb, isAnimatedImage } from '@/utils/media-meta';
 import { type Quality } from '@/services/media-encode';
 import { openExternal } from '@/utils/external';
+import { segmentContacts, telHref, mailtoHref } from '@/utils/linkify';
+import { presentEntityActions, type ContactEntity } from '@/services/entity-actions';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing } from '@/utils/text';
 import { vEnterSend } from '@/directives/enter-send';
@@ -1703,6 +1711,7 @@ interface BodySeg {
   emoji?: string;
   mention?: { id: string; name: string; me: boolean };
   everyone?: boolean;
+  contact?: ContactEntity; // spec 1029: a tappable phone number / email address
 }
 const MENTION_RE = /@([a-zA-Z0-9_]+)/g;
 
@@ -1715,9 +1724,19 @@ function bodyParts(m: Message): BodySeg[] {
   const mentioned = new Set(m.mentions ?? []);
   const members = mentionByUsername.value;
   const emit = (t: string): void => {
-    for (const seg of segmentEmoji(t)) {
-      if (seg.emoji) out.push({ emoji: seg.emoji });
-      else if (seg.text) out.push({ text: seg.text });
+    // Detect phone/email first (spec 1029), then emoji-segment the plain runs
+    // between them. Contacts sit between @mention and emoji handling: URLs and
+    // @mentions are already resolved by the outer loop, so a detected entity can
+    // never eat a link or a handle.
+    for (const cs of segmentContacts(t)) {
+      if ('kind' in cs) {
+        out.push({ contact: cs });
+        continue;
+      }
+      for (const seg of segmentEmoji(cs.text)) {
+        if (seg.emoji) out.push({ emoji: seg.emoji });
+        else if (seg.text) out.push({ text: seg.text });
+      }
     }
   };
   for (const p of linkParts(m.body)) {
