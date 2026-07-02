@@ -75,13 +75,15 @@
           </div>
           <div class="cw-actions">
             <button class="cw-btn cw-decline" aria-label="Decline second call" @click.stop="rejectSecond">Decline</button>
-            <!-- Merge the caller into the current call (spec 1028) — direct callers only,
-                 and only when there's room under the cap. Sits alongside Hold. -->
+            <!-- Fold the caller into the current call — a direct second caller (spec 1028)
+                 or a whole incoming group invite (spec 1030) — when there's room under the
+                 cap. Sits alongside Hold; a group fold that doesn't fit is blocked with the
+                 cap reason on tap (the distinct combined headcount isn't known here). -->
             <button
-              v-if="incomingSecond.kind === 'direct' && callRemainingSlots() > 0"
+              v-if="callRemainingSlots() > 0"
               class="cw-btn cw-accept"
-              aria-label="Add caller to this call"
-              @click.stop="mergeIncoming"
+              :aria-label="incomingSecond.kind === 'direct' ? 'Add caller to this call' : 'Add this group call into your call'"
+              @click.stop="mergeSecond"
             >Add to call</button>
             <button class="cw-btn cw-accept" aria-label="Hold current call and answer" @click.stop="acceptAndHold">Accept &amp; hold</button>
           </div>
@@ -446,7 +448,7 @@ import {
   iosSpeaker, setIosSpeakerphone,
   notJoining, busyMembers, recallMember, cancelInvite, addPeople, callRemainingSlots,
   acceptCall, rejectCall, declineWithMessage,
-  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, peerResumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, mergeIncoming, swapCalls,
+  heldCall, remoteHeld, groupHeldPeers, resumeCountdown, peerResumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, mergeIncoming, mergeGroupInvite, swapCalls,
   setGroupTileSize,
   type AudioRoute,
 } from '@/composables/useCall';
@@ -466,6 +468,12 @@ const stageEl = ref<HTMLElement | null>(null);
 
 // Full-screen incoming-call answer view (the consent line is shared with the banner).
 const { participantsLine } = useCallParticipants();
+
+/** "Add to call" on the second-incoming prompt: a direct caller merges (spec 1028),
+ *  a group invite folds its people into the current call (spec 1030 US3). */
+function mergeSecond(): void {
+  void (incomingSecond.value?.kind === 'direct' ? mergeIncoming() : mergeGroupInvite());
+}
 async function incomingDeclineMenu(): Promise<void> {
   const replies = await getQuickDeclines();
   const sheet = await actionSheetController.create({
