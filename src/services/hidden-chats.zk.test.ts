@@ -15,6 +15,9 @@ const ownsyncKeys = readFileSync(resolve(root, 'src/services/ownsync-keys.ts'), 
 // The hidden-chats storage keys (mirrors hidden-chats.ts SET_KEY/PIN_KEY + prefs),
 // plus the spec-1027 device-local badge cache (already preference-filtered, but a
 // per-device number that must never ride the snapshot to other devices).
+// NOTE: privacy.hiddenChatsBiometric is FUTURE-PROOFING ONLY — biometric reveal
+// (1019 US6) was never implemented and stays deferred (spec 1027 Out of Scope);
+// the assertion simply guarantees that if it ever lands, it can't sync either.
 const HIDDEN_KEYS = ['privacy.hiddenChats', 'privacy.hiddenPin', 'privacy.hiddenChatsEnabled', 'privacy.hiddenChatsGrace', 'privacy.hiddenChatsBiometric', 'badge.lastCount'];
 
 describe('zero-knowledge: hidden state never syncs', () => {

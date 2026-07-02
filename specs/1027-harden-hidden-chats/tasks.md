@@ -179,12 +179,12 @@ visible chats and badge correct from the first frame.
 
 ## Phase 9: Polish & Cross-Cutting
 
-- [ ] T039 (#632) [P] Neutralize dangling biometric references per R9 (keep the never-syncs assertion in `src/services/hidden-chats.zk.test.ts`, drop text implying the feature exists); confirm no `revealWithBiometric`/settings toggle is referenced anywhere in `src/`
-- [ ] T040 (#633) [P] Update doc comments: `src/services/hidden-chats.ts` header (per-person model + 1027 cross-reference), `src/services/hidden-chats-start.ts` (no longer test-only), `src/db/queries.ts` rule-R comment block
-- [ ] T041 (#634) Run all six existing hidden drive scenarios (`hidden-chats-1019.mjs`, `hidden-notify.mjs`, `hidden-badge.mjs`, `hidden-marker.mjs`, `hidden-pin-pad.mjs`, `hidden-flash.mjs`) against the dev stack and fix regressions — this run also re-verifies FR-007's reveal marker + sort-to-top behavior (unchanged in 1027)
+- [x] T039 (#632) [P] Neutralize dangling biometric references per R9 (keep the never-syncs assertion in `src/services/hidden-chats.zk.test.ts`, drop text implying the feature exists); confirm no `revealWithBiometric`/settings toggle is referenced anywhere in `src/`
+- [x] T040 (#633) [P] Update doc comments: `src/services/hidden-chats.ts` header (per-person model + 1027 cross-reference), `src/services/hidden-chats-start.ts` (no longer test-only), `src/db/queries.ts` rule-R comment block
+- [x] T041 (#634) Run all six existing hidden drive scenarios (`hidden-chats-1019.mjs`, `hidden-notify.mjs`, `hidden-badge.mjs`, `hidden-marker.mjs`, `hidden-pin-pad.mjs`, `hidden-flash.mjs`) against the dev stack and fix regressions — this run also re-verifies FR-007's reveal marker + sort-to-top behavior (unchanged in 1027)
 - [ ] T042 (#635) Full gates: `npm run build`, `npx vitest run` (coverage floors), `npm run test:e2e`, `cd server && go build ./... && go vet ./... && go test ./...`
 - [ ] T043 (#636) Bump spec `**Status**:` to `in-progress` → run `make roadmap` (start of implement); bump to `in-review` + re-run at PR time
-- [ ] T044 (#637) [P] Hardening: seal `HiddenPinRec.length` in `src/services/hidden-chats.ts` under the master key instead of cleartext (auto-verify-at-length reads it only while unlocked, so availability is unchanged); migrate existing records in place on first read (reseal + rewrite) and extend `src/services/hidden-chats.test.ts` for both fresh and migrated shapes
+- [x] T044 (#637) [P] Hardening: seal `HiddenPinRec.length` in `src/services/hidden-chats.ts` under the master key instead of cleartext (auto-verify-at-length reads it only while unlocked, so availability is unchanged); migrate existing records in place on first read (reseal + rewrite) and extend `src/services/hidden-chats.test.ts` for both fresh and migrated shapes
 
 ---
 

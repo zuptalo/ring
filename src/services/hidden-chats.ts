@@ -1,10 +1,16 @@
 /**
- * Hidden Chats — the local, zero-knowledge privacy layer (spec 1019).
+ * Hidden Chats — the local, zero-knowledge privacy layer (spec 1019, hardened
+ * and given its per-person model by spec 1027).
  *
  * A hidden chat is an ordinary conversation whose id is recorded in a per-device
  * "hidden set". That set, and a separate dedicated reveal PIN, live ONLY on this
  * device and never cross the wire (the server already can't read conversation
  * content; hiding adds no new signal — see spec §Zero-Knowledge Impact).
+ *
+ * Per person there is at most ONE hidden and ONE visible chat (`hidden-pair.ts`
+ * enforces it), inbound frames route to the hidden thread instead of minting a
+ * visible one (`inbound-route.ts`), and a destructive reset blocks the live
+ * relay path too (`hidden-chats-reset.ts` + the hiddenPeer tombstones).
  *
  * Storage (both device-local `settings` keys, deliberately excluded from
  * own-data sync so hiding stays per-device):
@@ -64,7 +70,18 @@ interface EncWrapper {
 interface HiddenPinRec {
   salt: string; // b64url Argon2id salt (clear)
   env: Envelope; // PIN_MARKER sealed under the PIN-derived key
-  length: number; // digit count, for auto-verify-at-length
+  // Digit count for auto-verify-at-length, SEALED under the master key (spec
+  // 1027 T044): stored in the clear it told anyone reading IndexedDB how many
+  // digits to brute-force. The search-bar gesture only needs it while the app
+  // is unlocked, so master-key sealing costs no availability.
+  len?: Envelope;
+  length?: number; // legacy cleartext count (pre-1027) — migrated on first read
+}
+
+const LEN_AAD = 'privacy.hiddenPin.len';
+
+function sealLen(n: number): Envelope {
+  return sealJson(getMasterKey(), n, 'master', utf8ToBytes(LEN_AAD));
 }
 
 /* ---- hidden set: master-key-sealed, device-local ---- */
@@ -153,7 +170,11 @@ export async function enableHiddenPin(pin: string): Promise<void> {
   const salt = randomBytes(ARGON_SALT_BYTES);
   const key = argon2id(pin, salt);
   const env = sealJson(key, PIN_MARKER, 'pin');
-  await writeSetting<HiddenPinRec>(PIN_KEY, { salt: bytesToB64url(salt), env, length: pin.length });
+  await writeSetting<HiddenPinRec>(PIN_KEY, {
+    salt: bytesToB64url(salt),
+    env,
+    len: sealLen(pin.length),
+  });
 }
 
 /** Verify a reveal-PIN attempt. Returns false (no oracle) on any failure. */
@@ -177,7 +198,26 @@ export async function changeHiddenPin(oldPin: string, newPin: string): Promise<v
 
 export async function hiddenPinLength(): Promise<number | null> {
   const rec = await readSetting<HiddenPinRec | undefined>(PIN_KEY, undefined);
-  return rec ? rec.length : null;
+  if (!rec) return null;
+  if (rec.len) {
+    try {
+      return openJson<number>(getMasterKey(), rec.len, utf8ToBytes(LEN_AAD));
+    } catch {
+      return null; // locked → the reveal gesture simply stays un-armed
+    }
+  }
+  // Legacy pre-1027 record with a CLEARTEXT length: migrate in place (reseal +
+  // drop the plaintext) on first read while unlocked.
+  if (typeof rec.length === 'number') {
+    const n = rec.length;
+    try {
+      await writeSetting<HiddenPinRec>(PIN_KEY, { salt: rec.salt, env: rec.env, len: sealLen(n) });
+    } catch {
+      /* locked → keep the legacy shape; the next unlocked read migrates it */
+    }
+    return n;
+  }
+  return null;
 }
 
 /** Erase the hidden set + PIN material from storage and the in-memory cache.

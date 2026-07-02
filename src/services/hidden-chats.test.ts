@@ -148,6 +148,26 @@ describe('separate dedicated PIN', () => {
     expect(await hiddenPinLength()).toBe(6);
   }, PIN_TIMEOUT);
 
+  it('stores the PIN length sealed, not in cleartext (spec 1027 T044)', async () => {
+    await enableHiddenPin('123456');
+    const raw = JSON.stringify(h.settings.get('privacy.hiddenPin'));
+    expect(raw).not.toContain('"length"'); // no legacy cleartext field
+    expect(raw).not.toContain(':6'); // the digit count itself never appears bare
+    expect(await hiddenPinLength()).toBe(6); // ...but reads fine while unlocked
+  }, PIN_TIMEOUT);
+
+  it('migrates a legacy cleartext-length record in place on first read', async () => {
+    // Simulate a pre-1027 record: real verifier + cleartext `length`.
+    await enableHiddenPin('98765');
+    const rec = h.settings.get('privacy.hiddenPin') as { salt: string; env: unknown; len?: unknown };
+    h.settings.set('privacy.hiddenPin', { salt: rec.salt, env: rec.env, length: 5 });
+    expect(await hiddenPinLength()).toBe(5); // read works...
+    const migrated = JSON.stringify(h.settings.get('privacy.hiddenPin'));
+    expect(migrated).not.toContain('"length"'); // ...and the plaintext is gone
+    expect(await hiddenPinLength()).toBe(5); // sealed copy round-trips
+    expect(await verifyHiddenPin('98765')).toBe(true); // verifier untouched
+  }, PIN_TIMEOUT);
+
   it('change requires the old PIN and rotates the verifier', async () => {
     await enableHiddenPin('1111');
     await expect(changeHiddenPin('0000', '2222')).rejects.toThrow();
