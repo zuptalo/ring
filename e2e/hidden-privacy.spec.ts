@@ -113,3 +113,58 @@ test('the badge honors always/never/revealed for hidden chats without suppressin
   await expect.poll(badge, { timeout: 10_000 }).toBe(1); // relock → excluded again
   void hiddenChat;
 });
+
+test('cold open never flashes a hidden chat and the badge is right from the first frame (US6 / FR-017, SC-006)', async ({ browser }) => {
+  test.setTimeout(180_000);
+  const a = await createAccount(await browser.newContext(), 'PRIVAC08');
+  const b = await createAccount(await browser.newContext(), 'PRIVAC09');
+  const c = await createAccount(await browser.newContext(), 'PRIVAC10');
+  await pair(a, b);
+  await pair(a, c);
+
+  // Hidden chat with B (1 unread) + visible chat with C (1 unread), badge mode
+  // 'never' → the correct badge is 1; a hidden-inclusive computation would say 2
+  // and a collateral fail-closed would say 0. Both are detectable.
+  const hiddenChat = await hiddenOneToOne(a, b, '1234');
+  const bChat = await ev(b, (id: string) => (window as any).__ringTest.startChat(id), a.id);
+  const cChat = await ev(c, (id: string) => (window as any).__ringTest.startChat(id), a.id);
+  await ev(a, () => (window as any).__ringTest.setGlobalSetting('privacy.hiddenChatsBadge', 'never'));
+  await ev(b, (id: string) => (window as any).__ringTest.sendChatMessage(id, 'hidden unread'), bChat);
+  await ev(c, (id: string) => (window as any).__ringTest.sendChatMessage(id, 'visible unread'), cChat);
+  const visibleChat = await ev(a, (id: string) => (window as any).__ringTest.chatWith(id), c.id);
+  await expect
+    .poll(() => ev(a, () => (window as any).__ringTest.unreadBadge()), { timeout: 20_000 })
+    .toBe(1); // seeds badge.lastCount with the filtered total
+
+  // SC-006 loop: five cold starts, polling from the earliest possible moment.
+  for (let round = 0; round < 5; round++) {
+    await a.page.reload();
+    const snapshots: Array<{ ids: string[]; badge: number }> = [];
+    const deadline = Date.now() + 20_000;
+    let settled = false;
+    while (Date.now() < deadline) {
+      try {
+        const snap = await ev(a, async () => ({
+          ids: await (window as any).__ringTest.visibleChatIds(),
+          badge: await (window as any).__ringTest.unreadBadge(),
+        }));
+        snapshots.push(snap);
+        if (snap.ids.length > 0) {
+          settled = true;
+          break;
+        }
+      } catch {
+        /* hook not ready yet — keep polling; nothing painted before it either */
+      }
+      await a.page.waitForTimeout(100);
+    }
+    expect(settled, `round ${round}: list settled`).toBe(true);
+    for (const s of snapshots) {
+      expect(s.ids, `round ${round}: hidden chat never in the list`).not.toContain(hiddenChat);
+      expect(s.badge, `round ${round}: badge never counts the hidden unread`).toBeLessThanOrEqual(1);
+    }
+    const last = snapshots[snapshots.length - 1];
+    expect(last.ids).toContain(visibleChat); // visible chats correct once painted
+    expect(last.badge).toBe(1); // ...and the badge (lastCount fallback → real value)
+  }
+});

@@ -68,9 +68,11 @@ await bob.page.addInitScript(() => {
 // Reload onto the Chats tab so the list actually renders during the startup window.
 await bob.page.goto('/tabs/chats');
 
-// Hard-reload several times and analyze the captured startup window each time.
+// Hard-reload 20 times (spec 1027 SC-006 soak) and analyze the captured
+// startup window each time.
 let dataLeaks = 0, domLeaks = 0, emptyFlashes = 0;
-for (let i = 1; i <= 6; i++) {
+const ROUNDS = 20;
+for (let i = 1; i <= ROUNDS; i++) {
   await bob.page.reload();
   await bob.page.waitForFunction(() => Array.isArray(window.__flash) && window.__flash.length > 0, null, { timeout: 15_000 });
   await bob.page.waitForTimeout(2500); // let the sampler span the unlock transition
@@ -94,7 +96,7 @@ for (let i = 1; i <= 6; i++) {
   );
   if (firstDomNonEmpty) console.log(`           first rendered rows @${firstDomNonEmpty.ms}ms = ${JSON.stringify(firstDomNonEmpty.dom)}`);
 }
-console.log(`\n[summary] across 6 reloads: dataLeaks=${dataLeaks}  domVisualLeaks=${domLeaks}  emptyHintFlashes=${emptyFlashes}`);
+console.log(`\n[summary] across ${ROUNDS} reloads: dataLeaks=${dataLeaks}  domVisualLeaks=${domLeaks}  emptyHintFlashes=${emptyFlashes}`);
 console.log(dataLeaks === 0 && domLeaks === 0 && emptyFlashes === 0
   ? '[PASS] no hidden-chat leak and no empty-state flash during startup'
   : '[FAIL] something flashed at startup');

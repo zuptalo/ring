@@ -34,4 +34,35 @@ describe('hiddenCallKeys', () => {
     expect(keys.has('peerA')).toBe(false);
     expect([...keys].sort()).toEqual(['c2', 'peerB']);
   });
+
+  // ---- spec 1027 (FR-014) — the coexistence model's call keys ----
+
+  it('a hidden PAIR conversation with no visible chat excludes the peer too', () => {
+    // The person's only thread is the hidden pair conversation: a 1:1 call row
+    // (contactId = peer) would reveal them — exclude it.
+    const chats = [chat({ id: 'p1', isGroup: true, participantIds: ['peerA'] })];
+    const keys = hiddenCallKeys(chats, new Set(['p1']));
+    expect(keys.has('peerA')).toBe(true);
+    expect(keys.has('p1')).toBe(true);
+  });
+
+  it('a visible chat with the same person keeps their calls in history (no collateral)', () => {
+    // Coexistence steady state: hidden 1:1 + visible pair conversation. Calls
+    // with the person belong to the OPEN relationship — hiding them would leak
+    // the opposite way (a visible contact with mysteriously missing calls).
+    const chats = [
+      chat({ id: 'h1', isGroup: false, participantIds: ['peerA'] }),
+      chat({ id: 'v1', isGroup: true, participantIds: ['peerA'] }),
+    ];
+    const keys = hiddenCallKeys(chats, new Set(['h1']));
+    expect(keys.has('peerA')).toBe(false); // visible relationship exists → calls show
+    expect(keys.has('h1')).toBe(true); // the hidden thread's own id stays excluded
+  });
+
+  it('a hidden multi-member group never excludes its members from 1:1 call history', () => {
+    const chats = [chat({ id: 'g1', isGroup: true, participantIds: ['m1', 'm2'] })];
+    const keys = hiddenCallKeys(chats, new Set(['g1']));
+    expect(keys.has('m1')).toBe(false);
+    expect(keys.has('m2')).toBe(false);
+  });
 });

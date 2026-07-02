@@ -166,12 +166,12 @@ visible chats and badge correct from the first frame.
 
 ### Tests (write first, must FAIL where behavior changes)
 
-- [ ] T036 (#629) [P] [US6] Failing/pinning Playwright e2e in `e2e/hidden-privacy.spec.ts` (cold-open section): seed hidden + visible chats, then LOOP ≥5 context restarts polling from first paint — hidden row never appears, visible rows and unread badge correct immediately (uses `badge.lastCount` from T027); extend `drive/scenarios/hidden-flash.mjs` to a ≥20-restart soak for the full SC-006 sample
-- [ ] T037 (#630) [P] [US6] Pinning vitest in `src/db/hidden-calls.test.ts` (extend): `countMissedUnseen` and call-history exclusion stay fail-closed without collateral loss once the set loads
+- [x] T036 (#629) [P] [US6] Failing/pinning Playwright e2e in `e2e/hidden-privacy.spec.ts` (cold-open section): seed hidden + visible chats, then LOOP ≥5 context restarts polling from first paint — hidden row never appears, visible rows and unread badge correct immediately (uses `badge.lastCount` from T027); extend `drive/scenarios/hidden-flash.mjs` to a ≥20-restart soak for the full SC-006 sample
+- [x] T037 (#630) [P] [US6] Pinning vitest in `src/db/hidden-calls.test.ts` (extend): `countMissedUnseen` and call-history exclusion stay fail-closed without collateral loss once the set loads
 
 ### Implementation
 
-- [ ] T038 (#631) [US6] Verify/adjust the `listChats` fail-closed nudge path (`src/db/queries.ts:59`, `src/services/hidden-state.ts`) so the T036 first-frame guarantee holds; fix anything T036 exposes
+- [x] T038 (#631) [US6] Verify/adjust the `listChats` fail-closed nudge path (`src/db/queries.ts:59`, `src/services/hidden-state.ts`) so the T036 first-frame guarantee holds; fix anything T036 exposes
 
 **Checkpoint**: all six bugs (B1–B6) fixed with regression coverage.
 
