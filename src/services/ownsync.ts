@@ -11,6 +11,7 @@
  * while unlocked), so it runs after the passcode gate.
  */
 import { get, getAll, put, remove, type StoreName } from '@/db/idb';
+import { SYNCED_PREF_KEYS } from './ownsync-keys';
 import { recordTombstone, isTombstoned, listTombstones } from '@/db/tombstones';
 import { isUnlockedNow, getMasterKey, getRecoveryWrapForUpload } from '@/services/crypto/identity';
 import { sealJson, openJson, type Envelope } from '@/services/crypto/envelope';
@@ -34,16 +35,8 @@ const PAGE = 500;
 // excluded (they're per-device or security-sensitive). Server enforces nothing
 // here, the whole snapshot is sealed under the master key.
 const PROFILE_STORE = 'profile';
-const SYNCED_PREF_KEYS: string[] = [
-  'privacy.lastSeen', 'privacy.online', 'privacy.profilePhoto', 'privacy.about',
-  'privacy.groups', 'privacy.messageTimer',
-  'privacy.blockUnknown', 'privacy.disableLinkPreviews',
-  'notifications.message.show', 'notifications.message.reactions', 'notifications.message.sound',
-  'notifications.group.show', 'notifications.group.reactions', 'notifications.group.sound',
-  'notifications.wall.show', 'notifications.showPreview', 'notifications.badge',
-  'notifications.inapp.enabled', 'notifications.inapp.style', 'notifications.inapp.sounds', 'notifications.inapp.vibrate',
-  'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters', 'chats.saveToPhotos', 'chats.keepArchived',
-];
+// SYNCED_PREF_KEYS lives in the dependency-free ./ownsync-keys module (imported at the top) so the
+// allowlist can be unit-tested without pulling in this sync engine's UI-touching dependencies.
 
 interface ProfileSnapshot {
   v: 1;

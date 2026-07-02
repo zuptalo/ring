@@ -27,7 +27,7 @@ import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgr
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
 import { THUMB_TIERS } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
-import { firstLink, buildLinkPreview } from '@/services/link-preview';
+import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/link-preview';
 import { ensureHiddenLoaded, isRevealed, isHiddenKnown } from '@/services/hidden-state';
 import { hiddenCallKeys } from '@/db/hidden-calls';
 import type {
@@ -383,9 +383,10 @@ export async function sendMessage(
   // Link preview: build it in the background (a relay round-trip + downscale) and
   // patch it in once ready, so the text isn't held up. Best-effort and gated by
   // the privacy toggle. Fire-and-forget — never awaited, never blocks the send.
-  const link = firstLink(body);
-  if (link && !(await getSetting<boolean>('privacy.disableLinkPreviews', false))) {
-    void attachLinkPreview(message.id, link);
+  const previewsDisabled = await getSetting<boolean>('privacy.disableLinkPreviews', false);
+  if (shouldBuildLinkPreview(body, previewsDisabled)) {
+    const link = firstLink(body);
+    if (link) void attachLinkPreview(message.id, link);
   }
 }
 
@@ -4400,33 +4401,32 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     return;
   }
 
-  // "Block unknown account messages" (privacy.blockUnknown): when on, drop a message
-  // from someone who is neither already a contact nor an accepted connection — a
-  // stranger must connect with you first. Connection REQUESTS travel over a separate
-  // server channel (not this E2EE message path), so this never stops someone from
-  // reaching out to connect; it only blocks unsolicited message content.
-  if (await getSetting<boolean>('privacy.blockUnknown', false)) {
-    if (!(await getContact(from)) && !(await isPeerConnected(from))) return;
-  }
+  // Friends-only messaging: only people you've connected with can put message CONTENT in
+  // your inbox. We can't drop here, though: connection CARDS (friend request, invite
+  // auto-connect, accept) and other control payloads must always be processed, because
+  // that is how people connect, and a group message rides a 1:1 session but is authorised
+  // by shared membership. So we open first, apply any card/control payload below, and gate
+  // only actual 1:1 content. Capture whether we knew this peer (and had a chat with them)
+  // BEFORE creating the provisional contact/chat needed to open the packet, so unsolicited
+  // content can be dropped again without leaving a trace.
+  const hadContactBefore = !!(await getContact(from));
+  const knewSenderBefore = hadContactBefore || (await isPeerConnected(from));
+  const hadDirectChatBefore = (await getAll<Chat>('chats')).some(
+    (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from,
+  );
 
   let contact = await getContact(from);
   if (!contact) {
+    // Provisionally create the contact so we have a chat + session to open the packet. If
+    // this turns out to be unsolicited 1:1 content it is removed again below; a card or a
+    // group message keeps it. Pull their real name/photo/@username from the directory
+    // (fire-and-forget; falls back to the next connect-time refresh).
     await addContactWithId(from, '');
     contact = await getContact(from);
-    // New inbound peer → pull their real name/photo/@username from the directory
-    // (fire-and-forget; falls back to the next connect-time refresh).
     void hydrateContactFromDirectory(from);
   }
   if (!contact) return;
-  // Open in-network inbox: the network is invite-only but internally everyone is
-  // discoverable, so any member can message any member; there is no longer a
-  // friend-request gate. A first message is shown immediately. We record the
-  // sender as connected so their chat stays visible (and a stale legacy
-  // 'request' card from an old client can't re-hide it).
-  if (!(await isPeerConnected(from))) await markContactConnected(from);
   const chatId = await startDirectChat(contact);
-  const ch = await getChat(chatId);
-  if (ch?.pending) await setChatPending(chatId, false);
 
   let payload;
   try {
@@ -4510,6 +4510,28 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
 
   // A group message arrives over a 1:1 session but belongs to the group chat.
   const isGroupMsg = !!payload.groupId;
+
+  // Friends-only gate, applied only to 1:1 CONTENT (cards/controls were handled above; a
+  // group message is authorised by shared membership). Content from someone we haven't
+  // connected with is unsolicited: ack it so the relay stops holding it, then remove the
+  // provisional contact/chat/session we created only to open it, so it leaves no trace.
+  if (!isGroupMsg && !knewSenderBefore && !(await isPeerConnected(from))) {
+    if (remoteId) await markInboundSeen(remoteId);
+    if (!hadDirectChatBefore) {
+      await remove('sessions', chatId);
+      await remove('chats', chatId);
+    }
+    if (!hadContactBefore) await remove('contacts', from);
+    return;
+  }
+  // Accepted 1:1 content from a known peer: keep them connected and un-pend the chat so it
+  // stays visible (and a stale legacy 'request' card from an old client can't re-hide it).
+  if (!isGroupMsg) {
+    if (!(await isPeerConnected(from))) await markContactConnected(from);
+    const ch = await getChat(chatId);
+    if (ch?.pending) await setChatPending(chatId, false);
+  }
+
   const targetChatId = payload.groupId ?? chatId;
   if (payload.groupId) await ensureGroupChat(payload.groupId, from);
 
