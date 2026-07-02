@@ -19,8 +19,8 @@ design ids (R1–R10, D1–D7, INV-1..3, rule R) refer to research.md / plan.md 
 
 **Purpose**: Make `queries.ts` greppable again before everything else touches it (quickstart Slice 0).
 
-- [ ] T001 (#594) Add a vitest pinning the contact-card hash for a known name/avatar input (the `${card.name}\u0000${card.avatar}` SHA-256 path) in `src/db/contact-card-hash.test.ts` — must PASS against current code before the byte flip
-- [ ] T002 (#595) Replace the raw NUL byte at `src/db/queries.ts:3703` with the `\u0000` escape; confirm T001 still passes and `rg` now treats the file as text (FR-020)
+- [x] T001 (#594) Add a vitest pinning the contact-card hash for a known name/avatar input (the `${card.name}\u0000${card.avatar}` SHA-256 path) in `src/db/contact-card-hash.test.ts` — must PASS against current code before the byte flip
+- [x] T002 (#595) Replace the raw NUL byte at `src/db/queries.ts:3703` with the `\u0000` escape; confirm T001 still passes and `rg` now treats the file as text (FR-020)
 
 ---
 

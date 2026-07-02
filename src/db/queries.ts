@@ -3700,7 +3700,7 @@ async function handleContactCard(from: string, chatId: string, card: ContactCard
 /* ---- profile re-share hint ---- */
 
 async function cardSignature(card: ContactCard): Promise<string> {
-  const data = new TextEncoder().encode(`${card.name} ${card.avatar}`);
+  const data = new TextEncoder().encode(`${card.name}\u0000${card.avatar}`);
   const digest = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
