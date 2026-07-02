@@ -281,7 +281,7 @@
             <ion-icon :icon="warningOutline" /> {{ connectionWarning }}
           </p>
           <p v-if="callState === 'connected'" class="stats">
-            ↑ {{ callStats.kbpsUp }} ↓ {{ callStats.kbpsDown }} kbps
+            ↑ {{ callStats.kBpsUp }} ↓ {{ callStats.kBpsDown }} KB/s
           </p>
           <pre v-if="showDiag" class="diag">{{ diag }}</pre>
         </div>

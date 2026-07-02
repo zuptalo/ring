@@ -87,7 +87,10 @@ export const videoQuality = ref<VideoQuality>('auto');
 // the peer's accept/reject; `upgradeRequest` = the peer asked us and a prompt shows.
 export const upgradePending = ref(false);
 export const upgradeRequest = ref(false);
-export const callStats = ref({ durationSec: 0, kbpsUp: 0, kbpsDown: 0 });
+// Traffic is reported in KILOBYTES per second (KB/s), not kilobits: bytes are the
+// unit people read throughput in, and the numbers are friendlier (a plain audio
+// call is ~2.5 KB/s rather than ~20 kbps). One decimal place.
+export const callStats = ref({ durationSec: 0, kBpsUp: 0, kBpsDown: 0 });
 // Group calls: the remote participants' streams (one per peer) for the tile grid.
 export const remoteStreams = ref<MediaStream[]>([]);
 // Group calls: maps a remote stream id → the userId that owns it, so a tile can show
@@ -937,14 +940,16 @@ async function pollStats(): Promise<void> {
     reprimeBytes = false;
     lastBytes = { up, down, ts: now };
     lastLoss = { lost, recv }; // re-baseline loss too, else the new PC's totals read as a loss spike
-    callStats.value = { ...callStats.value, kbpsUp: 0, kbpsDown: 0 };
+    callStats.value = { ...callStats.value, kBpsUp: 0, kBpsDown: 0 };
     return;
   }
   const dt = (now - lastBytes.ts) / 1000 || 1;
-  const kbpsUp = Math.max(0, Math.round(((up - lastBytes.up) * 8) / 1000 / dt));
-  const kbpsDown = Math.max(0, Math.round(((down - lastBytes.down) * 8) / 1000 / dt));
+  // bytes/sec ÷ 1000 = KB/s (decimal kilobytes), rounded to one decimal.
+  const toKBps = (delta: number): number => Math.max(0, Math.round((delta / dt / 1000) * 10) / 10);
+  const kBpsUp = toKBps(up - lastBytes.up);
+  const kBpsDown = toKBps(down - lastBytes.down);
   lastBytes = { up, down, ts: now };
-  callStats.value = { ...callStats.value, kbpsUp, kbpsDown };
+  callStats.value = { ...callStats.value, kBpsUp, kBpsDown };
 
   // Packet loss over this interval → "Connection unstable" (with hysteresis so it
   // doesn't flicker). Never overrides the stronger 'Reconnecting…' state.
@@ -966,7 +971,7 @@ async function pollStats(): Promise<void> {
     const kind = callMeta.value?.kind === 'video' ? 'video' : 'audio';
     setDiagSnapshot([
       `1:1 ${kind} · ${codec} · tier=${oneToOneQc.tier} · ${pc.connectionState}`,
-      `↑${kbpsUp}k ↓${kbpsDown}k · rtt=${rttMs} · loss=${(lossRatio * 100).toFixed(1)}%`,
+      `↑${kBpsUp} ↓${kBpsDown} KB/s · rtt=${rttMs} · loss=${(lossRatio * 100).toFixed(1)}%`,
     ]);
   }
 }
@@ -1190,7 +1195,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   groupHeldPeers.value = [];
   heldCall.value = null;
   incomingSecond.value = null;
-  callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
+  callStats.value = { durationSec: 0, kBpsUp: 0, kBpsDown: 0 };
   setDiagSnapshot([]); // spec 2011: drop the 1:1 ⓘ line so it doesn't linger into the next call
   connectionWarning.value = null;
 
