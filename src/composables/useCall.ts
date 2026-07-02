@@ -36,7 +36,7 @@ import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
-  sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth,
+  sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth, sendJoinRoom,
 } from '@/services/call/signalling';
 import { MeshSession } from '@/services/call/mesh';
 import { syncState } from '@/composables/useSync';
@@ -87,7 +87,10 @@ export const videoQuality = ref<VideoQuality>('auto');
 // the peer's accept/reject; `upgradeRequest` = the peer asked us and a prompt shows.
 export const upgradePending = ref(false);
 export const upgradeRequest = ref(false);
-export const callStats = ref({ durationSec: 0, kbpsUp: 0, kbpsDown: 0 });
+// Traffic is reported in KILOBYTES per second (KB/s), not kilobits: bytes are the
+// unit people read throughput in, and the numbers are friendlier (a plain audio
+// call is ~2.5 KB/s rather than ~20 kbps). One decimal place.
+export const callStats = ref({ durationSec: 0, kBpsUp: 0, kBpsDown: 0 });
 // Group calls: the remote participants' streams (one per peer) for the tile grid.
 export const remoteStreams = ref<MediaStream[]>([]);
 // Group calls: maps a remote stream id → the userId that owns it, so a tile can show
@@ -895,7 +898,7 @@ function stopTimers(): void {
 }
 
 async function pollStats(): Promise<void> {
-  // Use whichever connection is active (1:1 pc, or the SFU connection for group).
+  // Use whichever connection is active (1:1 pc, or the mesh session for group).
   const getStats = pc ? pc.getStats() : groupSession ? groupSession.stats() : null;
   if (!getStats) return;
   let up = 0;
@@ -937,14 +940,16 @@ async function pollStats(): Promise<void> {
     reprimeBytes = false;
     lastBytes = { up, down, ts: now };
     lastLoss = { lost, recv }; // re-baseline loss too, else the new PC's totals read as a loss spike
-    callStats.value = { ...callStats.value, kbpsUp: 0, kbpsDown: 0 };
+    callStats.value = { ...callStats.value, kBpsUp: 0, kBpsDown: 0 };
     return;
   }
   const dt = (now - lastBytes.ts) / 1000 || 1;
-  const kbpsUp = Math.max(0, Math.round(((up - lastBytes.up) * 8) / 1000 / dt));
-  const kbpsDown = Math.max(0, Math.round(((down - lastBytes.down) * 8) / 1000 / dt));
+  // bytes/sec ÷ 1000 = KB/s (decimal kilobytes), rounded to one decimal.
+  const toKBps = (delta: number): number => Math.max(0, Math.round((delta / dt / 1000) * 10) / 10);
+  const kBpsUp = toKBps(up - lastBytes.up);
+  const kBpsDown = toKBps(down - lastBytes.down);
   lastBytes = { up, down, ts: now };
-  callStats.value = { ...callStats.value, kbpsUp, kbpsDown };
+  callStats.value = { ...callStats.value, kBpsUp, kBpsDown };
 
   // Packet loss over this interval → "Connection unstable" (with hysteresis so it
   // doesn't flicker). Never overrides the stronger 'Reconnecting…' state.
@@ -966,7 +971,7 @@ async function pollStats(): Promise<void> {
     const kind = callMeta.value?.kind === 'video' ? 'video' : 'audio';
     setDiagSnapshot([
       `1:1 ${kind} · ${codec} · tier=${oneToOneQc.tier} · ${pc.connectionState}`,
-      `↑${kbpsUp}k ↓${kbpsDown}k · rtt=${rttMs} · loss=${(lossRatio * 100).toFixed(1)}%`,
+      `↑${kBpsUp} ↓${kBpsDown} KB/s · rtt=${rttMs} · loss=${(lossRatio * 100).toFixed(1)}%`,
     ]);
   }
 }
@@ -1190,7 +1195,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   groupHeldPeers.value = [];
   heldCall.value = null;
   incomingSecond.value = null;
-  callStats.value = { durationSec: 0, kbpsUp: 0, kbpsDown: 0 };
+  callStats.value = { durationSec: 0, kBpsUp: 0, kBpsDown: 0 };
   setDiagSnapshot([]); // spec 2011: drop the 1:1 ⓘ line so it doesn't linger into the next call
   connectionWarning.value = null;
 
@@ -1311,7 +1316,7 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
   navigateToCall();
 }
 
-/* ---- group (SFU) ---- */
+/* ---- group (mesh) ---- */
 
 /** Start a group call for a group chat (roomId == group chat id). `members` are the
  *  group participants the server should ring (the initiator supplies them since the
@@ -1345,7 +1350,7 @@ export async function startAdHocGroupCall(
   await startGroupCall(roomId, kind, name || 'Group call', groupAvatar(roomId), members);
 }
 
-/** Shared group-call entry: build + start the SFU session and wire its callbacks.
+/** Shared group-call entry: build + start the mesh session and wire its callbacks.
  *  `members` non-empty (initiator) rings the group; empty (joiner) just joins. */
 async function enterGroupCall(
   roomId: string,
@@ -1522,17 +1527,69 @@ export function callRemainingSlots(): number {
 }
 
 /**
- * Add people to the ACTIVE call (spec 1028, US2). MVP scope: only while already
- * in a GROUP call — promoting a 1:1 into a mesh (and merging an incoming caller)
- * is the deferred follow-up, so a 1:1 has no add path yet. Rings each fresh,
- * capacity-fitting id into the room via the existing in-room `call-ring` seam
- * (same as recallMember); the roster/leg machinery meshes them on accept. Cap is
- * enforced pre-emptively here (planInvite clamps + canAdd reason) with the server
- * `JoinIfRoom` as the authoritative backstop.
+ * Detach the current 1:1 PeerConnection and re-enter as a mesh ROOM, REUSING the
+ * live capture (spec 1028). Closes the 1:1 pc WITHOUT stopping the shared
+ * mic/cam tracks (the mesh takes them over — one capture per device, SC-006) and
+ * marks the old CallMeta torn down so a late 1:1 end-signal can't kill the room.
+ */
+async function convertActiveToRoom(
+  roomId: string,
+  kind: CallKind,
+  name: string,
+  avatar: string,
+  direction: 'incoming' | 'outgoing',
+): Promise<void> {
+  const stream = localStream.value ?? undefined;
+  if (pc) {
+    pc.onicecandidate = null;
+    pc.ontrack = null;
+    pc.onconnectionstatechange = null;
+    try {
+      pc.close();
+    } catch {
+      /* already closed */
+    }
+    pc = null;
+  }
+  pendingOffer = null;
+  pendingIce.length = 0;
+  remoteStream.value = null;
+  remoteHeld.value = false;
+  reprimeBytes = true; // re-baseline byte counters against the new mesh session
+  if (callMeta.value) callMeta.value.tornDown = true; // the old 1:1 meta is retired
+  await enterGroupCall(roomId, kind, name, avatar, direction, [], stream);
+}
+
+/**
+ * Promote the ACTIVE 1:1 into a mesh room (spec 1028, R2). Idempotent when the
+ * active call is already a group. Mints a room, tells the existing peer to follow
+ * via a sealed `joinroom`, then converts our own side (reusing the capture). The
+ * peer's `joinroom` handler auto-joins the same room, and the mesh rebuilds the
+ * pair leg the same way a late joiner already does — no live-PC migration.
+ */
+async function ensureActiveIsRoom(): Promise<void> {
+  const meta = callMeta.value;
+  if (!meta || meta.isGroup) return; // already a room (or no call)
+  if (!meta.peerUserId || !meta.chatId) return;
+  const roomId = uid();
+  await sendJoinRoom(meta.chatId, meta.peerUserId, meta.callId, roomId, meta.kind);
+  const title = await deriveGroupCallTitle([meta.peerUserId]);
+  await convertActiveToRoom(roomId, meta.kind, title, groupAvatar(roomId), 'outgoing');
+}
+
+/**
+ * Add people to the ACTIVE call (spec 1028, US2). If the active call is a 1:1 it
+ * is first promoted into a mesh room (both sides reuse their capture); then each
+ * fresh, capacity-fitting id is rung into the room via the existing in-room
+ * `call-ring` seam (same as recallMember), and the roster/leg machinery meshes
+ * them on accept. The cap is enforced pre-emptively here (planInvite clamps +
+ * canAdd reason) with the server `JoinIfRoom` as the authoritative backstop.
  */
 export async function addPeople(ids: string[]): Promise<void> {
+  if (!callMeta.value || callState.value === 'idle') return;
+  await ensureActiveIsRoom(); // promote a 1:1 first (no-op if already a room)
   const meta = callMeta.value;
-  if (!meta?.isGroup || !meta.roomId) return; // 1:1 add (via promotion) is deferred
+  if (!meta?.isGroup || !meta.roomId) return;
   const self = getSelfUserId() ?? '';
   const plan = planInvite(meta.kind, meta.roster, meta.invited ?? [], self, ids);
   for (const id of plan.toRing) {
@@ -1560,8 +1617,8 @@ export async function cancelInvite(memberId: string): Promise<void> {
   await sendGroupInviteeCancel(memberId, meta.roomId);
 }
 
-// ICE failed for the group PC: start the grace countdown and rebuild the SFU
-// connection (re-join). Only if grace expires without recovery do we end the call.
+// ICE failed for a group leg: start the grace countdown and rebuild the mesh
+// (re-join/recover). Only if grace expires without recovery do we end the call.
 async function onGroupIceFailed(): Promise<void> {
   startGrace();
   const gs = groupSession;
@@ -2025,6 +2082,36 @@ async function connectSecondDirect(
   navigateToCall();
 }
 
+/**
+ * Merge the pending second incoming DIRECT caller INTO the current call (spec
+ * 1028, US1) — the third choice alongside Accept-&-hold and Decline. Promotes the
+ * active call to a mesh room if it's still a 1:1, then tells the incoming caller
+ * to join that room instead of the 1:1 they placed. The caller joins in the
+ * room's kind (audio/video); the held call, if any, is untouched (merge acts only
+ * on the ACTIVE call). Blocked with a reason if the caller wouldn't fit the cap.
+ */
+export async function mergeIncoming(): Promise<void> {
+  const inc = incomingSecond.value;
+  if (!inc || inc.kind !== 'direct' || !inc.from || !inc.chatId) return;
+  await ensureActiveIsRoom(); // promote the active 1:1 (no-op if already a room)
+  const meta = callMeta.value;
+  if (!meta?.roomId) return;
+  const self = getSelfUserId() ?? '';
+  const gate = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1);
+  if (!gate.ok) {
+    await toast(gate.reason);
+    return; // leave the caller in the waiting slot so the user can still hold/decline
+  }
+  // Tell the caller to join our room instead of the 1:1 they dialed; they show as a
+  // "ringing" tile until their leg connects.
+  await sendJoinRoom(inc.chatId, inc.from, inc.callId, meta.roomId, meta.kind);
+  meta.invited = [...(meta.invited ?? []), inc.from];
+  markNotJoining(inc.from, false);
+  armMemberRingTimer(inc.from);
+  incomingSecond.value = null;
+  secondIce = [];
+}
+
 /** Accept the pending second incoming call (US1): put the current call on hold and connect
  *  the new one, reusing the one shared camera/mic. The held call's other side sees "on hold". */
 export async function acceptAndHold(): Promise<void> {
@@ -2197,11 +2284,11 @@ export function toggleCamera(): void {
 /* ---- mid-call media changes (camera flip, screen share, video<->audio) ----
  *
  * replaceTrack swaps a track in-place with NO renegotiation (camera flip, screen
- * share over an existing video sender), so it works for 1:1 AND for the SFU sender
- * in a group call. ADDING or REMOVING video (audio<->video, or sharing the screen
- * from an audio-only call) changes the m-line set and needs a fresh offer/answer;
- * that's only wired for 1:1 here (the SFU is server-offers-only, so group calls must
- * already carry video to flip the camera or screen-share). */
+ * share over an existing video sender), so it works for 1:1 AND for a mesh leg's
+ * sender in a group call. ADDING or REMOVING video (audio<->video, or sharing the
+ * screen from an audio-only call) changes the m-line set and needs a fresh
+ * offer/answer; that renegotiation is only wired for 1:1 here (a group call's mesh
+ * must already carry video to flip the camera or screen-share). */
 
 let activeScreenTrack: MediaStreamTrack | null = null;
 let screenAddedVideo = false; // screen share added video to an audio-only 1:1 call
@@ -2522,7 +2609,7 @@ export async function toggleScreenShare(): Promise<void> {
     screenAddedVideo = true;
     await renegotiate();
   } else {
-    // Audio-only group call: can't add video without an SFU re-offer.
+    // Audio-only group call: video is added per-leg via mesh renegotiation.
     screenTrack.stop();
     await toast('Start the call with video to share your screen');
     return;
@@ -2882,6 +2969,15 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         beginResumeCountdown(pc); // 5s heads-up + cue before WE become visible/audible again
         return;
       }
+      // Promote/merge (spec 1028): the peer is turning this 1:1 into a group (or
+      // merging us into their call). Follow them into the mesh room, reusing our
+      // capture — the same late-join path builds the fresh legs. Works whether we
+      // were the active peer or still dialing them (a merged-in caller).
+      if (signal.type === 'joinroom' && signal.roomId) {
+        const title = await deriveGroupCallTitle([meta.peerUserId ?? '']);
+        await convertActiveToRoom(signal.roomId, signal.kind ?? meta.kind, title, groupAvatar(signal.roomId), 'incoming');
+        return;
+      }
       // Connection-health report (spec 0007 US2): the peer is telling us the max quality it wants
       // from us. Keep only the newest (by seq) and apply it as a ceiling in adaptOneToOne.
       if (signal.type === 'qos' && signal.qos) {
@@ -3097,6 +3193,7 @@ export function useCall() {
     acceptUpgrade,
     rejectUpgrade,
     addPeople,
+    mergeIncoming,
     callRemainingSlots,
     recallMember,
     cancelInvite,
