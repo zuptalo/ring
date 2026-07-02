@@ -25,6 +25,15 @@ export function firstLink(body: string): string | undefined {
   return body.match(LINK_RE)?.[0];
 }
 
+/**
+ * Whether a just-sent text should get a link preview: it contains a link AND the user has
+ * not turned previews off (privacy.disableLinkPreviews). Pure so the gate is unit-testable
+ * without the message pipeline; `queries.ts` passes the resolved setting value.
+ */
+export function shouldBuildLinkPreview(body: string, previewsDisabled: boolean): boolean {
+  return !previewsDisabled && firstLink(body) !== undefined;
+}
+
 // Bounds that keep a preview from bloating the E2EE ratchet packet. The card
 // renders up to ~260px CSS-wide, so 640px (≈2x) stays sharp on retina displays
 // without letting the inline image grow unbounded.
