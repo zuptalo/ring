@@ -47,6 +47,7 @@ Specs are grouped by category band; status moves
 | [1021](specs/1021-support-contributions/spec.md) | Support the project (pay-what-you-want contributions) | 🔵 in-review |
 | [1024](specs/1024-resilient-posting-and-storage/spec.md) | Resilient posting & on-device storage management | 🔵 in-review |
 | [1025](specs/1025-app-ux-polish/spec.md) | App-wide UX polish and fixes | 🔵 in-review |
+| [1026](specs/1026-friends-only-and-settings-refinements/spec.md) | Friends-only messaging with privacy, settings and help refinements | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
