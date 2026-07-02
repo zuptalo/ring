@@ -17,6 +17,9 @@
 :root {
   --app-text: #000000;
   --app-text-muted: rgba(0, 0, 0, 0.55);
+  /* Secondary/explanatory text (setting captions, help paragraphs). Stronger than
+     --app-text-muted so descriptions stay comfortably readable on both themes. */
+  --app-text-secondary: rgba(0, 0, 0, 0.72);
   --app-surface: rgba(0, 0, 0, 0.04);
   --app-border: rgba(0, 0, 0, 0.1);
   --app-otp-border: rgba(0, 0, 0, 0.22);
@@ -48,6 +51,7 @@
 :root.ion-palette-dark {
   --app-text: #ffffff;
   --app-text-muted: rgba(255, 255, 255, 0.6);
+  --app-text-secondary: rgba(255, 255, 255, 0.78);
   --app-surface: rgba(255, 255, 255, 0.05);
   --app-border: rgba(255, 255, 255, 0.12);
   --app-otp-border: rgba(255, 255, 255, 0.25);

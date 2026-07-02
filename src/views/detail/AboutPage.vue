@@ -26,7 +26,7 @@
         <ion-list :inset="true">
           <ion-item lines="none">
             <ion-label class="ion-text-wrap maker">
-              <h2>Made by Zuptalo, with love for privacy 🔒</h2>
+              <h2>Made with love for privacy 🔒</h2>
               <p>
                 I built Ring because I wanted a messenger that doesn't watch you. No
                 phone number, no ads, nobody in the middle reading your stuff. Your
