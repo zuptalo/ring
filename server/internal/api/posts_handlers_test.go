@@ -13,11 +13,14 @@ import (
 	"ring/server/internal/ws"
 )
 
-// recordingNotifier records who was woken via NotifyPost, so a test can assert which
-// engagement actually wakes a device (vs. only syncing live).
+// recordingNotifier records who was woken via NotifyPost (new post) and
+// NotifyPostActivity (engagement on your post, spec 1031), so a test can assert which
+// event actually wakes a device (vs. only syncing live) — and, for engagement, that
+// ONLY the post owner is woken.
 type recordingNotifier struct {
-	mu    sync.Mutex
-	posts []string
+	mu       sync.Mutex
+	posts    []string
+	activity []string // "<userID>:<postID>" per NotifyPostActivity call
 }
 
 func (n *recordingNotifier) Notify(context.Context, string)     {}
@@ -27,6 +30,11 @@ func (n *recordingNotifier) NotifyPost(_ context.Context, userID string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.posts = append(n.posts, userID)
+}
+func (n *recordingNotifier) NotifyPostActivity(_ context.Context, userID, postID string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.activity = append(n.activity, userID+":"+postID)
 }
 func (n *recordingNotifier) postPushCount() int {
 	n.mu.Lock()
@@ -43,10 +51,26 @@ func (n *recordingNotifier) pushedTo(userID string) bool {
 	}
 	return false
 }
+func (n *recordingNotifier) activityPushCount() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.activity)
+}
+func (n *recordingNotifier) activityPushedTo(userID, postID string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, e := range n.activity {
+		if e == userID+":"+postID {
+			return true
+		}
+	}
+	return false
+}
 func (n *recordingNotifier) reset() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.posts = nil
+	n.activity = nil
 }
 
 // fakePostConn is a ConnectionStore whose Connected() answers from an explicit
@@ -725,45 +749,85 @@ func TestCommentRateLimitedPerPost(t *testing.T) {
 	}
 }
 
-// TestReactionDoesNotPushButCommentDoes: a reaction (add OR remove) syncs live but
-// never wakes a device; only a new comment fires a web push to the audience. The server
-// can't see add-vs-remove (sealed under K_post), so it gates on the unsealed kind.
-func TestReactionDoesNotPushButCommentDoes(t *testing.T) {
+// TestEngagementPushesOwnerOnly (spec 1031): engagement wakes ONLY the post owner —
+// a reaction or comment by someone else fires exactly one NotifyPostActivity to the
+// author; the rest of the audience, the actor, and tombstones never wake anyone. The
+// legacy audience-wide NotifyPost for comments is gone; NotifyPost stays new-post-only.
+func TestEngagementPushesOwnerOnly(t *testing.T) {
 	conn := newFakePostConn()
 	notif := &recordingNotifier{}
 	srv := newPostTestServerN(conn, newFakePostStore(), notif)
-	tokA, aliceID, _ := registerNamed(t, srv, "alice")
-	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	tokA, aliceID, _ := registerNamed(t, srv, "alice") // post author
+	tokB, bobID, _ := registerNamed(t, srv, "bob")     // engaging friend
+	_, carolID, _ := registerNamed(t, srv, "carol")    // bystander in the audience
 	conn.befriend(aliceID, bobID)
+	conn.befriend(aliceID, carolID)
 
-	body := `{"id":"` + postID + `","blobId":"cap","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	body := `{"id":"` + postID + `","blobId":"cap","envelopes":[` +
+		`{"recipient":"` + bobID + `","wrappedKey":"WKb"},{"recipient":"` + carolID + `","wrappedKey":"WKc"}]}`
 	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
 		t.Fatalf("create status = %d; body=%s", rr.Code, rr.Body.String())
 	}
-	// A brand-new post DOES push its audience; clear the recorder to isolate engagement.
-	if !notif.pushedTo(bobID) {
-		t.Fatalf("expected the new post to push the audience (bob)")
+	// A brand-new post still pushes its audience via the post tickle (unchanged).
+	if !notif.pushedTo(bobID) || !notif.pushedTo(carolID) {
+		t.Fatalf("expected the new post to push the audience (bob + carol)")
 	}
 	notif.reset()
 
-	// Bob reacts → the audience syncs live but NO device is woken.
+	// Bob reacts → exactly one activity push, to the author. Nobody else; no post tickle.
 	react := `{"id":"22222222-2222-2222-2222-222222222222","kind":"reaction","payload":"SEALED"}`
 	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, react); rr.Code != http.StatusCreated {
 		t.Fatalf("react status = %d; body=%s", rr.Code, rr.Body.String())
 	}
-	if n := notif.postPushCount(); n != 0 {
-		t.Errorf("reaction pushed %d device(s); want 0 (reactions never wake a device)", n)
+	if !notif.activityPushedTo(aliceID, postID) {
+		t.Errorf("expected the reaction to push the post author (alice)")
 	}
+	if n := notif.activityPushCount(); n != 1 {
+		t.Errorf("reaction fired %d activity pushes; want exactly 1 (the author)", n)
+	}
+	if n := notif.postPushCount(); n != 0 {
+		t.Errorf("reaction fired %d post tickles; want 0 (engagement never rides the post tickle)", n)
+	}
+	notif.reset()
 
-	// Bob comments → the post author (alice) IS pushed; the actor (bob) never is.
+	// Bob comments → same: only the author is woken; carol (audience) and bob never are.
 	comment := `{"id":"33333333-3333-3333-3333-333333333333","kind":"comment","payload":"SEALED"}`
 	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, comment); rr.Code != http.StatusCreated {
 		t.Fatalf("comment status = %d; body=%s", rr.Code, rr.Body.String())
 	}
-	if !notif.pushedTo(aliceID) {
+	if !notif.activityPushedTo(aliceID, postID) {
 		t.Errorf("expected the comment to push the post author (alice)")
 	}
-	if notif.pushedTo(bobID) {
-		t.Errorf("a comment must not push its own author (bob)")
+	if notif.activityPushedTo(bobID, postID) || notif.activityPushedTo(carolID, postID) {
+		t.Errorf("a comment must never push the actor (bob) or a bystander (carol)")
+	}
+	if n := notif.activityPushCount(); n != 1 {
+		t.Errorf("comment fired %d activity pushes; want exactly 1 (the author)", n)
+	}
+	if n := notif.postPushCount(); n != 0 {
+		t.Errorf("comment fired %d post tickles; want 0 (the audience-wide comment push is removed)", n)
+	}
+	notif.reset()
+
+	// Bob tombstones his comment → removals never wake anyone.
+	tomb := `{"id":"44444444-4444-4444-4444-444444444444","kind":"tombstone","target":"33333333-3333-3333-3333-333333333333"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, tomb); rr.Code != http.StatusCreated {
+		t.Fatalf("tombstone status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if n := notif.activityPushCount() + notif.postPushCount(); n != 0 {
+		t.Errorf("tombstone fired %d pushes; want 0", n)
+	}
+
+	// Alice engages her own post → self-actions never wake anyone (not even alice).
+	selfReact := `{"id":"55555555-5555-5555-5555-555555555555","kind":"reaction","payload":"SEALED"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokA, selfReact); rr.Code != http.StatusCreated {
+		t.Fatalf("self react status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	selfComment := `{"id":"66666666-6666-6666-6666-666666666666","kind":"comment","payload":"SEALED"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokA, selfComment); rr.Code != http.StatusCreated {
+		t.Fatalf("self comment status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if n := notif.activityPushCount() + notif.postPushCount(); n != 0 {
+		t.Errorf("self-engagement fired %d pushes; want 0", n)
 	}
 }

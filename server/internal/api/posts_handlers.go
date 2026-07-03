@@ -301,29 +301,31 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Nudge everyone who can see the post (content-free) to pull the new engagement.
+	// This WS fan-out is DATA SYNC, not alerting: a reaction appearing/disappearing
+	// must reach online viewers immediately so the post renders correctly for all.
 	if aud, err := h.Posts.PostAudience(r.Context(), postID); err == nil {
 		for _, u := range aud {
 			if u == uid {
 				continue
 			}
-			// The content-free WS nudge fires for ALL engagement (live reconciliation —
-			// a reaction appearing/disappearing must reach online viewers immediately).
 			if h.Hub != nil {
 				if b, e := json.Marshal(map[string]any{"t": "post-engagement", "post": postID}); e == nil {
 					h.Hub.Send(u, b)
 				}
 			}
-			// A web push (which can WAKE an offline device) fires ONLY for a new comment.
-			// Reactions (add AND remove) and comment tombstones sync live but never wake a
-			// device — removing a reaction or deleting a comment isn't worth a notification,
-			// and the server can't tell an add from a remove anyway (the `remove` flag is
-			// sealed under K_post), so gating on the unsealed `kind` is the zero-knowledge-
-			// clean way to silence them. It's a WALL event, so use the POST tickle (the SW
-			// suppresses the system notification when a window client exists, and a closed
-			// device shows the Wall notification — not a mislabeled "New message").
-			if h.Notifier != nil && req.Kind == "comment" {
-				h.Notifier.NotifyPost(r.Context(), u)
-			}
+		}
+	}
+	// A web push (which can WAKE an offline device) goes to the POST OWNER only
+	// (spec 1031): engagement is an interaction with THEIR content, so nobody else —
+	// not the audience, not co-commenters, and never the actor — is woken for it.
+	// Tombstones (removals) never push. The reaction add-vs-remove flag is sealed
+	// under K_post, so the owner's DEVICE makes the final show/skip call after
+	// decrypting; the server only routes on metadata it already holds (author id).
+	// A failed author lookup skips the push rather than failing the write — the
+	// engagement is stored and the WS frames above already went out.
+	if h.Notifier != nil && !tombstone {
+		if author, err := h.Posts.PostAuthor(r.Context(), postID); err == nil && author != "" && author != uid {
+			h.Notifier.NotifyPostActivity(r.Context(), author, postID)
 		}
 	}
 	httpx.JSON(w, http.StatusCreated, map[string]any{"id": req.ID})

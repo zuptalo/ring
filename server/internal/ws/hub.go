@@ -88,6 +88,12 @@ type Notifier interface {
 	NotifyCall(ctx context.Context, userID string)
 	NotifyConn(ctx context.Context, userID string)
 	NotifyPost(ctx context.Context, userID string)
+	// NotifyPostActivity wakes the POST OWNER's devices for engagement (a reaction or
+	// comment) on their post (spec 1031). Unlike the other tickles it carries the post
+	// id — still zero-knowledge (routing metadata the server already holds, sealed
+	// inside the encrypted Web Push envelope) — so the SW can pull that post's
+	// engagement and decide locally what, if anything, to show.
+	NotifyPostActivity(ctx context.Context, userID, postID string)
 }
 
 // frame is the wire shape. The relay only reads t/id/to/from/refId/messageId;

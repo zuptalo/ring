@@ -18,6 +18,8 @@
  * IDB-backed session token (no DOM / Ionic / page-only modules).
  */
 import { attemptDeviceUnlock } from './crypto/identity';
+import { ready as sodiumReady } from './crypto/primitives';
+import { openPostEngagement } from './posts';
 import { previewPacket } from './messaging';
 import { readHiddenSet, readHiddenSetOrNull } from './hidden-chats';
 import { readSessionToken, readSessionUserId } from './session';
@@ -714,6 +716,153 @@ export async function previewPosts(): Promise<{ notes: ConnNote[]; newCount: num
     await put<Setting<number>>('settings', { key: POST_SINCE_KEY, value: data.cursor });
   }
   return { notes, newCount: fresh.length };
+}
+
+/* ---- owner-only Wall engagement notifications (spec 1031) ---- */
+
+// A `post-activity` push means someone engaged with OUR post. The payload carries the
+// post id (sealed inside the encrypted push envelope), so the SW pulls exactly that
+// post's engagement. Actor + kind are server metadata (no decryption needed for a
+// comment note); the reaction add-vs-remove flag is sealed under K_post, so it is
+// opened LOCALLY with the key on our own post row — an unopenable reaction is skipped
+// (never a spurious alert for what might be a removal). A ledger keyed by engagement
+// id keeps repeated tickles idempotent, mirroring the conn ledger.
+const WALL_ACT_SHOWN_KEY = 'sw.wallActShown';
+const WALL_ACT_SHOWN_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const WALL_ACT_SHOWN_MAX = 500;
+const WALL_ACT_RECENT_MS = 10 * 60 * 1000;
+
+export interface PostActivityRow {
+  id: string;
+  actor: string;
+  kind: string;
+  payload: string;
+  createdAt: number;
+}
+
+export interface PostActivityItem {
+  id: string;
+  actor: string;
+  kind: 'reaction' | 'comment';
+}
+
+/**
+ * The pure filter behind previewPostActivity: which engagement rows deserve a note?
+ * Owner-only is re-checked HERE (the post row must be ours — defense in depth against
+ * a misrouted push), self/stale/already-shown rows drop, and a reaction survives only
+ * when `openReaction` proves it is an ADD. `openReaction` may throw (locked device /
+ * cold start) — that reaction is skipped silently while comments still pass.
+ */
+export function classifyPostActivity(args: {
+  post: { outgoing?: boolean; postKey?: string } | null | undefined;
+  self: string;
+  rows: PostActivityRow[];
+  seen: Set<string>;
+  now: number;
+  openReaction: (postKeyB64: string, payload: string) => { remove?: boolean };
+}): PostActivityItem[] {
+  const { post, self, rows, seen, now, openReaction } = args;
+  if (!post?.outgoing) return []; // not ours (or pruned/expired) → never alert
+  const cutoff = now - WALL_ACT_RECENT_MS;
+  const items: PostActivityItem[] = [];
+  for (const r of rows) {
+    if (!r.actor || r.actor === self) continue; // self-actions never alert
+    if (seen.has(r.id)) continue; // already announced on an earlier wake
+    if ((r.createdAt ?? 0) <= cutoff) continue; // stale backlog must not flood
+    if (r.kind === 'comment') {
+      items.push({ id: r.id, actor: r.actor, kind: 'comment' });
+    } else if (r.kind === 'reaction') {
+      if (!post.postKey) continue; // no key → can't prove add-vs-remove → stay silent
+      try {
+        if (openReaction(post.postKey, r.payload).remove) continue; // removals never alert
+      } catch {
+        continue; // unopenable (locked/cold) → silence beats a possibly-wrong alert
+      }
+      items.push({ id: r.id, actor: r.actor, kind: 'reaction' });
+    }
+    // tombstones / views / unknown kinds never alert (spec 1031 FR-011)
+  }
+  return items;
+}
+
+/** Render the surviving items as notification note(s): one item → an actor-named
+ *  note; several → ONE collapsed note (per-post tag) covering all their ledger keys. */
+export function buildPostActivityNotes(
+  postId: string,
+  items: PostActivityItem[],
+  names: Map<string, string>,
+): ConnNote[] {
+  if (!items.length) return [];
+  const url = `/wall/post/${postId}`;
+  const tag = `ring:post:act:${postId}`;
+  if (items.length === 1) {
+    const it = items[0];
+    return [{
+      keys: [it.id],
+      title: names.get(it.actor) ?? 'Someone',
+      body: it.kind === 'comment' ? 'commented on your post' : 'reacted to your post',
+      url,
+      tag,
+    }];
+  }
+  return [{ keys: items.map((i) => i.id), title: 'Ring', body: 'New activity on your post', url, tag }];
+}
+
+async function loadWallActShownEntries(): Promise<ShownEntry[]> {
+  const raw = await setting<ShownEntry[]>(WALL_ACT_SHOWN_KEY, []);
+  const cutoff = Date.now() - WALL_ACT_SHOWN_TTL_MS;
+  return raw.filter((e) => e && typeof e.ts === 'number' && e.ts >= cutoff);
+}
+
+/**
+ * Build the closed-app notification(s) for engagement on one of OUR posts. Fetches
+ * that post's engagement list, filters via classifyPostActivity (owner re-check,
+ * ledger, recency, removal-proofing), resolves actor names from the public directory
+ * (like previewPosts), and persists the ledger for what will be displayed. Returns []
+ * on any failure — a wrong silence self-heals on next open; a wrong alert doesn't.
+ */
+export async function previewPostActivity(postId: string): Promise<ConnNote[]> {
+  if (!postId) return [];
+  const token = await readSessionToken();
+  if (!token) return [];
+  const self = (await readSessionUserId()) ?? '';
+  const post = await get<{ id: string; outgoing?: boolean; postKey?: string }>('posts', postId);
+  let rows: PostActivityRow[] = [];
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/posts/${encodeURIComponent(postId)}/engagement`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return [];
+    rows = ((await res.json()) as { items?: PostActivityRow[] }).items ?? [];
+  } catch {
+    return [];
+  }
+  // libsodium must be initialized before opening sealed reaction payloads; comments
+  // never need it, so a failed init only silences reactions (classify's catch).
+  await sodiumReady().catch(() => {});
+  const seen = new Set((await loadWallActShownEntries()).map((e) => e.id));
+  const items = classifyPostActivity({ post, self, rows, seen, now: Date.now(), openReaction: openPostEngagement });
+  if (!items.length) return [];
+  const names = new Map<string, string>();
+  for (const actor of new Set(items.map((i) => i.actor))) {
+    names.set(actor, await connName(actor, token));
+  }
+  // Persist the ledger for what we're about to display so a repeated tickle
+  // (collapse topic re-fire, multi-device) doesn't re-announce the same items.
+  const entries = await loadWallActShownEntries();
+  const known = new Set(entries.map((e) => e.id));
+  const ts = Date.now();
+  for (const it of items) if (!known.has(it.id)) entries.push({ id: it.id, ts });
+  await put<Setting<ShownEntry[]>>('settings', { key: WALL_ACT_SHOWN_KEY, value: entries.slice(-WALL_ACT_SHOWN_MAX) });
+  return buildPostActivityNotes(postId, items, names);
 }
 
 /** Persist the conn-ledger keys we displayed, so the same event doesn't re-notify

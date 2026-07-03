@@ -8,7 +8,9 @@ package push
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -83,6 +85,16 @@ const (
 	// comes online (like a message), collapsed per subscription so a burst is one wake.
 	postTTL   = 7 * 24 * 60 * 60 // 604800s
 	postTopic = "ring-post"
+
+	// postActivityTTL: an "engagement on your post" wake follows the post-tickle
+	// holding rationale (worth learning about when the device next comes online),
+	// but posts themselves live at most 72h, so holding the wake longer than the
+	// post can exist would only ever wake a device for content that is already
+	// gone (the SW would fetch, find nothing fresh, and show nothing).
+	postActivityTTL = 72 * 60 * 60 // 259200s — the max post lifetime
+	// The activity topic is PER POST (see postActivityTopic) so a burst of
+	// reactions/comments on one post collapses to a single wake per device, while
+	// activity on a different post still wakes separately.
 
 	// versionTTL / versionTopic: a "new version" announcement is sent during the device's
 	// local daytime window (09:00–17:00, spec 1016), so it must EXPIRE within a few hours
@@ -220,9 +232,40 @@ func (n *Notifier) NotifyConn(ctx context.Context, userID string) {
 // NotifyPost pushes a content-free WALL-POST tickle (spec 0003): long-ish lived +
 // collapsible like a message, so an offline device still learns of it on wake; the SW
 // then shows a generic "new post" notification (closed) or nudges a live page to pull
-// + show the rich in-app banner. Carries no identity.
+// + show the rich in-app banner. Carries no identity. Since spec 1031 this tickle
+// means NEW POST (or revocation) only — engagement rides NotifyPostActivity instead.
 func (n *Notifier) NotifyPost(ctx context.Context, userID string) {
 	n.notify(ctx, userID, postParams())
+}
+
+// postActivityTopic derives the per-post Web Push collapse topic. RFC 8030 caps a
+// topic at 32 URL-safe base64 characters and a raw uuid is 36, so use a base64url
+// SHA-256 prefix: bursts on ONE post collapse to a single wake per device while
+// activity on different posts still wakes separately. The hash also keeps the raw
+// post id out of the (push-service-visible) topic header — the payload itself is
+// encrypted, the topic is not.
+func postActivityTopic(postID string) string {
+	sum := sha256.Sum256([]byte(postID))
+	return "act-" + base64.RawURLEncoding.EncodeToString(sum[:])[:24]
+}
+
+// NotifyPostActivity wakes the POST OWNER's devices for engagement (a reaction or a
+// comment by someone else) on their post — spec 1031's owner-only notification
+// routing. The payload carries the post id (routing metadata the server already
+// holds, sealed inside the per-subscription encrypted push envelope) so the SW can
+// pull exactly that post's engagement and decide locally what to show; the reaction
+// add-vs-remove flag stays sealed under K_post, so that judgement NEVER happens here.
+func (n *Notifier) NotifyPostActivity(ctx context.Context, userID, postID string) {
+	payload, err := json.Marshal(map[string]string{"t": "post-activity", "post": postID})
+	if err != nil {
+		return
+	}
+	n.notify(ctx, userID, pushParams{
+		payload: payload,
+		ttl:     postActivityTTL,
+		urgency: webpush.UrgencyHigh,
+		topic:   postActivityTopic(postID),
+	})
 }
 
 // SendVersion delivers the content-free version-announcement tickle to ONE subscription
