@@ -224,6 +224,21 @@ counts correct, server queue empty only for messages that are safely stored.
 - **Deferred frame**: a queued message the background path chose not to apply (ineligible or
   failed); it keeps today's notification behavior and is applied on app open.
 
+## Zero-Knowledge Impact *(constitution Principle I)*
+
+- **What crosses the wire**: nothing new. The same content-free push tickle, the same
+  fetch of the sealed pending queue, and the same receipt confirmation the open app
+  already sends. Only the *timing* of the confirmation changes (it can now happen while
+  the app is closed).
+- **What is encrypted**: everything, unchanged — messages remain sealed end-to-end;
+  decryption and storage happen only on the recipient's device.
+- **What metadata the server unavoidably sees**: identical to today — that a device
+  fetched its queue and which sealed frames it confirmed. The server already learns
+  "device received these frames" at fetch time (delivered receipts), so earlier
+  confirmation adds no new signal.
+- **Why**: this feature is purely a client-side change in when the device does its own
+  local bookkeeping; the server's knowledge, storage, and API surface are unchanged.
+
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
