@@ -80,8 +80,8 @@ empty server queue BEFORE reconnect; reconnect → no duplicates.
       vote, rekey/control → defer), unknown sender → defer, unresolvable chat → defer
 - [ ] T014 [P] [US1] Write failing unit tests for the apply path in
       `src/services/sw-drain.test.ts`: applied frame = message row + chat RMW
-      (unread+1/lastMessage/lastMessageTime) + ledger mark + session in ONE transaction and
-      its id queued for ack; replay of an applied frame = re-ack only (unread stays 1);
+      (unread+1/lastMessage/lastMessageTime) + ledger mark + session + staged `metaWrites`
+      (e.g. send-preamble clear) in ONE transaction and its id queued for ack; replay of an applied frame = re-ack only (unread stays 1);
       transaction abort → no ledger mark, no ack; ack POSTed only after commit;
       media-by-reference persists `pendingMedia` without any fetch
 - [ ] T015 [US1] Implement `src/services/sw-drain.ts` per contracts/sw-receive.md: gate
@@ -168,10 +168,14 @@ race all end with each message exactly once and correct unread.
 - [ ] T028 Walk `specs/1032-store-messages-push/quickstart.md` end-to-end on the dev stack
       (`make start`), including the degrade checklist and the DevTools kill-mid-drain
       probe; fix anything that drifted
-- [ ] T029 Full gates: `npm run build`, `npx vitest run` (coverage floors hold),
+- [ ] T029 Security review (constitution Principle IV): adversarial pass over the lock
+      discipline, `openPacketStaged`, and the atomic-commit/ack ordering against
+      `specs/1032-store-messages-push/contracts/sw-receive.md` invariants 1–5; record the
+      outcome in the PR description before requesting merge
+- [ ] T030 Full gates: `npm run build`, `npx vitest run` (coverage floors hold),
       `cd server && go build ./... && go vet ./... && go test ./...`,
       `npm run test:e2e` — all green with the flag defaulted off
-- [ ] T030 Flip spec `**Status**` to `in-review` in
+- [ ] T031 Flip spec `**Status**` to `in-review` in
       `specs/1032-store-messages-push/spec.md` and run `make roadmap`
 
 ## Dependencies & Execution Order
