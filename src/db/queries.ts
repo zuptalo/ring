@@ -22,6 +22,7 @@ import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive, pushWakeActive } from '@/services/notify';
+import { wallActivityAlert } from '@/services/wall-activity-policy';
 import { compressImage, compressVideo, achievedQuality } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
@@ -2670,6 +2671,57 @@ export async function notifyNewPost(authorId: string): Promise<void> {
   });
 }
 
+// Engagement items already alerted this session (one alert per item, even if the WS
+// nudge re-fires or a re-sync re-applies the same rows). Mirrors notifiedPostIds.
+const notifiedEngagementIds = new Set<string>();
+
+/** Surface an alert for fresh engagement (a reaction or comment by someone else) on
+ *  OUR OWN post — spec 1031's owner-only notifications. Called from the live
+ *  `post-engagement` WS nudge with whatever syncEngagement newly applied. Every rule
+ *  (owner-only, self-exclusion, removals/views never, freshness, the "Activity on
+ *  your posts" setting, temp mute, dedupe) lives in the pure wall-activity-policy
+ *  predicate; per-person Wall mute/hide is deliberately NOT consulted (it governs
+ *  new-post alerts only — engagement with your own content always concerns you). */
+export async function notifyPostActivity(postId: string, fresh: FreshEngagement[]): Promise<void> {
+  if (!fresh.length) return;
+  const self = getSelfUserId();
+  const post = await get<Post>('posts', postId);
+  if (!self || !post) return; // post pruned/expired before we got here → no dead-end alert
+  const [activityEnabled, tempMuted] = await Promise.all([
+    getSetting<boolean>('notifications.wall.activity', true),
+    isWallTempMuted(),
+  ]);
+  for (const item of fresh) {
+    const decision = wallActivityAlert({
+      isOwnPost: !!post.outgoing,
+      actor: item.actor,
+      self,
+      type: item.type,
+      deleted: !!item.deleted,
+      at: item.at,
+      now: now(),
+      activityEnabled: activityEnabled ?? true,
+      tempMuted,
+      alreadyNotified: notifiedEngagementIds.has(item.id),
+    });
+    if (decision !== 'alert') continue;
+    notifiedEngagementIds.add(item.id);
+    const c = await getContact(item.actor);
+    void notifyIncoming({
+      kind: 'system',
+      name: c?.name ?? 'Someone',
+      body:
+        item.type === 'reaction'
+          ? item.emoji
+            ? `reacted ${item.emoji} to your post`
+            : 'reacted to your post'
+          : 'commented on your post',
+      avatar: c?.avatar,
+      url: `/wall/post/${postId}`,
+    });
+  }
+}
+
 /* ---- Wall mute / hide controls (client-only ledgers) ---- */
 
 async function getWallLedger(key: string): Promise<Record<string, boolean>> {
@@ -2891,12 +2943,28 @@ interface CommentData {
   at: number;
 }
 
+/** One engagement item syncEngagement newly applied — enough for the caller to
+ *  decide (via wall-activity-policy) whether it deserves an alert (spec 1031).
+ *  `id` is the SERVER engagement id (unique per submit), so it doubles as the
+ *  notified-once dedupe key. */
+export interface FreshEngagement {
+  id: string;
+  type: 'reaction' | 'comment';
+  actor: string;
+  emoji?: string;
+  at: number;
+  deleted?: boolean;
+}
+
 /** Pull + decrypt a post's engagement and apply it: reactions (LWW per actor),
- *  comments (append, keyed by engagement id), and tombstones (mark target removed). */
-export async function syncEngagement(postId: string): Promise<void> {
-  if (!isUnlockedNow()) return;
+ *  comments (append, keyed by engagement id), and tombstones (mark target removed).
+ *  Returns the items it NEWLY applied so the caller can alert the post owner about
+ *  fresh reactions/comments (spec 1031); existing callers may ignore the return. */
+export async function syncEngagement(postId: string): Promise<FreshEngagement[]> {
+  if (!isUnlockedNow()) return [];
   const post = await get<Post>('posts', postId);
-  if (!post?.postKey) return;
+  if (!post?.postKey) return [];
+  const applied: FreshEngagement[] = [];
   try {
     const { items } = await apiListEngagement(postId);
     let latestActivity = 0; // newest reaction/comment time seen → keep-alive
@@ -2916,6 +2984,7 @@ export async function syncEngagement(postId: string): Promise<void> {
           id, postId, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at,
           deleted: data.remove || undefined, updatedAt: now(),
         });
+        applied.push({ id: it.id, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at, deleted: data.remove || undefined });
       } else if (it.kind === 'comment') {
         if (await get<PostEngagement>('postEngagement', it.id)) continue; // already have it
         let data: CommentData;
@@ -2928,6 +2997,7 @@ export async function syncEngagement(postId: string): Promise<void> {
         await put<PostEngagement>('postEngagement', {
           id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at, updatedAt: now(),
         });
+        applied.push({ id: it.id, type: 'comment', actor: it.actor, at: data.at });
       } else if (it.kind === 'tombstone') {
         // The tombstone's payload is the (cleartext) target engagement id.
         const target = await get<PostEngagement>('postEngagement', it.payload);
@@ -2940,6 +3010,7 @@ export async function syncEngagement(postId: string): Promise<void> {
   } catch {
     /* offline / transient */
   }
+  return applied;
 }
 
 /** Live reactions on a post (non-removed), oldest-first. */

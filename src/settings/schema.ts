@@ -508,8 +508,9 @@ export const SETTINGS: Record<string, SettingNode> = {
         header: 'Wall notifications',
         items: [
           { type: 'toggle', title: 'Show notifications', key: 'notifications.wall.show', default: true },
+          { type: 'toggle', title: 'Activity on your posts', key: 'notifications.wall.activity', default: true },
         ],
-        footer: 'Get notified when a friend shares a new post on their Wall.',
+        footer: 'Get notified when a friend shares a new post on their Wall, and when someone reacts to or comments on your posts.',
       },
       {
         header: 'Calls',

@@ -21,7 +21,7 @@ import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { CacheFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import {
-  previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, markConnShown,
+  previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
   coalesceForShow, loadShownSummary, setting,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
@@ -269,18 +269,21 @@ async function updateAppBadge(newCount: number): Promise<void> {
 
 /** Decode the content-free tickle's frame type ('call' shows a ring, 'conn' is a
  *  friend-request lifecycle event; anything else, including an unreadable/absent
- *  payload, is treated as a message). */
-function pushKind(event: PushEvent): 'call' | 'msg' | 'conn' | 'post' | 'version' {
+ *  payload, is treated as a message). 'post-activity' (spec 1031) is the one tickle
+ *  that carries data: the id of OUR post that received engagement — returned as
+ *  `post` so the handler can pull exactly that post's engagement. */
+function pushKind(event: PushEvent): { kind: 'call' | 'msg' | 'conn' | 'post' | 'post-activity' | 'version'; post?: string } {
   try {
-    const data = event.data?.json() as { t?: string } | undefined;
-    if (data?.t === 'call') return 'call';
-    if (data?.t === 'conn') return 'conn';
-    if (data?.t === 'post') return 'post';
-    if (data?.t === 'version') return 'version';
+    const data = event.data?.json() as { t?: string; post?: string } | undefined;
+    if (data?.t === 'call') return { kind: 'call' };
+    if (data?.t === 'conn') return { kind: 'conn' };
+    if (data?.t === 'post') return { kind: 'post' };
+    if (data?.t === 'post-activity') return { kind: 'post-activity', post: data.post };
+    if (data?.t === 'version') return { kind: 'version' };
   } catch {
     /* not JSON → treat as a message */
   }
-  return 'msg';
+  return { kind: 'msg' };
 }
 
 /** "What's new" notification after a new version is deployed. The version tickle is
@@ -316,11 +319,11 @@ async function showVersionNotification(): Promise<void> {
   });
 }
 
-/** Generic, identity-safe notification for Wall activity — a new post OR engagement
- *  (reaction/comment), which share the one content-free post tickle. Shown only when the
- *  app is closed; a live page shows the rich in-app banner / live update via the WS
- *  frame, so the SW stays silent there to avoid a duplicate. "Activity" rather than
- *  "post" so it reads honestly for a reaction/comment too. */
+/** Generic, identity-safe notification for a NEW Wall post (since spec 1031 the post
+ *  tickle is new-posts-only — engagement rides the 'post-activity' tickle to the post
+ *  owner and is rendered by previewPostActivity instead). Shown only when the app is
+ *  closed; a live page shows the rich in-app banner / live update via the WS frame,
+ *  so the SW stays silent there to avoid a duplicate. */
 async function showPostNotification(): Promise<number> {
   let notes: ConnNote[] = [];
   let newCount = 0;
@@ -561,7 +564,7 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const kind = pushKind(event);
+      const { kind, post } = pushKind(event);
       if (kind === 'call') {
         // A call is never queued on the relay; the tickle itself is the signal.
         // Show the ring immediately, ack reachability (so the caller's UI flips to
@@ -587,9 +590,10 @@ self.addEventListener('push', (event) => {
         return;
       }
       if (kind === 'post') {
-        // New Wall post. A live page owns the rich in-app banner (post-new WS frame
-        // via useSync), so the SW shows a generic notification only when the app is
-        // fully CLOSED. Nudge any live client to pull the post.
+        // New Wall post (since spec 1031 this tickle is new-posts-only; engagement
+        // rides 'post-activity'). A live page owns the rich in-app banner (post-new
+        // WS frame via useSync), so the SW shows a generic notification only when the
+        // app is fully CLOSED. Nudge any live client to pull the post.
         for (const client of clients) client.postMessage({ type: 'ring:posts' });
         // Honor the Wall notifications toggle (the foreground banner is already gated
         // by notifyNewPost; this gates the app-closed system notification to match).
@@ -597,6 +601,21 @@ self.addEventListener('push', (event) => {
           // Name the author AND bump the app-icon badge (the post path previously did neither).
           const newCount = await showPostNotification();
           await updateAppBadge(newCount);
+        }
+        return;
+      }
+      if (kind === 'post-activity') {
+        // Engagement (a reaction/comment by someone else) on OUR post — spec 1031's
+        // owner-only wake. A live page owns the in-app banner (it gets the
+        // post-engagement WS frame via useSync), so just nudge it to sync and stay
+        // silent. Fully closed → honor the "Activity on your posts" toggle, then let
+        // previewPostActivity decide: it re-checks ownership on the local post row,
+        // names the actor from the public directory, and opens sealed reaction
+        // payloads locally so a REMOVAL shows nothing at all.
+        for (const client of clients) client.postMessage({ type: 'ring:posts' });
+        if (!clients.length && (await setting('notifications.wall.activity', true))) {
+          const notes = await previewPostActivity(post ?? '');
+          if (notes.length) await showConnNotes(notes);
         }
         return;
       }

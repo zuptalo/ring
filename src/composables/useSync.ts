@@ -22,7 +22,7 @@ import {
   type TransportState,
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
-import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, pruneLocalPost } from '@/db/queries';
+import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, notifyPostActivity, pruneLocalPost } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -311,8 +311,14 @@ function start(): void {
       return;
     }
     if (f.t === 'post-engagement') {
-      // A reaction landed on a post we can see → pull that post's engagement.
-      void syncEngagement(f.post);
+      // Engagement landed on a post we can see → pull it (data sync for EVERYONE in
+      // the audience), then alert only if it's OUR post and the item earns it — the
+      // owner-only decision lives in wall-activity-policy via notifyPostActivity
+      // (spec 1031; bystanders sync silently).
+      void (async () => {
+        const fresh = await syncEngagement(f.post);
+        await notifyPostActivity(f.post, fresh);
+      })();
       return;
     }
     if (f.t === 'post-revoke') {
