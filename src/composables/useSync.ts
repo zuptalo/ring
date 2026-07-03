@@ -9,7 +9,7 @@
  * the real WebSocket transport is a one-line change here.
  */
 import { ref, watch } from 'vue';
-import { subscribe } from '@/db/idb';
+import { subscribe, touch } from '@/db/idb';
 import { isAuthenticated, getToken, verifySessionOrReset, getPendingInviter } from '@/services/auth';
 import {
   WebSocketTransport,
@@ -483,6 +483,13 @@ function start(): void {
         // Throttled internally, so this is cheap to run every time.
         void revalidatePushSubscription();
         void sweepExpiredMessages(); // drop anything that expired while backgrounded
+        // Spec 1032: the SW may have PERSISTED messages while this page sat frozen
+        // (iOS freezes JS but keeps the page alive), and a frozen page can miss the
+        // idb bridge's BroadcastChannel message. Re-fire the chats/messages bus on
+        // resume so useLiveQuery re-reads what the SW wrote — a read-only nudge; if
+        // nothing changed the queries just return the same rows.
+        touch('chats');
+        touch('messages');
       }
       void sendPresenceSelf(selfActive()); // online only when visible AND unlocked
     });

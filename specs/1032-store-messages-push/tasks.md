@@ -15,11 +15,11 @@ PR into `develop` must list `Closes #718` … `Closes #748`.
 
 ## Phase 1: Setup
 
-- [ ] T001 Define the internal rollout flag: add the `sw.fullPersist` settings-store key
+- [x] T001 Define the internal rollout flag: add the `sw.fullPersist` settings-store key
       (typed constant + default-absent read helper) where SW-safe settings constants live,
       alongside its read in `src/services/sw-inbox.ts` style — no Settings UI entry
       (`src/services/sw-inbox.ts` / shared constants module)
-- [ ] T002 Extend the dev-only test hook with `drainPending()` and a settings setter for
+- [x] T002 Extend the dev-only test hook with `drainPending()` and a settings setter for
       the flag in `src/services/testhook.ts` (stripped from production builds; mirrors the
       existing `previewPending`/`disconnect`/`reconnect` hooks)
 
@@ -77,28 +77,28 @@ with correct chats list/unread/badges from local data alone.
 **Independent test**: B offline, A sends 2 messages, `drainPending()` → rows + unread=2 +
 empty server queue BEFORE reconnect; reconnect → no duplicates.
 
-- [ ] T013 [P] [US1] Write failing unit tests for the eligibility classifier in
+- [x] T013 [P] [US1] Write failing unit tests for the eligibility classifier in
       `src/services/sw-drain.test.ts`: table over every payload type (plain text, media
       ref, group message → eligible; first-contact, cards, reaction, edit, erase, poll
       vote, rekey/control → defer), unknown sender → defer, unresolvable chat → defer
-- [ ] T014 [P] [US1] Write failing unit tests for the apply path in
+- [x] T014 [P] [US1] Write failing unit tests for the apply path in
       `src/services/sw-drain.test.ts`: applied frame = message row + chat RMW
       (unread+1/lastMessage/lastMessageTime) + ledger mark + session + staged `metaWrites`
       (e.g. send-preamble clear) in ONE transaction and its id queued for ack; replay of an applied frame = re-ack only (unread stays 1);
       transaction abort → no ledger mark, no ack; ack POSTed only after commit;
       media-by-reference persists `pendingMedia` without any fetch
-- [ ] T015 [US1] Implement `src/services/sw-drain.ts` per contracts/sw-receive.md: gate
+- [x] T015 [US1] Implement `src/services/sw-drain.ts` per contracts/sw-receive.md: gate
       composition, `/v1/relay/pending` fetch (reuse sw-inbox helpers), per-frame
       `withInboundLock` loop (ledger check → classify → `openPacketStaged` under
       `withSessionLock` → `transact` commit → collect ack id), notifications built from
       committed data via the existing `noteForPayload` path, single
       `POST /v1/relay/ack {ids}` as the wake's last step
-- [ ] T016 [US1] Route the push handler in `src/sw.ts`: behind the gate (flag on + locks
+- [x] T016 [US1] Route the push handler in `src/sw.ts`: behind the gate (flag on + locks
       present + device-unlock + no client claimed via existing `pageWillNotify`), call
       sw-drain; on ANY throw or degrade reason fall back to `previewPending()`; adjust
       badge math so applied frames aren't double-counted (`unreadCount()` already includes
       them; add deferred-only pending count)
-- [ ] T017 [P] [US1] Add `touch('chats'); touch('messages')` to the visibility-resume
+- [x] T017 [P] [US1] Add `touch('chats'); touch('messages')` to the visibility-resume
       handler in `src/composables/useSync.ts` (~:472) so a frozen page repaints on resume;
       confirm `resumePendingMediaJobs()` (~:246) covers SW-persisted `pendingMedia` rows
       on reconnect
@@ -117,11 +117,11 @@ devices never decrypt or store in the SW.
 **Independent test**: PIN-locked B gets a generic notification, nothing stored, frame
 stays queued; hidden chat stays generic.
 
-- [ ] T019 [P] [US2] Write failing unit tests in `src/services/sw-drain.test.ts`: locked
+- [x] T019 [P] [US2] Write failing unit tests in `src/services/sw-drain.test.ts`: locked
       posture (device-unlock fails) → gate returns `reason:'locked'`, zero writes, zero
       acks; hidden-chat / generic-preview rules produce the same notification payloads as
       the preview path (share the fixtures from `sw-inbox` tests)
-- [ ] T020 [US2] Implement the posture guards in `src/services/sw-drain.ts` + `src/sw.ts`:
+- [x] T020 [US2] Implement the posture guards in `src/services/sw-drain.ts` + `src/sw.ts`:
       gate short-circuits before any fetch-decrypt when locked; notification construction
       delegates to the exact same privacy/suppression helpers `previewPending` uses (no
       forked copy)
@@ -140,12 +140,12 @@ under interleaving.
 **Independent test**: interrupted drain, stranger first-contact, and drain-vs-reconnect
 race all end with each message exactly once and correct unread.
 
-- [ ] T022 [P] [US3] Write failing unit tests in `src/services/sw-drain.test.ts`:
+- [x] T022 [P] [US3] Write failing unit tests in `src/services/sw-drain.test.ts`:
       lock-timeout (`LockTimeoutError`) degrades the wake to preview-only (no ack, no
       writes); missing Web Locks → gate off; decrypt failure on one frame defers that
       frame and continues the loop; kill-between-commit-and-ack simulation → next wake
       re-acks via ledger without re-applying
-- [ ] T023 [US3] Implement the degrade ladder in `src/services/sw-drain.ts`/`src/sw.ts`
+- [x] T023 [US3] Implement the degrade ladder in `src/services/sw-drain.ts`/`src/sw.ts`
       (typed reasons `flag-off | locked | no-locks | lock-timeout | no-frames` surfaced in
       the drain result for the test hook), ensuring deferred frames keep flowing through
       `swNotifiedIds`/`swShownSummary` exactly as today

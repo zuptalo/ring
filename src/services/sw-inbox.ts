@@ -32,7 +32,8 @@ import type { MessagePayload } from './crypto/message';
 // VITE_API_URL is baked in only when targeting a different backend host.
 const API = `${import.meta.env.VITE_API_URL ?? ''}/v1`;
 
-interface MsgFrame {
+// Exported (spec 1032): sw-drain.ts drains the same queue authoritatively.
+export interface MsgFrame {
   t: string;
   id?: string;
   from?: string;
@@ -371,6 +372,35 @@ export async function ackCall(): Promise<void> {
   }
 }
 
+/** Fetch the queued (undelivered) frames. Fetching is what tells the server the
+ *  device received them (→ "delivered" receipts), so callers do it before any
+ *  decryption or settings gate. Bounded so a cold-start fetch can't hang the
+ *  handler. Shared by the preview path below and the authoritative drain
+ *  (sw-drain.ts, spec 1032). `failure` carries the preview-path reason label. */
+export async function fetchPendingFrames(token: string): Promise<{ frames: MsgFrame[] } | { failure: string }> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/relay/pending`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      console.warn('[sw-inbox] /relay/pending not ok', res.status);
+      return { failure: `relay-${res.status}` };
+    }
+    return { frames: ((await res.json()) as { frames?: MsgFrame[] }).frames ?? [] };
+  } catch (e) {
+    console.warn('[sw-inbox] /relay/pending fetch failed', e);
+    return { failure: 'relay-error' };
+  }
+}
+
 export async function previewPending(): Promise<PreviewResult> {
   const token = await readSessionToken();
   if (!token) {
@@ -390,32 +420,11 @@ export async function previewPending(): Promise<PreviewResult> {
   // before the key is ready).
   const unlockReady = attemptDeviceUnlock().catch(() => false);
 
-  // Fetch the queue, before any decryption or settings gate. Fetching is what tells
-  // the server the device received these frames (→ "delivered" receipts), so it must
-  // happen even if we later withhold or can't decrypt. Bounded so a cold-start fetch
-  // can't hang the handler.
-  let frames: MsgFrame[] = [];
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
-    let res: Response;
-    try {
-      res = await fetch(`${API}/relay/pending`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: ctrl.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) {
-      console.warn('[sw-inbox] /relay/pending not ok', res.status);
-      return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true, reason: `relay-${res.status}` };
-    }
-    frames = ((await res.json()) as { frames?: MsgFrame[] }).frames ?? [];
-  } catch (e) {
-    console.warn('[sw-inbox] /relay/pending fetch failed', e);
-    return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true, reason: 'relay-error' };
+  const fetched = await fetchPendingFrames(token);
+  if ('failure' in fetched) {
+    return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true, reason: fetched.failure };
   }
+  const frames = fetched.frames;
   // No pending frames: the message was already drained (page / a prior straggler) or this push carried
   // no queued message (a settings / own-data sync wake). Nothing genuinely new → no placeholder (2016).
   if (!frames.length) return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: false, reason: 'no-frames' };

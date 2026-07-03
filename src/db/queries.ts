@@ -14,6 +14,7 @@ import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { withInboundLock } from '@/services/cross-lock';
+import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
 import { autoSaveIncomingMedia } from '@/services/media-autosave';
 import { wallSyncedOnce } from '@/services/wall-load';
@@ -1421,28 +1422,9 @@ export async function leaveGroup(chatId: string): Promise<void> {
   await deleteChat(chatId);
 }
 
-const durLabel = (sec?: number) =>
-  sec ? ` (${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')})` : '';
-
-/** Chats-list preview text for a media message (label + duration). The chats
- *  list pairs this with an Ionic icon derived from `previewKind`, so no emoji. */
-function mediaPreview(kind: string, durationSec?: number, name?: string, videoNote?: boolean): string {
-  if (kind === 'voice') return `Voice message${durLabel(durationSec)}`;
-  if (kind === 'video') return videoNote ? `Video note${durLabel(durationSec)}` : 'Video';
-  if (kind === 'image') return 'Photo';
-  if (kind === 'audio') return name && name !== 'attachment' ? name : 'Audio';
-  if (kind === 'file') return `${name && name !== 'attachment' ? name : 'Document'}`;
-  return 'Attachment';
-}
-
-/** The icon category for the chats-list preview of a (possibly media) message. */
-function previewKind(kind: string, albumName?: string, videoNote?: boolean): Chat['lastKind'] {
-  if (albumName) return 'album';
-  if (kind === 'video') return videoNote ? 'videonote' : 'video';
-  if (kind === 'image' || kind === 'voice' || kind === 'file' || kind === 'audio') return kind;
-  if (kind === 'location' || kind === 'poll' || kind === 'contact') return kind;
-  return 'text';
-}
+// mediaPreview/previewKind/chatListPreview moved to services/message-preview.ts
+// (spec 1032): the SW's notification-time apply writes chat rows too, and both
+// writers must derive identical preview lines. Imported at the top of this file.
 
 /** Short snapshot of a message's content, for quotes / reaction previews. */
 function previewText(m: Message): string {
@@ -1972,6 +1954,18 @@ export async function resumePendingMediaJobs(): Promise<void> {
   const msgs = await getAll<Message>('messages');
   for (const m of msgs) {
     if (m.status === 'compressing') void processMediaJob(m.id);
+  }
+  // Spec 1032: the SW's notification-time apply NEVER downloads media bytes (no
+  // canvas pipeline, tight push budget) — it stores the reference as pendingMedia
+  // unconditionally, including media this device's auto-download preference would
+  // have fetched inline. Backfill those here (same call sites: app start +
+  // reconnect), so a photo received while closed is ready by the time the chat is
+  // opened. Deliberate defers (auto-download off / over the size limit) stay
+  // deferred — the same shouldAutoDownloadMedia gate the live path uses decides.
+  for (const m of msgs) {
+    if (m.outgoing || !m.pendingMedia || m.mediaId) continue;
+    if (!(await shouldAutoDownloadMedia((m.kind as MessageKind) || 'text', !!m.videoNote, m.pendingMedia.size))) continue;
+    void downloadMessageMedia(m.id).catch(() => {}); // failure keeps the manual tap path
   }
 }
 
@@ -4787,17 +4781,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   };
   await put('messages', message);
 
-  const preview = payload.albumName
-    ? payload.albumName
-    : kind === 'location'
-      ? payload.location?.label || 'Location'
-      : kind === 'poll'
-        ? payload.poll?.question || 'Poll'
-        : kind === 'contact'
-          ? payload.contact?.name || 'Contact'
-          : kind === 'audio'
-            ? payload.audio?.title || mediaPreview('audio', durationSec, payload.mediaRef?.name)
-            : payload.body || mediaPreview(kind, durationSec, undefined, payload.videoNote);
+  const preview = chatListPreview(payload, kind, durationSec);
   const chat = await getChat(targetChatId);
   // @mentions (spec 1020): am I called out in this group message? Individual mention by
   // id, or an @everyone that the sender is actually the group OWNER of (re-validated on

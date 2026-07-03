@@ -25,6 +25,7 @@ import {
   coalesceForShow, loadShownSummary, setting,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
+import { drainPersistPending, ackFrames } from '@/services/sw-drain';
 import { resubscribePush } from '@/services/sw-push';
 import { setPendingNav } from '@/services/pending-nav';
 import { userFacing, prettify, displayVersion } from '@/services/release-notes';
@@ -246,9 +247,11 @@ async function reassertFromSummary(): Promise<void> {
 
 const allIds = (notes: SwNote[]): string[] => notes.flatMap((n) => n.ids);
 
-// Set the app-icon badge to the unread total. The new message isn't persisted yet
-// (read-only SW), so we add the count of notifications we're showing on top of the
-// already-stored unread count. `newCount` is the fresh-notification count.
+// Set the app-icon badge to the unread total. On the preview path the new message
+// isn't persisted, so we add the count of fresh notifications on top of the
+// already-stored unread count (`newCount`). On the authoritative drain path
+// (spec 1032) applied frames ARE persisted — unreadCount() already includes them —
+// so the caller passes only the still-pending (deferred) count, never both.
 async function updateAppBadge(newCount: number): Promise<void> {
   try {
     const nav = self.navigator as Navigator & { setAppBadge?: (n?: number) => Promise<void> };
@@ -399,6 +402,42 @@ async function showConnNotification(): Promise<number> {
     data: { url: '/tabs/contacts' },
   });
   return pendingIncoming;
+}
+
+/**
+ * Spec 1032 (sw.fullPersist): attempt the AUTHORITATIVE drain — decrypt + persist
+ * eligible frames atomically, show their notifications, then ack. Returns true
+ * when this wake is fully handled; false hands the wake (or its deferred
+ * remainder) to showMessageNotification() below, whose preview flow is also the
+ * fallback for every degrade (flag off, no Web Locks, locked device, lock
+ * timeout, fetch/commit failure). Ordering per frame is commit → notify → ack:
+ * an ack is only ever sent for a durably-committed frame, and the notification
+ * is shown before the ack so a kill can't consume a frame silently.
+ */
+async function tryAuthoritativeDrain(): Promise<boolean> {
+  try {
+    return await serializeNotify(async () => {
+      const r = await drainPersistPending();
+      if (r.mode === 'degrade') return false; // includes 'no-frames' — the preview
+      // path owns the nothing-new / re-assert behavior (spec 2016/2017).
+      if (r.notes.length) {
+        await closeByTag(GENERIC_TAG);
+        await showNotes(r.notes);
+      }
+      // Mark applied frames in the preview ledger too: if the ack below fails they
+      // linger in the queue, and the preview path must not re-decrypt them (their
+      // message keys are consumed — it would misread them as decrypt failures).
+      await markShown(r.ackIds);
+      await ackFrames(r.ackIds); // strictly after commit + notifications
+      if (r.deferred > 0) return false; // preview flow handles the deferred remainder
+      // Fully handled: applied rows are already in unreadCount(), nothing pending.
+      await updateAppBadge(0);
+      return true;
+    });
+  } catch (e) {
+    console.warn('[sw] authoritative drain failed → preview fallback', e);
+    return false;
+  }
 }
 
 /**
@@ -637,6 +676,10 @@ self.addEventListener('push', (event) => {
       // show a banner reliably claims it, while a hidden/locked/frozen page (which
       // never acks) still falls through to the SW promptly enough.
       if (clients.length && (await pageWillNotify(clients, 2200))) return;
+      // Spec 1032: with sw.fullPersist on (and no page claiming the wake), persist
+      // + ack eligible frames right now so the app opens warm. Any degrade — and
+      // any deferred remainder — falls through to today's preview flow.
+      if (await tryAuthoritativeDrain()) return;
       await showMessageNotification();
     })(),
   );
