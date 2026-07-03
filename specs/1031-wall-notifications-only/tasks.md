@@ -53,7 +53,7 @@ C still sees the comment on the post (quickstart.md steps 1–3).
 
 ### Tests for User Story 1 (write first, must FAIL)
 
-- [ ] T008 [P] [US1] Write FAILING Playwright spec e2e/wall-activity-notify.spec.ts (style of e2e/wall.spec.ts, 3 contexts, no WebRTC): A posts; B comments → A shows an in-app banner naming B with "commented on your post"; B shows no banner; C shows no banner; C's post detail still shows the comment (FR-003/FR-005, TC-02)
+- [x] T008 [P] [US1] Write FAILING Playwright spec e2e/wall-activity-notify.spec.ts (style of e2e/wall.spec.ts, 3 contexts, no WebRTC): A posts; B comments → A shows an in-app banner naming B with "commented on your post"; B shows no banner; C shows no banner; C's post detail still shows the comment (FR-003/FR-005, TC-02)
 - [x] T009 [P] [US1] Write FAILING vitest tests in src/services/sw-inbox.postactivity.test.ts for the comments path of `previewPostActivity` (mirror src/services/sw-inbox.preview.test.ts's fetch/IDB mocking): fresh comment by another actor on an `outgoing` post → one note titled with the actor's name, body "commented on your post", url `/wall/post/<id>`, tag `ring:post:act:<id>`; actor === self → no note; post missing or not `outgoing` → no note; already in the `sw.wallActShown` ledger → no note; older than 10 min → no note; displayed notes are added to the ledger
 
 ### Implementation for User Story 1
@@ -61,7 +61,7 @@ C still sees the comment on the post (quickstart.md steps 1–3).
 - [x] T010 [US1] Add `notifyPostActivity(postId, fresh)` to src/db/queries.ts beside `notifyNewPost`: consult the T006 predicate per fresh item (inputs: post.outgoing, actor vs `getSelfUserId()`, `notifications.wall.activity` setting, `isWallTempMuted()`, 5-min freshness, session `notifiedEngagementIds` dedupe set); on 'alert' resolve the actor's contact name/avatar and `notifyIncoming({ kind:'system', name, body:'commented on your post', avatar, url:'/wall/post/<postId>' })`
 - [x] T011 [US1] Wire src/composables/useSync.ts `post-engagement` branch: `const fresh = await syncEngagement(f.post); void notifyPostActivity(f.post, fresh)` (serialize inside the existing async IIFE pattern like the `post-new` branch)
 - [x] T012 [US1] Implement the comments path of `previewPostActivity(postId)` in src/services/sw-inbox.ts beside `previewPosts`: read the post row from IDB (require `outgoing` + skip otherwise), GET `/v1/posts/{id}/engagement` with the session token, filter cleartext-`kind` comment rows by actor ≠ self + 10-min recency + `sw.wallActShown` ledger (CONN_SHOWN_KEY-style cap/prune), name actors via `connName`, collapse to one actor-named note (or "New activity on your post" when several actors) → T009 comments cases go green
-- [ ] T013 [US1] Extend src/sw.ts: `pushKind()` recognizes `{t:'post-activity', post}`; new push branch — live clients get `postMessage({type:'ring:posts'})` and the SW stays silent; no clients → honor `setting('notifications.wall.activity', true)` → `previewPostActivity(post)` → `showConnNotes`-style display with tag `ring:post:act:<postId>`; update the `showPostNotification`/`previewPosts` doc comments to "new posts only" (engagement no longer rides the `post` tickle); run `npm run build` and `npm run test:e2e -- wall-activity-notify` → T008 goes green
+- [x] T013 [US1] Extend src/sw.ts: `pushKind()` recognizes `{t:'post-activity', post}`; new push branch — live clients get `postMessage({type:'ring:posts'})` and the SW stays silent; no clients → honor `setting('notifications.wall.activity', true)` → `previewPostActivity(post)` → `showConnNotes`-style display with tag `ring:post:act:<postId>`; update the `showPostNotification`/`previewPosts` doc comments to "new posts only" (engagement no longer rides the `post` tickle); run `npm run build` and `npm run test:e2e -- wall-activity-notify` → T008 goes green
 
 **Checkpoint**: the reported problem is fixed end-to-end for comments; US1 is shippable.
 
@@ -79,7 +79,7 @@ steps 4–5, 8).
 ### Tests for User Story 2 (write first, must FAIL)
 
 - [x] T014 [P] [US2] Extend src/services/sw-inbox.postactivity.test.ts with FAILING reaction cases: fresh reaction row whose sealed payload opens with `remove: false` → note "reacted to your post"; `remove: true` → no note; payload that fails to open (locked/cold) → no note (never spurious); mixed fresh comment + reaction from different actors → single collapsed "New activity on your post" note
-- [ ] T015 [P] [US2] Extend e2e/wall-activity-notify.spec.ts with FAILING scenarios: B reacts → A banners naming B and the emoji; C and B show nothing; B removes the reaction → no new banner for A (TC-01, FR-002)
+- [x] T015 [P] [US2] Extend e2e/wall-activity-notify.spec.ts with FAILING scenarios: B reacts → A banners naming B and the emoji; C and B show nothing; B removes the reaction → no new banner for A (TC-01, FR-002)
 
 ### Implementation for User Story 2
 
@@ -101,13 +101,13 @@ steps 6–7).
 
 ### Tests for User Story 3 (write first, must FAIL)
 
-- [ ] T018 [P] [US3] Extend e2e/wall-activity-notify.spec.ts with FAILING scenarios: A comments and reacts on A's own post → no banner on any account (TC-07/08); A sets `notifications.wall.activity` to false (via the `__ringTest` settings hook) → B comments → no banner for A while the comment is visible on A's post detail; A mutes B on the Wall (mute ledger) → B comments → A STILL banners (clarified posts-only mute)
+- [x] T018 [P] [US3] Extend e2e/wall-activity-notify.spec.ts with FAILING scenarios: A comments and reacts on A's own post → no banner on any account (TC-07/08); A sets `notifications.wall.activity` to false (via the `__ringTest` settings hook) → B comments → no banner for A while the comment is visible on A's post detail; A mutes B on the Wall (mute ledger) → B comments → A STILL banners (clarified posts-only mute)
 
 ### Implementation for User Story 3
 
 - [x] T019 [P] [US3] Add the toggle to src/settings/schema.ts Wall group: `{ type:'toggle', title:'Activity on your posts', key:'notifications.wall.activity', default:true }` and update the group footer to cover both toggles in the About-page voice (plain, warm, no em-dashes or semicolons): "Get notified when a friend shares a new post on their Wall, and when someone reacts to or comments on your posts."
 - [x] T020 [P] [US3] Add `'notifications.wall.activity'` to `SYNCED_PREF_KEYS` in src/services/ownsync-keys.ts (and update src/services/ownsync.test.ts if it asserts the key list)
-- [ ] T021 [US3] Verify both alert paths honor the toggle + temp mute and ONLY those (page: predicate inputs in `notifyPostActivity`; SW: the `notifications.wall.activity` gate in src/sw.ts) — self-exclusion and mute semantics are already predicate-enforced (T003/T006); run `npm run test:e2e -- wall-activity-notify` → T018 goes green
+- [x] T021 [US3] Verify both alert paths honor the toggle + temp mute and ONLY those (page: predicate inputs in `notifyPostActivity`; SW: the `notifications.wall.activity` gate in src/sw.ts) — self-exclusion and mute semantics are already predicate-enforced (T003/T006); run `npm run test:e2e -- wall-activity-notify` → T018 goes green
 
 **Checkpoint**: all three stories independently verified; acceptance TCs 01/02/05-flat/06/07/08/09-flat pass.
 
@@ -115,9 +115,9 @@ steps 6–7).
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T022 Full gate sweep: `npm run build`, `npm run test:unit`, `cd server && go build ./... && go vet ./... && go test ./...`, `npm run test:e2e -- wall-activity-notify` (plus e2e/wall.spec.ts to confirm no regression in existing Wall flows)
-- [ ] T023 [P] Re-read every touched user-facing string against the UI copy voice (About-page tone, no em-dashes/semicolons): banner bodies, SW notification bodies, settings title/footer
-- [ ] T024 Set `**Status**: in-review` in specs/1031-wall-notifications-only/spec.md, run `make roadmap`, and verify `git status` shows only intended files
+- [x] T022 Full gate sweep: `npm run build`, `npm run test:unit`, `cd server && go build ./... && go vet ./... && go test ./...`, `npm run test:e2e -- wall-activity-notify` (plus e2e/wall.spec.ts to confirm no regression in existing Wall flows)
+- [x] T023 [P] Re-read every touched user-facing string against the UI copy voice (About-page tone, no em-dashes/semicolons): banner bodies, SW notification bodies, settings title/footer
+- [x] T024 Set `**Status**: in-review` in specs/1031-wall-notifications-only/spec.md, run `make roadmap`, and verify `git status` shows only intended files
 
 ---
 
