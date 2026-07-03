@@ -102,7 +102,7 @@ empty server queue BEFORE reconnect; reconnect → no duplicates.
       handler in `src/composables/useSync.ts` (~:472) so a frozen page repaints on resume;
       confirm `resumePendingMediaJobs()` (~:246) covers SW-persisted `pendingMedia` rows
       on reconnect
-- [ ] T018 [US1] Write the warm-open e2e in `e2e/sw-persist.spec.ts`: offline B receives
+- [x] T018 [US1] Write the warm-open e2e in `e2e/sw-persist.spec.ts`: offline B receives
       2 messages → `drainPending()` → assert rows exist, unread=2, `/v1/relay/pending`
       empty, icon-badge count = in-app total; `reconnect()` → exactly one copy of each
       message, unread unchanged
@@ -125,7 +125,7 @@ stays queued; hidden chat stays generic.
       gate short-circuits before any fetch-decrypt when locked; notification construction
       delegates to the exact same privacy/suppression helpers `previewPending` uses (no
       forked copy)
-- [ ] T021 [US2] Extend `e2e/sw-persist.spec.ts`: enable PIN lock → send → generic
+- [x] T021 [US2] Extend `e2e/sw-persist.spec.ts`: enable PIN lock → send → generic
       notification, no local rows, frame still pending server-side; unlock + open → message
       arrives via page drain exactly once. Add a hidden-chat scenario asserting generic
       content
@@ -149,11 +149,11 @@ race all end with each message exactly once and correct unread.
       (typed reasons `flag-off | locked | no-locks | lock-timeout | no-frames` surfaced in
       the drain result for the test hook), ensuring deferred frames keep flowing through
       `swNotifiedIds`/`swShownSummary` exactly as today
-- [ ] T024 [US3] Extend `e2e/sw-persist.spec.ts`: (a) stranger's first-contact message →
+- [x] T024 [US3] Extend `e2e/sw-persist.spec.ts`: (a) stranger's first-contact message →
       drain defers → page reconnect applies it once (friend-gate behavior intact);
       (b) concurrent `drainPending()` + `reconnect()` → exactly one row, one unread;
       (c) flag OFF run of the whole suite asserting byte-for-byte today's behavior
-- [ ] T025 [US3] Run the existing regression suites with the flag on and off —
+- [x] T025 [US3] Run the existing regression suites with the flag on and off —
       `e2e/sw-decrypt.spec.ts` (preview assertions updated only if the flag-on path
       legitimately changes them) and the `e2e/call-*.spec.ts` suites (message push landing
       mid-call must not disturb signalling; lock contention path)
@@ -171,11 +171,14 @@ race all end with each message exactly once and correct unread.
 - [ ] T028 Walk `specs/1032-store-messages-push/quickstart.md` end-to-end on the dev stack
       (`make start`), including the degrade checklist and the DevTools kill-mid-drain
       probe; fix anything that drifted
+      *(hermetic e2e covers the disconnect→drain→verify→reconnect + flag-off + locked
+      rows; remaining: kill-mid-drain probe + the real-device soak on the dev
+      deployment — flag defaults OFF, so no exposure until then)*
 - [ ] T029 Security review (constitution Principle IV): adversarial pass over the lock
       discipline, `openPacketStaged`, and the atomic-commit/ack ordering against
       `specs/1032-store-messages-push/contracts/sw-receive.md` invariants 1–5; record the
       outcome in the PR description before requesting merge
-- [ ] T030 Full gates: `npm run build`, `npx vitest run` (coverage floors hold),
+- [x] T030 Full gates: `npm run build`, `npx vitest run` (coverage floors hold),
       `cd server && go build ./... && go vet ./... && go test ./...`,
       `npm run test:e2e` — all green with the flag defaulted off
 - [ ] T031 Flip spec `**Status**` to `in-review` in
