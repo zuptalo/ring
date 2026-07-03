@@ -29,10 +29,10 @@ import { openPacketStaged, DeferFrame, type StagedOpen } from './messaging';
 import { withInboundLock, withSessionLock, locksAvailable, LockTimeoutError } from './cross-lock';
 import { readSessionToken, readSessionUserId } from './session';
 import { readHiddenSetOrNull } from './hidden-chats';
-import { fetchPendingFrames, noteForPayload, aggregate, setting, type MsgFrame, type SwNote } from './sw-inbox';
+import { resolveInboundDirectChat } from './hidden-pair';
+import { fetchPendingFrames, noteForPayload, aggregate, setting, loadShown, type MsgFrame, type SwNote } from './sw-inbox';
 import { chatListPreview, previewKind } from './message-preview';
-import { transact } from '@/db/idb';
-import { getAll } from '@/db/idb';
+import { transact, getAll, get } from '@/db/idb';
 import type { Chat, Contact, Message, Setting } from '@/db/types';
 import type { MessagePayload } from './crypto/message';
 
@@ -47,6 +47,9 @@ export const SW_FULL_PERSIST_KEY = 'sw.fullPersist';
 // the rest of the wake) to preview-only. A frozen-but-alive page can hold a lock
 // indefinitely; the push handler must not burn its waitUntil budget waiting.
 const LOCK_TIMEOUT_MS = 3000;
+
+// Bound on the /relay/ack POST, mirroring sw-inbox's PENDING_FETCH_TIMEOUT_MS.
+const ACK_TIMEOUT_MS = 8000;
 
 // The exactly-once ledger SHARED with the page path (db/queries.ts
 // wasInboundSeen/markInboundSeen — same key, same cap). The SW marks a frame
@@ -90,13 +93,15 @@ interface ApplyCtx {
   keepArchived: boolean;
 }
 
-/** The plain-1:1 session chat for a peer, mirroring the page's routeInboundFrom
- *  preference order: the visible plain 1:1 first, else the hidden one. Returns
- *  null when no chat row exists — which also covers the hidden-chat reset block
- *  (the reset destroyed the row), so those frames defer to the page. */
-export function directChatFor(chats: Chat[], from: string): Chat | null {
-  const mine = chats.filter((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
-  return mine.find((c) => !c.pending) ?? mine[0] ?? null;
+/** The plain-1:1 session chat for a peer: EXACTLY the page's rule-R resolver
+ *  (resolveInboundDirectChat — visible non-pending first, then visible pending,
+ *  then hidden), so both writers route a frame to the same chat (security review
+ *  F3: a pending-flag-only preference could commit into a hidden chat the page
+ *  would have routed visibly). Returns null when no chat row exists — which also
+ *  covers the hidden-chat reset block (the reset destroyed the row), so those
+ *  frames defer to the page. */
+export function directChatFor(chats: Chat[], hidden: ReadonlySet<string>, from: string): Chat | null {
+  return resolveInboundDirectChat(chats, hidden, from);
 }
 
 /** Pure eligibility classifier over a DECRYPTED payload (spec FR-004). Anything
@@ -124,7 +129,48 @@ export function classifyPayload(
   return { verdict: 'eligible', targetChatId: null }; // null = the 1:1 session chat
 }
 
-type ApplyOutcome = { kind: 'applied'; note: SwNote | null } | { kind: 'ack-only' } | { kind: 'defer'; why: string };
+type ApplyOutcome =
+  | { kind: 'applied'; note: SwNote | null }
+  | { kind: 'ack-only'; note: SwNote | null }
+  | { kind: 'defer'; why: string };
+
+/** Rebuild the notification for a frame that was COMMITTED in a previous wake but
+ *  never shown (SW killed between commit and showNotes — its id is in the seen
+ *  ledger but not the shown ledger). The message row is the durable source: map it
+ *  back to a payload shape and run the exact same noteForPayload privacy rules.
+ *  Returns null when the note was already shown, or the row can't be found (page
+ *  applied it — its own notify path ran). */
+async function noteFromCommittedFrame(id: string, ctx: ApplyCtx): Promise<SwNote | null> {
+  if ((await loadShown()).includes(id)) return null; // already alerted (normal re-ack)
+  const m = await get<Message>('messages', id);
+  if (!m || m.outgoing) return null;
+  const chat = ctx.chats.find((c) => c.id === m.chatId);
+  const payload: MessagePayload = {
+    body: m.body,
+    kind: m.kind,
+    timestamp: m.timestamp,
+    groupId: chat?.isGroup ? chat.id : undefined,
+    albumName: m.albumName,
+    videoNote: m.videoNote,
+    location: m.location,
+    poll: m.poll,
+    contact: m.contact,
+    audio: m.audio,
+    mentions: m.mentions,
+    mentionsEveryone: m.mentionsEveryone,
+  };
+  const { note } = noteForPayload(
+    { t: 'msg', id, from: m.senderId },
+    payload,
+    ctx.chats,
+    ctx.contacts,
+    ctx.showMessages,
+    ctx.showPreview,
+    ctx.hidden,
+    ctx.selfId,
+  );
+  return note;
+}
 
 /** Apply ONE frame under the session lock: staged decrypt → classify → atomic
  *  commit. Caller holds `ring:inbound`. Never acks — it only reports. */
@@ -132,14 +178,19 @@ async function applyOne(f: MsgFrame, ctx: ApplyCtx): Promise<ApplyOutcome> {
   const id = f.id as string;
   const from = f.from as string;
 
-  // Exactly-once (shared ledger): already committed by us or the page → just re-ack.
+  // Exactly-once (shared ledger): already committed by us or the page → re-ack.
+  // But NEVER silently (security review F4): if a prior wake committed this frame
+  // and was killed before its notification/ack, the redelivery is the only chance
+  // to alert — rebuild the note from the stored row unless it was already shown.
   const seenNow = await setting<string[]>(INBOUND_SEEN_KEY, []);
-  if (seenNow.includes(id)) return { kind: 'ack-only' };
+  if (seenNow.includes(id)) {
+    return { kind: 'ack-only', note: await noteFromCommittedFrame(id, ctx) };
+  }
 
   if (ctx.blocked[from]) return { kind: 'defer', why: 'blocked' }; // page drops + acks on open
   const contact = ctx.contacts.find((c) => c.id === from);
   if (!contact || !ctx.connected[from]) return { kind: 'defer', why: 'not-connected' };
-  const direct = directChatFor(ctx.chats, from);
+  const direct = directChatFor(ctx.chats, ctx.hidden, from);
   if (!direct) return { kind: 'defer', why: 'no-chat' };
 
   // The session lock spans decrypt AND commit: openPacketStaged persists nothing,
@@ -223,6 +274,10 @@ async function applyOne(f: MsgFrame, ctx: ApplyCtx): Promise<ApplyOutcome> {
             (!!payload.mentions?.includes(ctx.selfId) ||
               (!!payload.mentionsEveryone && !!chat.createdBy && from === chat.createdBy));
           if (selfMentioned) chat.unreadMentions = (chat.unreadMentions ?? 0) + 1;
+          // Accepted 1:1 content un-pends the chat, mirroring the page path (security
+          // review F7): the frame is acked, so the page never reprocesses it — leaving
+          // pending set would strand delivered messages in a hidden "request" chat.
+          if (!isGroupMsg && chat.pending) delete chat.pending;
           if (chat.archived && !chat.locked && !ctx.keepArchived) {
             delete chat.archived;
           }
@@ -327,6 +382,7 @@ export async function drainPersistPending(): Promise<DrainResult> {
         if (out.note) rawNotes.push(out.note);
       } else if (out.kind === 'ack-only') {
         ackIds.push(f.id as string);
+        if (out.note) rawNotes.push(out.note); // committed earlier but never alerted (F4)
       } else {
         deferred += 1;
       }
@@ -356,11 +412,22 @@ export async function ackFrames(ids: string[]): Promise<boolean> {
   const token = await readSessionToken();
   if (!token) return false;
   try {
-    const res = await fetch(`${API}/relay/ack`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
-    });
+    // Bounded like every other SW-context fetch (security review F10): a hung ack on
+    // a flaky post-wake network must not stall the notify chain past the push budget —
+    // an unacked frame just lingers and redelivers as a bare re-ack via the ledger.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ACK_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/relay/ack`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     return res.ok;
   } catch (e) {
     console.warn('[sw-drain] ack failed (frames linger; ledger dedupes)', e);

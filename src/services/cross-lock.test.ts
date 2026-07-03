@@ -178,6 +178,41 @@ describe('cross-lock: SW-side timeout (degrade-to-preview trigger)', () => {
     );
     expect(out).toBe('done');
   });
+
+  it('F2: the timeout covers the in-context QUEUE wait, not just the Web Lock request', async () => {
+    // A same-context caller parked on the cross-context lock holds the KeyedMutex
+    // slot; a later timed caller must still degrade at its deadline instead of
+    // waiting in the queue forever.
+    fake.held.add(sessionLockName('chat-9')); // "another context" holds the Web Lock
+    const parked = withSessionLock('chat-9', async () => 'never'); // untimed → waits, occupies the slot
+    await sleep(1);
+    let ran = false;
+    const timed = withSessionLock(
+      'chat-9',
+      async () => {
+        ran = true;
+      },
+      { timeoutMs: 25 },
+    );
+    await expect(timed).rejects.toBeInstanceOf(LockTimeoutError);
+    expect(ran).toBe(false);
+    fake.held.delete(sessionLockName('chat-9'));
+    fake['pump']();
+    await parked; // the parked holder completes once the lock frees
+  });
+
+  it("F6: a section error after the deadline fired is the section's error, never LockTimeoutError", async () => {
+    await expect(
+      withSessionLock(
+        'chat-1',
+        async () => {
+          await sleep(30); // deadline (10ms) fires mid-section
+          throw new Error('quota exceeded');
+        },
+        { timeoutMs: 10 },
+      ),
+    ).rejects.toThrow('quota exceeded');
+  });
 });
 
 describe('cross-lock: missing-API fallback (in-context serialization only)', () => {

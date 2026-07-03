@@ -136,3 +136,11 @@ lives in the session plan and is consolidated here. No NEEDS CLARIFICATION items
 - SW/page version skew (`registerType: 'prompt'` keeps an old SW alive against a new page):
   the serialized session format must not change in the same release as this feature; if it
   ever changes, add a version field and make old readers defer.
+- Version-skew on the LOCK DISCIPLINE itself (security review F5): a pre-1032 page kept
+  alive across an update takes no Web Locks, so the SW drain could interleave with it.
+  Rollout rule: enable `sw.fullPersist` only after every open tab runs ≥ this release, and
+  ship the default-on flip at least one release after the lock plumbing.
+- The page's inbound/session lock waits are unbounded across contexts (security review F9):
+  a second live window queued behind a frozen sibling stalls until it unfreezes/dies.
+  Accepted — iOS PWAs are effectively single-window, locks auto-release on context death,
+  and a timeout-bypass would reintroduce the two-writers race.

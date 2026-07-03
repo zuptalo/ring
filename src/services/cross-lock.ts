@@ -24,7 +24,17 @@
  * navigator.locks (the cross-context guarantee). SW callers pass a timeout: a
  * frozen-but-alive iOS page can hold a lock indefinitely while unable to run,
  * and the SW must degrade to the preview-only path rather than blow its
- * waitUntil budget waiting. Page callers wait without a timeout (they can).
+ * waitUntil budget waiting. Page callers wait without a timeout — accepted
+ * trade-off (security review F9): a SECOND live window queued behind a frozen
+ * sibling's inbound lock would stall until the sibling unfreezes or dies (locks
+ * auto-release on context death, and iOS PWAs are effectively single-window);
+ * bypassing on timeout would reintroduce the two-writers race this exists for.
+ *
+ * Version-skew caveat (security review F5): the guarantee holds only when EVERY
+ * live context runs lock-taking code. A pre-1032 page kept alive across an
+ * update (registerType 'prompt') takes no Web Locks, so the SW drain flag
+ * (sw.fullPersist) must only be enabled once all tabs run ≥ this release, and
+ * its default-on flip must ship at least one release after this code.
  */
 import { KeyedMutex } from './keyed-mutex';
 
@@ -69,26 +79,60 @@ export function locksAvailable(): boolean {
 // the mutex hands them to navigator.locks one at a time, in arrival order.
 const localMutex = new KeyedMutex();
 
+/** The cross-context half of an acquisition: request the Web Lock (if present)
+ *  and run fn under it. `started` disambiguates the two ways the request can
+ *  reject after the caller's deadline fired (security review F6): an abort
+ *  BEFORE the grant is a timeout; an error AFTER fn started is fn's own failure
+ *  and must propagate verbatim, never be misreported as a LockTimeoutError. */
+async function requestCross<T>(
+  name: string,
+  fn: () => Promise<T>,
+  signal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): Promise<T> {
+  const locks = locksApi();
+  if (!locks) return fn(); // no cross-context primitive → in-context serialization only
+  let started = false;
+  try {
+    return await locks.request(name, { mode: 'exclusive', signal }, async () => {
+      started = true;
+      return fn();
+    });
+  } catch (e) {
+    if (!started && signal?.aborted) throw new LockTimeoutError(name, timeoutMs ?? 0);
+    throw e;
+  }
+}
+
 async function withNamedLock<T>(name: string, fn: () => Promise<T>, opts?: LockOptions): Promise<T> {
-  return localMutex.run(name, async () => {
-    const locks = locksApi();
-    if (!locks) return fn(); // no cross-context primitive → in-context serialization only
-    if (opts?.timeoutMs == null) {
-      return locks.request(name, { mode: 'exclusive' }, fn);
-    }
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
-    try {
-      return await locks.request(name, { mode: 'exclusive', signal: ctrl.signal }, fn);
-    } catch (e) {
-      // Only the acquisition can abort (the signal is ignored once granted), so an
-      // abort here always means "timed out waiting", never "interrupted mid-section".
-      if (ctrl.signal.aborted) throw new LockTimeoutError(name, opts.timeoutMs);
-      throw e;
-    } finally {
-      clearTimeout(timer);
-    }
-  });
+  if (opts?.timeoutMs == null) {
+    return localMutex.run(name, () => requestCross(name, fn, undefined, undefined));
+  }
+  // The deadline must cover the WHOLE acquisition — the in-context KeyedMutex wait
+  // AND the Web Lock request (security review F2). A previous same-context caller
+  // parked on the cross-context lock holds the KeyedMutex slot too; starting the
+  // timer only inside the slot would let a "3s timeout" wait forever in the queue.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      let claimed = false; // our KeyedMutex turn arrived before the deadline
+      ctrl.signal.addEventListener('abort', () => {
+        if (!claimed) reject(new LockTimeoutError(name, opts.timeoutMs as number));
+      });
+      void localMutex.run(name, async () => {
+        if (ctrl.signal.aborted && !claimed) return; // deadline already rejected us; release the slot
+        claimed = true;
+        try {
+          resolve(await requestCross(name, fn, ctrl.signal, opts.timeoutMs));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const INBOUND_LOCK = 'ring:inbound';

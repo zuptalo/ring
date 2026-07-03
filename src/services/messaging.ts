@@ -30,7 +30,7 @@ import {
 } from './crypto/ratchet';
 import { sealMessage, openMessage, openMessagePreview, type MessagePayload, type WireMessage } from './crypto/message';
 import { sessionRecord, type SerializedSession } from './crypto/ratchet';
-import { withSessionLock } from './cross-lock';
+import { withSessionLock, LockTimeoutError } from './cross-lock';
 import {
   getIdentityKeys,
   getSignedPreKey,
@@ -280,6 +280,13 @@ export async function openPacket(chatId: string, raw: unknown): Promise<MessageP
  *
  * Throws if it can't decrypt/authenticate.
  */
+// How long a PREVIEW waits for the cross-context session lock before falling back
+// to a fully read-only decrypt. The preview is the SW's no-persist fallback path;
+// it must never park behind a lock a frozen page holds (security review F1) — a
+// hung preview inside sw.ts's straggler loop would block the notify chain for the
+// rest of the SW instance's life, silencing every later push.
+const PREVIEW_LOCK_TIMEOUT_MS = 3000;
+
 export async function previewPacket(chatId: string, raw: unknown): Promise<MessagePayload> {
   const packet = raw as WirePacket;
   if (!packet || (packet.type !== 'prekey' && packet.type !== 'normal')) {
@@ -287,9 +294,27 @@ export async function previewPacket(chatId: string, raw: unknown): Promise<Messa
   }
   // Serialize with the matching seals/opens AND with other background previews —
   // now that this path persists, two concurrent SW push handlers must not interleave
-  // a load→advance→save on the same session. See withSessionLock.
-  return withSessionLock(chatId, async () => {
-  let session = await loadSession(chatId);
+  // a load→advance→save on the same session. Bounded: if the lock can't be had
+  // promptly (a frozen page can hold it indefinitely), decrypt READ-ONLY instead —
+  // persisting nothing is always safe without the lock, and a rich notification
+  // still beats a generic one. (Read-only can't advance the persisted base, so a
+  // very long backlog may degrade to generic past MAX_SKIP — the pre-2015 behavior,
+  // only under lock contention.)
+  try {
+    return await withSessionLock(chatId, () => previewOpen(chatId, packet, true), {
+      timeoutMs: PREVIEW_LOCK_TIMEOUT_MS,
+    });
+  } catch (e) {
+    if (e instanceof LockTimeoutError) return previewOpen(chatId, packet, false);
+    throw e;
+  }
+}
+
+/** The preview decrypt body. `persistAdvance` is true only under the session lock;
+ *  without it this is PURE read-only (loads a fresh session copy, writes nothing),
+ *  which needs no serialization at all. */
+async function previewOpen(chatId: string, packet: WirePacket, persistAdvance: boolean): Promise<MessagePayload> {
+  const session = await loadSession(chatId);
   const hadExistingSession = !!session;
   if (!session) {
     // No session yet → this must be a first-contact prekey packet. Establish a
@@ -314,7 +339,8 @@ export async function previewPacket(chatId: string, raw: unknown): Promise<Messa
     // pre-1032). The AUTHORITATIVE persist-everything path is openPacketStaged below, which the SW
     // uses only when the cross-context lock is actually held (spec 1032). The DH-step frame still
     // decrypted in-memory for this preview; the page performs (and persists) that ratchet on drain.
-    if (!advancedDh) await saveSession(chatId, session);
+    // `persistAdvance` is false on the lock-timeout fallback: no lock held → no writes at all.
+    if (persistAdvance && !advancedDh) await saveSession(chatId, session);
     return payload;
   } catch (e) {
     // The established session couldn't open this. If it's a prekey packet the peer
@@ -328,7 +354,6 @@ export async function previewPacket(chatId: string, raw: unknown): Promise<Messa
   }
   // Deliberately NO session-meta writes: the send-preamble is cleared only by
   // openPacket (FR-004), never by a preview.
-  });
 }
 
 /* ---- authoritative SW receive (spec 1032) ---- */

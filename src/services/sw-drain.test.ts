@@ -218,10 +218,22 @@ describe('classifyPayload: the FR-004 eligibility table (pure)', () => {
   }
 
   it('directChatFor: unknown sender has no chat → null (defer); prefers the visible 1:1', () => {
+    const none = new Set<string>();
     const visible = { id: 'v', isGroup: false, participantIds: [PEER] } as Chat;
     const pending = { id: 'p', isGroup: false, participantIds: [PEER], pending: true } as Chat;
-    expect(directChatFor([pending, visible], PEER)?.id).toBe('v');
-    expect(directChatFor([visible], 'stranger')).toBeNull();
+    expect(directChatFor([pending, visible], none, PEER)?.id).toBe('v');
+    expect(directChatFor([visible], none, 'stranger')).toBeNull();
+  });
+
+  it('directChatFor: routes like the page (F3) — visible PENDING beats hidden non-pending', () => {
+    // The exact split-conversation hazard: a pending visible 1:1 plus a non-pending
+    // hidden 1:1. The page routes to the visible one; the SW must match, or it
+    // commits + acks into the PIN-locked hidden chat and the page never sees it.
+    const visiblePending = { id: 'vp', isGroup: false, participantIds: [PEER], pending: true } as Chat;
+    const hiddenChat = { id: 'h', isGroup: false, participantIds: [PEER] } as Chat;
+    expect(directChatFor([hiddenChat, visiblePending], new Set(['h']), PEER)?.id).toBe('vp');
+    // Only a hidden chat exists → content still lands there (spec 1027 rule R).
+    expect(directChatFor([hiddenChat], new Set(['h']), PEER)?.id).toBe('h');
   });
 });
 
@@ -409,6 +421,50 @@ describe('degrade ladder (T022): lock timeout + per-frame failures', () => {
     expect(msgRows().length).toBe(0);
     expect(ledger()).toEqual([]);
   });
+
+  it('F7: applied 1:1 content un-pends a pending chat (mirrors the page path)', async () => {
+    const c = chatRow();
+    c.pending = true;
+    storeOf('chats').set(CHAT, c);
+    queued = [{ t: 'msg', id: 'm1', from: PEER, ciphertext: N(pay()) }];
+    const r = await drainPersistPending();
+    expect(r.applied).toBe(1);
+    expect(chatRow().pending).toBeUndefined();
+  });
+
+  it('F4: a committed-but-never-shown frame re-acks WITH a rebuilt notification', async () => {
+    queued = [{ t: 'msg', id: 'm1', from: PEER, ciphertext: N(pay({ body: 'nearly lost' })) }];
+    // Wake 1 commits (row + ledger); the SW dies before showNotes/markShown/ack —
+    // i.e. nothing lands in swNotifiedIds. Simulated by just... not marking shown.
+    await drainPersistPending();
+    // Wake 2: redelivery. The frame is in the seen ledger → ack-only, but the note
+    // must be REBUILT from the stored row (never a silent consume).
+    const r2 = await drainPersistPending();
+    expect(r2.applied).toBe(0);
+    expect(r2.ackIds).toEqual(['m1']);
+    expect(r2.notes.length).toBe(1);
+    expect(r2.notes[0].body).toBe('nearly lost');
+    // Once shown (markShown ran), a further redelivery is a bare, silent re-ack.
+    storeOf('settings').set('swNotifiedIds', { key: 'swNotifiedIds', value: [{ id: 'm1', ts: Date.now() }] });
+    const r3 = await drainPersistPending();
+    expect(r3.ackIds).toEqual(['m1']);
+    expect(r3.notes.length).toBe(0);
+  });
+
+  it('F1: previewPacket under a held session lock falls back to a READ-ONLY decrypt', async () => {
+    const { previewPacket } = await import('./messaging');
+    const wire = N(pay({ body: 'previewed under contention' }));
+    lockBlocked = (name) => name.startsWith('ring:session:');
+    const before = structuredClone(storeOf('sessions').get(CHAT));
+    const p = await previewPacket(CHAT, wire);
+    expect(p.body).toBe('previewed under contention');
+    // No lock → no writes: the persisted session is byte-identical.
+    expect(storeOf('sessions').get(CHAT)).toEqual(before);
+    lockBlocked = null;
+    // The page's later authoritative open still decrypts the same frame.
+    const { openPacket } = await import('./messaging');
+    expect((await openPacket(CHAT, wire)).body).toBe('previewed under contention');
+  }, 15_000);
 
   it('one undecryptable frame defers WITHOUT stopping the rest of the wake', async () => {
     const good = N(pay({ body: 'fine' }));

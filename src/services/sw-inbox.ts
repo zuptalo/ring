@@ -1,12 +1,20 @@
 /**
- * Service-worker background decryption for rich notifications (Choice A).
+ * Service-worker background decryption for rich notifications.
  *
- * Woken by a content-free push tickle while the app is closed, the SW fetches the
- * queued E2EE frames over HTTP, decrypts them READ-ONLY (previewPacket never
- * persists the ratchet or acks), and builds notification previews. The page still
- * drains + persists the messages for real over its WebSocket when it next
- * connects, so this adds notification content WITHOUT touching shared ratchet
- * state. Only a content-free tickle ever flows through Apple/Google.
+ * Two modes since spec 1032 (specs/1032-store-messages-push/):
+ *   - AUTHORITATIVE (sw-drain.ts, behind the internal `sw.fullPersist` flag):
+ *     eligible plain messages are decrypted, PERSISTED atomically, and acked at
+ *     notification time, so the app opens warm. sw-drain reuses this module's
+ *     fetch + note-building helpers, so notification content and privacy rules
+ *     are identical in both modes.
+ *   - PREVIEW (this module, the original "Choice A"): woken by a content-free
+ *     push tickle, the SW fetches the queued E2EE frames over HTTP, decrypts
+ *     them READ-ONLY (previewPacket never persists the ratchet or acks), and
+ *     builds notification previews. The page still drains + persists for real
+ *     over its WebSocket on next open. This remains the whole story for: the
+ *     flag off, PIN/passkey-locked devices, frame types the drain defers
+ *     (first-contact, cards, reactions, controls), and every degrade path.
+ * Only a content-free tickle ever flows through Apple/Google in either mode.
  *
  * Mirrors the live page dispatch (db/queries.ts `receiveIncoming` → services/notify
  * `notifyIncoming`): plain messages honor `notifications.message.show`, while
@@ -140,7 +148,10 @@ async function loadShownEntries(): Promise<ShownEntry[]> {
   }
   return out;
 }
-async function loadShown(): Promise<string[]> {
+/** Frame ids already SHOWN as notifications (TTL-pruned). Exported for sw-drain's
+ *  re-ack path (spec 1032): a committed-but-never-shown frame gets its note rebuilt
+ *  on redelivery, and this ledger is what distinguishes "never shown" from shown. */
+export async function loadShown(): Promise<string[]> {
   return (await loadShownEntries()).map((e) => e.id);
 }
 
@@ -431,7 +442,16 @@ export async function previewPending(): Promise<PreviewResult> {
 
   // Queued message frames = the undelivered backlog → the app-icon badge. Known
   // from the fetch alone, so the badge is right even if we can't decrypt.
-  const pending = frames.filter((f) => f.t === 'msg' && !!f.id).length;
+  //
+  // Spec 1032 (security review F8): frames the authoritative drain already
+  // COMMITTED can linger here (their ack failed, or a redelivery raced the ack) —
+  // they are already inside the stored unread count, so counting them as pending
+  // would double-badge, and re-decrypting them would fail (their message keys are
+  // consumed) and masquerade as a decrypt failure. Treat committed frames as
+  // neither pending nor previewable; they resolve to a bare re-ack on the next
+  // drain or page open.
+  const committed = new Set(await setting<string[]>('inboundSeenIds', []));
+  const pending = frames.filter((f) => f.t === 'msg' && !!f.id && !committed.has(f.id)).length;
   console.info('[sw-inbox] fetched frames', { total: frames.length, pending });
 
   // Badge mode (spec 1027, B4): under 'never'/'revealed' only frames we can
@@ -474,7 +494,7 @@ export async function previewPending(): Promise<PreviewResult> {
   let silencedMessage = false; // a message intentionally silenced by per-chat prefs
   let decryptFailed = 0; // frames we couldn't decrypt (cold start / session not reachable)
   for (const f of frames) {
-    if (f.t !== 'msg' || !f.from || !f.id || seen.has(f.id)) continue;
+    if (f.t !== 'msg' || !f.from || !f.id || seen.has(f.id) || committed.has(f.id)) continue;
     let payload: MessagePayload;
     try {
       payload = await previewPacket(sessionKeyForPeer(chats, f.from), f.ciphertext);

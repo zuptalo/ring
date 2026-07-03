@@ -48,12 +48,13 @@ func (s *Store) PendingForRecipient(ctx context.Context, recipient string) ([]Re
 }
 
 // SweepRelayOlderThan deletes queued frames older than age, returning the number
-// removed. The service worker's read-only preview never acks, so a recipient who
-// never opens the app would otherwise accumulate frames forever. Payloads are
-// E2EE and idempotent (unique on recipient,msg_id), so aging one out only risks a
-// stale notification - never message loss for a recipient who actually returns
-// (the page WS-drains everything still present). Keep age >= the push TTL so a
-// long-held tickle always still has a frame to fetch.
+// removed. The service worker's preview path never acks (and even the spec-1032
+// authoritative drain acks only what it durably committed, leaving deferred frame
+// types queued), so a recipient who never opens the app would otherwise accumulate
+// frames forever. Payloads are E2EE and idempotent (unique on recipient,msg_id), so
+// aging one out only risks a stale notification - never message loss for a
+// recipient who actually returns (the page WS-drains everything still present).
+// Keep age >= the push TTL so a long-held tickle always still has a frame to fetch.
 func (s *Store) SweepRelayOlderThan(ctx context.Context, age time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx,
 		`DELETE FROM relay_queue WHERE created_at < now() - make_interval(secs => $1)`,

@@ -162,10 +162,10 @@ race all end with each message exactly once and correct unread.
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T026 [P] Update the stale server comment in `server/internal/store/relay.go`
+- [x] T026 [P] Update the stale server comment in `server/internal/store/relay.go`
       (~:50-56, `SweepRelayOlderThan`): the SW *can* now ack behind the flag; the sweep
       rationale (never-returning recipients) is unchanged. Comment-only, no behavior
-- [ ] T027 [P] Rewrite the header design-note in `src/services/sw-inbox.ts` (~:1-19,
+- [x] T027 [P] Rewrite the header design-note in `src/services/sw-inbox.ts` (~:1-19,
       "Choice A") to describe the two-mode world (authoritative sw-drain behind the flag;
       preview as fallback/deferred path), and cross-reference `specs/1032-store-messages-push/`
 - [ ] T028 Walk `specs/1032-store-messages-push/quickstart.md` end-to-end on the dev stack
@@ -174,7 +174,7 @@ race all end with each message exactly once and correct unread.
       *(hermetic e2e covers the disconnect→drain→verify→reconnect + flag-off + locked
       rows; remaining: kill-mid-drain probe + the real-device soak on the dev
       deployment — flag defaults OFF, so no exposure until then)*
-- [ ] T029 Security review (constitution Principle IV): adversarial pass over the lock
+- [x] T029 Security review (constitution Principle IV): adversarial pass over the lock
       discipline, `openPacketStaged`, and the atomic-commit/ack ordering against
       `specs/1032-store-messages-push/contracts/sw-receive.md` invariants 1–5; record the
       outcome in the PR description before requesting merge
