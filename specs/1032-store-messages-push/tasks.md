@@ -10,6 +10,9 @@ Principle IV adversarial suites (forgery, replay, out-of-order, skipped-key).
 **Organization**: Foundational lock/transaction plumbing first (it is a strict safety
 improvement even with the flag off), then user stories in priority order.
 
+**GitHub issues**: T001–T031 map 1:1 to issues #718–#748 (TNNN → #(717+NNN)). The feature
+PR into `develop` must list `Closes #718` … `Closes #748`.
+
 ## Phase 1: Setup
 
 - [ ] T001 Define the internal rollout flag: add the `sw.fullPersist` settings-store key
