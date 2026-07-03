@@ -28,41 +28,41 @@ PR into `develop` must list `Closes #718` … `Closes #748`.
 **Purpose**: the lock discipline, atomic transaction, and reactivity bridge every story
 depends on. Ships safely even with the flag off.
 
-- [ ] T003 [P] Write failing unit tests for the named-lock helpers in
+- [x] T003 [P] Write failing unit tests for the named-lock helpers in
       `src/services/cross-lock.test.ts`: exclusive ordering across two simulated contexts
       (fake `navigator.locks`), `ring:inbound` vs `ring:session:<chatId>` never inverted,
       SW-side timeout raises typed `LockTimeoutError`, missing-API fallback runs the
       in-context path
-- [ ] T004 Implement `src/services/cross-lock.ts`: `withInboundLock`, `withSessionLock`
+- [x] T004 Implement `src/services/cross-lock.ts`: `withInboundLock`, `withSessionLock`
       (KeyedMutex FIFO composed with `navigator.locks.request`, AbortSignal timeout),
       `locksAvailable()`; import-clean (no DOM/Ionic) per contracts/sw-receive.md
-- [ ] T005 [P] Write failing unit tests for the atomic multi-store transaction helper in
+- [x] T005 [P] Write failing unit tests for the atomic multi-store transaction helper in
       `src/db/idb.transact.test.ts`: all-or-nothing commit across
       `sessions`+`messages`+`chats`+`settings`, abort → zero writes and zero
       notifications, notify fires once per touched store after commit
-- [ ] T006 Implement `transact(stores, fn)` in `src/db/idb.ts` (one native IDB transaction;
+- [x] T006 Implement `transact(stores, fn)` in `src/db/idb.ts` (one native IDB transaction;
       notifications deferred to commit)
-- [ ] T007 [P] Write failing unit tests for the BroadcastChannel bridge in
+- [x] T007 [P] Write failing unit tests for the BroadcastChannel bridge in
       `src/db/idb.bridge.test.ts`: `notify()` posts the store name on
       `BroadcastChannel('ring:idb')`, a received name fires local listeners only, no echo
       loop, graceful no-op where BroadcastChannel is absent
-- [ ] T008 Implement the `ring:idb` BroadcastChannel bridge in `src/db/idb.ts`
-- [ ] T009 [P] Write failing ratchet tests in the crypto suite
+- [x] T008 Implement the `ring:idb` BroadcastChannel bridge in `src/db/idb.ts`
+- [x] T009 [P] Write failing ratchet tests in the crypto suite
       (`src/services/crypto/ratchet.staged.test.ts`): staged authoritative open returns
       advanced state (incl. DH step) without persisting; after the caller persists it, a
       subsequent seal on the reloaded state produces ciphertext the peer decrypts
       (send-chain integrity); replay of the same packet fails; forged ciphertext fails;
       out-of-order >50-frame backlog decrypts via the skipped-key cache
-- [ ] T010 Implement `openPacketStaged(chatId, from, ciphertext)` in
+- [x] T010 Implement `openPacketStaged(chatId, from, ciphertext)` in
       `src/services/messaging.ts` per contracts/sw-receive.md (full open incl. DH steps,
       persists nothing, returns `{payload, sessionToPersist, metaWrites}`; first-contact
       X3DH/prekey re-init NOT staged — throws a typed `DeferFrame` signal)
-- [ ] T011 Replace `sessionMutex.run(chatId, …)` with `withSessionLock(chatId, …)` at the
+- [x] T011 Replace `sessionMutex.run(chatId, …)` with `withSessionLock(chatId, …)` at the
       three call sites in `src/services/messaging.ts` (seal ~:117, open ~:197, preview
       ~:277) and rewrite the two-mode rationale comments at ~:240-266 and ~:294-300
       (preview stays same-chain-only as the fallback; authoritative SW open under lock is
       the new normal)
-- [ ] T012 Wrap the page's inbound chain step in `withInboundLock` in `src/db/queries.ts`
+- [x] T012 Wrap the page's inbound chain step in `withInboundLock` in `src/db/queries.ts`
       (~:4515, `receiveIncoming`), falling back to the bare chain when locks are absent;
       confirm `wasInboundSeen` short-circuit stays first inside the lock
 

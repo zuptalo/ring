@@ -13,6 +13,7 @@ import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { sealForChat, openPacket } from '@/services/messaging';
+import { withInboundLock } from '@/services/cross-lock';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
 import { autoSaveIncomingMedia } from '@/services/media-autosave';
 import { wallSyncedOnce } from '@/services/wall-load';
@@ -4511,10 +4512,15 @@ async function markInboundSeen(id: string): Promise<void> {
 // lock) runs OFF that chain, so two receiveIncoming calls for the same id could
 // otherwise overlap at the wasInboundSeen → openPacket → markInboundSeen await
 // points, letting a duplicate re-establish (clobber) the live Double Ratchet. This
-// module-level chain guarantees one inbound decrypt runs at a time.
+// module-level chain guarantees one inbound decrypt runs at a time IN THIS context;
+// withInboundLock (spec 1032) extends the same guarantee across contexts, so the
+// service worker's authoritative drain (sw-drain.ts) can never interleave its
+// check-ledger → decrypt → commit → ack section with ours. The page waits without a
+// timeout (only the SW side must degrade rather than stall its push budget), and
+// where Web Locks don't exist the helper is just this chain again.
 let inboundSerial: Promise<void> = Promise.resolve();
 export function receiveIncoming(from: string, remoteId: string, ciphertext: unknown): Promise<void> {
-  const run = inboundSerial.then(() => receiveIncomingInner(from, remoteId, ciphertext));
+  const run = inboundSerial.then(() => withInboundLock(() => receiveIncomingInner(from, remoteId, ciphertext)));
   inboundSerial = run.then(
     () => undefined,
     () => undefined,

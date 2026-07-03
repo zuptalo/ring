@@ -29,7 +29,8 @@ import {
   type PreKeyBundlePub,
 } from './crypto/ratchet';
 import { sealMessage, openMessage, openMessagePreview, type MessagePayload, type WireMessage } from './crypto/message';
-import { KeyedMutex } from './keyed-mutex';
+import { sessionRecord, type SerializedSession } from './crypto/ratchet';
+import { withSessionLock } from './cross-lock';
 import {
   getIdentityKeys,
   getSignedPreKey,
@@ -67,11 +68,17 @@ interface SessionMeta {
  * so several seal/open calls for one chatId run at once. Each loads the same state, advances
  * independently, and the last saveSession wins — silently corrupting the ratchet, which only
  * surfaces messages later as "ciphertext cannot be decrypted". (Interleaved chat messages and
- * call signals on the same session hit the same race.) Running each chat's critical section
- * through this mutex forces them to take turns, in arrival order; out-of-order delivery is
- * still handled by the ratchet's own skipped-key mechanism. Same-process only, which is all we
- * need: the SW preview path is read-only and never persists. */
-const sessionMutex = new KeyedMutex();
+ * call signals on the same session hit the same race.)
+ *
+ * Since spec 1032 the critical sections run under withSessionLock (cross-lock.ts): the same
+ * in-context FIFO as before, PLUS the cross-context Web Lock 'ring:session:<chatId>'. That
+ * upgrade exists because the SW is no longer read-only — behind the sw.fullPersist flag it
+ * performs the full authoritative open (openPacketStaged below, incl. DH-ratchet steps) and
+ * persists the advance, so page and SW are two writers of the same session row and only a
+ * cross-context lock can keep them from interleaving. Where Web Locks don't exist the helper
+ * degrades to the in-context mutex — exactly the pre-1032 guarantee — and the SW drain gate
+ * keeps full-persist off. Out-of-order delivery is still handled by the ratchet's own
+ * skipped-key mechanism. */
 
 /* ---- session metadata (settings store; separate from the ratchet state) ---- */
 
@@ -113,8 +120,8 @@ export async function sealForChat(
 ): Promise<{ to: string; packet: WirePacket } | null> {
   if (isGroup) return null; // group messaging (sender keys) is not relay-wired yet
   // Serialize the whole load→advance→save (incl. first-use X3DH bootstrap) per chat so
-  // concurrent seals/opens can't corrupt the ratchet — see sessionMutex.
-  return sessionMutex.run(chatId, async () => {
+  // concurrent seals/opens — in THIS context and in the SW — can't corrupt the ratchet.
+  return withSessionLock(chatId, async () => {
   let session = await loadSession(chatId);
   let meta = await getSessionMeta(chatId);
 
@@ -193,8 +200,8 @@ export async function openPacket(chatId: string, raw: unknown): Promise<MessageP
   if (!packet || (packet.type !== 'prekey' && packet.type !== 'normal')) {
     throw new Error('malformed wire packet');
   }
-  // Serialize per chat with the matching seals — see sessionMutex.
-  return sessionMutex.run(chatId, async () => {
+  // Serialize per chat with the matching seals — see withSessionLock.
+  return withSessionLock(chatId, async () => {
   let session = await loadSession(chatId);
   const hadExistingSession = !!session;
   if (!session) {
@@ -239,6 +246,13 @@ export async function openPacket(chatId: string, raw: unknown): Promise<MessageP
 /**
  * Decrypt an incoming packet for PREVIEW ONLY (service-worker notifications).
  *
+ * Since spec 1032 this is the SW's FALLBACK path: with sw.fullPersist on (and Web
+ * Locks available, device unlockable, no live page claiming the drain) the SW runs
+ * the authoritative openPacketStaged below instead. The preview remains the whole
+ * story for: the flag off, PIN/passkey-locked devices, deferred frame types
+ * (first-contact, cards, reactions, controls), and any lock-timeout/failure
+ * degrade — so its conservative rules below still matter.
+ *
  * Unlike openPacket this never consumes one-time prekeys, never persists a newly
  * ESTABLISHED responder (X3DH) session, and never clears the initiator send-
  * preamble — first-contact/X3DH and the preamble stay strictly the page's job.
@@ -273,8 +287,8 @@ export async function previewPacket(chatId: string, raw: unknown): Promise<Messa
   }
   // Serialize with the matching seals/opens AND with other background previews —
   // now that this path persists, two concurrent SW push handlers must not interleave
-  // a load→advance→save on the same session. See sessionMutex.
-  return sessionMutex.run(chatId, async () => {
+  // a load→advance→save on the same session. See withSessionLock.
+  return withSessionLock(chatId, async () => {
   let session = await loadSession(chatId);
   const hadExistingSession = !!session;
   if (!session) {
@@ -292,12 +306,14 @@ export async function previewPacket(chatId: string, raw: unknown): Promise<Messa
     // the cache). A prekey re-init (the catch below) deliberately does NOT reach here.
     const { payload, advancedDh } = openMessagePreview(session, packet.msg);
     // Persist ONLY a same-receiving-chain advance (the base moves forward so a backlog previews in
-    // order and can pass a point live call/`qos` signalling already advanced). If this frame
-    // triggered a DH-ratchet step, do NOT persist: a DH ratchet mints a fresh SENDING keypair (DHs),
-    // and the SW persisting it would make the worker a competing writer of the send-state — the
-    // page↔SW last-write-wins race could then clobber the page's authoritative DHs and permanently
-    // break outbound to the peer (adversarial review). The DH-step frame still decrypted in-memory
-    // for this preview; the page authoritatively performs (and persists) that ratchet when it drains.
+    // order and can pass a point live call/`qos` signalling already advanced). A DH-ratchet step is
+    // still NOT persisted here: a DH ratchet mints a fresh SENDING keypair (DHs), i.e. send-state.
+    // The preview is the fallback that also runs where Web Locks are ABSENT (withSessionLock then
+    // only serializes within this context), and there a page↔SW last-write-wins race could clobber
+    // the page's authoritative DHs and permanently break outbound to the peer (adversarial review,
+    // pre-1032). The AUTHORITATIVE persist-everything path is openPacketStaged below, which the SW
+    // uses only when the cross-context lock is actually held (spec 1032). The DH-step frame still
+    // decrypted in-memory for this preview; the page performs (and persists) that ratchet on drain.
     if (!advancedDh) await saveSession(chatId, session);
     return payload;
   } catch (e) {
@@ -313,6 +329,76 @@ export async function previewPacket(chatId: string, raw: unknown): Promise<Messa
   // Deliberately NO session-meta writes: the send-preamble is cleared only by
   // openPacket (FR-004), never by a preview.
   });
+}
+
+/* ---- authoritative SW receive (spec 1032) ---- */
+
+/** Thrown by openPacketStaged for frames the SW must NOT apply authoritatively —
+ *  first contact (no session), a peer's prekey re-init, or an undecryptable frame.
+ *  The caller defers the frame (preview-only notification, no ack); the page's
+ *  drain remains their delivery vehicle. */
+export class DeferFrame extends Error {
+  constructor(public readonly why: 'no-session' | 'prekey-reinit' | 'undecryptable') {
+    super(`frame deferred to the page drain: ${why}`);
+    this.name = 'DeferFrame';
+  }
+}
+
+/** Everything openPacketStaged decrypted but did NOT persist. The caller commits
+ *  the rows in ONE idb transaction with the message row + chat update + ledger
+ *  mark, so an interruption leaves either the complete result or nothing. */
+export interface StagedOpen {
+  payload: MessagePayload;
+  /** The advanced session (incl. any DH-ratchet step) as a sessions-store row. */
+  sessionRow: SerializedSession;
+  /** Settings-store rows to commit alongside (the cleared send-preamble, if any). */
+  metaWrites: Array<{ key: string; value: unknown }>;
+}
+
+/**
+ * The service worker's AUTHORITATIVE open (spec 1032, sw.fullPersist): decrypts
+ * exactly like openPacket — full consuming open, DH-ratchet steps included — but
+ * persists NOTHING. It stages the advanced session + session-meta effects for the
+ * caller (sw-drain.ts) to commit atomically with the message row and the
+ * exactly-once ledger, so the ack that follows can never outrun a durable commit.
+ *
+ * This deliberately supersedes, for the locked path only, the old "the SW never
+ * persists DH steps" rule: the race that rule guarded against is gone when the
+ * caller holds the cross-context session lock. Hence the hard requirements:
+ *
+ *   - The caller MUST hold withSessionLock(chatId) across THIS CALL AND the
+ *     commit of sessionRow/metaWrites. Locks are non-reentrant, so this function
+ *     takes none itself; a gap between decrypt and commit would let a page seal
+ *     interleave and be clobbered by the stale staged row.
+ *   - First-contact X3DH and a peer's prekey re-init are NOT staged (DeferFrame):
+ *     consuming a one-time prekey and replacing a live ratchet stay the page's
+ *     authoritative jobs, exactly as in previewPacket.
+ */
+export async function openPacketStaged(chatId: string, raw: unknown): Promise<StagedOpen> {
+  const packet = raw as WirePacket;
+  if (!packet || (packet.type !== 'prekey' && packet.type !== 'normal')) {
+    throw new Error('malformed wire packet');
+  }
+  const session = await loadSession(chatId);
+  if (!session) throw new DeferFrame('no-session'); // first contact → page runs X3DH
+  let payload: MessagePayload;
+  try {
+    payload = openMessage(session, packet.msg); // consuming open; mutates `session`
+  } catch {
+    // An established session that can't open a PREKEY packet = the peer re-initiated
+    // (they deleted the chat and re-ran X3DH). Replacing the live ratchet is the
+    // page's call (see openPacket's catch); anything else is simply undecryptable
+    // here (e.g. we lost the session) and the page's rekey recovery handles it.
+    throw new DeferFrame(packet.type === 'prekey' ? 'prekey-reinit' : 'undecryptable');
+  }
+  const metaWrites: StagedOpen['metaWrites'] = [];
+  // Mirror openPacket: hearing from the peer confirms the session, so the initiator
+  // stops prepending the prekey preamble — staged into the same commit.
+  const meta = await getSessionMeta(chatId);
+  if (meta?.sendPreamble) {
+    metaWrites.push({ key: `smeta:${chatId}`, value: { ...meta, sendPreamble: false } });
+  }
+  return { payload, sessionRow: sessionRecord(chatId, session), metaWrites };
 }
 
 /* ---- own prekey publication ---- */
