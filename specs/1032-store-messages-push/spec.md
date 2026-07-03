@@ -34,6 +34,16 @@ old device's push registration, so exactly one device is ever woken for a user's
 This is what makes it safe for that device to confirm receipt on the server's behalf while
 the app is closed.
 
+## Clarifications
+
+### Session 2026-07-03
+
+- Q: Should the rollout setting be user-visible in Settings, or an internal flag? → A:
+  Internal flag — a hidden device-local flag, not in the Settings UI. Enabled via dev
+  tooling on the development deployment during the soak, then flipped default-on in a later
+  release and eventually removed. Notification-time storage is a delivery mechanism, not a
+  user preference.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - The app opens warm (Priority: P1)
@@ -193,9 +203,10 @@ counts correct, server queue empty only for messages that are safely stored.
   totals MUST agree; messages already stored MUST NOT be counted twice in any badge.
 - **FR-010**: An app window that is alive (foreground or background) while the background
   path stores messages MUST reflect the new data in its views without requiring a reload.
-- **FR-011**: The feature MUST ship behind a device-local setting, default off, so it can be
-  proven on the development deployment before being enabled broadly; with the setting off,
-  behavior is byte-for-byte today's.
+- **FR-011**: The feature MUST ship behind an internal device-local flag (not exposed in
+  the Settings UI), default off, so it can be proven on the development deployment before
+  being enabled broadly; with the flag off, behavior is byte-for-byte today's. The flag is
+  a rollout vehicle, expected to become default-on and eventually be removed.
 - **FR-012**: The server MUST require no changes and MUST see no new information: the same
   sealed messages, the same fetch, the same receipt confirmations — only their timing
   changes. The zero-knowledge boundary is untouched.
