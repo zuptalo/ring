@@ -103,20 +103,33 @@ test('sw persist: drain vs reconnect race stays exactly-once', async ({ browser 
   await ctxB.close();
 });
 
-/** T024a — deferral: a stranger's first-contact message is NOT applied/acked by the
- *  drain; the page's reconnect applies it exactly once (friend-gate intact). */
-test('sw persist: first-contact frames defer to the page drain', async ({ browser }) => {
+/** T024a — deferral: an ineligible frame type (a reaction — a side-effect frame whose
+ *  handler lives page-side) is NOT applied/acked by the drain; the page's reconnect
+ *  applies it exactly once. (First-contact deferral is pinned at the unit level in
+ *  sw-drain.test.ts; friend requests ride the connections API, not relay frames.) */
+test('sw persist: ineligible frames (reaction) defer to the page drain', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'SWPERS05');
   const b = await createAccount(ctxB, 'SWPERS06');
+  await pair(a, b);
   await enableFlag(b);
 
-  // A and B are NOT paired. B goes offline; A sends a friend request (a card frame —
-  // both first-contact AND an ineligible type).
+  // B sends a message A can react to; both sides settle.
+  await expect.poll(() => chatOf(b, a.id), { timeout: 30_000 }).toBeTruthy();
+  const bChat = (await chatOf(b, a.id)) as string;
+  await b.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'react to me'), bChat);
+  const aChat = (await chatOf(a, b.id)) as string;
+  await expect.poll(() => bodiesOf(a, aChat), { timeout: 30_000 }).toContain('react to me');
+  const targetId = (await a.page.evaluate(async (id: string) => {
+    const ms = await (window as any).__ringTest.messages(id);
+    return ms.find((m: any) => m.body === 'react to me')?.id ?? '';
+  }, aChat)) as string;
+
+  // B goes offline; A reacts → a reaction frame queues on the relay.
   await b.page.evaluate(() => (window as any).__ringTest.disconnect());
   await b.page.waitForTimeout(800);
-  await a.page.evaluate((id: string) => (window as any).__ringTest.requestFriend(id), b.id);
+  await a.page.evaluate((id: string) => (window as any).__ringTest.reactToMessage(id, '👍'), targetId);
 
   // The drain defers it: nothing applied, nothing acked, frame still queued.
   await expect
@@ -131,12 +144,19 @@ test('sw persist: first-contact frames defer to the page drain', async ({ browse
   const r = (await drain(b)) as any;
   expect(r.applied).toBe(0);
   expect(r.ackIds ?? []).toEqual([]);
+  // The reaction is NOT on B's copy yet.
+  expect(
+    await b.page.evaluate((id: string) => (window as any).__ringTest.getReactions(id), targetId),
+  ).toEqual([]);
 
-  // Reconnect → the page applies the request for real, exactly once.
+  // Reconnect → the page applies the reaction for real, exactly once.
   await b.page.evaluate(() => (window as any).__ringTest.reconnect());
   await expect
-    .poll(() => b.page.evaluate(() => (window as any).__ringTest.pendingRequestIds()), { timeout: 30_000 })
-    .toContain(a.id);
+    .poll(
+      () => b.page.evaluate((id: string) => (window as any).__ringTest.getReactions(id), targetId),
+      { timeout: 30_000 },
+    )
+    .toEqual([{ emoji: '👍', count: 1 }]);
 
   await ctxA.close();
   await ctxB.close();
