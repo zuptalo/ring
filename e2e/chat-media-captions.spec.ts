@@ -164,7 +164,7 @@ test('a per-item caption overrides the shared caption for just that item', async
   await ctxB.close();
 });
 
-test('multiple picked photos sent as an album share one album id with a single caption', async ({ browser }) => {
+test('multiple picked photos sent as an album share one album id; the composer caption applies to every slide', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'ALBUMCP3');
@@ -183,7 +183,9 @@ test('multiple picked photos sent as an album share one album id with a single c
   await composer.pressSequentially('holiday', { delay: 12 });
   await a.page.getByRole('button', { name: 'Send' }).click();
 
-  // All three images share ONE album id, and exactly one of them carries the caption.
+  // All three images share ONE album id, and the composer caption reaches EVERY slide
+  // that has no per-item caption of its own (spec 2019): previously only the first
+  // slide carried it, so the rest showed uncaptioned in the album viewer.
   await expect
     .poll(
       async () => {
@@ -196,7 +198,7 @@ test('multiple picked photos sent as an album share one album id with a single c
       },
       { timeout: 30_000 },
     )
-    .toEqual({ count: 3, albums: 1, captioned: 1 });
+    .toEqual({ count: 3, albums: 1, captioned: 3 });
 
   await ctxA.close();
   await ctxB.close();
