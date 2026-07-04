@@ -825,6 +825,22 @@ export async function playGameMove(chatId: string, messageId: string, move: unkn
   await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
 }
 
+/** Resign an ongoing game (valid for either player, whoever's turn it is).
+ *  The opponent wins by concession; the bubble stays in history (FR-008). */
+export async function resignGame(chatId: string, messageId: string): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m?.game || m.chatId !== chatId) return;
+  const module = GAMES[m.game.gameType];
+  if (!module || deriveGameStatus(module, m.game).state !== 'ongoing') return;
+  const me = gameSelfPlayer(m);
+  const at = now();
+  const seq = m.game.moves.length + 1;
+  if ((await applyGameMove(m, me, { seq, action: 'resign', at })) !== 'applied') return;
+  const chat = await getChat(m.chatId);
+  const signal: GameMoveSignal = { messageId, seq, action: 'resign', at };
+  await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
+}
+
 /** Apply an inbound game move/resign from `from` (side effect, never a stored
  *  message). The bubble may be gone (TTL/deleted) — then the signal is dropped
  *  (data-model rule 1). v1 is strictly 1:1: only the conversation's peer plays. */

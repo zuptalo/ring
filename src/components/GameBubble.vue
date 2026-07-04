@@ -19,13 +19,32 @@
         @move="(mv: unknown) => $emit('move', mv)"
       />
       <div class="game-status" role="status">{{ statusLine }}</div>
+      <div class="game-actions">
+        <ion-button
+          v-if="status.state === 'ongoing'"
+          size="small"
+          fill="clear"
+          color="medium"
+          @click.stop="confirmResign"
+        >
+          Resign
+        </ion-button>
+        <ion-button
+          v-else
+          size="small"
+          fill="clear"
+          @click.stop="$emit('rematch', game.gameType)"
+        >
+          Play again
+        </ion-button>
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { IonIcon } from '@ionic/vue';
+import { IonIcon, IonButton, alertController } from '@ionic/vue';
 import { gameControllerOutline } from 'ionicons/icons';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
@@ -40,7 +59,25 @@ const props = defineProps<{
   /** Whether this bubble is our own message — the starter is player 0. */
   outgoing: boolean;
 }>();
-defineEmits<{ (e: 'move', move: unknown): void }>();
+const emit = defineEmits<{
+  (e: 'move', move: unknown): void;
+  (e: 'resign'): void;
+  /** Play again: start a fresh bubble of the same game (the chooser moves first). */
+  (e: 'rematch', gameType: string): void;
+}>();
+
+// Resigning concedes the game — worth one explicit confirmation.
+async function confirmResign(): Promise<void> {
+  const alert = await alertController.create({
+    header: 'Resign this game?',
+    message: 'Your friend wins the game.',
+    buttons: [
+      { text: 'Keep playing', role: 'cancel' },
+      { text: 'Resign', role: 'destructive', handler: () => emit('resign') },
+    ],
+  });
+  await alert.present();
+}
 
 const module = computed(() => GAMES[props.game.gameType] ?? null);
 const boardComponent = computed(() => GAME_BOARDS[props.game.gameType] ?? null);
@@ -96,5 +133,16 @@ const statusLine = computed((): string => {
   font-size: 14px;
   color: var(--app-text-muted);
   padding: 8px 0;
+}
+.game-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px -8px -6px 0;
+}
+.game-actions ion-button {
+  --padding-start: 8px;
+  --padding-end: 8px;
+  font-size: 13px;
+  text-transform: none;
 }
 </style>

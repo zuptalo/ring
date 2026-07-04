@@ -395,6 +395,8 @@
                 :game="m.game"
                 :outgoing="m.outgoing"
                 @move="(mv) => playGameMove(chatId, m.id, mv)"
+                @resign="resignGame(chatId, m.id)"
+                @rematch="(gt) => onGameRematch(gt)"
               />
 
               <!-- Rich link preview (generated sender-side, delivered E2EE — no
@@ -1139,7 +1141,7 @@ import {
   MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
-  sendGame, playGameMove, hasOngoingGame,
+  sendGame, playGameMove, resignGame, hasOngoingGame,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
   backfillThumbTiers, getDraft, saveDraft, clearDraft, getDraftMedia, saveDraftMedia, clearDraftMedia,
@@ -3874,6 +3876,10 @@ async function onGamePick(gameType: string): Promise<void> {
   await sendGame(chatId, gameType);
   void scrollToNewest();
 }
+
+// "Play again" on a finished bubble = a normal new game of the same type; the
+// chooser becomes the new game's first mover. Same gate as the picker.
+const onGameRematch = (gameType: string) => void onGamePick(gameType);
 
 async function onContactSelect(c: SharedContact): Promise<void> {
   contactPickerOpen.value = false;

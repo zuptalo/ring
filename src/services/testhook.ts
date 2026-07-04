@@ -52,6 +52,7 @@ import {
   votePoll as dbVotePoll,
   sendGame as dbSendGame,
   playGameMove as dbPlayGameMove,
+  resignGame as dbResignGame,
   hasOngoingGame as dbHasOngoingGame,
   forwardMessage as dbForwardMessage,
   sendMediaMessage as dbSendMediaMessage,
@@ -583,6 +584,8 @@ export function installTestHook(): void {
         status: deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game),
       };
     },
+    /** Resign an ongoing game (the opponent wins by concession). */
+    resignGame: (chatId: string, messageId: string) => dbResignGame(chatId, messageId),
     /** The one-game-per-chat gate's source of truth (FR-001a). */
     hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
     /** Forward a message by id (games must be a no-op — asserting FR-014). */
