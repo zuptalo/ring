@@ -198,21 +198,37 @@ func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p push
 	return resp.StatusCode, retryAfter, nil
 }
 
+// msgDebounceWindow folds a fast burst of messages to one recipient into at most a
+// leading + one trailing tickle (spec 2020). Long enough to absorb rapid-fire
+// sends, short enough that a burst's last message is announced promptly.
+const msgDebounceWindow = 2 * time.Second
+
 // Notifier sends a tickle to all of a user's subscriptions, pruning dead ones.
 type Notifier struct {
 	sender *Sender
 	store  SubStore
+	msgDeb *msgDebouncer
 }
 
 func NewNotifier(sender *Sender, st SubStore) *Notifier {
-	return &Notifier{sender: sender, store: st}
+	n := &Notifier{sender: sender, store: st}
+	// Trailing sends fire from a timer, long after the triggering request's context
+	// is gone — Background is correct; per-delivery budgets still apply in deliver.
+	n.msgDeb = newMsgDebouncer(msgDebounceWindow, func(userID string) {
+		n.notify(context.Background(), userID, msgParams())
+	})
+	return n
 }
 
 // Notify pushes a content-free MESSAGE tickle to every subscription of userID
 // (long-lived + collapsible, so an offline device still learns about it on wake).
-// Safe to call in a goroutine; failures are logged, 404/410 endpoints are pruned,
-// transient failures are retried.
-func (n *Notifier) Notify(ctx context.Context, userID string) { n.notify(ctx, userID, msgParams()) }
+// Debounced per recipient with a trailing edge (spec 2020): a fast burst yields at
+// most a leading + one trailing tickle — safe because the service worker drains the
+// WHOLE relay queue on any wake, so the trailing tickle covers every message of the
+// burst. Safe to call in a goroutine; failures are logged, 404/410 endpoints are
+// pruned, transient failures are retried. Only message tickles are debounced —
+// NotifyCall/NotifyConn/etc. below stay immediate.
+func (n *Notifier) Notify(ctx context.Context, userID string) { n.msgDeb.hit(userID) }
 
 // NotifyCall pushes a content-free CALL tickle: short-lived (a stale ring is
 // useless), high-urgency, and never collapsed, so it always wakes the device

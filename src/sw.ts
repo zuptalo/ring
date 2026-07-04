@@ -22,7 +22,7 @@ import { CacheFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
-  coalesceForShow, loadShownSummary, setting,
+  coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
@@ -179,6 +179,9 @@ async function showNotes(notes: SwNote[]): Promise<void> {
         // for "nothing new" uses reassertFromSummary below, which sets renotify:false)
         data: { url: n.url },
       });
+      // Record what the user SAW on this tag (spec 2020), so a later nothing-new
+      // wake can tell "identical re-assert" (skip) from "content changed" (show).
+      await saveShownSig(n.tag, { body: n.body, count: n.count ?? n.ids.length, ts: Date.now() });
     } catch (e) {
       console.warn('[sw] showNotification failed', e);
     }
@@ -229,7 +232,15 @@ async function reassertFromSummary(): Promise<void> {
     const list = await loadShownSummary(); // already TTL-filtered
     if (!list.length) return; // nothing to re-assert → show nothing (mirrors the badge-only path)
     const n = list.reduce((a, b) => (b.ts > a.ts ? b : a)); // freshest
+    // (spec 2020) A re-assert that is VISUALLY IDENTICAL to what the user already
+    // sees (same body + cumulative count on this tag) shows nothing at all: iOS
+    // renders even a silent same-tag re-show as a fresh banner + a duplicate
+    // Notification Center entry, which read as "the same message notified twice"
+    // in a burst. A CHANGED body/count still re-asserts silently below.
+    const sigs = await loadShownSigs();
+    if (!shouldReassert(sigs[n.tag], n)) return;
     const k = n.ids.length;
+    await saveShownSig(n.tag, { body: n.body, count: k, ts: Date.now() });
     await self.registration.showNotification(k > 1 ? `${n.title} (${k})` : n.title, {
       body: n.body,
       icon: ICON,

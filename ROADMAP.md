@@ -78,3 +78,4 @@ Specs are grouped by category band; status moves
 | [2017](specs/2017-sw-burst-coalesce/spec.md) | Coalesce burst notifications into one clean per-chat notification | 🔵 in-review |
 | [2018](specs/2018-notification-tap-opens/spec.md) | Notification tap opens the chat, not a stuck chat list | 🟡 in-progress |
 | [2019](specs/2019-typing-works-again/spec.md) | Typing works again after sending pasted media, and captions reach every attachment | 🟡 in-progress |
+| [2020](specs/2020-fast-message-bursts/spec.md) | Fast message bursts stop showing duplicate notifications | 🟡 in-progress |
