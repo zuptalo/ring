@@ -3,6 +3,7 @@
 // payloads, so a rules change means a NEW id, never a change behind this one
 // (contracts/game-payload.md §3).
 
+import { gridOutline } from 'ionicons/icons'
 import type { GameModule } from '../types'
 import {
   applyMove,
@@ -16,7 +17,7 @@ import {
 const tictactoe: GameModule<TicTacToeState, TicTacToeMove> = {
   id: 'tictactoe',
   displayName: 'Tic-tac-toe',
-  icon: 'grid-outline',
+  icon: gridOutline,
   players: 2,
   createInitialState,
   applyMove,

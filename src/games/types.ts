@@ -27,7 +27,8 @@ export interface GameStatusResult {
 export interface GameModule<S = unknown, M = unknown> {
   id: string
   displayName: string
-  /** Ionicon name shown in the picker and previews. */
+  /** An Ionicon (import from 'ionicons/icons' — icon data, not a name string,
+   *  so only the icons actually registered get bundled). */
   icon: string
   players: 2
   createInitialState(): S

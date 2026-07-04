@@ -7,5 +7,8 @@
 // future game) renders GameBubble's "update Ring to play" fallback.
 
 import type { Component } from 'vue'
+import TicTacToeBoard from './tictactoe/TicTacToeBoard.vue'
 
-export const GAME_BOARDS: Record<string, Component> = {}
+export const GAME_BOARDS: Record<string, Component> = {
+  tictactoe: TicTacToeBoard,
+}

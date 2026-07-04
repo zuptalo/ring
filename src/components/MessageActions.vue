@@ -12,7 +12,7 @@
         <ion-icon slot="start" :icon="arrowUndoOutline" />
         <ion-label>Reply</ion-label>
       </ion-item>
-      <ion-item button :detail="false" @click="choose('forward')">
+      <ion-item v-if="canForward ?? true" button :detail="false" @click="choose('forward')">
         <ion-icon slot="start" :icon="arrowRedoOutline" />
         <ion-label>Forward</ion-label>
       </ion-item>
@@ -64,6 +64,7 @@ defineProps<{
   canInfo?: boolean; // show "Message info" — outgoing (receipts) or any media (metadata, both directions)
   canCopy: boolean;
   canView?: boolean; // image/video/album: offer "View" (open the full-screen viewer)
+  canForward?: boolean; // games are excluded (spec 0008 FR-014); default true
   canEdit?: boolean; // own, not-deleted text message: offer "Edit"
   canSave?: boolean; // single image/video/file/audio: offer "Save"
   canSaveAll?: boolean; // album bubble: offer "Save all"

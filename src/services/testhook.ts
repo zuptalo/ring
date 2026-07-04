@@ -50,6 +50,10 @@ import {
   sendPoll as dbSendPoll,
   sendContact as dbSendContact,
   votePoll as dbVotePoll,
+  sendGame as dbSendGame,
+  playGameMove as dbPlayGameMove,
+  hasOngoingGame as dbHasOngoingGame,
+  forwardMessage as dbForwardMessage,
   sendMediaMessage as dbSendMediaMessage,
   setChatTtl as dbSetChatTtl,
   setChatNotifyPrefs as dbSetChatNotifyPrefs,
@@ -152,6 +156,8 @@ import { activityFor } from '@/composables/useTyping';
 import type { ActivityKind, ActivityState } from '@/services/transport';
 import { setSecret } from '@/db/secrets';
 import { get, getAll, put, bulkPut } from '@/db/idb';
+import { GAMES } from '@/games/registry';
+import { deriveStatus as deriveGameStatus } from '@/games/session';
 import { initialsAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
@@ -560,6 +566,27 @@ export function installTestHook(): void {
     sendContact: (chatId: string, userId: string, name: string, avatar?: string) =>
       dbSendContact(chatId, { userId, name, avatar }),
     votePoll: (messageId: string, option: number) => dbVotePoll(messageId, option),
+
+    /* ---- in-chat games (spec 0008) ---- */
+    /** Start a game in a 1:1 chat; returns the bubble's message id. */
+    sendGame: (chatId: string, gameType: string) => dbSendGame(chatId, gameType),
+    /** Play a move on a game bubble (refused silently when not allowed). */
+    playGameMove: (chatId: string, messageId: string, move: unknown) =>
+      dbPlayGameMove(chatId, messageId, move),
+    /** A game bubble's derived session view — exactly what the GameBubble renders. */
+    gameInfo: async (messageId: string) => {
+      const m = await dbGetMessage(messageId);
+      if (!m?.game) return null;
+      return {
+        gameType: m.game.gameType,
+        moves: m.game.moves.length,
+        status: deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game),
+      };
+    },
+    /** The one-game-per-chat gate's source of truth (FR-001a). */
+    hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
+    /** Forward a message by id (games must be a no-op — asserting FR-014). */
+    forwardMessage: (messageId: string, chatIds: string[]) => dbForwardMessage(messageId, chatIds),
     sendAudio: (chatId: string, name: string, title: string, artist: string) =>
       dbSendMediaMessage(chatId, 'audio', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/mpeg' }), name, 12, {
         audio: { title, artist },
