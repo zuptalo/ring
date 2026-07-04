@@ -1,12 +1,20 @@
 /**
- * Service-worker background decryption for rich notifications (Choice A).
+ * Service-worker background decryption for rich notifications.
  *
- * Woken by a content-free push tickle while the app is closed, the SW fetches the
- * queued E2EE frames over HTTP, decrypts them READ-ONLY (previewPacket never
- * persists the ratchet or acks), and builds notification previews. The page still
- * drains + persists the messages for real over its WebSocket when it next
- * connects, so this adds notification content WITHOUT touching shared ratchet
- * state. Only a content-free tickle ever flows through Apple/Google.
+ * Two modes since spec 1032 (specs/1032-store-messages-push/):
+ *   - AUTHORITATIVE (sw-drain.ts, behind the internal `sw.fullPersist` flag):
+ *     eligible plain messages are decrypted, PERSISTED atomically, and acked at
+ *     notification time, so the app opens warm. sw-drain reuses this module's
+ *     fetch + note-building helpers, so notification content and privacy rules
+ *     are identical in both modes.
+ *   - PREVIEW (this module, the original "Choice A"): woken by a content-free
+ *     push tickle, the SW fetches the queued E2EE frames over HTTP, decrypts
+ *     them READ-ONLY (previewPacket never persists the ratchet or acks), and
+ *     builds notification previews. The page still drains + persists for real
+ *     over its WebSocket on next open. This remains the whole story for: the
+ *     flag off, PIN/passkey-locked devices, frame types the drain defers
+ *     (first-contact, cards, reactions, controls), and every degrade path.
+ * Only a content-free tickle ever flows through Apple/Google in either mode.
  *
  * Mirrors the live page dispatch (db/queries.ts `receiveIncoming` → services/notify
  * `notifyIncoming`): plain messages honor `notifications.message.show`, while
@@ -32,7 +40,8 @@ import type { MessagePayload } from './crypto/message';
 // VITE_API_URL is baked in only when targeting a different backend host.
 const API = `${import.meta.env.VITE_API_URL ?? ''}/v1`;
 
-interface MsgFrame {
+// Exported (spec 1032): sw-drain.ts drains the same queue authoritatively.
+export interface MsgFrame {
   t: string;
   id?: string;
   from?: string;
@@ -139,7 +148,10 @@ async function loadShownEntries(): Promise<ShownEntry[]> {
   }
   return out;
 }
-async function loadShown(): Promise<string[]> {
+/** Frame ids already SHOWN as notifications (TTL-pruned). Exported for sw-drain's
+ *  re-ack path (spec 1032): a committed-but-never-shown frame gets its note rebuilt
+ *  on redelivery, and this ledger is what distinguishes "never shown" from shown. */
+export async function loadShown(): Promise<string[]> {
   return (await loadShownEntries()).map((e) => e.id);
 }
 
@@ -371,6 +383,35 @@ export async function ackCall(): Promise<void> {
   }
 }
 
+/** Fetch the queued (undelivered) frames. Fetching is what tells the server the
+ *  device received them (→ "delivered" receipts), so callers do it before any
+ *  decryption or settings gate. Bounded so a cold-start fetch can't hang the
+ *  handler. Shared by the preview path below and the authoritative drain
+ *  (sw-drain.ts, spec 1032). `failure` carries the preview-path reason label. */
+export async function fetchPendingFrames(token: string): Promise<{ frames: MsgFrame[] } | { failure: string }> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/relay/pending`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      console.warn('[sw-inbox] /relay/pending not ok', res.status);
+      return { failure: `relay-${res.status}` };
+    }
+    return { frames: ((await res.json()) as { frames?: MsgFrame[] }).frames ?? [] };
+  } catch (e) {
+    console.warn('[sw-inbox] /relay/pending fetch failed', e);
+    return { failure: 'relay-error' };
+  }
+}
+
 export async function previewPending(): Promise<PreviewResult> {
   const token = await readSessionToken();
   if (!token) {
@@ -390,39 +431,27 @@ export async function previewPending(): Promise<PreviewResult> {
   // before the key is ready).
   const unlockReady = attemptDeviceUnlock().catch(() => false);
 
-  // Fetch the queue, before any decryption or settings gate. Fetching is what tells
-  // the server the device received these frames (→ "delivered" receipts), so it must
-  // happen even if we later withhold or can't decrypt. Bounded so a cold-start fetch
-  // can't hang the handler.
-  let frames: MsgFrame[] = [];
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
-    let res: Response;
-    try {
-      res = await fetch(`${API}/relay/pending`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: ctrl.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!res.ok) {
-      console.warn('[sw-inbox] /relay/pending not ok', res.status);
-      return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true, reason: `relay-${res.status}` };
-    }
-    frames = ((await res.json()) as { frames?: MsgFrame[] }).frames ?? [];
-  } catch (e) {
-    console.warn('[sw-inbox] /relay/pending fetch failed', e);
-    return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true, reason: 'relay-error' };
+  const fetched = await fetchPendingFrames(token);
+  if ('failure' in fetched) {
+    return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: true, reason: fetched.failure };
   }
+  const frames = fetched.frames;
   // No pending frames: the message was already drained (page / a prior straggler) or this push carried
   // no queued message (a settings / own-data sync wake). Nothing genuinely new → no placeholder (2016).
   if (!frames.length) return { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: false, reason: 'no-frames' };
 
   // Queued message frames = the undelivered backlog → the app-icon badge. Known
   // from the fetch alone, so the badge is right even if we can't decrypt.
-  const pending = frames.filter((f) => f.t === 'msg' && !!f.id).length;
+  //
+  // Spec 1032 (security review F8): frames the authoritative drain already
+  // COMMITTED can linger here (their ack failed, or a redelivery raced the ack) —
+  // they are already inside the stored unread count, so counting them as pending
+  // would double-badge, and re-decrypting them would fail (their message keys are
+  // consumed) and masquerade as a decrypt failure. Treat committed frames as
+  // neither pending nor previewable; they resolve to a bare re-ack on the next
+  // drain or page open.
+  const committed = new Set(await setting<string[]>('inboundSeenIds', []));
+  const pending = frames.filter((f) => f.t === 'msg' && !!f.id && !committed.has(f.id)).length;
   console.info('[sw-inbox] fetched frames', { total: frames.length, pending });
 
   // Badge mode (spec 1027, B4): under 'never'/'revealed' only frames we can
@@ -465,7 +494,7 @@ export async function previewPending(): Promise<PreviewResult> {
   let silencedMessage = false; // a message intentionally silenced by per-chat prefs
   let decryptFailed = 0; // frames we couldn't decrypt (cold start / session not reachable)
   for (const f of frames) {
-    if (f.t !== 'msg' || !f.from || !f.id || seen.has(f.id)) continue;
+    if (f.t !== 'msg' || !f.from || !f.id || seen.has(f.id) || committed.has(f.id)) continue;
     let payload: MessagePayload;
     try {
       payload = await previewPacket(sessionKeyForPeer(chats, f.from), f.ciphertext);

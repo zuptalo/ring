@@ -342,6 +342,79 @@ export async function update<T>(
   if (wrote) notify(name);
 }
 
+/** The handle a `transact` callback drives. Reads/writes all ride ONE readwrite
+ *  IndexedDB transaction, so everything commits together or nothing does. */
+export interface Tx {
+  get<T>(name: StoreName, key: IDBValidKey): Promise<T | undefined>;
+  put<T>(name: StoreName, value: T): void;
+  delete(name: StoreName, key: IDBValidKey): void;
+}
+
+/**
+ * Run `fn` inside ONE readwrite transaction spanning `names` (spec 1032). This is
+ * what makes the service worker's per-frame commit crash-safe: the advanced ratchet
+ * session, the message row, the chat read-modify-write, and the exactly-once ledger
+ * mark are all-or-nothing — an interruption (worker killed, quota error, thrown
+ * callback) leaves either the complete result or no trace, never a half-applied
+ * frame. Change-bus notifications fire only after commit, once per touched store;
+ * an abort notifies nothing.
+ *
+ * Constraint inherited from IndexedDB itself: `fn` may await the handle's own
+ * `get` (the transaction stays alive across IDB-request microtasks), but awaiting
+ * anything else (fetch, timers, crypto) lets the transaction auto-commit early —
+ * do all slow work BEFORE calling transact and pass the results in.
+ */
+export async function transact(names: StoreName[], fn: (tx: Tx) => void | Promise<void>): Promise<void> {
+  const run = (db: IDBDatabase): Promise<Set<StoreName>> =>
+    new Promise<Set<StoreName>>((resolve, reject) => {
+      const tx = db.transaction(names, 'readwrite'); // may throw InvalidStateError synchronously
+      const touched = new Set<StoreName>();
+      const handle: Tx = {
+        get: (name, key) => promisify(tx.objectStore(name).get(key)),
+        put: (name, value) => {
+          tx.objectStore(name).put(value);
+          touched.add(name);
+        },
+        delete: (name, key) => {
+          tx.objectStore(name).delete(key);
+          touched.add(name);
+        },
+      };
+      let failed: unknown = null;
+      Promise.resolve()
+        .then(() => fn(handle))
+        .catch((e) => {
+          // Abort so nothing lands; reject with the CALLBACK's error (more useful
+          // than the generic AbortError the abort event carries).
+          failed = e;
+          try {
+            tx.abort();
+          } catch {
+            /* already aborted/finished */
+          }
+        });
+      tx.oncomplete = () => resolve(touched);
+      tx.onabort = () => reject(failed ?? tx.error ?? new Error('transaction aborted'));
+      tx.onerror = () => {
+        /* the abort handler reports; individual request errors bubble to onabort */
+      };
+    });
+  let touched: Set<StoreName>;
+  try {
+    touched = await run(await openDB());
+  } catch (e) {
+    // Cached connection was closing (storage cleared / other-tab upgrade); drop it
+    // and reopen once, like store()/update(), so this doesn't fail until a reload.
+    if (e instanceof DOMException && e.name === 'InvalidStateError') {
+      dbPromise = null;
+      touched = await run(await openDB());
+    } else {
+      throw e;
+    }
+  }
+  for (const name of touched) notify(name);
+}
+
 export async function bulkPut<T>(name: StoreName, values: T[]): Promise<void> {
   const db = await openDB();
   await new Promise<void>((resolve, reject) => {
@@ -380,8 +453,33 @@ export async function wipeAllStores(): Promise<void> {
 
 const listeners = new Map<StoreName, Set<() => void>>();
 
-function notify(name: StoreName): void {
+function fireLocal(name: StoreName): void {
   listeners.get(name)?.forEach((cb) => cb());
+}
+
+/* Cross-context bridge (spec 1032): the listener Map above is module-level, so it
+ * never crosses JS contexts — a live page's useLiveQuery was blind to service-worker
+ * writes (and tab B to tab A's). Every notify() ALSO posts the store name on
+ * BroadcastChannel('ring:idb'); a RECEIVED name fires the LOCAL listeners only and is
+ * never re-broadcast, so two bridged contexts can't echo-loop each other. Unknown
+ * payloads are ignored (a newer context may know stores this one doesn't). Contexts
+ * without BroadcastChannel just skip the bridge (today's in-context behavior). */
+const bridge: BroadcastChannel | null =
+  typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('ring:idb') : null;
+if (bridge) {
+  bridge.onmessage = (e: MessageEvent) => {
+    const name = e.data as StoreName;
+    if ((STORES as readonly string[]).includes(name)) fireLocal(name);
+  };
+}
+
+function notify(name: StoreName): void {
+  fireLocal(name);
+  try {
+    bridge?.postMessage(name);
+  } catch {
+    /* a closing channel must never fail a write */
+  }
 }
 
 /**

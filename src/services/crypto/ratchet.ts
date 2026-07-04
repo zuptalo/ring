@@ -268,7 +268,12 @@ function dhRatchet(state: RatchetState, headerDh: Uint8Array): void {
 
 /* ---- (de)serialization + persistence (sessions store, keyed by chatId) ---- */
 
-interface SerializedSession {
+// Exported (spec 1032): the SW's atomic per-frame commit writes the advanced session
+// row itself (via idb `transact`), so it needs the serialized record without this
+// module persisting it. The FORMAT is a cross-context contract — an old waiting SW
+// can run against a new page (registerType 'prompt') — so it must not change in the
+// same release as a feature that adds a second writer; version it if it ever does.
+export interface SerializedSession {
   id: string;
   dhsPub: string;
   dhsPriv: string;
@@ -314,6 +319,12 @@ function deserialize(j: SerializedSession): RatchetState {
     PN: j.pn,
     skipped,
   };
+}
+
+/** The sessions-store row for a state, WITHOUT persisting it — for callers that
+ *  commit the advance atomically with their other writes (spec 1032 SW drain). */
+export function sessionRecord(chatId: string, state: RatchetState): SerializedSession {
+  return serialize(chatId, state);
 }
 
 export async function loadSession(chatId: string): Promise<RatchetState | null> {

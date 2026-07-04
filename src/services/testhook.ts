@@ -10,6 +10,7 @@
 import { register, getSelfUserId, getSelfUsername } from '@/services/auth';
 import { syncDirectory, importDirectoryUser, searchDirectory, publishOwnProfile, refetchContactProfile } from '@/services/directory';
 import { previewPending } from '@/services/sw-inbox';
+import { drainPersistPending, ackFrames } from '@/services/sw-drain';
 import { disconnectTransport, nudgeReconnect, forceReconnect, sendDownloadedReceipts, sendSeenReceipts, applySeenPref } from '@/composables/useSync';
 import {
   ensureIdentity,
@@ -292,6 +293,16 @@ export function installTestHook(): void {
     /** Full background-preview result (notes + pending + suppressed + silenced), so a
      *  test can assert the closed-app SW decision (spec 1015 badge-only / web-push-off). */
     previewPendingFull: () => previewPending(),
+    /** Spec 1032: the SW AUTHORITATIVE drain (sw.fullPersist) — decrypt + persist +
+     *  ack eligible queued frames, exactly the module the push handler runs. Returns
+     *  the drain result plus whether the ack landed, so e2e can assert commit-before-
+     *  ack, exactly-once, and every degrade reason. Enable with
+     *  `setSetting('sw.fullPersist', true)` and `disconnect()` first. */
+    drainPending: async () => {
+      const r = await drainPersistPending();
+      const ackOk = r.mode === 'applied' ? await ackFrames(r.ackIds) : false;
+      return { ...r, ackOk };
+    },
     /** Drop the WebSocket so the server queues messages (simulate app closed). */
     disconnect: () => disconnectTransport(),
     /** Reconnect the WebSocket (drains the queue for real). */
