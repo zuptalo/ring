@@ -347,6 +347,47 @@ export function mergeIntoSummary(prev: ShownSummary | undefined, note: SwNote, n
   return { tag: note.tag, title: note.title, body: note.body, url: note.url, ids, ts: now };
 }
 
+/* ---- spec 2020: last-SHOWN signature per conversation, so a nothing-new wake never
+ * repeats a visually identical banner. iOS renders every showNotification call as a
+ * visible banner AND a separate Notification Center entry (same-tag replacement does
+ * not collapse history), so the spec-2016/2017 silent re-assert reads as a duplicate
+ * whenever the coalesced content hasn't changed. The signature records what the user
+ * last SAW per tag (body + cumulative count); an identical re-assert is skipped —
+ * the same iOS-tolerated outcome class as the mute/badge-only paths. ---- */
+export interface ShownSig {
+  body: string;
+  count: number;
+  ts: number;
+}
+const SHOWN_SIG_KEY = 'sw.shownSig';
+const SHOWN_SIG_TTL_MS = 10 * 60 * 1000;
+const SHOWN_SIG_MAX = 50;
+
+/** Pure decision (unit-tested): does this summary entry contain anything the user
+ *  hasn't already seen on this tag? */
+export function shouldReassert(prev: ShownSig | undefined, entry: ShownSummary): boolean {
+  return !prev || prev.body !== entry.body || prev.count !== entry.ids.length;
+}
+
+export async function loadShownSigs(): Promise<Record<string, ShownSig>> {
+  const raw = await setting<Record<string, ShownSig>>(SHOWN_SIG_KEY, {});
+  const cutoff = Date.now() - SHOWN_SIG_TTL_MS;
+  const out: Record<string, ShownSig> = {};
+  for (const [tag, sig] of Object.entries(raw)) {
+    if (sig && typeof sig.ts === 'number' && sig.ts >= cutoff) out[tag] = sig;
+  }
+  return out;
+}
+
+export async function saveShownSig(tag: string, sig: ShownSig): Promise<void> {
+  const sigs = await loadShownSigs(); // already TTL-pruned
+  sigs[tag] = sig;
+  const entries = Object.entries(sigs)
+    .sort((a, b) => a[1].ts - b[1].ts)
+    .slice(-SHOWN_SIG_MAX);
+  await put<Setting<Record<string, ShownSig>>>('settings', { key: SHOWN_SIG_KEY, value: Object.fromEntries(entries) });
+}
+
 /** (spec 2017) Merge each note into the persisted summary and return the notes to actually SHOW, with
  *  `count` set to the CUMULATIVE per-chat total (so a burst shows one monotonic count, not a bouncing
  *  per-pass slice). Persists the updated summary. Serialized by the caller. */
