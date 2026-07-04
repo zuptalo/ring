@@ -70,6 +70,14 @@ test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forwar
   expect(await hasOngoing(a, aChat)).toBe(true);
   await expect.poll(() => hasOngoing(b, bChat), { timeout: 15_000 }).toBe(true);
 
+  // FR-013: the recipient's chat-list preview reflects the new game.
+  await expect
+    .poll(
+      () => b.page.evaluate((id: string) => (window as any).__ringTest.chatPreview(id), bChat),
+      { timeout: 15_000 },
+    )
+    .toEqual({ lastMessage: 'Tic-tac-toe', lastKind: 'game' });
+
   // The starter (A) is player 0 and moves first: B moving first is refused locally.
   await playMove(b, bChat, msgId, 0);
   expect((await gameInfo(b, msgId)).moves).toBe(0);
@@ -81,6 +89,14 @@ test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forwar
 
   // B catches up and the boards alternate to A's win (row 0-1-2 vs B's 3,4).
   await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(1);
+  // FR-013: an opponent's move bumps the recipient's preview to "Your move".
+  await expect
+    .poll(
+      async () =>
+        (await b.page.evaluate((id: string) => (window as any).__ringTest.chatPreview(id), bChat))?.lastMessage,
+      { timeout: 15_000 },
+    )
+    .toBe('Your move');
   // A occupied 4 already; play a proper win line for A: 0,1,2 with B on 3,5.
   await playMove(b, bChat, msgId, 3);
   await expect.poll(async () => (await gameInfo(a, msgId)).moves, { timeout: 30_000 }).toBe(2);

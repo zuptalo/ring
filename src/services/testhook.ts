@@ -588,6 +588,11 @@ export function installTestHook(): void {
     resignGame: (chatId: string, messageId: string) => dbResignGame(chatId, messageId),
     /** The one-game-per-chat gate's source of truth (FR-001a). */
     hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
+    /** A chat's list-preview line + icon kind (game-activity preview asserts, FR-013). */
+    chatPreview: async (chatId: string) => {
+      const c = await dbGetChat(chatId);
+      return c ? { lastMessage: c.lastMessage, lastKind: c.lastKind ?? null } : null;
+    },
     /** Forward a message by id (games must be a no-op — asserting FR-014). */
     forwardMessage: (messageId: string, chatIds: string[]) => dbForwardMessage(messageId, chatIds),
     sendAudio: (chatId: string, name: string, title: string, artist: string) =>
