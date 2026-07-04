@@ -918,6 +918,7 @@
                and you send with the button. -->
           <ion-textarea
             ref="composerEl"
+            :key="composerKey"
             v-enter-send="send"
             class="composer"
             :value="draft"
@@ -1944,6 +1945,8 @@ const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[
 const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c])));
 const replyingTo = ref<ReplyRef | null>(null);
 const composerEl = ref<{ $el: HTMLIonTextareaElement } | null>(null);
+// Bumped after a media send to remount the composer textarea (spec 2019) — see send().
+const composerKey = ref(0);
 
 // Make the composer bidi-aware: dir="auto" on the NATIVE <textarea> (Ionic doesn't forward
 // it from the host) so the editor flips per content — a Persian/Arabic/Hebrew message flows
@@ -3714,9 +3717,10 @@ async function send() {
   }
 
   // Staged media (picked OR pasted) go out with the typed text as the caption. With 2+
-  // photos/videos the user picks Album (one swipeable post, default) or Individual: an
-  // album carries the caption once (on the first item); individual messages each carry it.
-  // Files are never part of an album.
+  // photos/videos the user picks Album (one swipeable post, default) or Individual. Either
+  // way the composer caption reaches EVERY item without a per-item caption of its own
+  // (spec 2019) — in an album the viewer shows a per-slide caption, so captioning only the
+  // first slide left the rest blank. Files are never part of an album.
   if (pendingMedia.value.length) {
     // Quality is applied silently PER KIND from the resolved settings (photo vs video, per-chat
     // override else the global Upload-quality) — no prompt. A source below the tier is never
@@ -3728,6 +3732,17 @@ async function send() {
     const caption = text;
     draft.value = '';
     clearComposerDraft();
+    // Re-mint the composer (spec 2019): clearing the staged media reverts the
+    // textarea's :maxlength from the caption cap back to undefined, and on iOS
+    // WebKit toggling maxlength rebuilds ion-textarea's inner native <textarea> —
+    // the rebuilt element loses its value/input wiring, so after sending, keystrokes
+    // reached a dead field and NOTHING typed showed up until the user left and
+    // re-entered the chat (which remounts the composer). Bumping :key remounts just
+    // this element in place — the same clean instance leaving-and-returning gives —
+    // then we re-focus the fresh textarea so the keyboard stays usable.
+    composerKey.value++;
+    await nextTick();
+    void nativeComposer().then((ta) => ta?.focus());
     // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
     const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
     replyingTo.value = null;
@@ -3738,9 +3753,11 @@ async function send() {
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       const inAlbum = !!albumId && (it.kind === 'image' || it.kind === 'video');
-      // A per-item caption (set by tapping the thumbnail) wins for that item; otherwise the
-      // shared caption applies — once for an album (first item), or to each individual message.
-      const cap = it.caption || (asAlbum ? (i === 0 ? caption : undefined) : caption);
+      // A per-item caption (set by tapping the thumbnail) wins for that item; otherwise
+      // the shared composer caption applies to EVERY item that has no caption of its
+      // own (spec 2019) — album or individual alike, so no attachment in the batch
+      // goes out silently uncaptioned just because it wasn't first.
+      const cap = it.caption || caption || undefined;
       const quality = it.kind === 'image' ? photoQ : it.kind === 'video' ? videoQ : 'original';
       await sendMediaMessage(
         chatId,
