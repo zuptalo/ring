@@ -142,6 +142,16 @@ shows game activity
 
 ## Implementation Strategy
 
+## GitHub Issues
+
+One issue per task (created 2026-07-05; the feature → develop PR must list `Closes #N`
+for each): T001 #761 · T002 #762 · T003 #763 · T004 #764 · T005 #765 · T006 #766 ·
+T007 #767 · T008 #768 · T009 #769 · T010 #770 · T011 #771 · T012 #772 · T013 #773 ·
+T014 #774 · T015 #775 · T016 #776 · T017 #777 · T018 #778 · T019 #779 · T020 #780 ·
+T021 #781 · T022 #782 · T023 #783 · T024 #784 · T025 #785 · T026 #786 · T027 #787
+
+---
+
 **MVP first**: Phases 1-3 alone ship a complete playable feature (start, play, win/draw,
 one-game gate). Stop at the Phase 3 checkpoint, run the full gates, and the feature is
 demoable. US2 (resign/rematch) and US3 (notifications/previews) layer on without touching
