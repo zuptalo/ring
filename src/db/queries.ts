@@ -851,7 +851,39 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   if (!chat || chat.isGroup || chat.participantIds[0] !== from) return;
   // The peer's role is the opposite of ours on this bubble.
   const sender = (1 - gameSelfPlayer(message)) as 0 | 1;
-  await applyGameMove(message, sender, signal);
+  if ((await applyGameMove(message, sender, signal)) !== 'applied') return;
+
+  // Deliberate divergence from silent poll votes (spec 0008 US3): a move
+  // demands the opponent's attention. The move is applied, so the line can be
+  // precise ("Your move" / the actual outcome); the SW preview path can't and
+  // says "Your move" for any move. notifyIncoming applies the same gates it
+  // applies to ordinary messages (mute, content prefs, open-chat suppression).
+  const me = gameSelfPlayer(message);
+  const status = deriveGameStatus(GAMES[message.game.gameType] ?? null, message.game);
+  const text =
+    status.state === 'won'
+      ? status.winner === me
+        ? 'You won the game! 🎉'
+        : 'They won the game'
+      : status.state === 'draw'
+        ? "It's a draw"
+        : status.state === 'resigned'
+          ? 'They resigned. You win!'
+          : 'Your move';
+  chat.lastMessage = text;
+  chat.lastKind = 'game';
+  chat.lastMessageTime = signal.at;
+  chat.updatedAt = signal.at;
+  await put('chats', chat);
+
+  const name = (await getContact(from))?.name ?? 'Someone';
+  await notifyIncoming({
+    kind: 'message',
+    chatId: message.chatId,
+    name,
+    body: text,
+    pushWoken: pushWakeActive(),
+  }).catch(() => {});
 }
 
 /** Ensure a shared contact exists locally and open a direct chat with them. */
@@ -1544,6 +1576,7 @@ function previewText(m: Message): string {
   if (m.body) return m.body.length > 28 ? `${m.body.slice(0, 28)}…` : m.body;
   if (m.kind === 'location') return m.location?.label || 'Location';
   if (m.kind === 'poll') return m.poll?.question || 'Poll';
+  if (m.kind === 'game') return GAMES[m.game?.gameType ?? '']?.displayName ?? 'Game';
   if (m.kind === 'contact') return m.contact?.name || 'Contact';
   return mediaPreview(m.kind, m.durationSec, undefined, m.videoNote);
 }

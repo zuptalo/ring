@@ -200,6 +200,42 @@ export function noteForPayload(
       wasMessage: false,
     };
   }
+  // A game move/resign (spec 0008 US3) is the ONE side-effect signal that
+  // notifies — a move demands the opponent's attention — but it sits behind
+  // exactly the gates an ordinary message gets (SC-007: hidden chats, mute,
+  // per-chat web-push, content prefs, global preview all behave identically).
+  // wasMessage stays false: the signal stores no row and never counts unread.
+  // (Copy nuance: a game-ENDING move also reads "Your move" here — the SW
+  // hasn't applied the move, so it can't know; the page path, which has, uses
+  // the precise outcome line.)
+  if (payload.gameMove) {
+    if (!showMessages) return { note: null, wasMessage: false };
+    const gchat = chats.find(
+      (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from,
+    );
+    if (gchat && hidden.has(gchat.id)) {
+      return {
+        note: { ids: [f.id as string], title: 'Ring', body: 'New message', url: '/tabs/chats', tag: `ring:${gchat.id}` },
+        wasMessage: false,
+      };
+    }
+    if (gchat?.mutedUntil && gchat.mutedUntil > Date.now()) return { note: null, wasMessage: false, silenced: true };
+    if (gchat?.notifyWebPush === false) return { note: null, wasMessage: false, silenced: true };
+    const gcontent = gchat?.notifyContent ?? 'full';
+    if (gcontent === 'none') return { note: null, wasMessage: false, silenced: true };
+    const gshowText = gcontent === 'full' && showPreview;
+    return {
+      note: {
+        ids: [f.id as string],
+        title: showPreview ? known || 'Someone' : 'Ring',
+        body: gshowText ? notifyPreview(payload) : 'New message',
+        url: gchat ? `/chat/${gchat.id}` : '/tabs/chats',
+        tag: gchat ? `ring:${gchat.id}` : `ring:from:${from}`,
+      },
+      wasMessage: false,
+    };
+  }
+
   // Reactions / poll votes / edits / delete-for-everyone / link-preview attach, and
   // the session re-key + disappearing-message TTL controls, are silent side effects
   // with nothing to show.

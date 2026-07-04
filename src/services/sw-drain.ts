@@ -121,6 +121,7 @@ export function classifyPayload(
   if (payload.group) return { verdict: 'defer', why: 'group-card' };
   if (payload.reaction) return { verdict: 'defer', why: 'reaction' };
   if (payload.pollVote) return { verdict: 'defer', why: 'poll-vote' };
+  if (payload.gameMove) return { verdict: 'defer', why: 'game-move' };
   if (payload.edit) return { verdict: 'defer', why: 'edit' };
   if (payload.erase) return { verdict: 'defer', why: 'erase' };
   if (payload.linkPreviewSig) return { verdict: 'defer', why: 'link-preview' };
@@ -160,6 +161,7 @@ async function noteFromCommittedFrame(id: string, ctx: ApplyCtx): Promise<SwNote
     videoNote: m.videoNote,
     location: m.location,
     poll: m.poll,
+    game: m.game ? { gameType: m.game.gameType } : undefined,
     contact: m.contact,
     audio: m.audio,
     mentions: m.mentions,
@@ -239,6 +241,9 @@ async function applyOne(f: MsgFrame, ctx: ApplyCtx): Promise<ApplyOutcome> {
         videoNote: payload.videoNote,
         location: payload.location,
         poll: payload.poll,
+        // A fresh session for an inbound game bubble, exactly like the page's
+        // receive (spec 0008): moves arrive later as page-deferred signals.
+        game: payload.game ? { gameType: payload.game.gameType, moves: [] } : undefined,
         contact: payload.contact,
         audio: payload.audio,
         linkPreview: payload.linkPreview,
