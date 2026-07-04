@@ -53,7 +53,7 @@ Specs are grouped by category band; status moves
 | [1029](specs/1029-tap-phone-and-email/spec.md) | Tap a Phone Number or Email in Messages & Posts | 🔵 in-review |
 | [1030](specs/1030-finish-call-kind/spec.md) | Finish Add-to-Call — Kind Upgrade, Join Cue, Group Merge, Robustness | 🔵 in-review |
 | [1031](specs/1031-wall-notifications-only/spec.md) | Wall notifications go to the owner only | 🟢 shipped |
-| [1032](specs/1032-store-messages-push/spec.md) | Messages store on push so the app opens warm | 🔵 in-review |
+| [1032](specs/1032-store-messages-push/spec.md) | Messages store on push so the app opens warm | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
