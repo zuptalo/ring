@@ -205,15 +205,17 @@ test('sw persist: PIN lock → nothing stored, frame stays queued, arrives after
   await ctxB.close();
 });
 
-/** T024c — flag OFF (the default): the drain refuses; behavior is byte-for-byte
- *  today's (preview-only, nothing stored, nothing acked). */
+/** T024c — flag OFF: the drain refuses; behavior is byte-for-byte today's
+ *  (preview-only, nothing stored, nothing acked). Dev builds default the flag ON
+ *  (SW_FULL_PERSIST_DEFAULT), so the production-off state is pinned by storing an
+ *  explicit false — which must always win over the default. */
 test('sw persist: flag off → drain degrades and the preview path owns the wake', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const a = await createAccount(ctxA, 'SWPERS09');
   const b = await createAccount(ctxB, 'SWPERS10');
   await pair(a, b);
-  // NOTE: no enableFlag(b) — default off.
+  await b.page.evaluate(() => (window as any).__ringTest.setSetting('sw.fullPersist', false));
 
   const aChat = (await chatOf(a, b.id)) as string;
   await a.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'warmup'), aChat);

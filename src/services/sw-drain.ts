@@ -38,10 +38,16 @@ import type { MessagePayload } from './crypto/message';
 
 const API = `${import.meta.env.VITE_API_URL ?? ''}/v1`;
 
-/** Internal rollout flag (spec 1032 FR-011). Device-local, default off, NOT in the
- *  Settings UI — set via dev tooling (`__ringTest.setSetting`) during the soak,
- *  flipped default-on in a later release, then removed. */
+/** Internal rollout flag (spec 1032 FR-011). Device-local, NOT in the Settings UI —
+ *  overridable via dev tooling (`__ringTest.setSetting`). */
 export const SW_FULL_PERSIST_KEY = 'sw.fullPersist';
+
+/** The flag's default when the device has no stored value: ON in dev builds
+ *  (`make start`, the ring-dev deployment, e2e's Vite server — so local + soak
+ *  devices exercise the drain without console surgery), OFF in production builds
+ *  until the deliberate default-flip release. An explicitly stored value always
+ *  wins in both, which is how the flag-off control tests pin today's behavior. */
+export const SW_FULL_PERSIST_DEFAULT = import.meta.env.DEV === true;
 
 // How long the SW waits for a cross-context lock before degrading that frame (and
 // the rest of the wake) to preview-only. A frozen-but-alive page can hold a lock
@@ -325,7 +331,7 @@ export async function drainPersistPending(): Promise<DrainResult> {
     notes: [],
   });
 
-  if (!(await setting<boolean>(SW_FULL_PERSIST_KEY, false))) return degrade('flag-off');
+  if (!(await setting<boolean>(SW_FULL_PERSIST_KEY, SW_FULL_PERSIST_DEFAULT))) return degrade('flag-off');
   if (!locksAvailable()) return degrade('no-locks');
   const token = await readSessionToken();
   if (!token) return degrade('no-token');

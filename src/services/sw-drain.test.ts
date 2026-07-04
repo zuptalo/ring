@@ -338,12 +338,23 @@ describe('drain: atomic apply + exactly-once + ack discipline (T014)', () => {
 });
 
 describe('drain: gate degrades (T019/T022 core)', () => {
-  it('flag off (default) → degrade flag-off, nothing touched', async () => {
-    storeOf('settings').delete(SW_FULL_PERSIST_KEY);
+  it('explicit flag=false → degrade flag-off, nothing touched (the production-parity control)', async () => {
+    // Production builds default the flag OFF (SW_FULL_PERSIST_DEFAULT is import.meta.env.DEV);
+    // under vitest DEV is true, so the off state is pinned via an explicit stored false —
+    // which must ALWAYS win over the default, in dev and prod alike.
+    storeOf('settings').set(SW_FULL_PERSIST_KEY, { key: SW_FULL_PERSIST_KEY, value: false });
     queued = [{ t: 'msg', id: 'm1', from: PEER, ciphertext: N(pay()) }];
     const r = await drainPersistPending();
     expect(r).toMatchObject({ mode: 'degrade', reason: 'flag-off', applied: 0, ackIds: [] });
     expect(msgRows().length).toBe(0);
+  });
+
+  it('no stored value in a dev build → the dev default turns the drain ON', async () => {
+    storeOf('settings').delete(SW_FULL_PERSIST_KEY);
+    queued = [{ t: 'msg', id: 'm1', from: PEER, ciphertext: N(pay()) }];
+    const r = await drainPersistPending();
+    expect(r.mode).toBe('applied'); // vitest runs DEV=true, same as make start / ring-dev
+    expect(r.applied).toBe(1);
   });
 
   it('no Web Locks → degrade no-locks', async () => {
