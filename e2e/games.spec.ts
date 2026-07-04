@@ -124,6 +124,51 @@ test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forwar
   await ctxB.close();
 });
 
+test('1:1 tic-tac-toe: resign ends it for both, and Play again starts a fresh game (US2)', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'RINGTST2');
+  const b = await createAccount(ctxB, 'RINGTST3');
+  await pair(a, b);
+
+  const aChat = (await a.page.evaluate((id) => (window as any).__ringTest.chatWith(id), b.id)) as string;
+  const bChat = (await b.page.evaluate((id) => (window as any).__ringTest.chatWith(id), a.id)) as string;
+  const msgId = await startGame(a, b, aChat, bChat);
+
+  // Mid-game, B resigns → both sides show A (player 0) as winner by concession.
+  await playMove(a, aChat, msgId, 4);
+  await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(1);
+  await b.page.evaluate(
+    (args: { chatId: string; msgId: string }) => (window as any).__ringTest.resignGame(args.chatId, args.msgId),
+    { chatId: bChat, msgId },
+  );
+  await expect.poll(async () => (await gameInfo(b, msgId)).status, { timeout: 30_000 }).toEqual({
+    state: 'resigned',
+    winner: 0,
+  });
+  await expect.poll(async () => (await gameInfo(a, msgId)).status, { timeout: 30_000 }).toEqual({
+    state: 'resigned',
+    winner: 0,
+  });
+
+  // The finished board is locked (a late move is refused/dropped on both sides)…
+  await playMove(a, aChat, msgId, 0);
+  expect((await gameInfo(a, msgId)).moves).toBe(1);
+  // …and the one-game gate is free again.
+  await expect.poll(() => hasOngoing(b, bChat), { timeout: 15_000 }).toBe(false);
+
+  // "Play again" = a fresh bubble started by whoever tapped it (B here): B is
+  // the new game's player 0 and moves first; the old bubble stays as it was.
+  const rematchId = await startGame(b, a, bChat, aChat);
+  expect(rematchId).not.toBe(msgId);
+  await playMove(b, bChat, rematchId, 4);
+  expect((await gameInfo(b, rematchId)).moves).toBe(1);
+  expect((await gameInfo(b, msgId)).status).toEqual({ state: 'resigned', winner: 0 });
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
 test('1:1 tic-tac-toe: draw, and an offline gap converges (FR-018)', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
