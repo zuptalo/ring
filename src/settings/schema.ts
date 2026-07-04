@@ -405,10 +405,6 @@ export const SETTINGS: Record<string, SettingNode> = {
     title: 'Chats',
     groups: [
       {
-        items: [{ type: 'toggle', title: 'Save to Photos', key: 'chats.saveToPhotos', default: false }],
-        footer: 'Automatically save photos and videos you receive to your device.',
-      },
-      {
         items: [{ type: 'toggle', title: 'Keep chats archived', key: 'chats.keepArchived', default: false }],
         footer: 'Archived chats stay archived when a new message arrives. When off, a new message brings the chat back to your main list.',
       },
