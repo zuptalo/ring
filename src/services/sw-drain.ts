@@ -42,12 +42,12 @@ const API = `${import.meta.env.VITE_API_URL ?? ''}/v1`;
  *  overridable via dev tooling (`__ringTest.setSetting`). */
 export const SW_FULL_PERSIST_KEY = 'sw.fullPersist';
 
-/** The flag's default when the device has no stored value: ON in dev builds
- *  (`make start`, the ring-dev deployment, e2e's Vite server — so local + soak
- *  devices exercise the drain without console surgery), OFF in production builds
- *  until the deliberate default-flip release. An explicitly stored value always
- *  wins in both, which is how the flag-off control tests pin today's behavior. */
-export const SW_FULL_PERSIST_DEFAULT = import.meta.env.DEV === true;
+/** The flag's default when the device has no stored value: ON for everyone (spec
+ *  1032 rollout completion — messages are saved the moment a notification arrives,
+ *  so the app opens up to date). An explicitly stored `false` still wins as a
+ *  per-device kill switch (and pins today's-behavior control tests) until the flag
+ *  is removed entirely in a later cleanup. */
+export const SW_FULL_PERSIST_DEFAULT = true;
 
 // How long the SW waits for a cross-context lock before degrading that frame (and
 // the rest of the wake) to preview-only. A frozen-but-alive page can hold a lock
