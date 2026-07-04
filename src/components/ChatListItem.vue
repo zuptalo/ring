@@ -87,6 +87,7 @@ import {
   notificationsOffOutline, lockClosedOutline, eyeOffOutline,
   cameraOutline, videocamOutline, micOutline, documentOutline, imagesOutline,
   locationOutline, barChartOutline, personOutline, musicalNotesOutline, callOutline,
+  gameControllerOutline,
 } from 'ionicons/icons';
 import {
   markChatRead, markChatUnread, setChatPinned, setChatArchived, MAX_PINNED_CHATS,
@@ -110,7 +111,7 @@ const PREVIEW_ICONS: Record<NonNullable<Chat['lastKind']>, string | null> = {
   image: cameraOutline, video: videocamOutline, videonote: videocamOutline, voice: micOutline,
   file: documentOutline, album: imagesOutline, location: locationOutline,
   poll: barChartOutline, contact: personOutline, audio: musicalNotesOutline, call: callOutline,
-  text: null, reaction: null,
+  game: gameControllerOutline, text: null, reaction: null,
 };
 const previewIcon = computed(() => (props.chat.lastKind ? PREVIEW_ICONS[props.chat.lastKind] : null));
 

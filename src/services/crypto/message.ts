@@ -209,6 +209,32 @@ export interface EraseSignal {
   at: number; // epoch ms
 }
 
+/**
+ * A new in-chat game (spec 0008), kind === 'game'. The whole start is just the
+ * registry id: the initial board is derived on both ends from the module's
+ * createInitialState(), and roles come from message direction (sender = player
+ * 0, moves first) — nothing else needs to cross the wire. `gameType` is frozen
+ * once shipped (see contracts/game-payload.md §3).
+ */
+export interface GameStart {
+  gameType: string;
+}
+
+/**
+ * A game move or resignation, carried E2EE inside a payload (like a poll vote)
+ * and applied as a side effect: it appends to the target game bubble's move
+ * log rather than appearing as its own chat message. The wire carries MOVES,
+ * never board state — each device validates and replays locally, so a
+ * tampering peer can only force a labeled out-of-sync state (spec FR-004).
+ */
+export interface GameMoveSignal {
+  messageId: string;
+  seq: number; // 1-based, strictly increasing per game session
+  action: 'move' | 'resign';
+  move?: unknown; // game-specific shape (tictactoe: { cell: 0-8 }); absent for resign
+  at: number; // epoch ms, display only — never used for ordering
+}
+
 export interface MessagePayload {
   body: string;
   kind: string;
@@ -230,6 +256,8 @@ export interface MessagePayload {
   location?: GeoLocation; // kind === 'location'
   poll?: Poll; // kind === 'poll' (votes start empty; vote signals fill them)
   pollVote?: PollVoteSignal; // a vote on an existing poll message (side effect)
+  game?: GameStart; // kind === 'game' (moves start empty; move signals fill them)
+  gameMove?: GameMoveSignal; // a move/resign on an existing game message (side effect)
   contact?: SharedContact; // kind === 'contact' (a shared Ring contact)
   audio?: AudioMeta; // kind === 'audio' (shared music file: title/artist)
   linkPreview?: LinkPreview; // inline preview on first send (rare: only if fast enough)

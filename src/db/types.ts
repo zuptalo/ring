@@ -69,6 +69,7 @@ export interface Chat {
     | 'poll'
     | 'contact'
     | 'audio'
+    | 'game'
     | 'call';
   lastMessageTime: number; // epoch ms
   unread: number;
@@ -164,6 +165,9 @@ export type MessageKind =
   | 'location'
   | 'poll'
   | 'contact'
+  // An in-chat turn-based game bubble (spec 0008). The `game` field carries the
+  // session (move log); move signals mutate it in place like poll votes.
+  | 'game'
   // A local-only, centered informational row logging a call's outcome (never sent to
   // the peer; each side logs its own). The `call` field carries the details.
   | 'call';
@@ -348,6 +352,11 @@ export interface Message {
   ttlOverrideMs?: number | null;
   location?: GeoLocation; // kind === 'location'
   poll?: Poll; // kind === 'poll'
+  // kind === 'game' (spec 0008): the session's append-only move log; board, turn,
+  // and outcome are always DERIVED by replay (src/games/session.ts), never stored.
+  // Living on the Message row (like `poll`) means TTL sweep, deletion, and
+  // hidden-chat concealment all apply to the game for free (FR-015).
+  game?: import('@/games/types').GameSession;
   contact?: SharedContact; // kind === 'contact'
   audio?: AudioMeta; // kind === 'audio' (shared music file: title/artist)
   callLog?: CallLog; // kind === 'call' (call-outcome informational row)

@@ -11,5 +11,8 @@
 // previews, notifications, the picker — is generic.
 
 import type { GameModule } from './types'
+import tictactoe from './tictactoe'
 
-export const GAMES: Record<string, GameModule> = {}
+export const GAMES: Record<string, GameModule> = {
+  [tictactoe.id]: tictactoe as GameModule,
+}
