@@ -178,6 +178,26 @@ watch(
   },
 );
 
+// First-paint gate (spec 2018): the pending-nav consume can fire very early (the
+// isUnlocked watcher is `immediate`, and a passwordless device unlock resolves in
+// milliseconds), and a deep-link push that lands while the root ion-router-outlet
+// is still mounting/animating its FIRST view gets its view swap DROPPED by Ionic —
+// the URL becomes /chat/<id> while the Chats list stays on screen (tapping that
+// chat is then a same-route no-op, and Back "returns" to the never-rendered chat
+// entry — the reported bug). Resolves after mount + two animation frames: the
+// frame after the first view committed.
+let markFirstPaint: () => void;
+const firstPaint = new Promise<void>((resolve) => (markFirstPaint = resolve));
+onMounted(() => {
+  requestAnimationFrame(() => requestAnimationFrame(() => markFirstPaint()));
+});
+
+// One settle between two programmatic Ionic navigations, so the second never
+// starts while the first is still animating (Ionic drops, not queues, an
+// overlapping view swap). Frame-based rather than a fixed duration.
+const settleFrames = (): Promise<void> =>
+  new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+
 // When opened from a notification, land on the relevant place: the deep-link the
 // service worker hands us, or, for a content-free push, the most pertinent tab.
 // `coldStart` is true when we're launching fresh from a tapped notification: the deep-link
@@ -195,8 +215,26 @@ async function routeRelevant(url?: string, coldStart = false): Promise<void> {
     }
   }
   if (coldStart && target !== '/tabs/chats') {
-    await router.replace('/tabs/chats');
+    // Never navigate before the app has painted its first view (spec 2018, FR-002).
+    await router.isReady();
+    await firstPaint;
+    // Seed the Chats home beneath the deep link. When the auth gate already landed
+    // on /tabs/chats (iOS ignores the open-window path), the replace would be a
+    // same-route no-op — skip it and just push. When the platform DID honor the
+    // deep link (current route = the target), the replace really navigates, so let
+    // its transition settle before stacking the push (overlap = dropped swap).
+    if (router.currentRoute.value.path !== '/tabs/chats') {
+      await router.replace('/tabs/chats');
+      await settleFrames();
+    }
     await router.push(target);
+  } else if (target.startsWith('/chat/') && router.currentRoute.value.path.startsWith('/chat/')) {
+    // Live app, notification for chat B tapped while chat A (possibly A's sub-pages)
+    // is on top: REPLACE instead of push (spec 2018, US follow-up). A push would
+    // stack B over A, so Back/swipe from the notification's chat returned to the
+    // previous conversation instead of the Chats list the user expects. Replacing
+    // swaps A's entry for B, leaving the Chats list beneath.
+    router.replace(target);
   } else {
     router.push(target);
   }
