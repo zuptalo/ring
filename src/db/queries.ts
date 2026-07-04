@@ -16,7 +16,6 @@ import { sealForChat, openPacket } from '@/services/messaging';
 import { withInboundLock } from '@/services/cross-lock';
 import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
-import { autoSaveIncomingMedia } from '@/services/media-autosave';
 import { wallSyncedOnce } from '@/services/wall-load';
 import { buildPost, wrapForNewAudience, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
 import { b64urlToBytes } from '@/services/crypto/envelope';
@@ -4726,15 +4725,10 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
             updatedAt: now(),
           });
           await applyThumbTiers(mediaId, await bubbleFromDataUrl(payload.mediaRef.poster)); // spec 1014
-          // "Save to Photos": best-effort auto-save of freshly-received media to the
-          // device when the app is in the foreground (chats.saveToPhotos). Fire-and-forget.
-          void autoSaveIncomingMedia({
-            blob,
-            kind,
-            mime: payload.mediaRef.mime,
-            name: payload.mediaRef.name,
-            sentAt: payload.timestamp ?? ts,
-          });
+          // (spec 2021) No auto-save-to-Photos on arrival: a pure iOS PWA has no web API
+          // to write the camera roll silently, and the old <a download> attempt broke the
+          // app out into a Safari/QuickLook preview on every incoming photo. Saving stays a
+          // manual, user-gesture share from the media viewer (services/media-save.ts).
         } else {
           pendingMedia = payload.mediaRef;
         }

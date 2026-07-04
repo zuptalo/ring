@@ -16,5 +16,5 @@ export const SYNCED_PREF_KEYS: string[] = [
   'notifications.group.show', 'notifications.group.reactions', 'notifications.group.sound',
   'notifications.wall.show', 'notifications.wall.activity', 'notifications.showPreview', 'notifications.badge',
   'notifications.inapp.enabled', 'notifications.inapp.style', 'notifications.inapp.sounds', 'notifications.inapp.vibrate',
-  'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters', 'chats.saveToPhotos', 'chats.keepArchived',
+  'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters', 'chats.keepArchived',
 ];
