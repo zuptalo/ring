@@ -157,8 +157,8 @@ func TestNotifyConnHeaders(t *testing.T) {
 	n := newNotifier(t, st)
 
 	n.NotifyConn(context.Background(), "u1")
-	if cap.ttl != "604800" {
-		t.Errorf("conn TTL = %q, want 604800 (7d)", cap.ttl)
+	if cap.ttl != "2419200" {
+		t.Errorf("conn TTL = %q, want 2419200 (28d)", cap.ttl)
 	}
 	if cap.urgency != "high" {
 		t.Errorf("conn Urgency = %q, want high", cap.urgency)
