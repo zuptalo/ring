@@ -34,7 +34,12 @@
           <!-- A status notice is a single (possibly long) line and carries no separate
                body, so let its headline wrap instead of truncating. -->
           <div class="nb-name" :class="{ 'nb-body-wrap': b.kind === 'status' }">{{ b.name }}</div>
-          <div v-if="b.body || sentId === b.id" class="nb-body" :class="{ 'nb-body-wrap': b.kind === 'action' }">{{ sentId === b.id ? 'Sent' : b.body }}</div>
+          <!-- Body renders through EmojiText so notification emoji (a game's 😏/🏆/🤝,
+               spec 0008 FR-023) play their Noto animation when they have one — same
+               pipeline as chat bodies, honoring the animation preference. -->
+          <div v-if="b.body || sentId === b.id" class="nb-body" :class="{ 'nb-body-wrap': b.kind === 'action' }">
+            <emoji-text :text="sentId === b.id ? 'Sent' : b.body" />
+          </div>
         </div>
         <ion-icon v-if="sentId === b.id" :icon="checkmarkCircle" class="nb-sent" />
       </div>
@@ -109,6 +114,7 @@ import {
   sparklesOutline, informationCircleOutline, alertCircleOutline,
 } from 'ionicons/icons';
 import router from '@/router';
+import EmojiText from '@/components/EmojiText.vue';
 import {
   notifyBanners, dismissBanner, holdBanner, pinBanner, unpinBanner,
   type NotifyBanner, type NotifyAction,

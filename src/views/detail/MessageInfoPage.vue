@@ -491,6 +491,6 @@ function mediaLabel(kind: Message['kind']) {
 .gi-vs {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
 }
 </style>

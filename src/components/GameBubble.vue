@@ -206,7 +206,7 @@ async function confirmResign(): Promise<void> {
 .game-side {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   min-width: 0;
 }
 .game-side:last-child {

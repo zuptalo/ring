@@ -188,6 +188,12 @@ mismatched sizes on iOS — font metrics differ per platform).
 
 ---
 
+## Phase 12: Banner polish (user feedback, 2026-07-05)
+
+- [X] T042 Breathing room between each name and its mark in the matchup header (and Message info players row); in-app banner bodies render through EmojiText so notification emoji (😏/🏆/🤝) animate when available, honoring the animation preference
+
+---
+
 ## GitHub Issues
 
 One issue per task (created 2026-07-05; the feature → develop PR must list `Closes #N`
@@ -196,7 +202,7 @@ T007 #767 · T008 #768 · T009 #769 · T010 #770 · T011 #771 · T012 #772 · T0
 T014 #774 · T015 #775 · T016 #776 · T017 #777 · T018 #778 · T019 #779 · T020 #780 ·
 T021 #781 · T022 #782 · T023 #783 · T024 #784 · T025 #785 · T026 #786 · T027 #787 ·
 T028 #788 · T029 #789 · T030 #790 · T031 #791 ·
-T032 #792 · T033 #793 · T034 #794 · T035 #795 · T036 #796 · T037 #797 · T038 #798 · T039 #799 · T040 #800 · T041 #801
+T032 #792 · T033 #793 · T034 #794 · T035 #795 · T036 #796 · T037 #797 · T038 #798 · T039 #799 · T040 #800 · T041 #801 · T042 #802
 
 ---
 
