@@ -75,6 +75,19 @@ export interface GameSession {
   gameType: string
   /** Visual theme id (FR-022); unknown/absent renders as the classic theme. */
   theme?: string
+  /**
+   * Explicit seats by userId (spec 0009: group/wall sessions). `[challenger]`
+   * while the challenge is open, `[challenger, acceptor]` once the seat locks.
+   * ABSENT ⇒ a 1:1 session with spec-0008 direction-derived roles, untouched.
+   */
+  players?: [string] | [string, string]
+  /** Open-challenge state (spec 0009). Present ⇒ this began as a challenge. */
+  challenge?: {
+    /** Every accept seen, deduped by userId. Ordering-bearing `at`s. */
+    accepts: { userId: string; at: number }[]
+    /** Creator withdrew (the cancel signal's own `at`). Withdrawn iff no moves. */
+    cancelledAt?: number
+  }
   /** The bubble's original compose time — kept here because Message.timestamp
    *  becomes last-activity time once moves re-surface the bubble (FR-021). */
   startedAt?: number
@@ -102,4 +115,8 @@ export interface GameMoveSignalShape {
   action: 'move' | 'resign'
   move?: unknown
   at: number
+  /** Spec 0009 seat lock: on seq 1 of an explicit-players session the challenger
+   *  stamps the resolved opponent, closing the accept race identically everywhere.
+   *  Ignored on 1:1 sessions and by older clients (additive). */
+  opponent?: string
 }
