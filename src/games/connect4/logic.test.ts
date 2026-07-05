@@ -120,16 +120,25 @@ describe('connect4 rules', () => {
 });
 
 describe('connect4 deterministic draw', () => {
-  it('round-robin columns 0→6 for 42 moves is a checkerboard draw', () => {
-    // Move k lands col k%7; owners form a checkerboard ((r+c) parity), which
-    // cannot contain four in a row in any direction — the canonical scripted
-    // draw the e2e reuses.
+  it('the scripted 42-move sequence plays clean to a draw', () => {
+    // A precomputed legal order that builds a verified run-free board (the
+    // hand-built draw above). Every prefix of a run-free board is run-free,
+    // so the whole game stays ongoing until the draw — the e2e reuses this
+    // exact script. (A naive round-robin does NOT draw: on its checkerboard,
+    // diagonals are mono-colored.)
     let s = createInitialState();
-    for (let k = 0; k < 42; k++) {
-      const next = applyMove(s, { col: k % 7 }, turn(s));
+    for (const col of DRAW_SEQ) {
+      expect(status(s)).toEqual({ state: 'ongoing' });
+      const next = applyMove(s, { col }, turn(s));
       expect(next).not.toBeNull();
       s = next!;
     }
     expect(status(s)).toEqual({ state: 'draw' });
   });
 });
+
+/** Exported for the e2e: a verified full-board draw, playable move-for-move. */
+export const DRAW_SEQ = [
+  2, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 5, 3, 3,
+  3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6,
+];
