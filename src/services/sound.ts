@@ -56,7 +56,11 @@ export type ToneName =
   | 'gamemove'
   | 'gamewin'
   | 'gamelose'
-  | 'gamedraw';
+  | 'gamedraw'
+  // Group challenge cues (spec 0009): the announcement fanfare-let and the
+  // "someone's in!" confirmation.
+  | 'gamechallenge'
+  | 'gameaccept';
 
 interface Note {
   freq: number;
@@ -214,6 +218,19 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
   gamedraw: [
     { freq: A4, start: 0, dur: 0.12, type: 'sine', gain: 0.16 },
     { freq: A4, start: 0.16, dur: 0.12, type: 'sine', gain: 0.16 },
+  ],
+  // A challenge lands: a bold rising fourth + flourish — an invitation with
+  // swagger, longer than gamestart so it reads as an announcement.
+  gamechallenge: [
+    { freq: G5, start: 0, dur: 0.1, type: 'triangle', gain: 0.24 },
+    { freq: C6, start: 0.1, dur: 0.1, type: 'triangle', gain: 0.26 },
+    { freq: G5, start: 0.22, dur: 0.08, type: 'triangle', gain: 0.2 },
+    { freq: E6, start: 0.32, dur: 0.22, type: 'triangle', gain: 0.28 },
+  ],
+  // Someone took the seat: a bright, quick two-note confirmation.
+  gameaccept: [
+    { freq: C5, start: 0, dur: 0.09, type: 'triangle', gain: 0.22 },
+    { freq: G5, start: 0.09, dur: 0.16, type: 'triangle', gain: 0.24 },
   ],
 };
 

@@ -122,6 +122,11 @@ export function classifyPayload(
   if (payload.reaction) return { verdict: 'defer', why: 'reaction' };
   if (payload.pollVote) return { verdict: 'defer', why: 'poll-vote' };
   if (payload.gameMove) return { verdict: 'defer', why: 'game-move' };
+  // Spec 0009: challenge sessions need the page's seat/engine wiring — the SW
+  // must neither apply accepts/cancels nor store a challenge bubble without one.
+  if (payload.gameAccept) return { verdict: 'defer', why: 'game-accept' };
+  if (payload.gameCancel) return { verdict: 'defer', why: 'game-cancel' };
+  if (payload.gameChallenge) return { verdict: 'defer', why: 'game-challenge' };
   if (payload.edit) return { verdict: 'defer', why: 'edit' };
   if (payload.erase) return { verdict: 'defer', why: 'erase' };
   if (payload.linkPreviewSig) return { verdict: 'defer', why: 'link-preview' };

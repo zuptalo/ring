@@ -13,7 +13,14 @@ import { get } from '@/db/idb'
 import { cue, type ToneName } from '@/services/sound'
 import type { GameSessionStatus } from '@/games/types'
 
-export type GameCue = 'gamestart' | 'gamemove' | 'gamewin' | 'gamelose' | 'gamedraw'
+export type GameCue =
+  | 'gamestart'
+  | 'gamemove'
+  | 'gamewin'
+  | 'gamelose'
+  | 'gamedraw'
+  | 'gamechallenge'
+  | 'gameaccept'
 
 /** The cue a game's new status earns for the player `me` — null for silence
  *  (out of sync is a failure state, not a moment; FR-026). */

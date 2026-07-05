@@ -40,6 +40,10 @@ export function notifyPreview(p: MessagePayload): string {
       const name = GAMES[p.game?.gameType ?? '']?.displayName;
       return name ? `Wants to play ${name}` : 'Wants to play a game';
     }
+    case 'gamechallenge': {
+      const name = GAMES[p.gameChallenge?.gameType ?? '']?.displayName;
+      return name ? `Challenges the group to ${name} 🫵` : 'Throws down a game challenge 🫵';
+    }
     default:
       return 'New message';
   }

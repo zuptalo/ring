@@ -54,6 +54,9 @@ import {
   playGameMove as dbPlayGameMove,
   resignGame as dbResignGame,
   hasOngoingGame as dbHasOngoingGame,
+  sendGameChallenge as dbSendGameChallenge,
+  acceptGameChallenge as dbAcceptGameChallenge,
+  cancelGameChallenge as dbCancelGameChallenge,
   forwardMessage as dbForwardMessage,
   shareProfileUpdate as dbShareProfileUpdate,
   sendMediaMessage as dbSendMediaMessage,
@@ -160,6 +163,7 @@ import { setSecret } from '@/db/secrets';
 import { get, getAll, put, bulkPut } from '@/db/idb';
 import { GAMES } from '@/games/registry';
 import { deriveStatus as deriveGameStatus } from '@/games/session';
+import { challengePhase, resolveOpponent } from '@/games/challenge';
 import { initialsAvatar, emojiAvatar, emojiOfAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
@@ -586,10 +590,20 @@ export function installTestHook(): void {
         startedAt: m.game.startedAt ?? null,
         moves: m.game.moves.length,
         status: deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game),
+        // Spec 0009 challenge views (null-safe for 1:1 sessions).
+        players: m.game.players ?? null,
+        phase: m.game.challenge ? challengePhase(m.game) : null,
+        opponent: m.game.challenge ? resolveOpponent(m.game) : null,
       };
     },
     /** Resign an ongoing game (the opponent wins by concession). */
     resignGame: (chatId: string, messageId: string) => dbResignGame(chatId, messageId),
+    /** Throw an open challenge into a group chat (spec 0009); returns the bubble id. */
+    sendGameChallenge: (chatId: string, gameType: string, theme?: string) =>
+      dbSendGameChallenge(chatId, gameType, theme),
+    /** Claim an open challenge's seat / withdraw one (creator only). */
+    acceptGameChallenge: (messageId: string) => dbAcceptGameChallenge(messageId),
+    cancelGameChallenge: (messageId: string) => dbCancelGameChallenge(messageId),
     /** The one-game-per-chat gate's source of truth (FR-001a). */
     hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
     /** Whether the notify layer considers this chat actively viewed (gates game cues). */
