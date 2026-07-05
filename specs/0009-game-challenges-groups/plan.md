@@ -15,8 +15,11 @@ sender-key fan-out, roles move from direction-derived to explicit `players` seat
 accept races deterministically. Wall challenges are ordinary posts whose game
 plays out ON the post: accepts and moves are sealed engagement records of a new
 kind `game`, replayed deterministically from the pulled set. Group story: zero
-server changes. Wall story: exactly ONE server line (the engagement-kind
-allowlist) — the server still stores only opaque sealed blobs.
+server changes. Wall story: two minimal server behaviors — the engagement-kind
+allowlist gains `game`, and the existing content-free wall push fans to the
+whole audience for game engagement (author-only today) so turns and follows
+wake closed apps. The server still stores and pushes only opaque/content-free
+data.
 
 ## Technical Context
 
@@ -65,8 +68,8 @@ the 60/min engagement rate cap and the WS nudge fan-out
 - **V. Offline-First**: PASS — additive optional fields, no migration; wall
   session is derived (replay-not-store doctrine).
 - **VI. Stateless Server & Migrations**: PASS — no schema change
-  (`post_engagement.kind` is free text, `0021_posts.sql:37`); the one-line
-  allowlist edit ships with a handler test.
+  (`post_engagement.kind` is free text, `0021_posts.sql:37`); the allowlist
+  edit and the audience push fan-out ship with handler tests.
 - **VII. Gates**: PASS — build/vet/test/e2e; release-note commit subjects.
 - **VIII. Traceability**: PASS — taskstoissues + Closes list.
 - **IX–XI**: PASS — no telemetry; Ionic-first bubble faces; copy voice.
@@ -111,8 +114,9 @@ src/services/sw-inbox.ts               # group gameMove players-only + follow ga
 src/services/game-sounds.ts            # 'gamechallenge' / 'gameaccept' cues
 src/settings/schema.ts                 # Notifications → Game notifications group
 src/services/ownsync-keys.ts           # sync the 4 pref keys (NOT games.follows)
-server/internal/api/posts_handlers.go  # ONE LINE: validEngagementKind += 'game'
-server/internal/api/posts_handlers_test.go  # the accompanying test
+server/internal/api/posts_handlers.go  # validEngagementKind += 'game'; audience-wide
+                                       #   content-free push for kind=='game' engagement
+server/internal/api/posts_handlers_test.go  # tests for both behaviors
 ```
 
 **Structure Decision**: existing single web app + the minimal server allowlist
@@ -123,3 +127,4 @@ edit. All new game logic stays pure under `src/games/` per 0008's discipline.
 | Deviation | Why needed | Simpler alternative rejected because |
 |-----------|------------|--------------------------------------|
 | Server learns the engagement kind string `game` (one allowlist line) | Wall moves must ride the sealed engagement channel so the post IS the board (user decision) | Smuggling game payloads as `comment`/`reaction` kinds corrupts pre-0009 clients' feeds (blank comments / garbage reactions) — visible data corruption vs. one metadata word the server already has for reactions vs comments |
+| Content-free wall push fans to the audience for `game` engagement (author-only today) | Offline turn/follow alerts for Wall games (user decision 2026-07-05) | On-open-only freshness was offered and declined — a turn-based game whose players never learn it is their turn while the app is closed defeats the feature |

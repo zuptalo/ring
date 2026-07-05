@@ -26,9 +26,15 @@ the existing content-free `post-engagement` WS nudge to the online audience.
   0008 out-of-sync terminal.
 - Post lifetime bounds the game; game `at`s feed the keep-alive bump.
 
-## Server surface (the one change)
+## Server surface (two minimal changes)
 
-`validEngagementKind` (server/internal/api/posts_handlers.go:222) gains `game`.
-No SQL migration (`post_engagement.kind` is free text); the payload stays an
-opaque sealed blob. The server learns only that a post has game-type engagement —
-the same class of metadata as its existing reaction-vs-comment distinction.
+1. `validEngagementKind` (server/internal/api/posts_handlers.go:222) gains
+   `game`. No SQL migration (`post_engagement.kind` is free text); the payload
+   stays an opaque sealed blob.
+2. For `kind == 'game'` engagement, the existing CONTENT-FREE wall push fans to
+   the post's full audience (author-only today, spec 1031): the push carries no
+   game data; each woken device pulls, decrypts under K_post, and decides
+   locally (turn/follow settings) whether to show anything.
+
+The server learns only that a post has game-type engagement — the same class of
+metadata as its existing reaction-vs-comment distinction.

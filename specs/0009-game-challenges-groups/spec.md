@@ -22,6 +22,7 @@
 - Q: After someone accepts a Wall challenge, where does the game live? → A: On the post — the post itself becomes the live board for the whole audience; moves ride the Wall's sealed engagement channel and observers see updates when their Wall refreshes.
 - Q: Should an unaccepted group challenge expire on its own? → A: No — it stays open until the creator withdraws it or someone accepts (cancel only).
 - Q: What does Play again do after a group game ends? → A: It throws a FRESH open challenge to the whole group; anyone can take the next round.
+- Q: How do Wall players and followers learn about moves while the app is closed? → A: The content-free Wall push fans to the WHOLE audience for game engagement (today it wakes only the post author); each device decides locally, from its own turn/follow settings, whether to show anything. The server learns only that a post has game activity, which the engagement kind string already tells it.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -71,7 +72,7 @@ A user shares a game challenge as a Wall post, choosing the audience (friends or
 
 1. **Given** the Wall composer, **When** the user creates a game-challenge post with an audience, **Then** exactly that audience sees the animated challenge on their Wall feed.
 2. **Given** a Wall challenge, **When** the first audience member accepts, **Then** the whole audience sees who took it and the game begins, with the matchup named.
-3. **Given** an active Wall game, **When** audience members open their Wall (or are online for the live nudge), **Then** they see the current state; followers additionally get move/result alerts per the Wall-freshness decision in Clarifications.
+3. **Given** an active Wall game, **When** a move lands, **Then** the audience's devices are woken by a content-free push and each decides locally: the player whose turn it is and followers get alerts; everyone else stays quiet. Opening the Wall always shows the current board.
 4. **Given** the post's lifetime expires (like any post), **Then** the challenge/game disappears with it for everyone.
 
 ---
@@ -110,7 +111,7 @@ A user shares a game challenge as a Wall post, choosing the audience (friends or
 
 - **What crosses the wire**: challenge, accept, cancel, and move signals as sealed payloads over the existing group sender-key channels; Wall challenges within the existing sealed post/engagement structures (contracts/wall-game-engagement.md).
 - **What is encrypted**: everything — who challenges, which game, every accept and move, who plays, who wins.
-- **What the server unavoidably sees**: the same envelope metadata as ordinary group messages; on the Wall, additionally the engagement KIND STRING `game` on sealed records — the same class of metadata as its existing reaction-vs-comment distinction (one allowlist line in the handler; payloads stay opaque; no schema change). Justified in plan.md's Complexity table.
+- **What the server unavoidably sees**: the same envelope metadata as ordinary group messages; on the Wall, additionally the engagement KIND STRING `game` on sealed records — the same class of metadata as its existing reaction-vs-comment distinction — and it fans its existing content-free push to the post's audience for that kind (payloads stay opaque; no schema change). Justified in plan.md's Complexity table.
 - **Why**: challenges are message content between people who already share encrypted channels; observers receive state because group fan-out already delivers it. Follow never leaves the device.
 
 ## Success Criteria *(mandatory)*
@@ -120,7 +121,7 @@ A user shares a game challenge as a Wall post, choosing the audience (friends or
 - **SC-001**: In a group of any size, 100% of devices converge on the same opponent for a challenge, including staged accept races across offline gaps.
 - **SC-002**: Observers receive zero game notifications unless they follow; followers receive exactly one notification per accepted move plus one for the result.
 - **SC-003**: A Wall challenge is visible to exactly the selected audience and to no one else, for the game's whole life.
-- **SC-004**: The server-side diff for the group story is empty; the Wall story changes exactly one allowlist line (engagement kind `game`) and adds no plaintext game data server-side.
+- **SC-004**: The server-side diff for the group story is empty; the Wall story changes exactly two minimal server behaviors (the engagement-kind allowlist and fanning the existing content-free push to the audience for game engagement) and adds no plaintext game data server-side.
 - **SC-005**: Starting a challenge takes at most one step more than starting a 1:1 game (the audience/group is implicit in where you start it).
 
 ## Assumptions

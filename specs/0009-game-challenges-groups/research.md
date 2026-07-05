@@ -103,14 +103,16 @@ id; accepts → D2's seat rule; moves sorted `(seq, at, actorId, id)` through th
 full set ⇒ same session. Local moves: sync-first, validate, optimistic row,
 submit. Forks render 0008's terminal 😵.
 
-## D10. Wall freshness: WS nudge for the online audience; push stays author-only (v1)
+## D10. Wall freshness: WS nudge online + audience-wide content-free push (user decision)
 
-The existing content-free `post-engagement` WS nudge already fans to the whole
-ONLINE audience (`posts_handlers.go:306`) → live boards + banners while the app
-is open. Web push wakes the AUTHOR only (spec 1031, `posts_handlers.go:326`), so
-in v1 the acceptor/followers get wall updates while online or on wall open —
-the documented product decision (see spec clarifications); an audience-wide
-content-free push for `game` engagement is the noted fast-follow option.
+The existing `post-engagement` WS nudge already fans to the whole ONLINE
+audience (`posts_handlers.go:306`) → live boards while the app is open. For
+closed apps, the author-only web push (spec 1031, `posts_handlers.go:326`)
+EXTENDS for `kind=='game'` engagement to the full audience — still content-free
+(the device pulls, decrypts, and decides locally from its turn/follow settings
+whether to surface anything). Chosen over on-open-only freshness by the product
+decision 2026-07-05: a turn-based game must be able to tell its player "your
+move" while the app is closed.
 
 ## D11. Announcement animation + cues (from docs/ANIMATED-EMOJI.md, all verified)
 
