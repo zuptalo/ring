@@ -20,7 +20,7 @@ Specs are grouped by category band; status moves
 | [0005](specs/0005-call-waiting-hold/spec.md) | Call waiting — hold, swap & drop between two concurrent calls | 🔵 in-review |
 | [0007](specs/0007-adaptive-call-quality/spec.md) | Adaptive call quality — per-receiver, network- and screen-aware, with peer-reported health | 🔵 in-review |
 | [0008](specs/0008-chat-turn-based/spec.md) | In-Chat Turn-Based Games | 🟢 shipped |
-| [0009](specs/0009-game-challenges-groups/spec.md) | Game Challenges in Groups and on the Wall | 🔵 in-review |
+| [0009](specs/0009-game-challenges-groups/spec.md) | Game Challenges in Groups and on the Wall | 🟢 shipped |
 
 ## ⚡ Ad-hoc (1001–1999)
 
