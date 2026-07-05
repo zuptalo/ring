@@ -236,6 +236,33 @@ export interface GameMoveSignal {
   action: 'move' | 'resign';
   move?: unknown; // game-specific shape (tictactoe: { cell: 0-8 }); absent for resign
   at: number; // epoch ms, display only — never used for ordering
+  // Spec 0009 seat lock: on seq 1 of a challenge session the challenger stamps
+  // the resolved opponent, closing the accept race identically everywhere.
+  opponent?: string;
+}
+
+/**
+ * An open game challenge in a GROUP chat (spec 0009), kind === 'gamechallenge'.
+ * Deliberately NOT kind 'game': spec-0008 clients would render a playable board
+ * with direction-derived (garbage) roles in a group — the new kind gets the safe
+ * unknown-kind fallback instead. The sender is the challenger (player 0).
+ */
+export interface GameChallengeStart {
+  gameType: string;
+  theme?: string;
+}
+
+/** A member accepting an open challenge (side effect on the challenge bubble).
+ *  `at` is ORDERING-BEARING: the seat is min(accepts) by (at, userId). */
+export interface GameAcceptSignal {
+  messageId: string;
+  at: number;
+}
+
+/** The creator withdrawing an open challenge (side effect; creator-only). */
+export interface GameCancelSignal {
+  messageId: string;
+  at: number;
 }
 
 export interface MessagePayload {
@@ -261,6 +288,9 @@ export interface MessagePayload {
   pollVote?: PollVoteSignal; // a vote on an existing poll message (side effect)
   game?: GameStart; // kind === 'game' (moves start empty; move signals fill them)
   gameMove?: GameMoveSignal; // a move/resign on an existing game message (side effect)
+  gameChallenge?: GameChallengeStart; // kind === 'gamechallenge' (spec 0009, groups)
+  gameAccept?: GameAcceptSignal; // claiming an open challenge's seat (side effect)
+  gameCancel?: GameCancelSignal; // the creator withdrawing a challenge (side effect)
   contact?: SharedContact; // kind === 'contact' (a shared Ring contact)
   audio?: AudioMeta; // kind === 'audio' (shared music file: title/artist)
   linkPreview?: LinkPreview; // inline preview on first send (rare: only if fast enough)

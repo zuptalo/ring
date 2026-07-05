@@ -144,6 +144,23 @@ describe('session engine (spec 0008)', () => {
     expect(localMoveAllowed(tictactoe, broken, 1)).toBe(false);
   });
 
+  // Spec 0009 regression fence: the engine is seat-AGNOSTIC. Sessions carrying
+  // the new explicit-players/challenge fields replay and classify exactly like
+  // bare 1:1 sessions — seats are the CALLER's mapping concern.
+  it('ignores explicit-players/challenge fields entirely (1:1 behavior unchanged)', () => {
+    const bare = build([[4, 0], [0, 1]]);
+    const dressed: GameSession = {
+      ...build([[4, 0], [0, 1]]),
+      players: ['alice', 'bob'],
+      challenge: { accepts: [{ userId: 'bob', at: 1 }] },
+    };
+    expect(replayState(tictactoe, dressed)).toEqual(replayState(tictactoe, bare));
+    expect(deriveStatus(tictactoe, dressed)).toEqual(deriveStatus(tictactoe, bare));
+    const r = applySignal(tictactoe, dressed, sig(3, 8), 0);
+    expect(r.outcome).toBe('applied');
+    expect(r.session.players).toEqual(['alice', 'bob']); // fields carried through
+  });
+
   it('treats an unknown gameType defensively: deriveStatus never throws', () => {
     const weird: GameSession = { gameType: 'from-the-future', moves: [] };
     expect(() => deriveStatus(null, weird)).not.toThrow();

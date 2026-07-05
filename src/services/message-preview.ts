@@ -30,6 +30,7 @@ export function previewKind(kind: string, albumName?: string, videoNote?: boolea
   if (kind === 'video') return videoNote ? 'videonote' : 'video';
   if (kind === 'image' || kind === 'voice' || kind === 'file' || kind === 'audio') return kind;
   if (kind === 'location' || kind === 'poll' || kind === 'contact' || kind === 'game') return kind;
+  if (kind === 'gamechallenge') return 'game';
   return 'text';
 }
 
@@ -44,7 +45,9 @@ export function chatListPreview(payload: MessagePayload, kind: string, durationS
         ? payload.poll?.question || 'Poll'
         : kind === 'game'
           ? GAMES[payload.game?.gameType ?? '']?.displayName ?? 'Game'
-          : kind === 'contact'
+          : kind === 'gamechallenge'
+            ? `${GAMES[payload.gameChallenge?.gameType ?? '']?.displayName ?? 'Game'} challenge`
+            : kind === 'contact'
           ? payload.contact?.name || 'Contact'
           : kind === 'audio'
             ? payload.audio?.title || mediaPreview('audio', durationSec, payload.mediaRef?.name)

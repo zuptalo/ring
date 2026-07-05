@@ -37,7 +37,7 @@ import { resolveInboundDirectChat, planStartDirectChat } from '@/services/hidden
 import { computeUnreadTotal, type HiddenBadgeMode } from '@/db/badge-count';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
-  EditSignal, EraseSignal, LinkPreviewSignal, GameMoveSignal,
+  EditSignal, EraseSignal, LinkPreviewSignal, GameMoveSignal, GameAcceptSignal, GameCancelSignal,
 } from '@/services/crypto/message';
 import { GAMES } from '@/games/registry';
 import {
@@ -47,6 +47,16 @@ import {
   localMoveAllowed as gameMoveAllowed,
   type SessionSignal,
 } from '@/games/session';
+import {
+  challengePhase,
+  resolveOpponent,
+  applyAccept as applyChallengeAccept,
+  applyCancel as applyChallengeCancel,
+  lockOpponent,
+  playerIndexOf,
+  buildWallSession,
+} from '@/games/challenge';
+import type { GameSession } from '@/games/types';
 import { gameCueFor, playGameCue } from '@/services/game-sounds';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
@@ -770,6 +780,10 @@ export async function hasOngoingGame(chatId: string): Promise<boolean> {
       m.game &&
       !m.deleted &&
       GAMES[m.game.gameType] &&
+      // A withdrawn challenge replays as "ongoing" (no moves, no result) but is
+      // over; an OPEN challenge deliberately counts — it holds the gate until
+      // someone takes it or the creator cancels (spec 0009).
+      challengePhase(m.game) !== 'cancelled' &&
       deriveGameStatus(GAMES[m.game.gameType], m.game).state === 'ongoing',
   );
 }
@@ -805,6 +819,207 @@ export async function sendGame(chatId: string, gameType: string, theme?: string)
 /** This device's role on a game bubble: the starter is player 0 (moves first). */
 const gameSelfPlayer = (m: Message): 0 | 1 => (m.outgoing ? 0 : 1);
 
+/** This device's SEAT on any game bubble: explicit-players sessions (spec 0009
+ *  group/wall challenges) map by userId — null means observer; 1:1 sessions
+ *  keep spec-0008 direction-derived roles, byte-identical. */
+function gameSelfIndex(m: Message): 0 | 1 | null {
+  if (m.game?.players) return playerIndexOf(m.game, getSelfUserId() ?? '');
+  return gameSelfPlayer(m);
+}
+
+/** "You" for yourself, else the contact's name (group game copy, name-first). */
+async function gameNameOf(userId: string | undefined): Promise<string> {
+  if (!userId) return 'Someone';
+  if (userId === (getSelfUserId() ?? '')) return 'You';
+  return (await getContact(userId))?.name ?? 'Someone';
+}
+
+/** After a LOCAL move/resign, reflect the game's new state in the chat-list
+ *  preview. Without this the winner's list kept the opponent's stale
+ *  "your turn 😏" forever — the final move never arrives at its own sender, so
+ *  the inbound path can never correct it. */
+async function bumpOwnGamePreview(m: Message, action: 'move' | 'resign', at: number): Promise<void> {
+  if (!m.game) return;
+  const me = gameSelfIndex(m);
+  if (me === null) return;
+  const chat = await getChat(m.chatId).catch(() => null);
+  if (!chat) return;
+  const status = deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game);
+  const otherIdx = (1 - me) as 0 | 1;
+  const otherName = m.game.players
+    ? await gameNameOf(m.game.players[otherIdx])
+    : (chat.name ?? 'They').split(' ')[0];
+  let text: string;
+  if (status.state === 'won' || status.state === 'resigned') {
+    text =
+      action === 'resign'
+        ? `You gave up. ${otherName} wins 🏆`
+        : status.winner === me
+          ? 'You won the game! 🏆'
+          : `${otherName} won the game 🏆`;
+  } else if (status.state === 'draw') {
+    text = "It's a draw 🤝";
+  } else if (status.state === 'ongoing') {
+    text = 'You made a move 🎲';
+  } else {
+    return; // out-of-sync keeps whatever the list showed
+  }
+  chat.lastMessage = text;
+  chat.lastKind = 'game';
+  chat.lastMessageTime = at;
+  chat.updatedAt = at;
+  await put('chats', chat);
+}
+
+/* ---- group game challenges (spec 0009) ---- */
+
+/** Throw an open challenge into a group chat (kind 'gamechallenge'): the first
+ *  member to accept becomes the opponent; everyone else observes. Returns the
+ *  bubble's message id (= the challenge/game session id). */
+export async function sendGameChallenge(chatId: string, gameType: string, theme?: string): Promise<string> {
+  const module = GAMES[gameType];
+  if (!module) throw new Error(`unknown game: ${gameType}`);
+  const pickedTheme = theme && module.themes.some((t) => t.id === theme) ? theme : undefined;
+  const ts = now();
+  const chat = await getChat(chatId);
+  const self = getSelfUserId() ?? '';
+  const message = newOutgoing(chat, chatId, 'gamechallenge', ts);
+  message.game = {
+    gameType,
+    theme: pickedTheme,
+    startedAt: ts,
+    moves: [],
+    players: [self],
+    challenge: { accepts: [] },
+  };
+  await put('messages', message);
+  await bumpOutgoing(chat, 'game', `${module.displayName} challenge`, ts);
+  await enqueueMessage(chat, message.id, {
+    body: '',
+    kind: 'gamechallenge',
+    timestamp: ts,
+    gameChallenge: { gameType, theme: pickedTheme },
+  });
+  void playGameCue('gamechallenge');
+  return message.id;
+}
+
+/** Claim the open seat. Refused silently unless the challenge still LOOKS open
+ *  from here (races are settled deterministically by the engine + seat lock). */
+export async function acceptGameChallenge(messageId: string): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m?.game?.challenge) return;
+  if (challengePhase(m.game) !== 'open') return;
+  const self = getSelfUserId() ?? '';
+  const at = now();
+  const r = applyChallengeAccept(m.game, self, at);
+  if (r.outcome !== 'applied') return;
+  m.game = r.session;
+  m.updatedAt = now();
+  await put('messages', m);
+  const chat = await getChat(m.chatId);
+  const signal: GameAcceptSignal = { messageId, at };
+  await enqueueMessage(chat, uid(), { body: '', kind: 'gameaccept', timestamp: at, gameAccept: signal });
+  void playGameCue('gameaccept');
+}
+
+/** Withdraw an untaken challenge (creator only). */
+export async function cancelGameChallenge(messageId: string): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m?.game?.challenge) return;
+  const self = getSelfUserId() ?? '';
+  const at = now();
+  const r = applyChallengeCancel(m.game, self, at);
+  if (r.outcome !== 'applied') return;
+  m.game = r.session;
+  m.updatedAt = now();
+  await put('messages', m);
+  const chat = await getChat(m.chatId);
+  const signal: GameCancelSignal = { messageId, at };
+  await enqueueMessage(chat, uid(), { body: '', kind: 'gamecancel', timestamp: at, gameCancel: signal });
+}
+
+/** Apply an inbound accept (side effect). Membership-checked here (the pure
+ *  engine is roster-blind); the challenger gets notified in the routing pass. */
+async function handleGameAccept(from: string, signal: GameAcceptSignal): Promise<void> {
+  const message = await getMessage(signal.messageId);
+  if (!message?.game?.challenge) return;
+  const chat = await getChat(message.chatId);
+  if (!chat || (chat.isGroup && !chat.participantIds.includes(from))) return;
+  const r = applyChallengeAccept(message.game, from, signal.at);
+  if (r.outcome !== 'applied') return;
+  message.game = r.session;
+  message.updatedAt = now();
+  await put('messages', message);
+  // The seat race may still be open; the seq-1 lock settles it. Tell the
+  // CHALLENGER someone is in (their move now), name-first.
+  if (playerIndexOf(message.game, getSelfUserId() ?? '') === 0) {
+    const name = await gameNameOf(from);
+    if (isChatActive(message.chatId)) void playGameCue('gameaccept');
+    if (!(await getSetting<boolean>('notifications.games.challenges', true))) return;
+    await notifyIncoming({
+      kind: 'message',
+      chatId: message.chatId,
+      name,
+      body: `${name} accepted your challenge 💪 Your move!`,
+      pushWoken: pushWakeActive(),
+    }).catch(() => {});
+  }
+}
+
+/* ---- following a game (spec 0009 FR-006): device-local, private ---- */
+
+/** The follow set: gameId (bubble messageId / postId) → followedAt. NEVER
+ *  own-data-synced and never on the wire — nobody learns who follows. */
+export async function followedGames(): Promise<Record<string, number>> {
+  return getSetting<Record<string, number>>('games.follows', {});
+}
+
+export async function followGame(gameId: string): Promise<void> {
+  const f = await followedGames();
+  f[gameId] = now();
+  await setSetting('games.follows', f);
+}
+
+export async function unfollowGame(gameId: string): Promise<void> {
+  const f = await followedGames();
+  delete f[gameId];
+  await setSetting('games.follows', f);
+}
+
+/** A player who left group `chatId` resigns all their ongoing games there —
+ *  applied locally by every remaining member from the roster card's `at`
+ *  (identical inputs ⇒ identical outcome, no wire signal; spec 0009 D6). */
+async function resignGamesOfLeaver(chatId: string, leaverId: string, at: number): Promise<void> {
+  const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
+  for (const m of msgs) {
+    if (!m.game?.players || m.deleted) continue;
+    const idx = playerIndexOf(m.game, leaverId);
+    if (idx === null) continue;
+    if (m.game.challenge && challengePhase(m.game) !== 'accepted') continue;
+    if (deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game).state !== 'ongoing') continue;
+    // A pre-lock leaver: pin the derived seat first so the resignation lands
+    // on a concrete matchup everywhere.
+    if (m.game.players.length === 1) {
+      const opp = resolveOpponent(m.game);
+      if (!opp) continue;
+      m.game = lockOpponent(m.game, opp);
+    }
+    await applyGameMove(m, idx, { seq: m.game.moves.length + 1, action: 'resign', at });
+  }
+}
+
+/** Apply an inbound cancel (side effect; the engine enforces creator-only). */
+async function handleGameCancel(from: string, signal: GameCancelSignal): Promise<void> {
+  const message = await getMessage(signal.messageId);
+  if (!message?.game?.challenge) return;
+  const r = applyChallengeCancel(message.game, from, signal.at);
+  if (r.outcome !== 'applied') return;
+  message.game = r.session;
+  message.updatedAt = now();
+  await put('messages', message);
+}
+
 /** Run one signal through the session engine and persist any state change.
  *  Shared by the local and inbound paths so both classify identically. */
 async function applyGameMove(message: Message, sender: 0 | 1, signal: SessionSignal): Promise<string> {
@@ -831,17 +1046,33 @@ export async function playGameMove(chatId: string, messageId: string, move: unkn
   const m = await getMessage(messageId);
   if (!m?.game || m.chatId !== chatId) return;
   const module = GAMES[m.game.gameType];
-  const me = gameSelfPlayer(m);
-  if (!module || !gameMoveAllowed(module, m.game, me)) return;
+  if (!module) return;
+  // Challenge sessions (spec 0009): playable only once someone took the seat;
+  // the CHALLENGER's opening move locks the derived opponent permanently and
+  // stamps it on the wire, closing any still-open accept race identically
+  // everywhere (contracts/challenge-payload.md §3).
+  if (m.game.challenge) {
+    if (challengePhase(m.game) !== 'accepted') return;
+    if (m.game.players?.length === 1) {
+      const opp = resolveOpponent(m.game);
+      if (!opp) return;
+      m.game = lockOpponent(m.game, opp);
+    }
+  }
+  const me = gameSelfIndex(m);
+  if (me === null) return; // observers never move
+  if (!gameMoveAllowed(module, m.game, me)) return;
   if (module.applyMove(replayGameState(module, m.game), move, me) === null) return;
   const at = now();
   const seq = m.game.moves.length + 1;
+  const opponent = seq === 1 && m.game.players?.length === 2 ? m.game.players[1] : undefined;
   if ((await applyGameMove(m, me, { seq, action: 'move', move, at })) !== 'applied') return;
   // Your own move ticks (or lands the result cue when it ends the game, FR-026);
   // playing is inherently in-chat, so no isChatActive check here.
   void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  await bumpOwnGamePreview(m, 'move', at);
   const chat = await getChat(m.chatId);
-  const signal: GameMoveSignal = { messageId, seq, action: 'move', move, at };
+  const signal: GameMoveSignal = { messageId, seq, action: 'move', move, at, opponent };
   await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
 }
 
@@ -852,12 +1083,24 @@ export async function resignGame(chatId: string, messageId: string): Promise<voi
   if (!m?.game || m.chatId !== chatId) return;
   const module = GAMES[m.game.gameType];
   if (!module || deriveGameStatus(module, m.game).state !== 'ongoing') return;
-  const me = gameSelfPlayer(m);
+  // Challenge sessions: only a seated game can be conceded; a pre-lock resign
+  // locks the derived seat first so the winner is concrete everywhere.
+  if (m.game.challenge) {
+    if (challengePhase(m.game) !== 'accepted') return;
+    if (m.game.players?.length === 1) {
+      const opp = resolveOpponent(m.game);
+      if (!opp) return;
+      m.game = lockOpponent(m.game, opp);
+    }
+  }
+  const me = gameSelfIndex(m);
+  if (me === null) return; // observers have nothing to concede
   const at = now();
   const seq = m.game.moves.length + 1;
   if ((await applyGameMove(m, me, { seq, action: 'resign', at })) !== 'applied') return;
   // Conceding sounds the losing tone for the resigner (FR-026).
   void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  await bumpOwnGamePreview(m, 'resign', at);
   const chat = await getChat(m.chatId);
   const signal: GameMoveSignal = { messageId, seq, action: 'resign', at };
   await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
@@ -865,44 +1108,97 @@ export async function resignGame(chatId: string, messageId: string): Promise<voi
 
 /** Apply an inbound game move/resign from `from` (side effect, never a stored
  *  message). The bubble may be gone (TTL/deleted) — then the signal is dropped
- *  (data-model rule 1). v1 is strictly 1:1: only the conversation's peer plays. */
+ *  (data-model rule 1). 1:1 sessions: only the conversation's peer plays.
+ *  Explicit-players sessions (spec 0009 challenges): seats map by userId and
+ *  non-players are dropped, never out-of-sync. */
 async function handleGameMove(from: string, signal: GameMoveSignal): Promise<void> {
   const message = await getMessage(signal.messageId);
   if (!message?.game) return;
   const chat = await getChat(message.chatId);
-  if (!chat || chat.isGroup || chat.participantIds[0] !== from) return;
-  // The peer's role is the opposite of ours on this bubble.
-  const sender = (1 - gameSelfPlayer(message)) as 0 | 1;
+  if (!chat) return;
+
+  let sender: 0 | 1;
+  if (message.game.players) {
+    // Group/wall challenge session (spec 0009).
+    if (chat.isGroup && !chat.participantIds.includes(from)) return; // not a member
+    if (message.game.challenge && challengePhase(message.game) === 'cancelled') return;
+    // The challenger's seq-1 stamp locks the seat before the move applies.
+    if (
+      signal.seq === 1 &&
+      signal.opponent &&
+      message.game.players.length === 1 &&
+      playerIndexOf(message.game, from) === 0
+    ) {
+      message.game = lockOpponent(message.game, signal.opponent);
+    }
+    const idx = playerIndexOf(message.game, from);
+    if (idx === null) return; // observers/strangers never poison the board
+    sender = idx;
+  } else {
+    // 1:1 (spec 0008) — byte-identical to the shipped path.
+    if (chat.isGroup || chat.participantIds[0] !== from) return;
+    sender = (1 - gameSelfPlayer(message)) as 0 | 1;
+  }
   if ((await applyGameMove(message, sender, signal)) !== 'applied') return;
 
   // Deliberate divergence from silent poll votes (spec 0008 US3): a move
-  // demands the opponent's attention. The move is applied, so the line can be
-  // precise ("Your move" / the actual outcome); the SW preview path can't and
-  // says "Your move" for any move. notifyIncoming applies the same gates it
-  // applies to ordinary messages (mute, content prefs, open-chat suppression).
-  const me = gameSelfPlayer(message);
+  // demands the PLAYERS' attention. Observers stay quiet by default (spec 0009
+  // FR-005; Follow opt-in refines this in the routing pass). notifyIncoming
+  // applies the same gates as ordinary messages (mute, content prefs,
+  // open-chat suppression).
+  const me = gameSelfIndex(message);
   const status = deriveGameStatus(GAMES[message.game.gameType] ?? null, message.game);
 
-  // Their move sounds only while this chat is on screen (FR-026) — the
-  // notification path covers a closed/backgrounded chat, so never both.
-  if (isChatActive(message.chatId)) void playGameCue(gameCueFor(status, me));
-  // Name-first copy (T041), result emoji from the overlay set (FR-025).
-  const name = (await getContact(from))?.name ?? 'Someone';
+  // Their move sounds only while this chat is on screen (FR-026) — players only.
+  if (me !== null && isChatActive(message.chatId)) void playGameCue(gameCueFor(status, me));
+
+  // Chat-list preview for EVERYONE (it's just the list line), name-first, with
+  // third-person copy for observers.
+  const name = await gameNameOf(from);
+  const winnerName =
+    status.state === 'won' || status.state === 'resigned'
+      ? message.game.players
+        ? await gameNameOf(message.game.players[status.winner as 0 | 1])
+        : status.winner === me
+          ? 'You'
+          : name
+      : '';
   const text =
     status.state === 'won'
-      ? status.winner === me
+      ? winnerName === 'You'
         ? 'You won the game! 🏆'
-        : `${name} won the game 🏆`
+        : `${winnerName} won the game 🏆`
       : status.state === 'draw'
         ? "It's a draw 🤝"
         : status.state === 'resigned'
-          ? `${name} gave up. You win! 🏆`
-          : `${name} made a move, your turn 😏`;
+          ? winnerName === 'You'
+            ? `${name} gave up. You win! 🏆`
+            : `${name} gave up. ${winnerName} wins 🏆`
+          : me !== null && status.state === 'ongoing' && status.turn === me
+            ? `${name} made a move, your turn 😏`
+            : `${name} made a move 🎲`;
   chat.lastMessage = text;
   chat.lastKind = 'game';
   chat.lastMessageTime = signal.at;
   chat.updatedAt = signal.at;
   await put('chats', chat);
+
+  // NOTIFICATIONS (spec 0009 FR-005/FR-006/FR-009): players get their turn and
+  // the result; observers only when they FOLLOW this game — each lane behind
+  // its own Settings → Notifications → Games switch, all beneath the existing
+  // mute/content gates inside notifyIncoming.
+  let notify = false;
+  if (me !== null) {
+    notify =
+      status.state !== 'ongoing' ||
+      (status.turn === me && (await getSetting<boolean>('notifications.games.turn', true)));
+  } else if (message.game.players && (await followedGames())[message.id] !== undefined) {
+    notify =
+      status.state === 'ongoing'
+        ? await getSetting<boolean>('notifications.games.followMoves', true)
+        : await getSetting<boolean>('notifications.games.followResults', true);
+  }
+  if (!notify) return;
   await notifyIncoming({
     kind: 'message',
     chatId: message.chatId,
@@ -2420,6 +2716,9 @@ export async function createPost(opts: {
   // Spec 1024: a stable post id supplied by the outbox worker so a retry is idempotent — the same
   // id overwrites the local post and the server upserts it, instead of creating a duplicate.
   id?: string;
+  // A game-challenge post (spec 0009): the game plays out ON the post. The payload
+  // gets the game field + fallback body copy for pre-0009 audiences.
+  game?: { gameType: string; theme?: string };
   // Optional attachment(s). A single item is an ordinary media post; an array of 2+
   // image/video items is an ALBUM post (spec 1022, FR-019) — every item is compressed to
   // the chosen quality, encrypted + uploaded, and all the media-refs ride sealed inside
@@ -2430,7 +2729,13 @@ export async function createPost(opts: {
 }): Promise<Post> {
   const self = getSelfUserId();
   if (!self) throw new Error('not signed in');
-  const body = opts.body?.trim() || undefined;
+  let body = opts.body?.trim() || undefined;
+  // A challenge post carries fallback copy so pre-0009 audiences see a harmless
+  // text post instead of a blank one (contracts/wall-game-engagement.md).
+  if (opts.game && !body) {
+    const gname = GAMES[opts.game.gameType]?.displayName ?? 'game';
+    body = `\u{1F3AE} ${gname} challenge \u2014 update Ring to play`;
+  }
   if (!body && !opts.media) throw new Error('Nothing to post.');
   const friends = opts.audience === 'close' ? await listCloseFriends() : await listFriends();
   if (!friends.length) throw new Error('No audience — add friends first.');
@@ -2451,7 +2756,21 @@ export async function createPost(opts: {
   let mediaH: number | undefined;
   const mediaIds: string[] = [];
   const refs: NonNullable<PostPayload['album']> = [];
-  const payload: PostPayload = { kind, body };
+  // Normalized to a PLAIN object at the choke point: a caller may hand us a Vue
+  // reactive Proxy, which JSON-seals fine (so the fan-out would succeed) but
+  // throws DataCloneError when the local Post row is put into IndexedDB —
+  // "shared with everyone except yourself".
+  // The challenger's own display info rides SEALED with the game so audience
+  // members who don't hold them as a contact still see who is playing.
+  const game = opts.game
+    ? {
+        gameType: opts.game.gameType,
+        theme: opts.game.theme,
+        hostName: (await getSecret('profileName', '')).trim() || undefined,
+        hostAvatar: (await downscaleAvatar(await getSecret('profileAvatar', ''), 96).catch(() => '')) || undefined,
+      }
+    : undefined;
+  const payload: PostPayload = { kind, body, game };
   const total = mediaList.length;
   for (const m of mediaList) {
     const index = mediaIds.length; // 0-based position of this item
@@ -2551,6 +2870,7 @@ export async function createPost(opts: {
     ttlMs,
     outgoing: true,
     postKey: built.postKey,
+    game,
     updatedAt: createdAt,
   };
   await put<Post>('posts', post);
@@ -2745,6 +3065,7 @@ async function receivePost(sp: ServerPost): Promise<void> {
     ttlMs: sp.ttlMs,
     outgoing: false,
     postKey,
+    game: payload.game,
     updatedAt: now(),
   });
   // Pull any engagement (reactions/comments) that already exists on this post (also
@@ -2801,12 +3122,17 @@ export async function pruneLocalPost(id: string): Promise<void> {
 }
 
 /** Human label for what was shared, used in notifications. */
-function postShareLabel(kind: Post['kind']): string {
-  return kind === 'image'
+function postShareLabel(p: Pick<Post, 'kind' | 'game'>): string {
+  // A challenge post leads with the urgency: the first to accept plays (spec 0009).
+  if (p.game) {
+    const gname = GAMES[p.game.gameType]?.displayName ?? 'game';
+    return `started a ${gname} challenge, be quick if you want it 🫵`;
+  }
+  return p.kind === 'image'
     ? 'shared a photo'
-    : kind === 'video'
+    : p.kind === 'video'
       ? 'shared a video'
-      : kind === 'voice'
+      : p.kind === 'voice'
         ? 'shared a voice message'
         : 'shared a post';
 }
@@ -2835,7 +3161,7 @@ export async function notifyNewPost(authorId: string): Promise<void> {
   void notifyIncoming({
     kind: 'system',
     name: c?.name ?? 'Someone',
-    body: postShareLabel(p.kind),
+    body: postShareLabel(p),
     avatar: c?.avatar,
     url: '/tabs/wall',
   });
@@ -2861,7 +3187,12 @@ export async function notifyPostActivity(postId: string, fresh: FreshEngagement[
     getSetting<boolean>('notifications.wall.activity', true),
     isWallTempMuted(),
   ]);
+  // Game engagement (spec 0009) has its own audience-wide policy below —
+  // spec 1031's owner-only rules stay untouched for reactions/comments.
+  const gameItems = fresh.filter((i) => i.type === 'game');
+  if (gameItems.length) await notifyWallGameActivity(post, gameItems);
   for (const item of fresh) {
+    if (item.type === 'game') continue;
     const decision = wallActivityAlert({
       isOwnPost: !!post.outgoing,
       actor: item.actor,
@@ -2890,6 +3221,80 @@ export async function notifyPostActivity(postId: string, fresh: FreshEngagement[
       url: `/wall/post/${postId}`,
     });
   }
+}
+
+/** Alerts for fresh GAME engagement on a challenge post (spec 0009): the seated
+ *  player hears their turn / the result; a follower hears moves and results;
+ *  everyone else stays quiet — all behind the Settings → Notifications → Games
+ *  switches, deduped by engagement id like every other wall alert. */
+async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Promise<void> {
+  const self = getSelfUserId();
+  if (!self || !post.game) return;
+  const others = fresh.filter((i) => i.actor !== self && !notifiedEngagementIds.has(i.id));
+  if (!others.length) return;
+  const session = await wallGameSession(post.id);
+  if (!session) return;
+  const module = GAMES[session.gameType] ?? null;
+  const status = deriveGameStatus(module, session);
+  const me = playerIndexOf(session, self);
+  const latest = others.sort((x, y) => x.at - y.at)[others.length - 1];
+  const mover = (await getContact(latest.actor))?.name ?? 'Someone';
+
+  // WATCHING the game live — the Wall tab or this very post open, app visible —
+  // means the board updates in front of them: no toast, just the move cue for
+  // the players. The wall twin of the open-chat rule (spec 0008 FR-026): the
+  // notification path covers everyone who is NOT looking.
+  const path = typeof window !== 'undefined' ? window.location.pathname : '';
+  const watching =
+    typeof document !== 'undefined' &&
+    document.visibilityState === 'visible' &&
+    (path === '/tabs/wall' || path === `/wall/post/${post.id}`);
+  if (watching) {
+    for (const i of others) notifiedEngagementIds.add(i.id);
+    if (me !== null) void playGameCue(gameCueFor(status, me));
+    return;
+  }
+
+  let body: string | null = null;
+  if (me !== null) {
+    // A player: someone accepted my challenge, my turn, or the result.
+    if (challengePhase(session) === 'accepted' && session.players?.length && session.moves.length === 0 && me === 0) {
+      if (await getSetting<boolean>('notifications.games.challenges', true)) {
+        body = `${mover} accepted your challenge \u{1F4AA} Your move!`;
+      }
+    } else if (status.state === 'ongoing') {
+      if (status.turn === me && (await getSetting<boolean>('notifications.games.turn', true))) {
+        body = `${mover} made a move, your turn \u{1F60F}`;
+      }
+    } else if (status.state === 'won' || status.state === 'resigned') {
+      const winnerId = session.players?.[status.winner];
+      body = winnerId === self ? 'You won the game! \u{1F3C6}' : `${await gameNameOf(winnerId)} won the game \u{1F3C6}`;
+    } else if (status.state === 'draw') {
+      body = "It's a draw \u{1F91D}";
+    }
+  } else if ((await followedGames())[post.id] !== undefined) {
+    // A follower: moves and results, each behind its own switch.
+    if (status.state === 'ongoing') {
+      if (await getSetting<boolean>('notifications.games.followMoves', true)) {
+        body = `${mover} made a move \u{1F3B2}`;
+      }
+    } else if (await getSetting<boolean>('notifications.games.followResults', true)) {
+      if (status.state === 'draw') body = "It's a draw \u{1F91D}";
+      else if (status.state === 'won' || status.state === 'resigned') {
+        body = `${await gameNameOf(session.players?.[status.winner])} won the game \u{1F3C6}`;
+      }
+    }
+  }
+  for (const i of others) notifiedEngagementIds.add(i.id);
+  if (!body) return;
+  const c = await getContact(latest.actor);
+  await notifyIncoming({
+    kind: 'system',
+    name: c?.name ?? 'Someone',
+    body,
+    avatar: c?.avatar,
+    url: `/wall/post/${post.id}`,
+  }).catch(() => {});
 }
 
 /* ---- Wall mute / hide controls (client-only ledgers) ---- */
@@ -3119,7 +3524,7 @@ interface CommentData {
  *  notified-once dedupe key. */
 export interface FreshEngagement {
   id: string;
-  type: 'reaction' | 'comment';
+  type: 'reaction' | 'comment' | 'game';
   actor: string;
   emoji?: string;
   at: number;
@@ -3168,6 +3573,22 @@ export async function syncEngagement(postId: string): Promise<FreshEngagement[]>
           id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at, updatedAt: now(),
         });
         applied.push({ id: it.id, type: 'comment', actor: it.actor, at: data.at });
+      } else if (it.kind === 'game') {
+        // A game accept/move on a challenge post (spec 0009). Rows are immutable
+        // and keyed by the SERVER engagement id — the replay's dedupe key; the
+        // session itself is always DERIVED from the full row set (wallGameSession).
+        if (await get<PostEngagement>('postEngagement', it.id)) continue;
+        let data: NonNullable<PostEngagement['game']>;
+        try {
+          data = openPostEngagement<NonNullable<PostEngagement['game']>>(post.postKey, it.payload);
+        } catch {
+          continue;
+        }
+        latestActivity = Math.max(latestActivity, data.at); // an active game keep-alives its post
+        await put<PostEngagement>('postEngagement', {
+          id: it.id, postId, type: 'game', actor: it.actor, at: data.at, game: data, updatedAt: now(),
+        });
+        applied.push({ id: it.id, type: 'game', actor: it.actor, at: data.at });
       } else if (it.kind === 'tombstone') {
         // The tombstone's payload is the (cleartext) target engagement id.
         const target = await get<PostEngagement>('postEngagement', it.payload);
@@ -3200,6 +3621,136 @@ export async function listPostComments(postId: string): Promise<PostEngagement[]
   return rows
     .filter((e) => e.type === 'comment' && !e.deleted)
     .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+}
+
+/* ---- wall game challenges (spec 0009 US3): the post IS the board ---- */
+
+/** The DERIVED game session on a challenge post — a pure deterministic replay of
+ *  the stored engagement rows (contracts/wall-game-engagement.md). Same pulled
+ *  set ⇒ same session on every device; never stored. */
+export async function wallGameSession(postId: string): Promise<GameSession | null> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return null;
+  const rows = (await getByIndex<PostEngagement>('postEngagement', 'postId', postId))
+    .filter((e) => e.type === 'game' && e.game)
+    .map((e) => ({ id: e.id, actor: e.actor, payload: e.game! }));
+  return buildWallSession(GAMES[post.game.gameType] ?? null, post.author, post.game, rows);
+}
+
+/** Display info for a wall game's players, from the SEALED payloads themselves
+ *  (the post's hostName/hostAvatar; each accept's name/avatar) — so a viewer
+ *  resolves both players even when one isn't their contact. Contacts, being
+ *  fresher, should override this at render time. */
+export async function wallGamePlayerMeta(
+  postId: string,
+): Promise<Record<string, { name?: string; avatar?: string }>> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return {};
+  const meta: Record<string, { name?: string; avatar?: string }> = {};
+  if (post.game.hostName || post.game.hostAvatar) {
+    meta[post.author] = { name: post.game.hostName, avatar: post.game.hostAvatar };
+  }
+  const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
+  for (const e of rows) {
+    if (e.type !== 'game' || e.game?.t !== 'accept') continue;
+    if (e.game.name || e.game.avatar) meta[e.actor] = { name: e.game.name, avatar: e.game.avatar };
+  }
+  return meta;
+}
+
+/** Store the optimistic local row + submit the sealed record. The local id IS
+ *  the server engagement id, so the next sync dedupes it naturally. */
+async function submitWallGame(post: Post, data: NonNullable<PostEngagement['game']>): Promise<void> {
+  const self = getSelfUserId();
+  if (!self || !post.postKey) return;
+  const engId = uid();
+  await put<PostEngagement>('postEngagement', {
+    id: engId, postId: post.id, type: 'game', actor: self, at: data.at, game: data, updatedAt: now(),
+  });
+  await bumpPostActivity(post.id, data.at);
+  try {
+    await apiSubmitEngagement(post.id, {
+      id: engId,
+      kind: 'game',
+      payload: sealPostEngagement(post.postKey, data),
+    });
+  } catch {
+    /* offline — the optimistic row stands; a later sync reconciles */
+  }
+}
+
+/** Claim a Wall challenge's open seat. Syncs first: the seat may be taken. */
+export async function acceptWallChallenge(postId: string): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return;
+  await syncEngagement(postId);
+  const session = await wallGameSession(postId);
+  const self = getSelfUserId() ?? '';
+  if (!session || challengePhase(session) !== 'open') return;
+  if (session.players?.[0] === self) return; // the author can't take their own seat
+  // The acceptor's display info rides sealed in the accept: the audience are
+  // the AUTHOR's friends, not necessarily the acceptor's, and a game readable
+  // by them should name both players for them (spec 0009).
+  await submitWallGame(post, {
+    t: 'accept',
+    at: now(),
+    name: (await getSecret('profileName', '')).trim() || undefined,
+    avatar: (await downscaleAvatar(await getSecret('profileAvatar', ''), 96).catch(() => '')) || undefined,
+  });
+  void playGameCue('gameaccept');
+}
+
+/** Play a move on a Wall game. Sync-first, validated by the same pure engine as
+ *  chats; the author's seq-1 move locks the derived seat as wire data. */
+export async function playWallGameMove(postId: string, move: unknown): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return;
+  const module = GAMES[post.game.gameType];
+  if (!module) return;
+  await syncEngagement(postId);
+  let session = await wallGameSession(postId);
+  if (!session || challengePhase(session) !== 'accepted') return;
+  const self = getSelfUserId() ?? '';
+  if (session.players?.length === 1) {
+    if (session.players[0] !== self) return; // only the author's move seats the lock
+    const opp = resolveOpponent(session);
+    if (!opp) return;
+    session = lockOpponent(session, opp);
+  }
+  const me = playerIndexOf(session, self);
+  if (me === null) return; // observers never move
+  if (!gameMoveAllowed(module, session, me)) return;
+  if (module.applyMove(replayGameState(module, session), move, me) === null) return;
+  const at = now();
+  const seq = session.moves.length + 1;
+  const opponent = seq === 1 && session.players?.length === 2 ? session.players[1] : undefined;
+  await submitWallGame(post, { t: 'move', seq, action: 'move', move, at, opponent });
+  const after = await wallGameSession(postId);
+  if (after) void playGameCue(gameCueFor(deriveGameStatus(module, after), me));
+}
+
+/** Concede a Wall game (players only, once seated). */
+export async function resignWallGame(postId: string): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return;
+  const module = GAMES[post.game.gameType];
+  if (!module) return;
+  await syncEngagement(postId);
+  let session = await wallGameSession(postId);
+  if (!session || challengePhase(session) !== 'accepted') return;
+  if (deriveGameStatus(module, session).state !== 'ongoing') return;
+  const self = getSelfUserId() ?? '';
+  if (session.players?.length === 1) {
+    const opp = resolveOpponent(session);
+    if (!opp) return;
+    session = lockOpponent(session, opp);
+  }
+  const me = playerIndexOf(session, self);
+  if (me === null) return;
+  const at = now();
+  await submitWallGame(post, { t: 'move', seq: session.moves.length + 1, action: 'resign', at });
+  const after = await wallGameSession(postId);
+  if (after) void playGameCue(gameCueFor(deriveGameStatus(module, after), me));
 }
 
 /** Add an audience-visible comment to a post (sealed under K_post; fanned out). */
@@ -4560,6 +5111,10 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
       existing.participantIds = existing.participantIds.filter((id) => id !== from);
       existing.updatedAt = now();
       await put('chats', existing);
+      // Spec 0009: a seated PLAYER leaving ends their ongoing games as a
+      // resignation — derived locally from the shared roster card's own `at`,
+      // so every remaining member converges without any extra wire signal.
+      await resignGamesOfLeaver(card.groupId, from, card.at);
     }
     return;
   }
@@ -4831,6 +5386,17 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     if (remoteId) await markInboundSeen(remoteId);
     return;
   }
+  // Challenge accepts/cancels (spec 0009) → mutate the challenge bubble.
+  if (payload.gameAccept) {
+    await handleGameAccept(from, payload.gameAccept);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
+  if (payload.gameCancel) {
+    await handleGameCancel(from, payload.gameCancel);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
   // Edits → rewrite the target message's text, never a stored message.
   if (payload.edit) {
     await handleEdit(from, payload.edit);
@@ -4949,9 +5515,19 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     // sender is player 0; on this side outgoing === false, so we are player 1.
     // startedAt keeps the compose time — Message.timestamp becomes last-activity
     // time once moves re-surface the bubble (FR-021), and stats need the start.
+    // A group CHALLENGE (spec 0009) seats the challenger explicitly instead.
     game: payload.game
       ? { gameType: payload.game.gameType, theme: payload.game.theme, startedAt: ts, moves: [] }
-      : undefined,
+      : payload.gameChallenge
+        ? {
+            gameType: payload.gameChallenge.gameType,
+            theme: payload.gameChallenge.theme,
+            startedAt: ts,
+            moves: [],
+            players: [from] as [string],
+            challenge: { accepts: [] },
+          }
+        : undefined,
     contact: payload.contact,
     audio: payload.audio,
     linkPreview: payload.linkPreview, // present only on the rare fast-enough inline send

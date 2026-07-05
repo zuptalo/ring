@@ -7,16 +7,20 @@
       Update Ring to play this game.
     </div>
     <template v-else>
-      <!-- Matchup header (FR-019/FR-023): who plays what, minimal words. -->
+      <!-- Matchup header (FR-019/FR-023): who plays what, minimal words. In
+           explicit-players sessions (spec 0009) seats render in play order;
+           1:1 keeps you-first exactly as shipped. -->
       <div class="game-vs">
         <span class="game-side you">
-          <game-mark :mark="theme.marks?.[myPlayer]" :player="myPlayer" />
-          <span class="side-name">You</span>
+          <game-mark :mark="theme.marks?.[leftSeat]" :player="leftSeat" />
+          <user-avatar v-if="seatAvatar(leftSeat)" :src="seatAvatar(leftSeat)!" :alt="seatName(leftSeat)" class="side-face" />
+          <span class="side-name">{{ seatName(leftSeat) }}</span>
         </span>
         <span class="game-vs-word">vs</span>
         <span class="game-side">
-          <span class="side-name">{{ peerFirstName }}</span>
-          <game-mark :mark="theme.marks?.[theirPlayer]" :player="theirPlayer" />
+          <span class="side-name">{{ seatName(rightSeat) }}</span>
+          <user-avatar v-if="seatAvatar(rightSeat)" :src="seatAvatar(rightSeat)!" :alt="seatName(rightSeat)" class="side-face" />
+          <game-mark :mark="theme.marks?.[rightSeat]" :player="rightSeat" />
         </span>
       </div>
 
@@ -24,7 +28,7 @@
         <component
           :is="boardComponent"
           :state="boardState"
-          :my-player="myPlayer"
+          :my-player="myPlayer ?? 0"
           :can-move="canMove"
           :marks="theme.marks"
           :accent="theme.accent"
@@ -33,20 +37,38 @@
         />
         <!-- Result overlay (FR-025): the finished board announces itself — gold
              trophy, silver medal, or a handshake — large and animated over a
-             half-transparent backdrop, with a phoenix rematch. Tapping it peeks
-             at the final board (the compact line below keeps the outcome). -->
+             half-transparent backdrop. PLAYERS can tap to peek at the final
+             board and get the phoenix rematch; OBSERVERS (spec 0009) get the
+             winner by name and an invitation to throw their own challenge —
+             the finished board is the players' business, not a replay surface. -->
         <div
           v-if="showOverlay"
           class="game-overlay"
-          role="button"
-          tabindex="0"
-          :aria-label="`${statusLine}. Show the board`"
-          @click.stop="peeked = true"
-          @keydown.enter.stop="peeked = true"
+          :role="isObserver ? undefined : 'button'"
+          :tabindex="isObserver ? undefined : 0"
+          :aria-label="isObserver ? statusLine : `${statusLine}. Show the board`"
+          @click.stop="isObserver ? undefined : (peeked = true)"
+          @keydown.enter.stop="isObserver ? undefined : (peeked = true)"
         >
           <animated-emoji :emoji="overlayEmoji" large class="game-overlay-result" />
-          <ion-button size="small" fill="clear" class="game-overlay-again" @click.stop="$emit('rematch', game.gameType)">
+          <span v-if="isObserver" class="game-overlay-line">{{ statusLine }}</span>
+          <ion-button
+            v-if="!isObserver"
+            size="small"
+            fill="clear"
+            class="game-overlay-again"
+            @click.stop="$emit('rematch', game.gameType)"
+          >
             <animated-emoji emoji="🐦‍🔥" />&nbsp;Play again
+          </ion-button>
+          <ion-button
+            v-else
+            size="small"
+            fill="clear"
+            class="game-overlay-again"
+            @click.stop="$emit('rematch', game.gameType)"
+          >
+            <animated-emoji emoji="🫵" />&nbsp;Start your own challenge
           </ion-button>
         </div>
       </div>
@@ -61,7 +83,7 @@
         </div>
         <div class="game-actions">
           <ion-button
-            v-if="status.state === 'ongoing'"
+            v-if="status.state === 'ongoing' && myPlayer !== null"
             size="small"
             fill="clear"
             color="medium"
@@ -69,7 +91,25 @@
           >
             Resign
           </ion-button>
-          <ion-button v-else size="small" fill="clear" @click.stop="$emit('rematch', game.gameType)">
+          <!-- Observers can privately follow a live game for move/result alerts
+               (spec 0009 FR-006 — device-local, nobody learns who follows). -->
+          <ion-button
+            v-else-if="status.state === 'ongoing' && myPlayer === null && explicit"
+            size="small"
+            fill="clear"
+            :color="followed ? 'primary' : 'medium'"
+            @click.stop="$emit('follow')"
+          >
+            <animated-emoji emoji="👀" />&nbsp;{{ followed ? 'Following' : 'Follow' }}
+          </ion-button>
+          <!-- Rematch only once the game is OVER (observers included — anyone
+               may throw the next open challenge, spec 0009). -->
+          <ion-button
+            v-else-if="status.state !== 'ongoing'"
+            size="small"
+            fill="clear"
+            @click.stop="$emit('rematch', game.gameType)"
+          >
             <animated-emoji emoji="🐦‍🔥" />&nbsp;Play again
           </ion-button>
         </div>
@@ -84,9 +124,11 @@ import { IonIcon, IonButton, alertController } from '@ionic/vue';
 import { gameControllerOutline } from 'ionicons/icons';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import GameMark from '@/components/GameMark.vue';
+import UserAvatar from '@/components/UserAvatar.vue';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
 import { deriveStatus, replayState } from '@/games/session';
+import { playerIndexOf, resolveOpponent } from '@/games/challenge';
 import type { GameSession, GameTheme } from '@/games/types';
 
 // The bubble renders ONLY derived state: board and status come from replaying
@@ -98,19 +140,50 @@ const props = defineProps<{
   outgoing: boolean;
   /** The opponent's display name (the 1:1 chat's name). */
   peerName?: string;
+  /** Explicit-players sessions (spec 0009 challenges): who I am… */
+  selfId?: string;
+  /** …and how to name the seats (userId → display name). */
+  names?: Record<string, string>;
+  /** Observer follow state (spec 0009 FR-006, device-local). */
+  followed?: boolean;
+  /** Seat avatars (userId → image src), e.g. from the wall's sealed player
+   *  meta. Rendered beside the seat names when available. */
+  avatars?: Record<string, string>;
 }>();
 const emit = defineEmits<{
   (e: 'move', move: unknown): void;
   (e: 'resign'): void;
   /** Play again: start a fresh bubble of the same game (the chooser moves first). */
   (e: 'rematch', gameType: string): void;
+  /** Observer toggling their private follow of this game. */
+  (e: 'follow'): void;
 }>();
 
 const module = computed(() => GAMES[props.game.gameType] ?? null);
 const boardComponent = computed(() => GAME_BOARDS[props.game.gameType] ?? null);
-const myPlayer = computed<0 | 1>(() => (props.outgoing ? 0 : 1));
-const theirPlayer = computed<0 | 1>(() => (props.outgoing ? 1 : 0));
+// Seats: explicit players (group/wall) map by userId — null = observer,
+// read-only board. 1:1 keeps the spec-0008 direction-derived roles untouched.
+const explicit = computed(() => !!props.game.players);
+const myPlayer = computed<0 | 1 | null>(() =>
+  explicit.value ? playerIndexOf(props.game, props.selfId ?? '') : props.outgoing ? 0 : 1,
+);
+const seatAvatar = (idx: 0 | 1): string | null => {
+  if (!explicit.value || !props.avatars) return null;
+  const uid = props.game.players?.[idx] ?? (idx === 1 ? resolveOpponent(props.game) ?? '' : '');
+  return (uid && props.avatars[uid]) || null;
+};
+const seatName = (idx: 0 | 1): string => {
+  if (!explicit.value) return idx === myPlayer.value ? 'You' : peerFirstName.value;
+  const uid = props.game.players?.[idx] ?? (idx === 1 ? resolveOpponent(props.game) ?? '' : '');
+  if (uid && uid === props.selfId) return 'You';
+  // 'Someone' matches how the Wall names non-contact comment authors — a wall
+  // game's players aren't necessarily each other's contacts.
+  return (props.names?.[uid ?? ''] ?? 'Someone').split(' ')[0];
+};
 const peerFirstName = computed(() => (props.peerName ?? 'Them').split(' ')[0]);
+// Header order: play order for explicit seats; you-first for 1:1 (as shipped).
+const leftSeat = computed<0 | 1>(() => (explicit.value ? 0 : ((myPlayer.value ?? 0) as 0 | 1)));
+const rightSeat = computed<0 | 1>(() => (1 - leftSeat.value) as 0 | 1);
 // Unknown/absent theme id → the module's first theme (classic), never an error
 // (FR-022; a newer app may ship themes this build doesn't know).
 const theme = computed<GameTheme>(() => {
@@ -124,22 +197,26 @@ const lastMove = computed(() => {
   return rec ? (rec.move as { cell: number }) : null;
 });
 const canMove = computed(
-  () => status.value.state === 'ongoing' && status.value.turn === myPlayer.value,
+  () => myPlayer.value !== null && status.value.state === 'ongoing' && status.value.turn === myPlayer.value,
 );
 
 // As few words as possible (FR-023); the animated cue carries the feeling.
+// Observers (spec 0009) read everything third-person by seat name.
 const statusLine = computed((): string => {
   const s = status.value;
-  const them = peerFirstName.value;
   switch (s.state) {
     case 'ongoing':
-      return s.turn === myPlayer.value ? 'Your move' : `${them}'s move`;
+      return s.turn === myPlayer.value ? 'Your move' : `${seatName(s.turn)}'s move`;
     case 'won':
-      return s.winner === myPlayer.value ? 'You won!' : `${them} won`;
+      return s.winner === myPlayer.value ? 'You won!' : `${seatName(s.winner)} won`;
     case 'draw':
       return 'Draw';
-    case 'resigned':
-      return s.winner === myPlayer.value ? `${them} gave up. You win!` : 'You gave up';
+    case 'resigned': {
+      const loser = (1 - s.winner) as 0 | 1;
+      if (s.winner === myPlayer.value) return `${seatName(loser)} gave up. You win!`;
+      if (loser === myPlayer.value) return 'You gave up';
+      return `${seatName(loser)} gave up. ${seatName(s.winner)} wins`;
+    }
     case 'out-of-sync':
       return 'Out of sync';
   }
@@ -147,27 +224,33 @@ const statusLine = computed((): string => {
 });
 
 // The paired cue — same concept, same emoji, everywhere (docs/ANIMATED-EMOJI.md):
-// results are 🏆 (winner) / 🥈 (other player) / 🤝 (draw), matching the overlay.
+// results are 🏆 (winner) / 🥈 (losing player) / 🤝 (draw); observers see the 🏆.
 const statusEmoji = computed((): string => {
   const s = status.value;
   if (s.state === 'ongoing') return s.turn === myPlayer.value ? '🎲' : '⏳';
-  if (s.state === 'won' || s.state === 'resigned') return s.winner === myPlayer.value ? '🏆' : '🥈';
+  if (s.state === 'won' || s.state === 'resigned') {
+    if (myPlayer.value === null) return '🏆';
+    return s.winner === myPlayer.value ? '🏆' : '🥈';
+  }
   if (s.state === 'draw') return '🤝';
   if (s.state === 'out-of-sync') return '😵';
   return '';
 });
 
 // Result overlay (FR-025): shown for every finished-with-a-result state until
-// the player peeks at the final board. Peeking is per-mount, local only.
+// the player peeks at the final board. Peeking is per-mount, local only — and
+// players-only: observers keep the announcement (spec 0009).
 const peeked = ref(false);
+const isObserver = computed(() => explicit.value && myPlayer.value === null);
 const showOverlay = computed(
   () =>
-    !peeked.value &&
+    (!peeked.value || isObserver.value) &&
     (status.value.state === 'won' || status.value.state === 'draw' || status.value.state === 'resigned'),
 );
 const overlayEmoji = computed((): string => {
   const s = status.value;
   if (s.state === 'draw') return '🤝';
+  if (myPlayer.value === null) return '🏆'; // observers celebrate the winner
   return (s.state === 'won' || s.state === 'resigned') && s.winner === myPlayer.value ? '🏆' : '🥈';
 });
 
@@ -212,6 +295,11 @@ async function confirmResign(): Promise<void> {
 .game-side:last-child {
   justify-content: flex-end;
 }
+.game-side .side-face {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
 .game-side .side-name {
   min-width: 0;
   white-space: nowrap;
@@ -246,6 +334,13 @@ async function confirmResign(): Promise<void> {
   font-size: 13px;
   text-transform: none;
   --color: #fff;
+}
+.game-overlay-line {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+  padding: 0 8px;
 }
 .game-status {
   display: flex;

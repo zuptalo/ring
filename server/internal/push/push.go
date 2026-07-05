@@ -71,10 +71,10 @@ const (
 	msgTopic = "ring-msg"
 
 	// connTTL: a friend-request lifecycle wake is worth holding until the device
-	// next comes online (like a message), but a weeks-stale connection wake is
-	// noise — the SW reconciles current state from GET /v1/connections on wake, so
-	// a moderate hold is plenty. 7 days covers a phone offline over a long weekend.
-	connTTL = 7 * 24 * 60 * 60 // 604800s
+	// next comes online (like a message). The SW reconciles current state from
+	// GET /v1/connections on wake, so a stale wake can never show wrong content —
+	// hold at the 28-day practical max the push services honor, like messages.
+	connTTL = 28 * 24 * 60 * 60 // 2419200s
 	// connTopic collapses a burst of connection tickles to one subscription into a
 	// single wake-up (the SW re-reads the full connection state on any wake, so
 	// collapsing loses nothing). Distinct from msgTopic so a connection wake is
@@ -82,16 +82,20 @@ const (
 	connTopic = "ring-conn"
 
 	// postTTL / postTopic: a Wall post wake is worth holding until the device next
-	// comes online (like a message), collapsed per subscription so a burst is one wake.
-	postTTL   = 7 * 24 * 60 * 60 // 604800s
+	// comes online (like a message), collapsed per subscription so a burst is one
+	// wake. Held at the 28-day practical max: the SW reconciles on wake, so the
+	// worst a long-held tickle can do is a silent no-op.
+	postTTL   = 28 * 24 * 60 * 60 // 2419200s
 	postTopic = "ring-post"
 
 	// postActivityTTL: an "engagement on your post" wake follows the post-tickle
-	// holding rationale (worth learning about when the device next comes online),
-	// but posts themselves live at most 72h, so holding the wake longer than the
-	// post can exist would only ever wake a device for content that is already
-	// gone (the SW would fetch, find nothing fresh, and show nothing).
-	postActivityTTL = 72 * 60 * 60 // 259200s — the max post lifetime
+	// holding rationale (worth learning about when the device next comes online).
+	// Held at the 28-day practical max like the others: keep-alive can extend a
+	// post (fresh engagement rolls its expiry — and an active wall GAME, spec
+	// 0009, keeps its post alive move after move), so a hard 72h cap could drop
+	// wakes for content that still exists. A wake for a since-expired post is a
+	// silent no-op (the SW fetches, finds nothing fresh, and shows nothing).
+	postActivityTTL = 28 * 24 * 60 * 60 // 2419200s
 	// The activity topic is PER POST (see postActivityTopic) so a burst of
 	// reactions/comments on one post collapses to a single wake per device, while
 	// activity on a different post still wakes separately.

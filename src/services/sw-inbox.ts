@@ -25,9 +25,9 @@
  * Import-clean for the SW: depends only on idb, the crypto/decrypt path, and the
  * IDB-backed session token (no DOM / Ionic / page-only modules).
  */
-import { attemptDeviceUnlock } from './crypto/identity';
+import { attemptDeviceUnlock, getIdentityKeys } from './crypto/identity';
 import { ready as sodiumReady } from './crypto/primitives';
-import { openPostEngagement } from './posts';
+import { openPostEngagement, openReceivedPost } from './posts';
 import { previewPacket } from './messaging';
 import { readHiddenSet, readHiddenSetOrNull } from './hidden-chats';
 import { readSessionToken, readSessionUserId } from './session';
@@ -35,6 +35,7 @@ import { get, getAll, put } from '@/db/idb';
 import { notifyPreview } from '@/utils/notify-preview';
 import { GAMES } from '@/games/registry';
 import { applySignal as applyGameSignal, deriveStatus as deriveGameStatus } from '@/games/session';
+import { playerIndexOf, lockOpponent, buildWallSession, challengePhase, type WallGameRow } from '@/games/challenge';
 import type { Chat, Contact, Message, Setting } from '@/db/types';
 import type { MessagePayload } from './crypto/message';
 
@@ -172,9 +173,14 @@ export function noteForPayload(
   showPreview: boolean,
   hidden: Set<string> = new Set(),
   selfId = '',
-  // The gameMove target's stored row (prefetched by previewPending), so a
-  // game-ending move can name the WINNER in the web push (spec 0008 T041).
-  gameRow?: Message,
+  // Game context, prefetched by previewPending (spec 0008 T041 / spec 0009 US2):
+  // the target's stored row (winner naming + group seat mapping), the device's
+  // game-notification prefs, and its private follow set.
+  gameCtx?: {
+    row?: Message;
+    prefs?: { turn: boolean; challenges: boolean; followMoves: boolean; followResults: boolean };
+    follows?: Record<string, number>;
+  },
 ): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
@@ -213,11 +219,14 @@ export function noteForPayload(
   // (Copy nuance: a game-ENDING move also reads "Your move" here — the SW
   // hasn't applied the move, so it can't know; the page path, which has, uses
   // the precise outcome line.)
-  if (payload.gameMove) {
+  if (payload.gameMove || payload.gameAccept) {
     if (!showMessages) return { note: null, wasMessage: false };
-    const gchat = chats.find(
-      (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from,
-    );
+    const row = gameCtx?.row;
+    const prefs = gameCtx?.prefs ?? { turn: true, challenges: true, followMoves: true, followResults: true };
+    const follows = gameCtx?.follows ?? {};
+    const gchat = payload.groupId
+      ? chats.find((c) => c.id === payload.groupId && c.isGroup)
+      : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
     if (gchat && hidden.has(gchat.id)) {
       return {
         note: { ids: [f.id as string], title: 'Ring', body: 'New message', url: '/tabs/chats', tag: `ring:${gchat.id}` },
@@ -229,28 +238,83 @@ export function noteForPayload(
     const gcontent = gchat?.notifyContent ?? 'full';
     if (gcontent === 'none') return { note: null, wasMessage: false, silenced: true };
     const gshowText = gcontent === 'full' && showPreview;
-    // Name-first copy (T041): the mover by name, and a game-ENDING move names
-    // the winner. A resign always crowns the recipient; a winning move is
-    // derived by running the signal through the pure session engine against
-    // the stored row (when previewPending could fetch it).
     const mover = known || 'Someone';
-    let gline = `${mover} made a move, your turn 😏`;
-    if (payload.gameMove.action === 'resign') {
-      gline = `${mover} gave up. You win! 🏆`;
-    } else if (gameRow?.game) {
-      const gmodule = GAMES[gameRow.game.gameType] ?? null;
-      const gme = gameRow.outgoing ? 0 : 1;
-      const r = applyGameSignal(gmodule, gameRow.game, payload.gameMove, (1 - gme) as 0 | 1);
-      if (r.outcome === 'applied') {
-        const st = deriveGameStatus(gmodule, r.session);
-        if (st.state === 'won') gline = st.winner === gme ? 'You won the game! 🏆' : `${mover} won the game 🏆`;
-        else if (st.state === 'draw') gline = "It's a draw 🤝";
+    const nameOf = (uid: string | undefined): string =>
+      !uid ? 'Someone' : uid === selfId ? 'You' : contacts.find((c) => c.id === uid)?.name ?? 'Someone';
+
+    let gline: string | null;
+    if (payload.gameAccept) {
+      // Only the CHALLENGER cares that someone took the seat (spec 0009 US2).
+      if (row?.game?.players?.[0] !== selfId || row.game.players.length !== 1) {
+        return { note: null, wasMessage: false };
+      }
+      if (!prefs.challenges) return { note: null, wasMessage: false, silenced: true };
+      gline = `${mover} accepted your challenge 💪 Your move!`;
+    } else {
+      const sig = payload.gameMove!;
+      if (row?.game?.players) {
+        // Group/wall challenge session: derive the post-move outcome and MY
+        // seat with the same pure engine every device uses (spec 0009).
+        let session = row.game;
+        if (sig.seq === 1 && sig.opponent && session.players!.length === 1 && playerIndexOf(session, from) === 0) {
+          session = lockOpponent(session, sig.opponent);
+        }
+        const senderIdx = playerIndexOf(session, from);
+        if (senderIdx === null) return { note: null, wasMessage: false };
+        const after = applyGameSignal(GAMES[session.gameType] ?? null, session, sig, senderIdx).session;
+        const st = deriveGameStatus(GAMES[session.gameType] ?? null, after);
+        const myIdx = playerIndexOf(after, selfId);
+        const winnerLine = (): string | null => {
+          if (st.state === 'won' || st.state === 'resigned') {
+            const winnerId = after.players?.[st.winner!];
+            return winnerId === selfId ? 'You won the game! 🏆' : `${nameOf(winnerId)} won the game 🏆`;
+          }
+          if (st.state === 'draw') return "It's a draw 🤝";
+          return null;
+        };
+        if (myIdx !== null) {
+          // A PLAYER: my turn now, or the result — behind the turn pref.
+          if (st.state === 'ongoing') {
+            if (st.turn !== myIdx) return { note: null, wasMessage: false };
+            if (!prefs.turn) return { note: null, wasMessage: false, silenced: true };
+            gline = `${mover} made a move, your turn 😏`;
+          } else {
+            gline = winnerLine();
+          }
+        } else {
+          // An OBSERVER: silent unless this game is followed (device-local set).
+          if (follows[sig.messageId] === undefined) return { note: null, wasMessage: false };
+          if (st.state === 'ongoing') {
+            if (!prefs.followMoves) return { note: null, wasMessage: false, silenced: true };
+            gline = `${mover} made a move 🎲`;
+          } else {
+            if (!prefs.followResults) return { note: null, wasMessage: false, silenced: true };
+            gline = winnerLine();
+          }
+        }
+      } else {
+        // 1:1 (spec 0008 T041): name the winner when the stored row lets the
+        // engine derive it; a resign always crowns the recipient.
+        gline = `${mover} made a move, your turn 😏`;
+        if (sig.action === 'resign') {
+          gline = `${mover} gave up. You win! 🏆`;
+        } else if (row?.game) {
+          const gmodule = GAMES[row.game.gameType] ?? null;
+          const gme = row.outgoing ? 0 : 1;
+          const r = applyGameSignal(gmodule, row.game, sig, (1 - gme) as 0 | 1);
+          if (r.outcome === 'applied') {
+            const st = deriveGameStatus(gmodule, r.session);
+            if (st.state === 'won') gline = st.winner === gme ? 'You won the game! 🏆' : `${mover} won the game 🏆`;
+            else if (st.state === 'draw') gline = "It's a draw 🤝";
+          }
+        }
       }
     }
+    if (gline === null) return { note: null, wasMessage: false };
     return {
       note: {
         ids: [f.id as string],
-        title: showPreview ? known || 'Someone' : 'Ring',
+        title: showPreview ? (payload.groupId ? gchat?.name || 'Group' : mover) : 'Ring',
         body: gshowText ? gline : 'New message',
         url: gchat ? `/chat/${gchat.id}` : '/tabs/chats',
         tag: gchat ? `ring:${gchat.id}` : `ring:from:${from}`,
@@ -612,12 +676,23 @@ export async function previewPending(): Promise<PreviewResult> {
         : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === f.from);
       if (bChat && !hidden.has(bChat.id)) badgeable += 1;
     }
-    // A gameMove note can name the winner when the target bubble is on-device
-    // (spec 0008 T041); absent row → the generic named-mover line.
-    const gameRow = payload.gameMove
-      ? await get<Message>('messages', payload.gameMove.messageId)
+    // Game context (spec 0008 T041 / spec 0009 US2): the target bubble's stored
+    // row (winner naming + group seats), the game-notification prefs, and the
+    // device-local follow set. Absent row → the generic named-mover fallback.
+    const gameTargetId = payload.gameMove?.messageId ?? payload.gameAccept?.messageId;
+    const gameCtx = gameTargetId
+      ? {
+          row: await get<Message>('messages', gameTargetId),
+          prefs: {
+            turn: await setting<boolean>('notifications.games.turn', true),
+            challenges: await setting<boolean>('notifications.games.challenges', true),
+            followMoves: await setting<boolean>('notifications.games.followMoves', true),
+            followResults: await setting<boolean>('notifications.games.followResults', true),
+          },
+          follows: await setting<Record<string, number>>('games.follows', {}),
+        }
       : undefined;
-    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameRow);
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx);
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;
@@ -816,7 +891,10 @@ export async function previewPosts(): Promise<{ notes: ConnNote[]; newCount: num
   if (!token) return { notes: [], newCount: 0 };
   const self = await readSessionUserId();
   const since = (await setting<number>(POST_SINCE_KEY, 0)) || 0;
-  let data: { posts?: Array<{ id: string; author: string; createdAt: number }>; cursor?: number };
+  let data: {
+    posts?: Array<{ id: string; author: string; createdAt: number; blobId?: string; size?: number; wrappedKey?: string }>;
+    cursor?: number;
+  };
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
@@ -841,7 +919,11 @@ export async function previewPosts(): Promise<{ notes: ConnNote[]; newCount: num
     notes.push({
       keys: [`post:${p.id}`],
       title: await connName(p.author, token),
-      body: 'posted on their Wall',
+      // A game-challenge post earns the urgent line (spec 0009): unseal the
+      // post right here in the SW when the keystore allows. Anything else —
+      // PIN-locked, offline blob, media post, tampered — keeps the generic
+      // content-free line, exactly what all posts said before.
+      body: (await swPostChallengeLine(p, token)) ?? 'posted on their Wall',
       url: '/tabs/wall',
       tag: `ring:post:${p.author}`,
     });
@@ -850,6 +932,44 @@ export async function previewPosts(): Promise<{ notes: ConnNote[]; newCount: num
     await put<Setting<number>>('settings', { key: POST_SINCE_KEY, value: data.cursor });
   }
   return { notes, newCount: fresh.length };
+}
+
+// A challenge post is text-only and tiny; never pull a media post's blob just
+// for notification copy.
+const CHALLENGE_POST_MAX_BYTES = 16_384;
+
+/** If this fresh post is a game CHALLENGE, return the urgent line for its push
+ *  note; null for everything else (generic line) — including every failure
+ *  (locked keystore, blob fetch, tampered seal): silence about content beats a
+ *  wrong claim. Decryption happens on-device, same trust as the page. */
+async function swPostChallengeLine(
+  p: { id: string; blobId?: string; size?: number; wrappedKey?: string },
+  token: string,
+): Promise<string | null> {
+  try {
+    if (!p.wrappedKey || !p.blobId || (p.size ?? Infinity) > CHALLENGE_POST_MAX_BYTES) return null;
+    await sodiumReady();
+    if (!(await attemptDeviceUnlock())) return null;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/blobs/${encodeURIComponent(p.blobId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const { payload } = openReceivedPost(bytes, p.wrappedKey, getIdentityKeys().x.privateKey);
+    if (!payload.game) return null;
+    const gname = GAMES[payload.game.gameType]?.displayName ?? 'game';
+    return `started a ${gname} challenge, be quick if you want it 🫵`;
+  } catch {
+    return null;
+  }
 }
 
 /* ---- owner-only Wall engagement notifications (spec 1031) ---- */
@@ -919,6 +1039,87 @@ export function classifyPostActivity(args: {
   return items;
 }
 
+/**
+ * Wall games on push wake (spec 0009 US3): the audience-wide 'post-activity'
+ * push fans to every device that can see a challenge post; THIS pure classifier
+ * replays the fetched game rows through the same engine every page uses and
+ * decides, from my seat + my private follow + my prefs, whether to say anything.
+ * Returns null when nothing is fresh; otherwise the fresh ledger keys plus a
+ * note (or `note: null` for a deliberate quiet — keys still get ledgered so a
+ * repeated tickle stays silent too).
+ */
+export function classifyWallGameActivity(args: {
+  post:
+    | { author?: string; outgoing?: boolean; postKey?: string; game?: { gameType: string; theme?: string } }
+    | null
+    | undefined;
+  self: string;
+  rows: PostActivityRow[];
+  seen: Set<string>;
+  prefs: { turn: boolean; challenges: boolean; followMoves: boolean; followResults: boolean };
+  followed: boolean;
+  openGame: (postKeyB64: string, payload: string) => WallGameRow['payload'];
+  names: Map<string, string>;
+}): { keys: string[]; note: { title: string; body: string } | null } | null {
+  const { post, self, rows, seen, prefs, followed, openGame, names } = args;
+  if (!post?.game || !post.postKey || !post.author) return null;
+  const gameRows: WallGameRow[] = [];
+  const fresh: { id: string; actor: string; at: number }[] = [];
+  for (const r of rows) {
+    if (r.kind !== 'game') continue;
+    let payload: WallGameRow['payload'];
+    try {
+      payload = openGame(post.postKey, r.payload);
+    } catch {
+      continue; // unopenable (locked/cold) → treat as absent
+    }
+    gameRows.push({ id: r.id, actor: r.actor, payload });
+    if (!seen.has(r.id) && r.actor && r.actor !== self) fresh.push({ id: r.id, actor: r.actor, at: payload.at });
+  }
+  if (!fresh.length) return null;
+  const session = buildWallSession(GAMES[post.game.gameType] ?? null, post.author, post.game, gameRows);
+  const status = deriveGameStatus(GAMES[session.gameType] ?? null, session);
+  const me = playerIndexOf(session, self);
+  const latest = fresh.sort((x, y) => x.at - y.at)[fresh.length - 1];
+  const mover = names.get(latest.actor) ?? 'Someone';
+  const nameOf = (uid: string | undefined): string =>
+    !uid ? 'Someone' : uid === self ? 'You' : names.get(uid) ?? 'Someone';
+  const keys = fresh.map((f) => f.id);
+  const quiet = { keys, note: null };
+
+  let body: string | null = null;
+  if (me !== null) {
+    if (challengePhase(session) === 'accepted' && session.moves.length === 0 && me === 0) {
+      if (!prefs.challenges) return quiet;
+      body = `${mover} accepted your challenge 💪 Your move!`;
+    } else if (status.state === 'ongoing') {
+      if (status.turn !== me) return quiet; // my own side already knows; their move next
+      if (!prefs.turn) return quiet;
+      body = `${mover} made a move, your turn 😏`;
+    } else if (status.state === 'won' || status.state === 'resigned') {
+      const winnerId = session.players?.[status.winner];
+      body = winnerId === self ? 'You won the game! 🏆' : `${nameOf(winnerId)} won the game 🏆`;
+    } else if (status.state === 'draw') {
+      body = "It's a draw 🤝";
+    }
+  } else if (followed) {
+    if (status.state === 'ongoing') {
+      if (!prefs.followMoves) return quiet;
+      body = `${mover} made a move 🎲`;
+    } else if (status.state === 'won' || status.state === 'resigned') {
+      if (!prefs.followResults) return quiet;
+      body = `${nameOf(session.players?.[status.winner])} won the game 🏆`;
+    } else if (status.state === 'draw') {
+      if (!prefs.followResults) return quiet;
+      body = "It's a draw 🤝";
+    }
+  } else {
+    return quiet; // a quiet observer — ledger the keys, say nothing
+  }
+  if (!body) return quiet;
+  return { keys, note: { title: mover, body } };
+}
+
 /** Render the surviving items as notification note(s): one item → an actor-named
  *  note; several → ONE collapsed note (per-post tag) covering all their ledger keys. */
 export function buildPostActivityNotes(
@@ -960,7 +1161,13 @@ export async function previewPostActivity(postId: string): Promise<ConnNote[]> {
   const token = await readSessionToken();
   if (!token) return [];
   const self = (await readSessionUserId()) ?? '';
-  const post = await get<{ id: string; outgoing?: boolean; postKey?: string }>('posts', postId);
+  const post = await get<{
+    id: string;
+    author?: string;
+    outgoing?: boolean;
+    postKey?: string;
+    game?: { gameType: string; theme?: string };
+  }>('posts', postId);
   let rows: PostActivityRow[] = [];
   try {
     const ctrl = new AbortController();
@@ -984,19 +1191,51 @@ export async function previewPostActivity(postId: string): Promise<ConnNote[]> {
   await sodiumReady().catch(() => {});
   const seen = new Set((await loadWallActShownEntries()).map((e) => e.id));
   const items = classifyPostActivity({ post, self, rows, seen, now: Date.now(), openReaction: openPostEngagement });
-  if (!items.length) return [];
+
+  // A game-challenge post (spec 0009): the audience-wide push means WE may be a
+  // player or follower — replay the game rows and decide locally.
+  let gameKeys: string[] = [];
+  let gameNote: ConnNote | null = null;
+  if (post?.game) {
+    const prefs = {
+      turn: await setting<boolean>('notifications.games.turn', true),
+      challenges: await setting<boolean>('notifications.games.challenges', true),
+      followMoves: await setting<boolean>('notifications.games.followMoves', true),
+      followResults: await setting<boolean>('notifications.games.followResults', true),
+    };
+    const follows = await setting<Record<string, number>>('games.follows', {});
+    const gnames = new Map<string, string>();
+    for (const actor of new Set(rows.filter((r) => r.kind === 'game').map((r) => r.actor))) {
+      gnames.set(actor, await connName(actor, token));
+    }
+    const g = classifyWallGameActivity({
+      post, self, rows, seen, prefs,
+      followed: follows[postId] !== undefined,
+      openGame: openPostEngagement,
+      names: gnames,
+    });
+    if (g) {
+      gameKeys = g.keys;
+      if (g.note) {
+        gameNote = { keys: g.keys, title: g.note.title, body: g.note.body, url: `/wall/post/${postId}`, tag: `ring:post:game:${postId}` };
+      }
+    }
+  }
+  if (!items.length && !gameKeys.length) return [];
   const names = new Map<string, string>();
   for (const actor of new Set(items.map((i) => i.actor))) {
     names.set(actor, await connName(actor, token));
   }
   // Persist the ledger for what we're about to display so a repeated tickle
   // (collapse topic re-fire, multi-device) doesn't re-announce the same items.
+  // Game keys ledger even when deliberately quiet.
   const entries = await loadWallActShownEntries();
   const known = new Set(entries.map((e) => e.id));
   const ts = Date.now();
   for (const it of items) if (!known.has(it.id)) entries.push({ id: it.id, ts });
+  for (const k of gameKeys) if (!known.has(k)) entries.push({ id: k, ts });
   await put<Setting<ShownEntry[]>>('settings', { key: WALL_ACT_SHOWN_KEY, value: entries.slice(-WALL_ACT_SHOWN_MAX) });
-  return buildPostActivityNotes(postId, items, names);
+  return [...buildPostActivityNotes(postId, items, names), ...(gameNote ? [gameNote] : [])];
 }
 
 /** Persist the conn-ledger keys we displayed, so the same event doesn't re-notify

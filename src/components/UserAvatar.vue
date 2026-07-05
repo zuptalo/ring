@@ -62,5 +62,10 @@ img {
   height: 100%;
   object-fit: cover;
   display: block;
+  /* Same circular cutout as the emoji disc above: a PHOTO avatar must never
+     render square just because a call site (a game seat chip, a new surface)
+     didn't add its own rounding. Sites inside ion-avatar already clip round;
+     doubling the radius is harmless. */
+  border-radius: 50%;
 }
 </style>

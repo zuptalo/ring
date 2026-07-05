@@ -74,8 +74,19 @@
         </ion-item>
       </ion-list>
 
+      <!-- The staged game challenge (spec 0009): one chip, removable. -->
+      <ion-list v-if="challenge" :inset="true">
+        <ion-item lines="none">
+          <span slot="start" class="challenge-die"><animated-emoji emoji="🎲" /></span>
+          <ion-label>{{ challengeLabel }}</ion-label>
+          <ion-button slot="end" fill="clear" color="medium" aria-label="Remove challenge" @click="challenge = null">
+            <ion-icon slot="icon-only" :icon="closeOutline" />
+          </ion-button>
+        </ion-item>
+      </ion-list>
+
       <!-- First-attachment options: only when nothing is staged yet and not already recording. -->
-      <ion-list v-if="!mediaItems.length && !recording" :inset="true">
+      <ion-list v-if="!mediaItems.length && !recording && !challenge" :inset="true">
         <ion-item button :detail="false" @click="pickMedia">
           <ion-icon slot="start" :icon="imageOutline" color="primary" />
           <ion-label color="primary">Add photos or videos</ion-label>
@@ -84,7 +95,12 @@
           <ion-icon slot="start" :icon="micOutline" color="primary" />
           <ion-label color="primary">Record voice</ion-label>
         </ion-item>
+        <ion-item button :detail="false" @click="gamePickerOpen = true">
+          <span slot="start" class="challenge-die"><animated-emoji emoji="🫵" /></span>
+          <ion-label color="primary">Throw a game challenge</ion-label>
+        </ion-item>
       </ion-list>
+      <game-picker :open="gamePickerOpen" @close="gamePickerOpen = false" @pick="onChallengePick" />
       <input
         ref="fileInput"
         type="file"
@@ -134,7 +150,10 @@ import {
 import { useRouter, useRoute } from 'vue-router';
 import { imageOutline, closeOutline, micOutline, playCircle } from 'ionicons/icons';
 import { vEnterSend } from '@/directives/enter-send';
-import { enqueuePendingPost, getPendingPost, deletePendingPost, type PostLifetime } from '@/db/queries';
+import { enqueuePendingPost, getPendingPost, deletePendingPost, createPost, type PostLifetime } from '@/db/queries';
+import GamePicker from '@/components/GamePicker.vue';
+import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
+import { GAMES } from '@/games/registry';
 import { kickPendingPosts } from '@/services/pending-posts';
 import { hasRoomFor } from '@/services/storage-estimate';
 import { generateVideoPoster } from '@/utils/media-meta';
@@ -170,7 +189,24 @@ const mediaItems = ref<PostMedia[]>([]);
 const MAX_MEDIA = 10;
 const atMaxMedia = computed(() => mediaItems.value.length >= MAX_MEDIA);
 
-const canShare = computed(() => body.value.trim().length > 0 || mediaItems.value.length > 0);
+const canShare = computed(
+  () => body.value.trim().length > 0 || mediaItems.value.length > 0 || !!challenge.value,
+);
+
+// A game-challenge post (spec 0009): the post becomes a live board for the
+// audience. Text-only (no media) — the challenge IS the content.
+const challenge = ref<{ gameType: string; theme?: string } | null>(null);
+const gamePickerOpen = ref(false);
+const challengeLabel = computed(() => {
+  if (!challenge.value) return '';
+  const m = GAMES[challenge.value.gameType];
+  const t = m?.themes.find((x) => x.id === challenge.value?.theme && x.id !== 'classic')?.name;
+  return `${m?.displayName ?? 'Game'} challenge${t ? ` · ${t}` : ''}`;
+});
+function onChallengePick(gameType: string, theme?: string): void {
+  gamePickerOpen.value = false;
+  challenge.value = { gameType, theme };
+}
 
 // mm:ss for a staged voice clip's thumbnail.
 const fmtDur = (s?: number): string => {
@@ -456,6 +492,21 @@ async function share(): Promise<void> {
   if (!canShare.value || sharing.value) return;
   sharing.value = true;
   try {
+    // A challenge post has no media to stage — it posts directly (sealed like
+    // any text post, with the game field + fallback copy inside the payload).
+    if (challenge.value) {
+      await createPost({
+        body: body.value.trim() || undefined,
+        audience: audience.value,
+        lifetime: lifetime.value,
+        // A PLAIN copy — the reactive Proxy can't be structured-cloned into
+        // IndexedDB (iOS Safari throws "The object can not be cloned", and the
+        // post would fan out to friends but never land locally).
+        game: { gameType: challenge.value.gameType, theme: challenge.value.theme },
+      });
+      router.back();
+      return;
+    }
     // Spec 1024: cache the staged media into the outbox and DISMISS immediately — the upload
     // worker finishes it in the background and the Wall shows a pending card with progress.
     // HD-only on the Wall (spec 1022, FR-020): every post ships at HD.

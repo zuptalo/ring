@@ -831,3 +831,92 @@ func TestEngagementPushesOwnerOnly(t *testing.T) {
 		t.Errorf("self-engagement fired %d pushes; want 0", n)
 	}
 }
+
+// Spec 0009: game engagement (an accept or move on a game-challenge post) must
+// reach players and followers even when their app is closed — so unlike
+// reactions/comments (author-only, spec 1031), kind "game" fans the CONTENT-FREE
+// activity push to the whole audience except the actor, author included even
+// when the author is the actor's opponent. The payload stays sealed; each woken
+// device pulls, decrypts under K_post, and decides locally whether to alert.
+func TestGameEngagementPushesAudience(t *testing.T) {
+	conn := newFakePostConn()
+	notif := &recordingNotifier{}
+	srv := newPostTestServerN(conn, newFakePostStore(), notif)
+	tokA, aliceID, _ := registerNamed(t, srv, "alice") // challenge post author (player 0)
+	tokB, bobID, _ := registerNamed(t, srv, "bob")     // first accepter (player 1)
+	_, carolID, _ := registerNamed(t, srv, "carol")    // audience observer
+	conn.befriend(aliceID, bobID)
+	conn.befriend(aliceID, carolID)
+
+	body := `{"id":"` + postID + `","blobId":"cap","envelopes":[` +
+		`{"recipient":"` + bobID + `","wrappedKey":"WKb"},{"recipient":"` + carolID + `","wrappedKey":"WKc"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	notif.reset()
+
+	// Bob accepts the challenge (kind "game") → the kind is valid, stored
+	// opaquely, and the push fans to alice (author) AND carol (audience) — not bob.
+	acceptEng := `{"id":"77777777-7777-7777-7777-777777777777","kind":"game","payload":"SEALED"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, acceptEng); rr.Code != http.StatusCreated {
+		t.Fatalf("game engagement status = %d; body=%s (kind must be accepted)", rr.Code, rr.Body.String())
+	}
+	if !notif.activityPushedTo(aliceID, postID) || !notif.activityPushedTo(carolID, postID) {
+		t.Errorf("game engagement must push the whole audience (alice + carol)")
+	}
+	if notif.activityPushedTo(bobID, postID) {
+		t.Errorf("game engagement must never push the actor (bob)")
+	}
+	if n := notif.activityPushCount(); n != 2 {
+		t.Errorf("game engagement fired %d activity pushes; want exactly 2", n)
+	}
+	notif.reset()
+
+	// The AUTHOR moves (alice is player 0): unlike self-reactions, her game
+	// engagement still wakes the others — it is bob's turn now.
+	moveEng := `{"id":"88888888-8888-8888-8888-888888888888","kind":"game","payload":"SEALED2"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokA, moveEng); rr.Code != http.StatusCreated {
+		t.Fatalf("author game engagement status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if !notif.activityPushedTo(bobID, postID) || !notif.activityPushedTo(carolID, postID) {
+		t.Errorf("the author's game engagement must push bob + carol")
+	}
+	if notif.activityPushedTo(aliceID, postID) {
+		t.Errorf("the author's own game engagement must not push the author")
+	}
+	notif.reset()
+
+	// Reactions keep their spec-1031 author-only behavior — the game fan-out
+	// must not widen anything else.
+	react := `{"id":"99999999-9999-9999-9999-999999999999","kind":"reaction","payload":"SEALED"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, react); rr.Code != http.StatusCreated {
+		t.Fatalf("react status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if n := notif.activityPushCount(); n != 1 || !notif.activityPushedTo(aliceID, postID) {
+		t.Errorf("reaction fired %d pushes; want exactly 1, to the author", n)
+	}
+
+	// The stored record round-trips opaquely with its kind.
+	rr := do(t, srv, http.MethodGet, "/v1/posts/"+postID+"/engagement", tokA, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status = %d", rr.Code)
+	}
+	var listedWrap struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &listedWrap); err != nil {
+		t.Fatalf("list decode: %v", err)
+	}
+	var games int
+	for _, e := range listedWrap.Items {
+		if e["kind"] == "game" {
+			games++
+			if e["payload"] != "SEALED" && e["payload"] != "SEALED2" {
+				t.Errorf("game payload not stored opaquely: %v", e["payload"])
+			}
+		}
+	}
+	if games != 2 {
+		t.Errorf("listed %d game engagements; want 2", games)
+	}
+}

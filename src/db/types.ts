@@ -168,6 +168,9 @@ export type MessageKind =
   // An in-chat turn-based game bubble (spec 0008). The `game` field carries the
   // session (move log); move signals mutate it in place like poll votes.
   | 'game'
+  // An open group game challenge (spec 0009): the same `game` session field with
+  // explicit players/challenge state; accepts/moves mutate it as side effects.
+  | 'gamechallenge'
   // A local-only, centered informational row logging a call's outcome (never sent to
   // the peer; each side logs its own). The `call` field carries the details.
   | 'call';
@@ -453,6 +456,10 @@ export interface Post {
   // generated it; recipients unwrap it from their envelope) and uses it to seal/open
   // audience-visible engagement (reactions/comments). The server never sees it.
   postKey?: string;
+  // A game-challenge post (spec 0009): the game plays out ON the post — accepts and
+  // moves are engagement rows of type 'game'; the session is DERIVED from them
+  // (buildWallSession), never stored. The author is the challenger (player 0).
+  game?: { gameType: string; theme?: string; hostName?: string; hostAvatar?: string };
   updatedAt: number; // change-bus / dedup
 }
 
@@ -506,12 +513,21 @@ export interface OutboxItem {
 export interface PostEngagement {
   id: string;
   postId: string;
-  type: 'reaction' | 'comment' | 'view';
+  type: 'reaction' | 'comment' | 'view' | 'game';
   actor: string; // userId (profile resolved from contacts/directory)
   emoji?: string; // reaction
   text?: string; // comment (decrypted)
   at: number; // actor timestamp; LWW for reaction/view, ordering for comment
   deleted?: boolean; // comment tombstone
+  // A game accept/move on a challenge post (spec 0009), the OPENED sealed payload.
+  // `id` is the server engagement id — the replay's dedupe key (contracts/
+  // wall-game-engagement.md); ordering-bearing fields live inside.
+  // An accept carries the acceptor's OWN display info (sealed under K_post):
+  // the audience are the author's friends, not necessarily the acceptor's, and
+  // a game readable by them should name its players for them too (spec 0009).
+  game?:
+    | { t: 'accept'; at: number; name?: string; avatar?: string }
+    | { t: 'move'; seq: number; action: 'move' | 'resign'; move?: unknown; at: number; opponent?: string };
   updatedAt: number;
 }
 

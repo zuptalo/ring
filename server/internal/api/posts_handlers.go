@@ -214,13 +214,17 @@ func (h *Handlers) removePostRecipient(w http.ResponseWriter, r *http.Request) {
 
 type engagementReq struct {
 	ID      string `json:"id"`
-	Kind    string `json:"kind"`             // reaction | comment | tombstone
+	Kind    string `json:"kind"`             // reaction | comment | game | tombstone
 	Payload string `json:"payload"`          // opaque, sealed under K_post
 	Target  string `json:"target,omitempty"` // tombstone: the engagement id being removed
 }
 
+// "game" (spec 0009): an accept or move on a game-challenge post. The payload
+// stays sealed under K_post like every other kind — the server learns only that
+// a post has game-type engagement, the same class of metadata as its existing
+// reaction-vs-comment distinction.
 func validEngagementKind(k string) bool {
-	return k == "reaction" || k == "comment" || k == "tombstone"
+	return k == "reaction" || k == "comment" || k == "tombstone" || k == "game"
 }
 
 // submitEngagement (POST /v1/posts/{id}/engagement) records one opaque engagement item
@@ -323,8 +327,32 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 	// decrypting; the server only routes on metadata it already holds (author id).
 	// A failed author lookup skips the push rather than failing the write — the
 	// engagement is stored and the WS frames above already went out.
+	//
+	// EXCEPTION — kind "game" (spec 0009): a game riding a post must reach its
+	// players and followers while their app is CLOSED (a turn-based game whose
+	// player never learns it is their turn defeats the feature), so the same
+	// content-free push fans to the WHOLE audience plus the author, except the
+	// actor — including when the actor IS the author, whose move is the other
+	// player's turn. Each woken device pulls, decrypts under K_post, and decides
+	// locally (turn/follow settings) whether to show anything.
 	if h.Notifier != nil && !tombstone {
-		if author, err := h.Posts.PostAuthor(r.Context(), postID); err == nil && author != "" && author != uid {
+		if req.Kind == "game" {
+			targets := map[string]bool{}
+			if aud, err := h.Posts.PostAudience(r.Context(), postID); err == nil {
+				for _, u := range aud {
+					targets[u] = true
+				}
+			}
+			if author, err := h.Posts.PostAuthor(r.Context(), postID); err == nil && author != "" {
+				targets[author] = true
+			}
+			for u := range targets {
+				if u == uid {
+					continue
+				}
+				h.Notifier.NotifyPostActivity(r.Context(), u, postID)
+			}
+		} else if author, err := h.Posts.PostAuthor(r.Context(), postID); err == nil && author != "" && author != uid {
 			h.Notifier.NotifyPostActivity(r.Context(), author, postID)
 		}
 	}

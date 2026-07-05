@@ -175,6 +175,11 @@ the same emoji across bubbles, notifications, previews, and stats.
 | Celebration accents (sparingly) | 🎉 `1f389` | moments, not results — results are the 🏆/🥈/🤝 set |
 | Chat-list previews + in-app banners | any emoji in the line | render through EmojiText — animated when the set has it |
 | Emoji profile pictures | user's pick | animated on every swept avatar surface, 2 loops then rest (`UserAvatar`) |
+| Challenge announcement (groups + Wall, spec 0009) | 🫵 `1faf5` + 🎲 `1f3b2` | the call-to-arms hero on an open challenge |
+| Accept button + "accepted" notices | 💪 `1f4aa` | someone takes the seat |
+| Challenge withdrawn | 🫠 `1fae0` | the creator melted away |
+| Race lost ("got there first") | 😅 `1f605` | a beat-to-the-seat accepter's gentle nod |
+| Observer Follow toggle | 👀 `1f440` | privately watching a game |
 
 ## Tic-tac-toe themes (spec 0008)
 

@@ -218,7 +218,10 @@
                 <ion-spinner name="crescent" />
               </div>
             </div>
-            <p v-if="p.body" class="body"><EmojiText :text="p.body" /></p>
+            <!-- A game-challenge post (spec 0009): the post IS the board; the card
+                 derives everything live and replaces the fallback body copy. -->
+            <wall-game-card v-if="p.game" :post-id="p.id" :author-name="p.authorName" :is-own="!!p.isOwn" />
+            <p v-else-if="p.body" class="body"><EmojiText :text="p.body" /></p>
 
             <!-- Reactions: pills + a quick-react button opening the shared picker. -->
             <div class="rrow">
@@ -319,6 +322,7 @@ import { vEnterSend } from '@/directives/enter-send';
 import { suspendAutoplay } from '@/directives/autoplay-visible';
 import WallVideo from '@/components/WallVideo.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
+import WallGameCard from '@/components/WallGameCard.vue';
 import { useWall, type WallPost } from '@/composables/useWall';
 import { usePendingPosts } from '@/composables/usePendingPosts';
 import { retryPendingPost, cancelPendingPost } from '@/services/pending-posts';
@@ -540,9 +544,14 @@ async function openPostMenu(post: WallPost): Promise<void> {
         },
         { text: 'Hide all their posts', handler: () => void hideUser(post) },
       ];
+  // A game post's story in numbers (spec 0009) lives on the post page — the
+  // menu is the discoverable way in from the feed.
+  const gameStats = post.game
+    ? [{ text: 'Game stats', handler: () => void router.push(`/wall/post/${post.id}`) }]
+    : [];
   const sheet = await actionSheetController.create({
     header: post.isOwn ? 'Your post' : post.authorName,
-    buttons: [...buttons, { text: 'Cancel', role: 'cancel' as const }],
+    buttons: [...gameStats, ...buttons, { text: 'Cancel', role: 'cancel' as const }],
   });
   await sheet.present();
 }
