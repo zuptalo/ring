@@ -190,8 +190,20 @@ test('1:1 tic-tac-toe: resign ends it for both, and Play again starts a fresh ga
 
   // FR-026: with the chat OPEN, an inbound move ticks and a self-resign plays
   // the losing tone — asserted via the cue recorder (a recorded cue passed both
-  // the Game sounds gate and the de-dup).
-  await b.page.evaluate((id: string) => (window as any).__ringTest.navigate(`/chat/${id}`), bChat);
+  // the Game sounds gate and the de-dup). Wait for the bubble to actually render
+  // so the page has registered itself as the active chat before the move lands.
+  // Fire-and-forget: awaiting router.push's promise can race a transition into a
+  // destroyed-context error; the gate poll below owns readiness either way.
+  await b.page.evaluate((id: string) => {
+    void (window as any).__ringTest.navigate(`/chat/${id}`);
+  }, bChat);
+  // The bubble renders DURING the page transition, but the active-chat gate is set
+  // on ionViewDidEnter when the transition completes — wait for the gate itself.
+  await expect
+    .poll(() => b.page.evaluate((id: string) => (window as any).__ringTest.isChatActive(id), bChat), {
+      timeout: 15_000,
+    })
+    .toBe(true);
   await b.page.evaluate(() => (window as any).__ringTest.recordCues(true));
 
   // Mid-game, B resigns → both sides show A (player 0) as winner by concession.

@@ -47,7 +47,16 @@ export type ToneName =
   | 'resume'
   | 'swap'
   // Played to the party coming OFF hold, alongside the 5s "you're about to be visible" countdown.
-  | 'resuming';
+  | 'resuming'
+  // In-chat game cues (spec 0008 FR-026): the match call when a game starts (and on a
+  // rematch), a soft tick per accepted move, a small win fanfare, a warm losing descent,
+  // and a neutral pair for a draw. Played only while the game's chat is open, behind the
+  // "Game sounds" toggle.
+  | 'gamestart'
+  | 'gamemove'
+  | 'gamewin'
+  | 'gamelose'
+  | 'gamedraw';
 
 interface Note {
   freq: number;
@@ -178,6 +187,33 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
     { freq: G5, start: 0, dur: 0.09, type: 'triangle', gain: 0.26 },
     { freq: C6, start: 0.11, dur: 0.09, type: 'triangle', gain: 0.28 },
     { freq: E6, start: 0.22, dur: 0.22, type: 'triangle', gain: 0.32 },
+  ],
+  // Game start / rematch "match call": a playful rising triple — an invitation,
+  // brighter than beacon but shorter than ringing.
+  gamestart: [
+    { freq: C5, start: 0, dur: 0.09, type: 'triangle', gain: 0.22 },
+    { freq: E5, start: 0.09, dur: 0.09, type: 'triangle', gain: 0.22 },
+    { freq: A5, start: 0.18, dur: 0.18, type: 'triangle', gain: 0.24 },
+  ],
+  // A move landing: one soft tick, quiet on purpose — it plays often.
+  gamemove: [{ freq: 660, start: 0, dur: 0.07, type: 'sine', gain: 0.14 }],
+  // Winning: a small four-note fanfare climbing to the octave.
+  gamewin: [
+    { freq: C5, start: 0, dur: 0.1, type: 'triangle', gain: 0.22 },
+    { freq: E5, start: 0.1, dur: 0.1, type: 'triangle', gain: 0.24 },
+    { freq: G5, start: 0.2, dur: 0.1, type: 'triangle', gain: 0.26 },
+    { freq: C6, start: 0.3, dur: 0.26, type: 'triangle', gain: 0.3 },
+  ],
+  // Losing: a warm three-note descent — gentle, never a sad trombone.
+  gamelose: [
+    { freq: E5, start: 0, dur: 0.12, type: 'sine', gain: 0.2 },
+    { freq: C5, start: 0.12, dur: 0.14, type: 'sine', gain: 0.18 },
+    { freq: A4, start: 0.27, dur: 0.22, type: 'sine', gain: 0.16 },
+  ],
+  // Draw: two equal mid notes — even, unresolved, like the game.
+  gamedraw: [
+    { freq: A4, start: 0, dur: 0.12, type: 'sine', gain: 0.16 },
+    { freq: A4, start: 0.16, dur: 0.12, type: 'sine', gain: 0.16 },
   ],
 };
 

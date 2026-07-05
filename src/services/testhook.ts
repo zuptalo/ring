@@ -138,7 +138,7 @@ import {
   listConnections as apiListConnections,
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
-import { notifyBanners, showActionBanner } from '@/services/notify';
+import { notifyBanners, showActionBanner, isChatActive as notifyIsChatActive } from '@/services/notify';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { recordCues, recordedCues } from '@/services/sound';
 import { syncContactEdges } from '@/services/directory';
@@ -591,6 +591,8 @@ export function installTestHook(): void {
     resignGame: (chatId: string, messageId: string) => dbResignGame(chatId, messageId),
     /** The one-game-per-chat gate's source of truth (FR-001a). */
     hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
+    /** Whether the notify layer considers this chat actively viewed (gates game cues). */
+    isChatActive: (chatId: string) => notifyIsChatActive(chatId),
     /** A chat's list-preview line + icon kind (game-activity preview asserts, FR-013). */
     chatPreview: async (chatId: string) => {
       const c = await dbGetChat(chatId);

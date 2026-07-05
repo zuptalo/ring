@@ -47,6 +47,7 @@ import {
   localMoveAllowed as gameMoveAllowed,
   type SessionSignal,
 } from '@/games/session';
+import { gameCueFor, playGameCue } from '@/services/game-sounds';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
   GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, OutboxItem, ChatDraft,
@@ -797,6 +798,7 @@ export async function sendGame(chatId: string, gameType: string, theme?: string)
     timestamp: ts,
     game: { gameType, theme: pickedTheme },
   });
+  void playGameCue('gamestart'); // the match call (FR-026); starting is always in-chat
   return message.id;
 }
 
@@ -835,6 +837,9 @@ export async function playGameMove(chatId: string, messageId: string, move: unkn
   const at = now();
   const seq = m.game.moves.length + 1;
   if ((await applyGameMove(m, me, { seq, action: 'move', move, at })) !== 'applied') return;
+  // Your own move ticks (or lands the result cue when it ends the game, FR-026);
+  // playing is inherently in-chat, so no isChatActive check here.
+  void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
   const chat = await getChat(m.chatId);
   const signal: GameMoveSignal = { messageId, seq, action: 'move', move, at };
   await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
@@ -851,6 +856,8 @@ export async function resignGame(chatId: string, messageId: string): Promise<voi
   const at = now();
   const seq = m.game.moves.length + 1;
   if ((await applyGameMove(m, me, { seq, action: 'resign', at })) !== 'applied') return;
+  // Conceding sounds the losing tone for the resigner (FR-026).
+  void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
   const chat = await getChat(m.chatId);
   const signal: GameMoveSignal = { messageId, seq, action: 'resign', at };
   await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
@@ -875,6 +882,10 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   // applies to ordinary messages (mute, content prefs, open-chat suppression).
   const me = gameSelfPlayer(message);
   const status = deriveGameStatus(GAMES[message.game.gameType] ?? null, message.game);
+
+  // Their move sounds only while this chat is on screen (FR-026) — the
+  // notification path covers a closed/backgrounded chat, so never both.
+  if (isChatActive(message.chatId)) void playGameCue(gameCueFor(status, me));
   // Result emoji match the bubble's overlay set (FR-025): 🏆/🥈/🤝.
   const text =
     status.state === 'won'
@@ -4910,6 +4921,10 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
       }
     }
   }
+
+  // An incoming game start sounds the match call when its chat is on screen
+  // (FR-026); everywhere else the notification sound speaks for it.
+  if (payload.game && isChatActive(targetChatId)) void playGameCue('gamestart');
 
   const message: Message = {
     // Use the sender's message id so a read receipt we send back correlates to

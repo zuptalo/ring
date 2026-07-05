@@ -516,6 +516,13 @@ export const SETTINGS: Record<string, SettingNode> = {
         footer: 'Subtle cues during a call, like connecting, reconnecting, mute and unmute, camera on and off, and a quiet tone for a message that arrives while you’re on a call.',
       },
       {
+        header: 'Games',
+        items: [
+          { type: 'toggle', title: 'Game sounds', key: 'notifications.gameSounds', default: true },
+        ],
+        footer: 'Playful cues while a game chat is open: a match starting, each move landing, and the result.',
+      },
+      {
         header: 'Home screen notifications',
         items: [{ type: 'link', id: 'notifications-badge', title: 'App icon badge', icon: 'bell' }],
       },

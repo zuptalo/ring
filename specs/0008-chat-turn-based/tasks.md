@@ -178,7 +178,7 @@ mismatched sizes on iOS — font metrics differ per platform).
 
 ## Phase 10: Game audio (user feedback, 2026-07-05)
 
-- [ ] T040 FR-026 game sound cues, tests first: extend `src/services/sound.ts` RECIPES with `gamestart`/`gamemove`/`gamewin`/`gamelose`/`gamedraw` (sound.test.ts completeness check goes red first); new `src/services/game-sounds.ts` with pure `gameCueFor(status, me)` (unit-tested) + a `notifications.gameSounds`-gated player (no import cycle: reads the setting via idb directly); hooks in `queries.ts` (sendGame + inbound bubble while chat active → match call; applied moves → tick or result cue; self resign → lose cue; inbound only while `isChatActive`); "Game sounds" toggle beside "In-call sounds" in `settings/schema.ts`; e2e asserts fired cues via the existing `recordCues`/`cuesFired` hook
+- [X] T040 FR-026 game sound cues, tests first: extend `src/services/sound.ts` RECIPES with `gamestart`/`gamemove`/`gamewin`/`gamelose`/`gamedraw` (sound.test.ts completeness check goes red first); new `src/services/game-sounds.ts` with pure `gameCueFor(status, me)` (unit-tested) + a `notifications.gameSounds`-gated player (no import cycle: reads the setting via idb directly); hooks in `queries.ts` (sendGame + inbound bubble while chat active → match call; applied moves → tick or result cue; self resign → lose cue; inbound only while `isChatActive`); "Game sounds" toggle beside "In-call sounds" in `settings/schema.ts`; e2e asserts fired cues via the existing `recordCues`/`cuesFired` hook
 
 ---
 
