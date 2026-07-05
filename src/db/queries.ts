@@ -54,7 +54,9 @@ import {
   applyCancel as applyChallengeCancel,
   lockOpponent,
   playerIndexOf,
+  buildWallSession,
 } from '@/games/challenge';
+import type { GameSession } from '@/games/types';
 import { gameCueFor, playGameCue } from '@/services/game-sounds';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
@@ -2675,6 +2677,9 @@ export async function createPost(opts: {
   // Spec 1024: a stable post id supplied by the outbox worker so a retry is idempotent — the same
   // id overwrites the local post and the server upserts it, instead of creating a duplicate.
   id?: string;
+  // A game-challenge post (spec 0009): the game plays out ON the post. The payload
+  // gets the game field + fallback body copy for pre-0009 audiences.
+  game?: { gameType: string; theme?: string };
   // Optional attachment(s). A single item is an ordinary media post; an array of 2+
   // image/video items is an ALBUM post (spec 1022, FR-019) — every item is compressed to
   // the chosen quality, encrypted + uploaded, and all the media-refs ride sealed inside
@@ -2685,7 +2690,13 @@ export async function createPost(opts: {
 }): Promise<Post> {
   const self = getSelfUserId();
   if (!self) throw new Error('not signed in');
-  const body = opts.body?.trim() || undefined;
+  let body = opts.body?.trim() || undefined;
+  // A challenge post carries fallback copy so pre-0009 audiences see a harmless
+  // text post instead of a blank one (contracts/wall-game-engagement.md).
+  if (opts.game && !body) {
+    const gname = GAMES[opts.game.gameType]?.displayName ?? 'game';
+    body = `\u{1F3AE} ${gname} challenge \u2014 update Ring to play`;
+  }
   if (!body && !opts.media) throw new Error('Nothing to post.');
   const friends = opts.audience === 'close' ? await listCloseFriends() : await listFriends();
   if (!friends.length) throw new Error('No audience — add friends first.');
@@ -2706,7 +2717,7 @@ export async function createPost(opts: {
   let mediaH: number | undefined;
   const mediaIds: string[] = [];
   const refs: NonNullable<PostPayload['album']> = [];
-  const payload: PostPayload = { kind, body };
+  const payload: PostPayload = { kind, body, game: opts.game };
   const total = mediaList.length;
   for (const m of mediaList) {
     const index = mediaIds.length; // 0-based position of this item
@@ -2806,6 +2817,7 @@ export async function createPost(opts: {
     ttlMs,
     outgoing: true,
     postKey: built.postKey,
+    game: opts.game,
     updatedAt: createdAt,
   };
   await put<Post>('posts', post);
@@ -3000,6 +3012,7 @@ async function receivePost(sp: ServerPost): Promise<void> {
     ttlMs: sp.ttlMs,
     outgoing: false,
     postKey,
+    game: payload.game,
     updatedAt: now(),
   });
   // Pull any engagement (reactions/comments) that already exists on this post (also
@@ -3116,7 +3129,12 @@ export async function notifyPostActivity(postId: string, fresh: FreshEngagement[
     getSetting<boolean>('notifications.wall.activity', true),
     isWallTempMuted(),
   ]);
+  // Game engagement (spec 0009) has its own audience-wide policy below —
+  // spec 1031's owner-only rules stay untouched for reactions/comments.
+  const gameItems = fresh.filter((i) => i.type === 'game');
+  if (gameItems.length) await notifyWallGameActivity(post, gameItems);
   for (const item of fresh) {
+    if (item.type === 'game') continue;
     const decision = wallActivityAlert({
       isOwnPost: !!post.outgoing,
       actor: item.actor,
@@ -3145,6 +3163,65 @@ export async function notifyPostActivity(postId: string, fresh: FreshEngagement[
       url: `/wall/post/${postId}`,
     });
   }
+}
+
+/** Alerts for fresh GAME engagement on a challenge post (spec 0009): the seated
+ *  player hears their turn / the result; a follower hears moves and results;
+ *  everyone else stays quiet — all behind the Settings → Notifications → Games
+ *  switches, deduped by engagement id like every other wall alert. */
+async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Promise<void> {
+  const self = getSelfUserId();
+  if (!self || !post.game) return;
+  const others = fresh.filter((i) => i.actor !== self && !notifiedEngagementIds.has(i.id));
+  if (!others.length) return;
+  const session = await wallGameSession(post.id);
+  if (!session) return;
+  const module = GAMES[session.gameType] ?? null;
+  const status = deriveGameStatus(module, session);
+  const me = playerIndexOf(session, self);
+  const latest = others.sort((x, y) => x.at - y.at)[others.length - 1];
+  const mover = (await getContact(latest.actor))?.name ?? 'Someone';
+
+  let body: string | null = null;
+  if (me !== null) {
+    // A player: someone accepted my challenge, my turn, or the result.
+    if (challengePhase(session) === 'accepted' && session.players?.length && session.moves.length === 0 && me === 0) {
+      if (await getSetting<boolean>('notifications.games.challenges', true)) {
+        body = `${mover} accepted your challenge \u{1F4AA} Your move!`;
+      }
+    } else if (status.state === 'ongoing') {
+      if (status.turn === me && (await getSetting<boolean>('notifications.games.turn', true))) {
+        body = `${mover} made a move, your turn \u{1F60F}`;
+      }
+    } else if (status.state === 'won' || status.state === 'resigned') {
+      const winnerId = session.players?.[status.winner];
+      body = winnerId === self ? 'You won the game! \u{1F3C6}' : `${await gameNameOf(winnerId)} won the game \u{1F3C6}`;
+    } else if (status.state === 'draw') {
+      body = "It's a draw \u{1F91D}";
+    }
+  } else if ((await followedGames())[post.id] !== undefined) {
+    // A follower: moves and results, each behind its own switch.
+    if (status.state === 'ongoing') {
+      if (await getSetting<boolean>('notifications.games.followMoves', true)) {
+        body = `${mover} made a move \u{1F3B2}`;
+      }
+    } else if (await getSetting<boolean>('notifications.games.followResults', true)) {
+      if (status.state === 'draw') body = "It's a draw \u{1F91D}";
+      else if (status.state === 'won' || status.state === 'resigned') {
+        body = `${await gameNameOf(session.players?.[status.winner])} won the game \u{1F3C6}`;
+      }
+    }
+  }
+  for (const i of others) notifiedEngagementIds.add(i.id);
+  if (!body) return;
+  const c = await getContact(latest.actor);
+  await notifyIncoming({
+    kind: 'system',
+    name: c?.name ?? 'Someone',
+    body,
+    avatar: c?.avatar,
+    url: `/wall/post/${post.id}`,
+  }).catch(() => {});
 }
 
 /* ---- Wall mute / hide controls (client-only ledgers) ---- */
@@ -3374,7 +3451,7 @@ interface CommentData {
  *  notified-once dedupe key. */
 export interface FreshEngagement {
   id: string;
-  type: 'reaction' | 'comment';
+  type: 'reaction' | 'comment' | 'game';
   actor: string;
   emoji?: string;
   at: number;
@@ -3423,6 +3500,22 @@ export async function syncEngagement(postId: string): Promise<FreshEngagement[]>
           id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at, updatedAt: now(),
         });
         applied.push({ id: it.id, type: 'comment', actor: it.actor, at: data.at });
+      } else if (it.kind === 'game') {
+        // A game accept/move on a challenge post (spec 0009). Rows are immutable
+        // and keyed by the SERVER engagement id — the replay's dedupe key; the
+        // session itself is always DERIVED from the full row set (wallGameSession).
+        if (await get<PostEngagement>('postEngagement', it.id)) continue;
+        let data: NonNullable<PostEngagement['game']>;
+        try {
+          data = openPostEngagement<NonNullable<PostEngagement['game']>>(post.postKey, it.payload);
+        } catch {
+          continue;
+        }
+        latestActivity = Math.max(latestActivity, data.at); // an active game keep-alives its post
+        await put<PostEngagement>('postEngagement', {
+          id: it.id, postId, type: 'game', actor: it.actor, at: data.at, game: data, updatedAt: now(),
+        });
+        applied.push({ id: it.id, type: 'game', actor: it.actor, at: data.at });
       } else if (it.kind === 'tombstone') {
         // The tombstone's payload is the (cleartext) target engagement id.
         const target = await get<PostEngagement>('postEngagement', it.payload);
@@ -3455,6 +3548,107 @@ export async function listPostComments(postId: string): Promise<PostEngagement[]
   return rows
     .filter((e) => e.type === 'comment' && !e.deleted)
     .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+}
+
+/* ---- wall game challenges (spec 0009 US3): the post IS the board ---- */
+
+/** The DERIVED game session on a challenge post — a pure deterministic replay of
+ *  the stored engagement rows (contracts/wall-game-engagement.md). Same pulled
+ *  set ⇒ same session on every device; never stored. */
+export async function wallGameSession(postId: string): Promise<GameSession | null> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return null;
+  const rows = (await getByIndex<PostEngagement>('postEngagement', 'postId', postId))
+    .filter((e) => e.type === 'game' && e.game)
+    .map((e) => ({ id: e.id, actor: e.actor, payload: e.game! }));
+  return buildWallSession(GAMES[post.game.gameType] ?? null, post.author, post.game, rows);
+}
+
+/** Store the optimistic local row + submit the sealed record. The local id IS
+ *  the server engagement id, so the next sync dedupes it naturally. */
+async function submitWallGame(post: Post, data: NonNullable<PostEngagement['game']>): Promise<void> {
+  const self = getSelfUserId();
+  if (!self || !post.postKey) return;
+  const engId = uid();
+  await put<PostEngagement>('postEngagement', {
+    id: engId, postId: post.id, type: 'game', actor: self, at: data.at, game: data, updatedAt: now(),
+  });
+  await bumpPostActivity(post.id, data.at);
+  try {
+    await apiSubmitEngagement(post.id, {
+      id: engId,
+      kind: 'game',
+      payload: sealPostEngagement(post.postKey, data),
+    });
+  } catch {
+    /* offline — the optimistic row stands; a later sync reconciles */
+  }
+}
+
+/** Claim a Wall challenge's open seat. Syncs first: the seat may be taken. */
+export async function acceptWallChallenge(postId: string): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return;
+  await syncEngagement(postId);
+  const session = await wallGameSession(postId);
+  const self = getSelfUserId() ?? '';
+  if (!session || challengePhase(session) !== 'open') return;
+  if (session.players?.[0] === self) return; // the author can't take their own seat
+  await submitWallGame(post, { t: 'accept', at: now() });
+  void playGameCue('gameaccept');
+}
+
+/** Play a move on a Wall game. Sync-first, validated by the same pure engine as
+ *  chats; the author's seq-1 move locks the derived seat as wire data. */
+export async function playWallGameMove(postId: string, move: unknown): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return;
+  const module = GAMES[post.game.gameType];
+  if (!module) return;
+  await syncEngagement(postId);
+  let session = await wallGameSession(postId);
+  if (!session || challengePhase(session) !== 'accepted') return;
+  const self = getSelfUserId() ?? '';
+  if (session.players?.length === 1) {
+    if (session.players[0] !== self) return; // only the author's move seats the lock
+    const opp = resolveOpponent(session);
+    if (!opp) return;
+    session = lockOpponent(session, opp);
+  }
+  const me = playerIndexOf(session, self);
+  if (me === null) return; // observers never move
+  if (!gameMoveAllowed(module, session, me)) return;
+  if (module.applyMove(replayGameState(module, session), move, me) === null) return;
+  const at = now();
+  const seq = session.moves.length + 1;
+  const opponent = seq === 1 && session.players?.length === 2 ? session.players[1] : undefined;
+  await submitWallGame(post, { t: 'move', seq, action: 'move', move, at, opponent });
+  const after = await wallGameSession(postId);
+  if (after) void playGameCue(gameCueFor(deriveGameStatus(module, after), me));
+}
+
+/** Concede a Wall game (players only, once seated). */
+export async function resignWallGame(postId: string): Promise<void> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return;
+  const module = GAMES[post.game.gameType];
+  if (!module) return;
+  await syncEngagement(postId);
+  let session = await wallGameSession(postId);
+  if (!session || challengePhase(session) !== 'accepted') return;
+  if (deriveGameStatus(module, session).state !== 'ongoing') return;
+  const self = getSelfUserId() ?? '';
+  if (session.players?.length === 1) {
+    const opp = resolveOpponent(session);
+    if (!opp) return;
+    session = lockOpponent(session, opp);
+  }
+  const me = playerIndexOf(session, self);
+  if (me === null) return;
+  const at = now();
+  await submitWallGame(post, { t: 'move', seq: session.moves.length + 1, action: 'resign', at });
+  const after = await wallGameSession(postId);
+  if (after) void playGameCue(gameCueFor(deriveGameStatus(module, after), me));
 }
 
 /** Add an audience-visible comment to a post (sealed under K_post; fanned out). */

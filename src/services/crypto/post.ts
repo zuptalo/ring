@@ -38,6 +38,10 @@ export interface PostPayload {
   // instead of the single `media`. Every ref rides sealed under K_post, so the server still
   // sees only opaque ciphertext regardless of how many media a post carries.
   album?: import('./message').MediaRef[];
+  // A game-challenge post (spec 0009). Additive: kind stays 'text' and `body`
+  // carries fallback copy, so pre-0009 audiences see a harmless text post while
+  // new clients render the live challenge/board instead of the body.
+  game?: { gameType: string; theme?: string };
 }
 
 /** Generate a fresh per-post content key. */

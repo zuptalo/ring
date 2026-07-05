@@ -59,6 +59,11 @@ import {
   cancelGameChallenge as dbCancelGameChallenge,
   followGame as dbFollowGame,
   unfollowGame as dbUnfollowGame,
+  wallGameSession as dbWallGameSession,
+  acceptWallChallenge as dbAcceptWallChallenge,
+  playWallGameMove as dbPlayWallGameMove,
+  resignWallGame as dbResignWallGame,
+  deletePost as dbDeletePost,
   forwardMessage as dbForwardMessage,
   shareProfileUpdate as dbShareProfileUpdate,
   sendMediaMessage as dbSendMediaMessage,
@@ -1073,10 +1078,38 @@ export function installTestHook(): void {
     /* ---- Wall (spec 0003): drive the real queries.ts orchestration so e2e exercises
        the actual encrypt → upload → fan-out → receive/open path, not a shortcut. ---- */
     /** Compose + share a post. Returns the new post id. */
-    post: async (opts: { body?: string; audience?: 'friends' | 'close'; lifetime?: '1h' | '24h' | '72h' }): Promise<string> => {
-      const p = await dbCreatePost({ body: opts.body, audience: opts.audience ?? 'friends', lifetime: opts.lifetime ?? '24h' });
+    post: async (opts: {
+      body?: string;
+      audience?: 'friends' | 'close';
+      lifetime?: '1h' | '24h' | '72h';
+      game?: { gameType: string; theme?: string };
+    }): Promise<string> => {
+      const p = await dbCreatePost({
+        body: opts.body,
+        audience: opts.audience ?? 'friends',
+        lifetime: opts.lifetime ?? '24h',
+        game: opts.game,
+      });
       return p.id;
     },
+    /** The derived wall game view (spec 0009 US3) — exactly what the post card renders. */
+    wallGameInfo: async (postId: string) => {
+      const sess = await dbWallGameSession(postId);
+      if (!sess) return null;
+      return {
+        gameType: sess.gameType,
+        theme: sess.theme ?? null,
+        players: sess.players ?? null,
+        phase: challengePhase(sess),
+        opponent: resolveOpponent(sess),
+        moves: sess.moves.length,
+        status: deriveGameStatus(GAMES[sess.gameType] ?? null, sess),
+      };
+    },
+    acceptWallChallenge: (postId: string) => dbAcceptWallChallenge(postId),
+    playWallGameMove: (postId: string, move: unknown) => dbPlayWallGameMove(postId, move),
+    resignWallGame: (postId: string) => dbResignWallGame(postId),
+    deletePost: (postId: string) => dbDeletePost(postId),
     /** Spec 1024 (US2): seed a FAILED pending post straight into the outbox so the Wall renders the
      *  "Couldn't post" card with Retry/Cancel. Text-only (no cached blobs needed for the UI check). */
     seedFailedPendingPost: async (body = 'Stuck post'): Promise<string> => {
