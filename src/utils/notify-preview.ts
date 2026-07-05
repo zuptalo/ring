@@ -41,8 +41,11 @@ export function notifyPreview(p: MessagePayload): string {
       return name ? `Wants to play ${name}` : 'Wants to play a game';
     }
     case 'gamechallenge': {
+      // Urgency is the point: the first to accept plays (spec 0009).
       const name = GAMES[p.gameChallenge?.gameType ?? '']?.displayName;
-      return name ? `Challenges the group to ${name} 🫵` : 'Throws down a game challenge 🫵';
+      return name
+        ? `Started a ${name} challenge, be quick if you want it 🫵`
+        : 'Started a game challenge, be quick if you want it 🫵';
     }
     default:
       return 'New message';

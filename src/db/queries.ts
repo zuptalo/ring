@@ -3074,12 +3074,17 @@ export async function pruneLocalPost(id: string): Promise<void> {
 }
 
 /** Human label for what was shared, used in notifications. */
-function postShareLabel(kind: Post['kind']): string {
-  return kind === 'image'
+function postShareLabel(p: Pick<Post, 'kind' | 'game'>): string {
+  // A challenge post leads with the urgency: the first to accept plays (spec 0009).
+  if (p.game) {
+    const gname = GAMES[p.game.gameType]?.displayName ?? 'game';
+    return `started a ${gname} challenge, be quick if you want it 🫵`;
+  }
+  return p.kind === 'image'
     ? 'shared a photo'
-    : kind === 'video'
+    : p.kind === 'video'
       ? 'shared a video'
-      : kind === 'voice'
+      : p.kind === 'voice'
         ? 'shared a voice message'
         : 'shared a post';
 }
@@ -3108,7 +3113,7 @@ export async function notifyNewPost(authorId: string): Promise<void> {
   void notifyIncoming({
     kind: 'system',
     name: c?.name ?? 'Someone',
-    body: postShareLabel(p.kind),
+    body: postShareLabel(p),
     avatar: c?.avatar,
     url: '/tabs/wall',
   });
