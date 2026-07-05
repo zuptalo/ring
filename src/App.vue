@@ -9,6 +9,9 @@
     <!-- Outermost gate: blocks a plain browser tab until Ring is installed
          (overlays everything, including the key gate). -->
     <install-guard />
+    <!-- Cold-start launch reveal: plays the brand animation once (~2.4s), then
+         fades out and unmounts, above both gates (z-40). -->
+    <launch-reveal />
     <!-- Global incoming-call ringer: a non-blocking banner while a call rings. -->
     <incoming-call-overlay />
     <!-- Floating call widget when a call runs but the call screen is minimized. -->
@@ -42,6 +45,7 @@ import { useAutoLock } from '@/composables/useAutoLock';
 import { useContactProfilePrompts } from '@/composables/useContactProfilePrompts';
 import KeyGuard from '@/components/KeyGuard.vue';
 import InstallGuard from '@/components/InstallGuard.vue';
+import LaunchReveal from '@/components/LaunchReveal.vue';
 import IncomingCallOverlay from '@/components/IncomingCallOverlay.vue';
 import MinimizedCall from '@/components/MinimizedCall.vue';
 import MinimizedAudio from '@/components/MinimizedAudio.vue';
