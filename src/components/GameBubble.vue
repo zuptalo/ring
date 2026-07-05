@@ -11,11 +11,11 @@
       <div class="game-vs">
         <span class="game-side you">
           <game-mark :mark="theme.marks?.[myPlayer]" :player="myPlayer" />
-          You
+          <span class="side-name">You</span>
         </span>
         <span class="game-vs-word">vs</span>
         <span class="game-side">
-          {{ peerFirstName }}
+          <span class="side-name">{{ peerFirstName }}</span>
           <game-mark :mark="theme.marks?.[theirPlayer]" :player="theirPlayer" />
         </span>
       </div>
@@ -130,15 +130,16 @@ const canMove = computed(
 // As few words as possible (FR-023); the animated cue carries the feeling.
 const statusLine = computed((): string => {
   const s = status.value;
+  const them = peerFirstName.value;
   switch (s.state) {
     case 'ongoing':
-      return s.turn === myPlayer.value ? 'Your move' : 'Their move';
+      return s.turn === myPlayer.value ? 'Your move' : `${them}'s move`;
     case 'won':
-      return s.winner === myPlayer.value ? 'You won!' : 'They won';
+      return s.winner === myPlayer.value ? 'You won!' : `${them} won`;
     case 'draw':
       return 'Draw';
     case 'resigned':
-      return s.winner === myPlayer.value ? 'They gave up. You win!' : 'You gave up';
+      return s.winner === myPlayer.value ? `${them} gave up. You win!` : 'You gave up';
     case 'out-of-sync':
       return 'Out of sync';
   }
@@ -192,18 +193,26 @@ async function confirmResign(): Promise<void> {
   flex-direction: column;
   gap: 6px;
 }
+/* Grid keeps "vs" DEAD CENTER regardless of name lengths (T041): the two
+   sides get equal tracks and ellipsize long names instead of pushing it. */
 .game-vs {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
   font-size: 14px;
   font-weight: 600;
 }
 .game-side {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+}
+.game-side:last-child {
+  justify-content: flex-end;
+}
+.game-side .side-name {
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;

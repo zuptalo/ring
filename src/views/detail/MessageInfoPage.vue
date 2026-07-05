@@ -305,7 +305,7 @@ const gameResultLine = computed((): string => {
     case 'ongoing': return 'Still playing';
     case 'won': return s.winner === myGamePlayer.value ? 'You won!' : `${peerFirstName.value} won`;
     case 'draw': return 'Draw';
-    case 'resigned': return s.winner === myGamePlayer.value ? 'They gave up. You win!' : 'You gave up';
+    case 'resigned': return s.winner === myGamePlayer.value ? `${peerFirstName.value} gave up. You win!` : 'You gave up';
     case 'out-of-sync': return 'Out of sync';
   }
   return '';

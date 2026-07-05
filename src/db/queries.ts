@@ -886,24 +886,23 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   // Their move sounds only while this chat is on screen (FR-026) — the
   // notification path covers a closed/backgrounded chat, so never both.
   if (isChatActive(message.chatId)) void playGameCue(gameCueFor(status, me));
-  // Result emoji match the bubble's overlay set (FR-025): 🏆/🥈/🤝.
+  // Name-first copy (T041), result emoji from the overlay set (FR-025).
+  const name = (await getContact(from))?.name ?? 'Someone';
   const text =
     status.state === 'won'
       ? status.winner === me
         ? 'You won the game! 🏆'
-        : 'They won the game 🥈'
+        : `${name} won the game 🏆`
       : status.state === 'draw'
         ? "It's a draw 🤝"
         : status.state === 'resigned'
-          ? 'They gave up. You win! 🏆'
-          : 'Your move';
+          ? `${name} gave up. You win! 🏆`
+          : `${name} made a move, your turn 😏`;
   chat.lastMessage = text;
   chat.lastKind = 'game';
   chat.lastMessageTime = signal.at;
   chat.updatedAt = signal.at;
   await put('chats', chat);
-
-  const name = (await getContact(from))?.name ?? 'Someone';
   await notifyIncoming({
     kind: 'message',
     chatId: message.chatId,

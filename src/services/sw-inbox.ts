@@ -33,7 +33,9 @@ import { readHiddenSet, readHiddenSetOrNull } from './hidden-chats';
 import { readSessionToken, readSessionUserId } from './session';
 import { get, getAll, put } from '@/db/idb';
 import { notifyPreview } from '@/utils/notify-preview';
-import type { Chat, Contact, Setting } from '@/db/types';
+import { GAMES } from '@/games/registry';
+import { applySignal as applyGameSignal, deriveStatus as deriveGameStatus } from '@/games/session';
+import type { Chat, Contact, Message, Setting } from '@/db/types';
 import type { MessagePayload } from './crypto/message';
 
 // Same-origin by default (the dev proxy / prod reverse-proxy route /v1 → backend).
@@ -170,6 +172,9 @@ export function noteForPayload(
   showPreview: boolean,
   hidden: Set<string> = new Set(),
   selfId = '',
+  // The gameMove target's stored row (prefetched by previewPending), so a
+  // game-ending move can name the WINNER in the web push (spec 0008 T041).
+  gameRow?: Message,
 ): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
@@ -224,11 +229,29 @@ export function noteForPayload(
     const gcontent = gchat?.notifyContent ?? 'full';
     if (gcontent === 'none') return { note: null, wasMessage: false, silenced: true };
     const gshowText = gcontent === 'full' && showPreview;
+    // Name-first copy (T041): the mover by name, and a game-ENDING move names
+    // the winner. A resign always crowns the recipient; a winning move is
+    // derived by running the signal through the pure session engine against
+    // the stored row (when previewPending could fetch it).
+    const mover = known || 'Someone';
+    let gline = `${mover} made a move, your turn 😏`;
+    if (payload.gameMove.action === 'resign') {
+      gline = `${mover} gave up. You win! 🏆`;
+    } else if (gameRow?.game) {
+      const gmodule = GAMES[gameRow.game.gameType] ?? null;
+      const gme = gameRow.outgoing ? 0 : 1;
+      const r = applyGameSignal(gmodule, gameRow.game, payload.gameMove, (1 - gme) as 0 | 1);
+      if (r.outcome === 'applied') {
+        const st = deriveGameStatus(gmodule, r.session);
+        if (st.state === 'won') gline = st.winner === gme ? 'You won the game! 🏆' : `${mover} won the game 🏆`;
+        else if (st.state === 'draw') gline = "It's a draw 🤝";
+      }
+    }
     return {
       note: {
         ids: [f.id as string],
         title: showPreview ? known || 'Someone' : 'Ring',
-        body: gshowText ? notifyPreview(payload) : 'New message',
+        body: gshowText ? gline : 'New message',
         url: gchat ? `/chat/${gchat.id}` : '/tabs/chats',
         tag: gchat ? `ring:${gchat.id}` : `ring:from:${from}`,
       },
@@ -589,7 +612,12 @@ export async function previewPending(): Promise<PreviewResult> {
         : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === f.from);
       if (bChat && !hidden.has(bChat.id)) badgeable += 1;
     }
-    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '');
+    // A gameMove note can name the winner when the target bubble is on-device
+    // (spec 0008 T041); absent row → the generic named-mover line.
+    const gameRow = payload.gameMove
+      ? await get<Message>('messages', payload.gameMove.messageId)
+      : undefined;
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameRow);
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;

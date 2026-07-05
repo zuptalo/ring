@@ -184,7 +184,7 @@ mismatched sizes on iOS — font metrics differ per platform).
 
 ## Phase 11: Personal copy (user feedback, 2026-07-05)
 
-- [ ] T041 Name-first game copy: matchup header keeps "vs" centered (grid, sides ellipsize long names); bubble results name the opponent ("Alice won", "Alice gave up. You win!"); move notifications say "Alice made a move, your turn 😏" and game-ending ones name the winner on BOTH the page path and the SW web-push path (the SW prefetches the game row and derives the post-move result with the pure session engine); tests updated first (sw-inbox.games, notify-preview, e2e preview assert)
+- [X] T041 Name-first game copy: matchup header keeps "vs" centered (grid, sides ellipsize long names); bubble results name the opponent ("Alice won", "Alice gave up. You win!"); move notifications say "Alice made a move, your turn 😏" and game-ending ones name the winner on BOTH the page path and the SW web-push path (the SW prefetches the game row and derives the post-move result with the pure session engine); tests updated first (sw-inbox.games, notify-preview, e2e preview assert)
 
 ---
 

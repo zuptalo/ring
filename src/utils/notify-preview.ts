@@ -12,9 +12,8 @@ import type { MessagePayload } from '@/services/crypto/message';
 import { GAMES } from '@/games/registry';
 
 export function notifyPreview(p: MessagePayload): string {
-  // A game move/resign signal (spec 0008) has no body/kind of its own — it is a
-  // side effect on an earlier bubble, so label it before the body checks below.
-  if (p.gameMove) return p.gameMove.action === 'resign' ? 'They resigned the game' : 'Your move';
+  // (Game MOVE signals never reach here: both notification paths build their
+  // own name-first line — queries.handleGameMove and sw-inbox's gameMove branch.)
   // Defensive (spec 1015 FR-004a): only ever surface a clean string. A decrypted
   // but malformed payload (e.g. a non-string body) must fall through to a safe
   // label, never render a partial/garbled preview.
