@@ -104,7 +104,7 @@ test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forwar
   expect((await gameInfo(a, msgId)).moves).toBe(1);
 
   // B catches up and the boards alternate to A's win (row 0-1-2 vs B's 3,4).
-  await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(1);
+  await expect.poll(async () => (await gameInfo(b, msgId))?.moves, { timeout: 30_000 }).toBe(1);
   // FR-013/T041: an opponent's move bumps the recipient's preview, naming the mover.
   await expect
     .poll(
@@ -133,26 +133,36 @@ test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forwar
   await playMove(b, bChat, msgId, 3);
   await expect.poll(() => gameIsLast(b, bChat, msgId), { timeout: 15_000 }).toBe(true);
   await expect.poll(() => gameIsLast(a, aChat, msgId), { timeout: 30_000 }).toBe(true);
-  await expect.poll(async () => (await gameInfo(a, msgId)).moves, { timeout: 30_000 }).toBe(2);
+  await expect.poll(async () => (await gameInfo(a, msgId))?.moves, { timeout: 30_000 }).toBe(2);
   await playMove(a, aChat, msgId, 0);
-  await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(3);
+  await expect.poll(async () => (await gameInfo(b, msgId))?.moves, { timeout: 30_000 }).toBe(3);
   await playMove(b, bChat, msgId, 5);
-  await expect.poll(async () => (await gameInfo(a, msgId)).moves, { timeout: 30_000 }).toBe(4);
+  await expect.poll(async () => (await gameInfo(a, msgId))?.moves, { timeout: 30_000 }).toBe(4);
   await playMove(a, aChat, msgId, 1);
-  await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(5);
+  await expect.poll(async () => (await gameInfo(b, msgId))?.moves, { timeout: 30_000 }).toBe(5);
   await playMove(b, bChat, msgId, 7);
-  await expect.poll(async () => (await gameInfo(a, msgId)).moves, { timeout: 30_000 }).toBe(6);
+  await expect.poll(async () => (await gameInfo(a, msgId))?.moves, { timeout: 30_000 }).toBe(6);
   await playMove(a, aChat, msgId, 2); // completes 0-1-2
 
   // Both sides converge on the identical outcome: A (player 0) won.
-  await expect.poll(async () => (await gameInfo(a, msgId)).status, { timeout: 30_000 }).toEqual({
+  await expect.poll(async () => (await gameInfo(a, msgId))?.status, { timeout: 30_000 }).toEqual({
     state: 'won',
     winner: 0,
   });
-  await expect.poll(async () => (await gameInfo(b, msgId)).status, { timeout: 30_000 }).toEqual({
+  await expect.poll(async () => (await gameInfo(b, msgId))?.status, { timeout: 30_000 }).toEqual({
     state: 'won',
     winner: 0,
   });
+
+  // The WINNER's own chat list reflects the result too — their winning move was
+  // local, so the inbound path can never fix a stale "your turn" for them.
+  await expect
+    .poll(
+      async () =>
+        (await a.page.evaluate((id: string) => (window as any).__ringTest.chatPreview(id), aChat))?.lastMessage,
+      { timeout: 15_000 },
+    )
+    .toContain('You won the game');
 
   // Terminal game frees the gate on both sides.
   await expect.poll(() => hasOngoing(a, aChat), { timeout: 15_000 }).toBe(false);
@@ -208,7 +218,7 @@ test('1:1 tic-tac-toe: resign ends it for both, and Play again starts a fresh ga
 
   // Mid-game, B resigns → both sides show A (player 0) as winner by concession.
   await playMove(a, aChat, msgId, 4);
-  await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(1);
+  await expect.poll(async () => (await gameInfo(b, msgId))?.moves, { timeout: 30_000 }).toBe(1);
   await expect
     .poll(() => b.page.evaluate(() => (window as any).__ringTest.cuesFired()), { timeout: 15_000 })
     .toContain('gamemove');
@@ -216,11 +226,11 @@ test('1:1 tic-tac-toe: resign ends it for both, and Play again starts a fresh ga
     (args: { chatId: string; msgId: string }) => (window as any).__ringTest.resignGame(args.chatId, args.msgId),
     { chatId: bChat, msgId },
   );
-  await expect.poll(async () => (await gameInfo(b, msgId)).status, { timeout: 30_000 }).toEqual({
+  await expect.poll(async () => (await gameInfo(b, msgId))?.status, { timeout: 30_000 }).toEqual({
     state: 'resigned',
     winner: 0,
   });
-  await expect.poll(async () => (await gameInfo(a, msgId)).status, { timeout: 30_000 }).toEqual({
+  await expect.poll(async () => (await gameInfo(a, msgId))?.status, { timeout: 30_000 }).toEqual({
     state: 'resigned',
     winner: 0,
   });
@@ -271,20 +281,20 @@ test('1:1 tic-tac-toe: draw, and an offline gap converges (FR-018)', async ({ br
     const chat = step.who === 'a' ? aChat : bChat;
     const mover = step.who === 'a' ? 0 : 1;
     await expect
-      .poll(async () => ((await gameInfo(p, msgId)).status as any).turn, { timeout: 30_000 })
+      .poll(async () => ((await gameInfo(p, msgId))?.status as any)?.turn, { timeout: 30_000 })
       .toBe(mover);
     await playMove(p, chat, msgId, step.cell);
   }
-  await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(4);
+  await expect.poll(async () => (await gameInfo(b, msgId))?.moves, { timeout: 30_000 }).toBe(4);
 
   // B goes offline; A plays its 5th move into the queue.
   await b.page.evaluate(() => (window as any).__ringTest.disconnect());
-  await expect.poll(async () => ((await gameInfo(a, msgId)).status as any).turn, { timeout: 30_000 }).toBe(0);
+  await expect.poll(async () => ((await gameInfo(a, msgId))?.status as any)?.turn, { timeout: 30_000 }).toBe(0);
   await playMove(a, aChat, msgId, 3);
 
   // B reconnects → the queued move arrives and the board catches up identically.
   await b.page.evaluate(() => (window as any).__ringTest.reconnect());
-  await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(5);
+  await expect.poll(async () => (await gameInfo(b, msgId))?.moves, { timeout: 30_000 }).toBe(5);
 
   // Finish the game online to the draw.
   for (const step of script.slice(5)) {
@@ -292,12 +302,12 @@ test('1:1 tic-tac-toe: draw, and an offline gap converges (FR-018)', async ({ br
     const chat = step.who === 'a' ? aChat : bChat;
     const mover = step.who === 'a' ? 0 : 1;
     await expect
-      .poll(async () => ((await gameInfo(p, msgId)).status as any).turn, { timeout: 30_000 })
+      .poll(async () => ((await gameInfo(p, msgId))?.status as any)?.turn, { timeout: 30_000 })
       .toBe(mover);
     await playMove(p, chat, msgId, step.cell);
   }
-  await expect.poll(async () => (await gameInfo(a, msgId)).status, { timeout: 30_000 }).toEqual({ state: 'draw' });
-  await expect.poll(async () => (await gameInfo(b, msgId)).status, { timeout: 30_000 }).toEqual({ state: 'draw' });
+  await expect.poll(async () => (await gameInfo(a, msgId))?.status, { timeout: 30_000 }).toEqual({ state: 'draw' });
+  await expect.poll(async () => (await gameInfo(b, msgId))?.status, { timeout: 30_000 }).toEqual({ state: 'draw' });
 
   await ctxA.close();
   await ctxB.close();

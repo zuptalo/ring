@@ -834,6 +834,43 @@ async function gameNameOf(userId: string | undefined): Promise<string> {
   return (await getContact(userId))?.name ?? 'Someone';
 }
 
+/** After a LOCAL move/resign, reflect the game's new state in the chat-list
+ *  preview. Without this the winner's list kept the opponent's stale
+ *  "your turn 😏" forever — the final move never arrives at its own sender, so
+ *  the inbound path can never correct it. */
+async function bumpOwnGamePreview(m: Message, action: 'move' | 'resign', at: number): Promise<void> {
+  if (!m.game) return;
+  const me = gameSelfIndex(m);
+  if (me === null) return;
+  const chat = await getChat(m.chatId).catch(() => null);
+  if (!chat) return;
+  const status = deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game);
+  const otherIdx = (1 - me) as 0 | 1;
+  const otherName = m.game.players
+    ? await gameNameOf(m.game.players[otherIdx])
+    : (chat.name ?? 'They').split(' ')[0];
+  let text: string;
+  if (status.state === 'won' || status.state === 'resigned') {
+    text =
+      action === 'resign'
+        ? `You gave up. ${otherName} wins 🏆`
+        : status.winner === me
+          ? 'You won the game! 🏆'
+          : `${otherName} won the game 🏆`;
+  } else if (status.state === 'draw') {
+    text = "It's a draw 🤝";
+  } else if (status.state === 'ongoing') {
+    text = 'You made a move 🎲';
+  } else {
+    return; // out-of-sync keeps whatever the list showed
+  }
+  chat.lastMessage = text;
+  chat.lastKind = 'game';
+  chat.lastMessageTime = at;
+  chat.updatedAt = at;
+  await put('chats', chat);
+}
+
 /* ---- group game challenges (spec 0009) ---- */
 
 /** Throw an open challenge into a group chat (kind 'gamechallenge'): the first
@@ -1033,6 +1070,7 @@ export async function playGameMove(chatId: string, messageId: string, move: unkn
   // Your own move ticks (or lands the result cue when it ends the game, FR-026);
   // playing is inherently in-chat, so no isChatActive check here.
   void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  await bumpOwnGamePreview(m, 'move', at);
   const chat = await getChat(m.chatId);
   const signal: GameMoveSignal = { messageId, seq, action: 'move', move, at, opponent };
   await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
@@ -1062,6 +1100,7 @@ export async function resignGame(chatId: string, messageId: string): Promise<voi
   if ((await applyGameMove(m, me, { seq, action: 'resign', at })) !== 'applied') return;
   // Conceding sounds the losing tone for the resigner (FR-026).
   void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  await bumpOwnGamePreview(m, 'resign', at);
   const chat = await getChat(m.chatId);
   const signal: GameMoveSignal = { messageId, seq, action: 'resign', at };
   await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
