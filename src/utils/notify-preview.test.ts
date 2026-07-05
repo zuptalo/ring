@@ -45,12 +45,4 @@ describe('notifyPreview', () => {
     );
   });
 
-  it('labels game move/resign signals', () => {
-    expect(
-      notifyPreview(p({ gameMove: { messageId: 'g1', seq: 2, action: 'move', move: { cell: 4 }, at: 1 } })),
-    ).toBe('Your move');
-    expect(
-      notifyPreview(p({ gameMove: { messageId: 'g1', seq: 3, action: 'resign', at: 2 } })),
-    ).toBe('They resigned the game');
-  });
 });

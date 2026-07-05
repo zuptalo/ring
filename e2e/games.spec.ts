@@ -105,14 +105,14 @@ test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forwar
 
   // B catches up and the boards alternate to A's win (row 0-1-2 vs B's 3,4).
   await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(1);
-  // FR-013: an opponent's move bumps the recipient's preview to "Your move".
+  // FR-013/T041: an opponent's move bumps the recipient's preview, naming the mover.
   await expect
     .poll(
       async () =>
         (await b.page.evaluate((id: string) => (window as any).__ringTest.chatPreview(id), bChat))?.lastMessage,
       { timeout: 15_000 },
     )
-    .toBe('Your move');
+    .toContain('made a move, your turn');
   // FR-021: a text message buries the bubble; an accepted move re-surfaces it as
   // the newest message on BOTH devices (ordered by the signal's own timestamp).
   await b.page.evaluate((id: string) => (window as any).__ringTest.sendChatMessage(id, 'bury the game'), bChat);

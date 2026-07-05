@@ -32,6 +32,7 @@
 - Q: What lives in a game bubble's message info? → A: Fun game stats — the matchup, when it started, the result, total game time, move count, each player's average reply time and fastest move, derived from move timestamps only.
 - Q: How should a finished game announce its result? → A: A half-transparent dark overlay covers the board with a large animated result — the gold trophy for the winner, the silver medal for the other player, a handshake for a draw — plus a phoenix-marked Play again. Tapping the overlay reveals the final board underneath (with the compact result line), so the record stays inspectable.
 - Q: Should games make sound? → A: Yes — short synthesized cues (the app's existing royalty-free WebAudio recipes, no audio files) for a match starting, each move, winning, losing, and a draw. They play only while the game's chat is open (notifications cover the rest), behind a "Game sounds" toggle next to "In-call sounds", on by default.
+- Q: How personal should game copy be? → A: Use the opponent's name, never "they": the matchup header keeps "vs" centered and shortens long names instead of pushing it aside; a finished bubble says "Alice won"; a move notification says "Alice made a move, your turn 😏"; and when the game ends, notifications (including web push, which derives the result from the stored session) name the winner.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -114,7 +115,7 @@ A player who has left the chat or the app learns that their opponent has moved: 
 - **FR-009**: Users MUST be able to start a rematch from a finished game; the rematch is a brand-new game bubble and the finished bubble remains in history.
 - **FR-010**: All game traffic (game start, moves, resignations) MUST be end-to-end encrypted and indistinguishable to the server from ordinary message traffic; the server MUST NOT gain any new capability, endpoint, or data format for this feature (zero server changes).
 - **FR-011**: Game activity MUST respect the chat's existing privacy and attention settings: muted chats produce no notification; generic/private notification modes and hidden chats reveal nothing beyond what an ordinary message would.
-- **FR-012**: An opponent's move MUST produce a "your move" notification when the app is closed or the chat is not open, subject to FR-011's gates.
+- **FR-012**: An opponent's move MUST produce a notification when the app is closed or the chat is not open, subject to FR-011's gates. The notification names the mover ("Alice made a move, your turn 😏"); a game-ending move names the winner instead — on the web-push path too, where the result derives from the stored session.
 - **FR-013**: The chat list preview MUST reflect game activity (new game, move played) in plain language.
 - **FR-014**: Game bubbles MUST be excluded from forwarding.
 - **FR-015**: Game bubbles and their moves MUST follow the chat's existing message lifecycle: disappearing-message timers, deletion, and hidden-chat concealment apply to them exactly as to ordinary messages.
