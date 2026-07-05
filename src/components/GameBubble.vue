@@ -147,7 +147,9 @@ const seatName = (idx: 0 | 1): string => {
   if (!explicit.value) return idx === myPlayer.value ? 'You' : peerFirstName.value;
   const uid = props.game.players?.[idx] ?? (idx === 1 ? resolveOpponent(props.game) ?? '' : '');
   if (uid && uid === props.selfId) return 'You';
-  return (props.names?.[uid ?? ''] ?? 'Them').split(' ')[0];
+  // 'Someone' matches how the Wall names non-contact comment authors — a wall
+  // game's players aren't necessarily each other's contacts.
+  return (props.names?.[uid ?? ''] ?? 'Someone').split(' ')[0];
 };
 const peerFirstName = computed(() => (props.peerName ?? 'Them').split(' ')[0]);
 // Header order: play order for explicit seats; you-first for 1:1 (as shipped).
