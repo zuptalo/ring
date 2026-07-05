@@ -143,6 +143,13 @@ export function buildWallSession(
   accepts.sort((a, b) => a.at - b.at || (a.actor < b.actor ? -1 : a.actor > b.actor ? 1 : 0))
   for (const a of accepts) session = applyAccept(session, a.actor, a.at).session
 
+  // The game's story starts when the seat was won (spec 0009 stats): the
+  // resolved opponent's accept stamps startedAt so reply-gap stats have their
+  // base. Deterministic — derived from the same ordered accept data everywhere.
+  const seat = resolveOpponent(session)
+  const seatAccept = seat ? accepts.find((a) => a.actor === seat) : undefined
+  if (seatAccept) session = { ...session, startedAt: seatAccept.at }
+
   moves.sort(
     (a, b) =>
       a.p.seq - b.p.seq ||

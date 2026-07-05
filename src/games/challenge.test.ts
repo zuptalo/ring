@@ -158,3 +158,16 @@ describe('buildWallSession (spec 0009 FR-008, replay from the pulled set)', () =
     expect(s.players).toEqual(['alice']);
   });
 });
+
+describe('buildWallSession stats base (spec 0009 wall stats)', () => {
+  it('startedAt is the seat-winning accept, so reply stats measure from the match', () => {
+    const rows: WallGameRow[] = [
+      { id: 'e1', actor: 'carol', payload: { t: 'accept', at: 2000 } },
+      { id: 'e2', actor: 'bob', payload: { t: 'accept', at: 1000 } },
+    ];
+    const s = buildWallSession(tictactoe, 'alice', { gameType: 'tictactoe' }, rows);
+    expect(s.startedAt).toBe(1000); // bob won the seat at 1000
+    const open = buildWallSession(tictactoe, 'alice', { gameType: 'tictactoe' }, []);
+    expect(open.startedAt).toBeUndefined();
+  });
+});

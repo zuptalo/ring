@@ -63,6 +63,9 @@
         <audio v-else-if="mediaUrl && post.kind === 'voice'" class="vaudio" :src="mediaUrl" controls />
 
         <wall-game-card v-if="post.game" :post-id="post.id" :author-name="authorName" :is-own="!!post.outgoing" />
+        <!-- The game's story in numbers (spec 0009) — the post page doubles as
+             the wall game's "info" screen, like Message info does in chats. -->
+        <wall-game-stats v-if="post.game" :post-id="post.id" />
         <p v-else-if="post.body" class="body"><EmojiText :text="post.body" big /></p>
 
         <p v-if="post.expiresAt" class="expiry" :title="when(post.expiresAt)">
@@ -156,6 +159,7 @@
 <script setup lang="ts">
 import UserAvatar from '@/components/UserAvatar.vue';
 import WallGameCard from '@/components/WallGameCard.vue';
+import WallGameStats from '@/components/WallGameStats.vue';
 import { computed, reactive, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
