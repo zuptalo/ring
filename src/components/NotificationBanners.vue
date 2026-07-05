@@ -27,7 +27,7 @@
         @keydown.enter="isStatic(b) ? undefined : open(b)"
       >
         <div class="nb-avatar" :class="{ 'nb-system': (b.kind === 'system' || b.kind === 'action' || b.kind === 'status') && !b.avatar }">
-          <img v-if="b.avatar" :src="b.avatar" :alt="b.name" />
+          <user-avatar v-if="b.avatar" :src="b.avatar" :alt="b.name" />
           <ion-icon v-else :icon="bannerIcon(b)" />
         </div>
         <div class="nb-text">
@@ -107,6 +107,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { ref, watch } from 'vue';
 import { IonIcon, IonTextarea } from '@ionic/vue';
 import {

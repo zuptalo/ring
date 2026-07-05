@@ -10,7 +10,7 @@
   >
     <ion-content v-if="chat" class="sheet">
       <div class="sheet-head">
-        <ion-avatar class="head-av"><img :src="chat.avatar" :alt="chat.name" /></ion-avatar>
+        <ion-avatar class="head-av"><user-avatar :src="chat.avatar" :alt="chat.name" /></ion-avatar>
         <h2 class="head-name">{{ chat.name }}</h2>
         <button class="close" aria-label="Close" @click="$emit('dismiss')">
           <ion-icon :icon="closeOutline" />
@@ -69,6 +69,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import {
   IonModal, IonContent, IonList, IonItem, IonLabel, IonIcon, IonAvatar,
   actionSheetController,

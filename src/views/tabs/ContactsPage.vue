@@ -50,7 +50,7 @@
         </ion-list-header>
         <ion-item v-for="req in incomingRequests" :key="`in-${req.userId}`" :detail="false">
           <ion-avatar slot="start">
-            <img :src="req.avatar || initialsAvatar(req.name)" :alt="req.name" />
+            <user-avatar :src="req.avatar || initialsAvatar(req.name)" :alt="req.name" />
           </ion-avatar>
           <ion-label class="ion-text-wrap">
             <h2>{{ req.name }}</h2>
@@ -61,7 +61,7 @@
         </ion-item>
         <ion-item v-for="req in pendingOutgoing" :key="`out-${req.userId}`" :detail="false">
           <ion-avatar slot="start">
-            <img :src="req.avatar || initialsAvatar(req.name)" :alt="req.name" />
+            <user-avatar :src="req.avatar || initialsAvatar(req.name)" :alt="req.name" />
           </ion-avatar>
           <ion-label class="ion-text-wrap">
             <h2>{{ req.name }}</h2>
@@ -131,7 +131,7 @@
             <ion-item button :detail="false" @click="open(person.id)">
               <div class="avatar-wrap" slot="start">
                 <ion-avatar>
-                  <img :src="person.avatar" :alt="person.name" />
+                  <user-avatar :src="person.avatar" :alt="person.name" />
                 </ion-avatar>
                 <span v-if="peerPresence(person.id)?.online" class="presence-dot" aria-hidden="true" />
               </div>
@@ -163,7 +163,7 @@
             @click="open(person.id)"
           >
             <ion-avatar slot="start">
-              <img :src="person.avatar" :alt="person.name" />
+              <user-avatar :src="person.avatar" :alt="person.name" />
             </ion-avatar>
             <ion-label>
               <h2>{{ person.name }}</h2>
@@ -189,6 +189,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {

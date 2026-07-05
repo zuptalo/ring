@@ -16,7 +16,7 @@
     <video v-if="hasVideo" ref="vid" class="mini-video" muted autoplay playsinline />
     <template v-else>
       <ion-avatar class="mini-avatar">
-        <img v-if="callMeta" :src="callMeta.avatar" :alt="callMeta.name" />
+        <user-avatar v-if="callMeta" :src="callMeta.avatar" :alt="callMeta.name" />
       </ion-avatar>
       <div class="mini-info">
         <div class="mini-name">{{ callMeta?.name }}</div>
@@ -31,6 +31,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { IonAvatar, IonIcon } from '@ionic/vue';

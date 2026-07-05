@@ -197,11 +197,11 @@ mismatched sizes on iOS — font metrics differ per platform).
 ## Phase 13: Emoji everywhere — previews + emoji profile pictures (user feedback, 2026-07-05)
 
 - [X] T043 Chat-list previews render through EmojiText so a preview's emoji plays its animation (FR-023/FR-027)
-- [ ] T044 [test-first] FAILING tests: pure `emojiAvatar(emoji)`/`emojiOfAvatar(src)` round-trip unit tests; e2e — a picked emoji avatar reaches the peer's stored contact through the E2EE profile card and decodes back to the emoji
-- [ ] T045 `db/avatars.ts` gains `emojiAvatar` (emoji on a soft colored disc, initialsAvatar-style SVG data URL, emoji recoverably embedded) + `emojiOfAvatar`; `AnimatedEmoji` implements the `plays` cap for real (default stays infinite): N loops then rest on the native glyph
-- [ ] T046 `UserAvatar.vue` renders an emoji-encoded avatar as AnimatedEmoji (plays=2) on its disc, else the plain img; sweep chat list, chat header, contacts, contact detail, banners, message info, profile surfaces (unswept surfaces keep the static disc — safe)
-- [ ] T047 "Pick an emoji" entry points: ProfileSetupModal (signup) and ProfilePage picture sheets via the existing EmojiPickerModal; the pick satisfies the photo-required gate and publishes exactly like a photo (FR-027)
-- [ ] T048 Drive showcase (signup pick, chat list + header, peer side) + gates
+- [X] T044 [test-first] FAILING tests: pure `emojiAvatar(emoji)`/`emojiOfAvatar(src)` round-trip unit tests; e2e — a picked emoji avatar reaches the peer's stored contact through the E2EE profile card and decodes back to the emoji
+- [X] T045 `db/avatars.ts` gains `emojiAvatar` (emoji on a soft colored disc, initialsAvatar-style SVG data URL, emoji recoverably embedded) + `emojiOfAvatar`; `AnimatedEmoji` implements the `plays` cap for real (default stays infinite): N loops then rest on the native glyph
+- [X] T046 `UserAvatar.vue` renders an emoji-encoded avatar as AnimatedEmoji (plays=2) on its disc, else the plain img; sweep chat list, chat header, contacts, contact detail, banners, message info, profile surfaces (unswept surfaces keep the static disc — safe)
+- [X] T047 "Pick an emoji" entry points: ProfileSetupModal (signup) and ProfilePage picture sheets via the existing EmojiPickerModal; the pick satisfies the photo-required gate and publishes exactly like a photo (FR-027)
+- [X] T048 Drive showcase (signup pick, chat list + header, peer side) + gates
 
 ---
 

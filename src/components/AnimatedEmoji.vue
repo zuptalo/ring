@@ -17,12 +17,14 @@ import { loadEmojiLottie } from '@/services/emoji-cache';
  * third-party CDN. Falls back to the native glyph when animation is off, the emoji has
  * no Noto Lottie, or the server can't reach it.
  *
- * (`plays` is accepted but ignored — playback is now visibility-driven, not count-
- * capped — so existing callers don't break.)
+ * `plays` caps how many loops run (spec 0008 FR-027: emoji avatars play twice
+ * and rest). Unset = loop forever while visible (the pre-existing behaviour for
+ * every caller that doesn't pass it). Once the cap is reached the animation is
+ * torn down and the native glyph rests in its place until remount.
  */
 const props = withDefaults(
   defineProps<{ emoji: string; animate?: boolean; large?: boolean; plays?: number }>(),
-  { animate: true, large: false, plays: 3 },
+  { animate: true, large: false, plays: undefined },
 );
 
 const rootEl = ref<HTMLElement>();
@@ -34,6 +36,8 @@ let anim: any = null;
 let observer: IntersectionObserver | null = null;
 let loading = false;
 let visible = false;
+let loopsDone = 0;
+let finished = false; // plays cap reached → rest on the native glyph
 
 function codepoints(): string {
   return [...props.emoji].map((c) => (c.codePointAt(0) ?? 0).toString(16)).join('_');
@@ -42,7 +46,7 @@ function codepoints(): string {
 // Lazily load the Lottie on first visibility, then loop it. Subsequent visibility
 // changes just resume/pause the already-loaded animation.
 async function ensureLoaded(): Promise<void> {
-  if (anim || loading || !props.animate || !anchor.value) return;
+  if (anim || loading || finished || !props.animate || !anchor.value) return;
   loading = true;
   try {
     // Self-hosted proxy, cached in-memory per session (spec 1017) + persistently by the service
@@ -58,6 +62,19 @@ async function ensureLoaded(): Promise<void> {
       autoplay: false,
       animationData: data,
     });
+    // Bounded playback (spec 0008 FR-027): after `plays` full loops, tear the
+    // animation down and let the native glyph rest in its place.
+    if (props.plays !== undefined) {
+      anim.addEventListener('loopComplete', () => {
+        loopsDone += 1;
+        if (props.plays !== undefined && loopsDone >= props.plays) {
+          finished = true;
+          showNative.value = true;
+          anim?.destroy?.();
+          anim = null;
+        }
+      });
+    }
     showNative.value = false;
     if (visible) anim.play(); // it became (or stayed) visible while loading
   } catch {

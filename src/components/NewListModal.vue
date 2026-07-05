@@ -31,7 +31,7 @@
       <ion-list :inset="true">
         <ion-list-header><ion-label>Chats ({{ selected.size }})</ion-label></ion-list-header>
         <ion-item v-for="c in chats" :key="c.id" button :detail="false" @click="toggle(c.id)">
-          <ion-avatar slot="start"><img :src="c.avatar" :alt="c.name" /></ion-avatar>
+          <ion-avatar slot="start"><user-avatar :src="c.avatar" :alt="c.name" /></ion-avatar>
           <ion-label>{{ c.name }}</ion-label>
           <ion-checkbox slot="end" :checked="selected.has(c.id)" class="pick" aria-hidden="true" />
         </ion-item>
@@ -51,6 +51,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref } from 'vue';
 import {
   IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonSearchbar,

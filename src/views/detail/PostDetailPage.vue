@@ -18,7 +18,7 @@
       <div v-if="post" class="wrap">
         <div class="head">
           <ion-avatar class="avatar">
-            <img v-if="authorAvatar" :src="authorAvatar" :alt="authorName" />
+            <user-avatar v-if="authorAvatar" :src="authorAvatar" :alt="authorName" />
             <div v-else class="ph">{{ initial(authorName) }}</div>
           </ion-avatar>
           <div class="who">
@@ -153,6 +153,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, reactive, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,

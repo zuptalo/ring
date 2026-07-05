@@ -40,7 +40,7 @@
           @click="openInfo"
         >
           <ion-avatar class="chat-header-avatar">
-            <img :src="chat.avatar" :alt="chat.name" />
+            <user-avatar :src="chat.avatar" :alt="chat.name" />
           </ion-avatar>
           <span class="chat-header-text">
             <span class="chat-header-name">{{ chat.name }}</span>
@@ -1115,6 +1115,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {

@@ -13,7 +13,7 @@
       <template v-if="contact">
         <div class="profile ion-text-center">
           <ion-avatar class="profile-avatar">
-            <img :src="contact.avatar" :alt="contact.name" />
+            <user-avatar :src="contact.avatar" :alt="contact.name" />
           </ion-avatar>
           <h1>{{ contact.name }}</h1>
           <p v-if="contact.username" class="handle">@{{ contact.username }}</p>
@@ -162,6 +162,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,

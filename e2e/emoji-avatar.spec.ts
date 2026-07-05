@@ -19,11 +19,21 @@ test('an emoji profile picture reaches the peer and decodes back to the emoji', 
   const aChat = (await a.page.evaluate((id) => (window as any).__ringTest.chatWith(id), b.id)) as string;
   await a.page.evaluate((id: string) => (window as any).__ringTest.shareProfileUpdate(id), aChat);
 
-  // B's stored contact avatar is a normal picture that decodes to the emoji.
+  // A profile change to a KNOWN contact arrives STAGED (the adopt/dismiss
+  // prompt, by design) — and the staged picture already decodes to the emoji.
+  await expect
+    .poll(
+      () => b.page.evaluate((id: string) => (window as any).__ringTest.contactPendingAvatarEmoji(id), a.id),
+      { timeout: 30_000 },
+    )
+    .toBe('😎');
+
+  // B adopts it (the prompt's Adopt action) → the displayed avatar decodes too.
+  await b.page.evaluate((id: string) => (window as any).__ringTest.adoptContactProfile(id), a.id);
   await expect
     .poll(
       () => b.page.evaluate((id: string) => (window as any).__ringTest.contactAvatarEmoji(id), a.id),
-      { timeout: 30_000 },
+      { timeout: 15_000 },
     )
     .toBe('😎');
 

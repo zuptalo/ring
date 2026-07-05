@@ -173,6 +173,8 @@ the same emoji across bubbles, notifications, previews, and stats.
 | Game bubble, out of sync | 😵 `1f635` | broken game |
 | Board, last move played | the theme's mark, animated | draws the eye to what just happened |
 | Celebration accents (sparingly) | 🎉 `1f389` | moments, not results — results are the 🏆/🥈/🤝 set |
+| Chat-list previews + in-app banners | any emoji in the line | render through EmojiText — animated when the set has it |
+| Emoji profile pictures | user's pick | animated on every swept avatar surface, 2 loops then rest (`UserAvatar`) |
 
 ## Tic-tac-toe themes (spec 0008)
 

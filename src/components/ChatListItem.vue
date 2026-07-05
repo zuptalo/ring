@@ -20,7 +20,7 @@
     <ion-item button :detail="false" :class="{ 'hidden-row': isHidden }" @click="$emit('open', chat.id)">
       <div class="avatar-wrap" slot="start">
         <ion-avatar>
-          <img :src="chat.avatar" :alt="chat.name" />
+          <user-avatar :src="chat.avatar" :alt="chat.name" />
         </ion-avatar>
         <span v-if="isOnline" class="presence-dot" aria-hidden="true" />
       </div>
@@ -79,6 +79,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref } from 'vue';
 import {
   IonItemSliding, IonItem, IonItemOptions, IonItemOption, IonAvatar, IonLabel, IonNote,

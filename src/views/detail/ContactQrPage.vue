@@ -12,7 +12,7 @@
     <ion-content :fullscreen="true" class="ion-padding">
       <div class="ion-text-center ion-padding">
         <ion-avatar style="margin: 8px auto 12px; width: 64px; height: 64px;">
-          <img :src="avatar" :alt="name" />
+          <user-avatar :src="avatar" :alt="name" />
         </ion-avatar>
         <ion-text>
           <h2>{{ name }}</h2>
@@ -52,6 +52,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { onMounted, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,

@@ -143,7 +143,7 @@
             <div class="tier" v-if="seenByIds.length">
               <div class="avatar-stack">
                 <ion-avatar v-for="id in stackIds(seenByIds)" :key="id">
-                  <img :src="avatarFor(id)" :alt="nameFor(id)" />
+                  <user-avatar :src="avatarFor(id)" :alt="nameFor(id)" />
                 </ion-avatar>
                 <span v-if="overflowCount(seenByIds)" class="stack-more">+{{ overflowCount(seenByIds) }}</span>
               </div>
@@ -162,7 +162,7 @@
             <div class="tier" v-if="deliveredIds.length">
               <div class="avatar-stack">
                 <ion-avatar v-for="id in stackIds(deliveredIds)" :key="id">
-                  <img :src="avatarFor(id)" :alt="nameFor(id)" />
+                  <user-avatar :src="avatarFor(id)" :alt="nameFor(id)" />
                 </ion-avatar>
                 <span v-if="overflowCount(deliveredIds)" class="stack-more">+{{ overflowCount(deliveredIds) }}</span>
               </div>
@@ -181,7 +181,7 @@
             <div class="tier" v-if="notDeliveredIds.length">
               <div class="avatar-stack">
                 <ion-avatar v-for="id in stackIds(notDeliveredIds)" :key="id">
-                  <img :src="avatarFor(id)" :alt="nameFor(id)" />
+                  <user-avatar :src="avatarFor(id)" :alt="nameFor(id)" />
                 </ion-avatar>
                 <span v-if="overflowCount(notDeliveredIds)" class="stack-more">+{{ overflowCount(notDeliveredIds) }}</span>
               </div>
@@ -215,6 +215,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import {

@@ -105,7 +105,7 @@
             :detail="false"
             @click="cancelInvite(m)"
           >
-            <ion-avatar slot="start"><img :src="m.avatar" :alt="m.name" /></ion-avatar>
+            <ion-avatar slot="start"><user-avatar :src="m.avatar" :alt="m.name" /></ion-avatar>
             <ion-label>
               {{ m.name }}
               <p>Invited · pending</p>
@@ -117,7 +117,7 @@
         <ion-list :inset="true">
           <ion-list-header><ion-label>Members</ion-label></ion-list-header>
           <ion-item lines="full">
-            <ion-avatar slot="start"><img :src="selfAvatar" :alt="selfName" /></ion-avatar>
+            <ion-avatar slot="start"><user-avatar :src="selfAvatar" :alt="selfName" /></ion-avatar>
             <ion-label>{{ selfName }} <span class="you-tag">(You)</span></ion-label>
           </ion-item>
           <ion-item
@@ -127,7 +127,7 @@
             :detail="false"
             @click="memberOptions(m)"
           >
-            <ion-avatar slot="start"><img :src="m.avatar" :alt="m.name" /></ion-avatar>
+            <ion-avatar slot="start"><user-avatar :src="m.avatar" :alt="m.name" /></ion-avatar>
             <ion-label>{{ m.name }}</ion-label>
             <ion-icon slot="end" :icon="ellipsisHorizontal" color="medium" />
           </ion-item>
@@ -154,6 +154,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {

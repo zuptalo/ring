@@ -33,6 +33,42 @@ export function initialsAvatar(name: string): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+/**
+ * Emoji profile picture (spec 0008 FR-027): the chosen emoji on a coloured disc,
+ * as an ordinary SVG data URL — so it flows through every avatar surface, the
+ * E2EE profile card, the directory, and OLDER APPS as just a picture. The emoji
+ * is embedded recoverably (`data-emoji`) so up-to-date surfaces can upgrade it
+ * to the animated version via emojiOfAvatar(). Deterministic and byte-stable:
+ * the profile-change signature (cardShared) relies on identical bytes per emoji.
+ */
+export function emojiAvatar(emoji: string): string {
+  const bg = COLORS[hash(emoji) % COLORS.length];
+  const safe = emoji.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" data-emoji="${safe}">
+<rect width="120" height="120" rx="60" fill="${bg}"/>
+<text x="60" y="60" dy="0.35em" text-anchor="middle" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="62">${safe}</text>
+</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+/** The disc colour behind an emoji avatar (same seed → same colour as the SVG). */
+export function emojiDiscColor(emoji: string): string {
+  return COLORS[hash(emoji) % COLORS.length];
+}
+
+/** The emoji embedded in an emoji avatar, or null for any other avatar/source. */
+export function emojiOfAvatar(src: string): string | null {
+  if (!src || !src.startsWith('data:image/svg+xml')) return null;
+  try {
+    const svg = decodeURIComponent(src.slice(src.indexOf(',') + 1));
+    const m = svg.match(/data-emoji="([^"]*)"/);
+    if (!m || !m[1]) return null;
+    return m[1].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+  } catch {
+    return null;
+  }
+}
+
 /** Avatar for a "Ghosted" peer (account deleted): a tombstone with "RIP" on a
  *  muted grey disc, so a gone account reads as distinct from any live contact. */
 export function ghostAvatar(): string {

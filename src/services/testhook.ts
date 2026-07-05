@@ -55,6 +55,7 @@ import {
   resignGame as dbResignGame,
   hasOngoingGame as dbHasOngoingGame,
   forwardMessage as dbForwardMessage,
+  shareProfileUpdate as dbShareProfileUpdate,
   sendMediaMessage as dbSendMediaMessage,
   setChatTtl as dbSetChatTtl,
   setChatNotifyPrefs as dbSetChatNotifyPrefs,
@@ -159,7 +160,7 @@ import { setSecret } from '@/db/secrets';
 import { get, getAll, put, bulkPut } from '@/db/idb';
 import { GAMES } from '@/games/registry';
 import { deriveStatus as deriveGameStatus } from '@/games/session';
-import { initialsAvatar } from '@/db/avatars';
+import { initialsAvatar, emojiAvatar, emojiOfAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
 import type { Call, Chat, FriendRequest, Media, Message, Post, OutboxPost } from '@/db/types';
@@ -593,6 +594,19 @@ export function installTestHook(): void {
     hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
     /** Whether the notify layer considers this chat actively viewed (gates game cues). */
     isChatActive: (chatId: string) => notifyIsChatActive(chatId),
+    /** Pick an emoji profile picture (spec 0008 FR-027) — the same path the UI uses. */
+    setEmojiAvatar: async (emoji: string): Promise<void> => {
+      await setSecret('profileAvatar', emojiAvatar(emoji));
+      await publishOwnProfile();
+    },
+    /** Re-share the current profile into a chat (drives the E2EE profile card). */
+    shareProfileUpdate: (chatId: string) => dbShareProfileUpdate(chatId),
+    /** The emoji a contact's DISPLAYED avatar decodes to, or null (FR-027 asserts). */
+    contactAvatarEmoji: async (id: string): Promise<string | null> =>
+      emojiOfAvatar((await dbGetContact(id))?.avatar ?? ''),
+    /** The emoji a contact's STAGED (not yet adopted) avatar decodes to, or null. */
+    contactPendingAvatarEmoji: async (id: string): Promise<string | null> =>
+      emojiOfAvatar((await dbGetContact(id))?.pendingAvatar ?? ''),
     /** A chat's list-preview line + icon kind (game-activity preview asserts, FR-013). */
     chatPreview: async (chatId: string) => {
       const c = await dbGetChat(chatId);

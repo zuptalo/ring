@@ -63,7 +63,7 @@
             @click="openInfo(group.contactId)"
           >
             <ion-avatar slot="start">
-              <img :src="group.avatar" :alt="group.name" />
+              <user-avatar :src="group.avatar" :alt="group.name" />
             </ion-avatar>
             <ion-label :color="group.missed ? 'danger' : undefined">
               <h2>
@@ -143,7 +143,7 @@
             @click="callContact(person.id)"
           >
             <ion-avatar slot="start">
-              <img :src="person.avatar" :alt="person.name" />
+              <user-avatar :src="person.avatar" :alt="person.name" />
             </ion-avatar>
             <ion-label>
               <h2>{{ person.name }}</h2>
@@ -158,6 +158,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
