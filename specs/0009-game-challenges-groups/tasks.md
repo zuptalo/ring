@@ -51,4 +51,5 @@ US2 needs T007/T008; US3 client work (T013-T015) needs T003+T012.
 
 ## GitHub Issues
 
-(filled by taskstoissues)
+One issue per task (created 2026-07-05; the feature → develop PR must list Closes #N for each):
+T001 #812 · T002 #813 · T003 #814 · T004 #815 · T005 #816 · T006 #817 · T007 #818 · T008 #819 · T009 #820 · T010 #821 · T011 #822 · T012 #823 · T013 #824 · T014 #825 · T015 #826 · T016 #827 · T017 #828
