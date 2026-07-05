@@ -168,6 +168,9 @@ export type MessageKind =
   // An in-chat turn-based game bubble (spec 0008). The `game` field carries the
   // session (move log); move signals mutate it in place like poll votes.
   | 'game'
+  // An open group game challenge (spec 0009): the same `game` session field with
+  // explicit players/challenge state; accepts/moves mutate it as side effects.
+  | 'gamechallenge'
   // A local-only, centered informational row logging a call's outcome (never sent to
   // the peer; each side logs its own). The `call` field carries the details.
   | 'call';
