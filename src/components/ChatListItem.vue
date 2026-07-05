@@ -20,7 +20,8 @@
     <ion-item button :detail="false" :class="{ 'hidden-row': isHidden }" @click="$emit('open', chat.id)">
       <div class="avatar-wrap" slot="start">
         <ion-avatar>
-          <user-avatar :src="chat.avatar" :alt="chat.name" />
+          <!-- Unread demands attention: the emoji picture keeps moving until read (FR-028). -->
+          <user-avatar :src="chat.avatar" :alt="chat.name" :attention="unread" />
         </ion-avatar>
         <span v-if="isOnline" class="presence-dot" aria-hidden="true" />
       </div>

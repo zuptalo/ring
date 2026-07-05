@@ -6,7 +6,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { loadEmojiLottie } from '@/services/emoji-cache';
 
 /**
@@ -17,10 +17,12 @@ import { loadEmojiLottie } from '@/services/emoji-cache';
  * third-party CDN. Falls back to the native glyph when animation is off, the emoji has
  * no Noto Lottie, or the server can't reach it.
  *
- * `plays` caps how many loops run (spec 0008 FR-027: emoji avatars play twice
- * and rest). Unset = loop forever while visible (the pre-existing behaviour for
- * every caller that doesn't pass it). Once the cap is reached the animation is
- * torn down and the native glyph rests in its place until remount.
+ * `plays` caps how many loops run (spec 0008 FR-027/FR-028: emoji avatars play
+ * a configured number of times). Unset = loop forever while visible (the
+ * pre-existing behaviour for every caller that doesn't pass it). Once the cap
+ * is reached the animation RESTS ON ITS FIRST FRAME — the Lottie art, not the
+ * native glyph, so the picture never visibly changes style. Raising/clearing
+ * `plays` later (an unread chat re-demanding attention) resumes the loop.
  */
 const props = withDefaults(
   defineProps<{ emoji: string; animate?: boolean; large?: boolean; plays?: number }>(),
@@ -62,19 +64,18 @@ async function ensureLoaded(): Promise<void> {
       autoplay: false,
       animationData: data,
     });
-    // Bounded playback (spec 0008 FR-027): after `plays` full loops, tear the
-    // animation down and let the native glyph rest in its place.
-    if (props.plays !== undefined) {
-      anim.addEventListener('loopComplete', () => {
-        loopsDone += 1;
-        if (props.plays !== undefined && loopsDone >= props.plays) {
-          finished = true;
-          showNative.value = true;
-          anim?.destroy?.();
-          anim = null;
-        }
-      });
-    }
+    // Bounded playback (spec 0008 FR-027/FR-028): after `plays` full loops,
+    // rest on the FIRST FRAME of the animation (kept loaded), so the picture
+    // stays in the Lottie's art style instead of swapping to the native glyph.
+    // Registered unconditionally: `plays` can appear/clear later (an unread
+    // chat re-demanding attention), and the counter must not miss loops.
+    anim.addEventListener('loopComplete', () => {
+      loopsDone += 1;
+      if (props.plays !== undefined && loopsDone >= props.plays) {
+        finished = true;
+        anim?.goToAndStop?.(0, true);
+      }
+    });
     showNative.value = false;
     if (visible) anim.play(); // it became (or stayed) visible while loading
   } catch {
@@ -88,11 +89,28 @@ function setVisible(on: boolean): void {
   visible = on;
   if (on) {
     void ensureLoaded();
-    anim?.play();
+    if (!finished) anim?.play(); // at rest → stay on the first frame
   } else {
     anim?.pause();
   }
 }
+
+// A raised/cleared cap re-earns playback: an unread chat flips `plays` to
+// unlimited and the resting avatar starts moving again (FR-028); read → the
+// cap returns and the NEXT loopComplete parks it back on the first frame.
+watch(
+  () => props.plays,
+  (next) => {
+    if (!finished) return;
+    if (next === undefined || loopsDone < next) {
+      finished = false;
+      if (visible) {
+        void ensureLoaded();
+        anim?.play();
+      }
+    }
+  },
+);
 
 onMounted(() => {
   if (!props.animate) return;

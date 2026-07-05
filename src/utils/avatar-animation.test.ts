@@ -3,7 +3,7 @@
 // toggle wins, unread attention keeps it looping (when allowed), otherwise
 // the configured loop count applies ('forever' = never stop).
 import { describe, it, expect } from 'vitest';
-import { resolveAvatarAnimation } from './useAnimationPrefs';
+import { resolveAvatarAnimation } from '@/utils/avatar-animation';
 
 describe('resolveAvatarAnimation (spec 0008 FR-028)', () => {
   it('defaults: two loops, then rest', () => {

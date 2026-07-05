@@ -428,6 +428,26 @@ export const SETTINGS: Record<string, SettingNode> = {
         ],
         footer: 'When turned on, emoji and GIFs will move automatically. Emoji in a message play a few times when they scroll into view.',
       },
+      {
+        header: 'Emoji profile pictures',
+        items: [
+          {
+            type: 'choice',
+            title: 'Play',
+            key: 'chats.avatarLoops',
+            default: 'twice',
+            options: [
+              { value: 'once', label: 'Once' },
+              { value: 'twice', label: 'Twice' },
+              { value: 'thrice', label: 'Three times' },
+              { value: 'forever', label: 'Keep looping' },
+            ],
+          },
+          { type: 'toggle', title: 'Keep animating for unread chats', key: 'chats.avatarUnreadLoop', default: true },
+        ],
+        footer:
+          'How an emoji profile picture moves. After its plays it settles on the first frame of the animation. In your chats list, a chat with unread messages keeps its picture moving until you have read them.',
+      },
     ],
   },
 

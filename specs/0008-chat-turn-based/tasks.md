@@ -207,7 +207,7 @@ mismatched sizes on iOS — font metrics differ per platform).
 
 ## Phase 14: Animation behavior settings (user feedback, 2026-07-05)
 
-- [ ] T049 Capped avatar animations rest on the Lottie's FIRST FRAME (never swap back to the native glyph); chat rows with unread messages keep their emoji avatar animating; Appearance -> Animations gains a "Profile pictures" group: play once / twice (default) / three times / keep looping, plus a keep-animating-for-unread toggle (default on), resolved by a pure, unit-tested resolveAvatarAnimation() in useAnimationPrefs
+- [X] T049 Capped avatar animations rest on the Lottie's FIRST FRAME (never swap back to the native glyph); chat rows with unread messages keep their emoji avatar animating; Appearance -> Animations gains a "Profile pictures" group: play once / twice (default) / three times / keep looping, plus a keep-animating-for-unread toggle (default on), resolved by a pure, unit-tested resolveAvatarAnimation() in useAnimationPrefs
 
 ---
 

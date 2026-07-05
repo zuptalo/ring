@@ -7,7 +7,7 @@
        the parent (ion-avatar or a styled container), like the <img> it
        replaces; surfaces not yet swept keep showing the static disc. -->
   <span v-if="emoji" class="ua" :style="{ background: disc }" role="img" :aria-label="alt">
-    <animated-emoji :emoji="emoji" :plays="2" class="ua-glyph" />
+    <animated-emoji :emoji="emoji" :animate="anim.animate" :plays="anim.plays" class="ua-glyph" />
   </span>
   <img v-else :src="src" :alt="alt" />
 </template>
@@ -16,11 +16,26 @@
 import { computed } from 'vue';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import { emojiOfAvatar, emojiDiscColor } from '@/db/avatars';
+import { useAnimationPrefs, resolveAvatarAnimation } from '@/composables/useAnimationPrefs';
 
-const props = withDefaults(defineProps<{ src: string; alt?: string }>(), { alt: '' });
+const props = withDefaults(
+  defineProps<{
+    src: string;
+    alt?: string;
+    /** The surface demands attention (an unread chat row): while the user's
+     *  keep-animating-for-unread preference allows it, the loop cap lifts. */
+    attention?: boolean;
+  }>(),
+  { alt: '', attention: false },
+);
 
+const { animEmoji, avatarLoops, avatarUnreadLoop } = useAnimationPrefs();
 const emoji = computed(() => emojiOfAvatar(props.src));
 const disc = computed(() => (emoji.value ? emojiDiscColor(emoji.value) : 'transparent'));
+// FR-028: one pure resolver so every avatar surface animates identically.
+const anim = computed(() =>
+  resolveAvatarAnimation(animEmoji.value, avatarLoops.value, avatarUnreadLoop.value, props.attention),
+);
 </script>
 
 <style scoped>
