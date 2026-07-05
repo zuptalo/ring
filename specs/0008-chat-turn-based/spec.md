@@ -19,6 +19,12 @@
 
 - Q: Can multiple games be ongoing in the same 1:1 chat at once? → A: One at a time — the Game entry in the attach menu is unavailable while a game in that chat is still ongoing.
 
+### Session 2026-07-05 (post-implementation feedback)
+
+- Q: How should players see whose turn it is at a glance? → A: An animated cue on the bubble using the app's existing animated emoji (animated hourglass while waiting, an animated cue when it is your move), falling back to the plain status text where animation is off or unavailable.
+- Q: How do players remember which mark is theirs mid-game? → A: The bubble always states which mark you play, colored to match the board.
+- Q: Should an active game stay visible as messages arrive? → A: Yes — any accepted move or resignation re-surfaces the game bubble to the newest position in the conversation, identically on both devices; the bubble's displayed time then reflects its latest activity.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Play tic-tac-toe inside a 1:1 chat (Priority: P1)
@@ -107,6 +113,9 @@ A player who has left the chat or the app learns that their opponent has moved: 
 - **FR-016**: Games MUST be defined as self-contained, first-party modules behind a single common interface (identity, initial state, move validation, turn tracking, outcome), registered in one catalog, such that adding a future game requires only a new module and its registration — no changes to how games are transmitted, stored, or listed.
 - **FR-017**: No game code may ever be downloaded, dynamically loaded, or third-party; all games ship inside the reviewed application build.
 - **FR-018**: Moves made while the opponent is offline MUST be delivered when they reconnect and bring their board to the same state, in order, with no user action required.
+- **FR-019**: The bubble MUST always show which mark the viewer plays (e.g. "you play ✕"), visually matched to the board, for the whole life of the game.
+- **FR-020**: Whose-turn state MUST be glanceable on the bubble: an animated cue (reusing the app's existing animated-emoji capability) distinguishes "your move" from "waiting for them", degrading to plain status text when animation is off or the art is unavailable.
+- **FR-021**: Every accepted move or resignation MUST re-surface the game bubble to the newest position in the conversation on BOTH devices identically (derived from the signal's own timestamp, never local receive time), so an active game is never buried by later messages. The bubble's displayed time then reflects its latest activity. Rejected/out-of-sync signals do not re-surface it.
 
 ### Key Entities
 

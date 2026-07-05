@@ -21,6 +21,12 @@ const playMove = (p: RingClient, chatId: string, messageId: string, cell: number
 const hasOngoing = (p: RingClient, chatId: string): Promise<boolean> =>
   p.page.evaluate((id: string) => (window as any).__ringTest.hasOngoingGame(id), chatId);
 
+/** Whether the game bubble is the NEWEST message in the chat's display order. */
+const gameIsLast = async (p: RingClient, chatId: string, msgId: string): Promise<boolean> => {
+  const ms = (await p.page.evaluate((id: string) => (window as any).__ringTest.messages(id), chatId)) as any[];
+  return ms.length > 0 && ms[ms.length - 1].id === msgId;
+};
+
 /** Start a game from `starter` and wait until BOTH sides hold the bubble. */
 async function startGame(a: RingClient, b: RingClient, aChat: string, bChat: string): Promise<string> {
   const before = (await a.page.evaluate(
@@ -97,8 +103,24 @@ test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forwar
       { timeout: 15_000 },
     )
     .toBe('Your move');
+  // FR-021: a text message buries the bubble; an accepted move re-surfaces it as
+  // the newest message on BOTH devices (ordered by the signal's own timestamp).
+  await b.page.evaluate((id: string) => (window as any).__ringTest.sendChatMessage(id, 'bury the game'), bChat);
+  await a.page.waitForFunction(
+    async (chatId: string) => {
+      const ms = await (window as any).__ringTest.messages(chatId);
+      return ms.some((m: any) => m.body === 'bury the game');
+    },
+    aChat,
+    { timeout: 30_000 },
+  );
+  expect(await gameIsLast(a, aChat, msgId)).toBe(false);
+  expect(await gameIsLast(b, bChat, msgId)).toBe(false);
+
   // A occupied 4 already; play a proper win line for A: 0,1,2 with B on 3,5.
   await playMove(b, bChat, msgId, 3);
+  await expect.poll(() => gameIsLast(b, bChat, msgId), { timeout: 15_000 }).toBe(true);
+  await expect.poll(() => gameIsLast(a, aChat, msgId), { timeout: 30_000 }).toBe(true);
   await expect.poll(async () => (await gameInfo(a, msgId)).moves, { timeout: 30_000 }).toBe(2);
   await playMove(a, aChat, msgId, 0);
   await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(3);

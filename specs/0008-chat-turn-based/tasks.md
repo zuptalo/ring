@@ -142,13 +142,28 @@ shows game activity
 
 ## Implementation Strategy
 
+## Phase 7: Follow-up UX (user feedback, 2026-07-05)
+
+**Purpose**: FR-019/FR-020/FR-021 (added post-implementation) + an iOS rendering bug:
+glanceable turn state via existing animated emoji, a "you play ✕" legend, accepted
+activity re-surfacing the bubble, and SVG marks (the ✕/◯ text glyphs render at
+mismatched sizes on iOS — font metrics differ per platform).
+
+- [ ] T028 [P] Write FAILING e2e in `e2e/games.spec.ts`: a text message buries the game bubble (bubble is no longer last in `messages()` order), then an accepted move re-surfaces it as the NEWEST message on both devices (FR-021)
+- [ ] T029 Implement the activity bump in `src/db/queries.ts` `applyGameMove()`: on outcome `'applied'` only, `message.timestamp = max(timestamp, signal.at)` — derived from the signal so both devices reorder identically; dropped/out-of-sync signals never bump
+- [ ] T030 `src/games/tictactoe/TicTacToeBoard.vue` + `src/components/GameBubble.vue`: draw ✕/◯ as stroke SVGs (identical geometry on every platform, fixes the iOS glyph-size mismatch) and add a "You play ✕" legend with the viewer's mark colored to match the board (FR-019); status row gains an `AnimatedEmoji` cue — 🎲 your turn, ⏳ their turn, 🎉 you won — all verified present in the Noto set, native-glyph fallback otherwise (FR-020)
+- [ ] T031 Update `drive/scenarios/tictactoe.mjs` screenshots for the new bubble; re-run gates (`npm run build`, `npm run test:unit`, `npx playwright test games.spec.ts`)
+
+---
+
 ## GitHub Issues
 
 One issue per task (created 2026-07-05; the feature → develop PR must list `Closes #N`
 for each): T001 #761 · T002 #762 · T003 #763 · T004 #764 · T005 #765 · T006 #766 ·
 T007 #767 · T008 #768 · T009 #769 · T010 #770 · T011 #771 · T012 #772 · T013 #773 ·
 T014 #774 · T015 #775 · T016 #776 · T017 #777 · T018 #778 · T019 #779 · T020 #780 ·
-T021 #781 · T022 #782 · T023 #783 · T024 #784 · T025 #785 · T026 #786 · T027 #787
+T021 #781 · T022 #782 · T023 #783 · T024 #784 · T025 #785 · T026 #786 · T027 #787 ·
+T028 #788 · T029 #789 · T030 #790 · T031 #791
 
 ---
 
