@@ -170,6 +170,12 @@ mismatched sizes on iOS — font metrics differ per platform).
 
 ---
 
+## Phase 9: Result overlay (user feedback, 2026-07-05)
+
+- [X] T039 FR-025 result overlay: `GameBubble.vue` covers a finished board with a half-transparent dark overlay carrying a LARGE animated result (🏆 winner, 🥈 other player, 🤝 draw — all verified animated) and a 🐦‍🔥 Play again; tap-to-peek reveals the final board with the compact result line. Promote 🏆/🥈/🤝 to THE result emoji across bubble, Message info, and the page-path preview strings; update `docs/ANIMATED-EMOJI.md` usage table; refresh drive screenshots; re-run gates
+
+---
+
 ## GitHub Issues
 
 One issue per task (created 2026-07-05; the feature → develop PR must list `Closes #N`
@@ -178,7 +184,7 @@ T007 #767 · T008 #768 · T009 #769 · T010 #770 · T011 #771 · T012 #772 · T0
 T014 #774 · T015 #775 · T016 #776 · T017 #777 · T018 #778 · T019 #779 · T020 #780 ·
 T021 #781 · T022 #782 · T023 #783 · T024 #784 · T025 #785 · T026 #786 · T027 #787 ·
 T028 #788 · T029 #789 · T030 #790 · T031 #791 ·
-T032 #792 · T033 #793 · T034 #794 · T035 #795 · T036 #796 · T037 #797 · T038 #798
+T032 #792 · T033 #793 · T034 #794 · T035 #795 · T036 #796 · T037 #797 · T038 #798 · T039 #799
 
 ---
 

@@ -20,43 +20,66 @@
         </span>
       </div>
 
-      <component
-        :is="boardComponent"
-        :state="boardState"
-        :my-player="myPlayer"
-        :can-move="canMove"
-        :marks="theme.marks"
-        :accent="theme.accent"
-        :last-move="lastMove"
-        @move="(mv: unknown) => $emit('move', mv)"
-      />
+      <div class="game-stage">
+        <component
+          :is="boardComponent"
+          :state="boardState"
+          :my-player="myPlayer"
+          :can-move="canMove"
+          :marks="theme.marks"
+          :accent="theme.accent"
+          :last-move="lastMove"
+          @move="(mv: unknown) => $emit('move', mv)"
+        />
+        <!-- Result overlay (FR-025): the finished board announces itself — gold
+             trophy, silver medal, or a handshake — large and animated over a
+             half-transparent backdrop, with a phoenix rematch. Tapping it peeks
+             at the final board (the compact line below keeps the outcome). -->
+        <div
+          v-if="showOverlay"
+          class="game-overlay"
+          role="button"
+          tabindex="0"
+          :aria-label="`${statusLine}. Show the board`"
+          @click.stop="peeked = true"
+          @keydown.enter.stop="peeked = true"
+        >
+          <animated-emoji :emoji="overlayEmoji" large class="game-overlay-result" />
+          <ion-button size="small" fill="clear" class="game-overlay-again" @click.stop="$emit('rematch', game.gameType)">
+            <animated-emoji emoji="🐦‍🔥" />&nbsp;Play again
+          </ion-button>
+        </div>
+      </div>
 
       <!-- Glanceable state (FR-020/FR-023): an animated cue + as few words as
-           possible, from the palette in docs/ANIMATED-EMOJI.md. -->
-      <div class="game-status" role="status">
-        <animated-emoji v-if="statusEmoji" :key="statusEmoji" :emoji="statusEmoji" />
-        <span>{{ statusLine }}</span>
-      </div>
-      <div class="game-actions">
-        <ion-button
-          v-if="status.state === 'ongoing'"
-          size="small"
-          fill="clear"
-          color="medium"
-          @click.stop="confirmResign"
-        >
-          Resign
-        </ion-button>
-        <ion-button v-else size="small" fill="clear" @click.stop="$emit('rematch', game.gameType)">
-          Play again
-        </ion-button>
-      </div>
+           possible, from the palette in docs/ANIMATED-EMOJI.md. Hidden while
+           the result overlay carries the outcome. -->
+      <template v-if="!showOverlay">
+        <div class="game-status" role="status">
+          <animated-emoji v-if="statusEmoji" :key="statusEmoji" :emoji="statusEmoji" />
+          <span>{{ statusLine }}</span>
+        </div>
+        <div class="game-actions">
+          <ion-button
+            v-if="status.state === 'ongoing'"
+            size="small"
+            fill="clear"
+            color="medium"
+            @click.stop="confirmResign"
+          >
+            Resign
+          </ion-button>
+          <ion-button v-else size="small" fill="clear" @click.stop="$emit('rematch', game.gameType)">
+            <animated-emoji emoji="🐦‍🔥" />&nbsp;Play again
+          </ion-button>
+        </div>
+      </template>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { IonIcon, IonButton, alertController } from '@ionic/vue';
 import { gameControllerOutline } from 'ionicons/icons';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
@@ -122,15 +145,29 @@ const statusLine = computed((): string => {
   return '';
 });
 
-// The paired cue — same concept, same emoji, everywhere (docs/ANIMATED-EMOJI.md).
+// The paired cue — same concept, same emoji, everywhere (docs/ANIMATED-EMOJI.md):
+// results are 🏆 (winner) / 🥈 (other player) / 🤝 (draw), matching the overlay.
 const statusEmoji = computed((): string => {
   const s = status.value;
   if (s.state === 'ongoing') return s.turn === myPlayer.value ? '🎲' : '⏳';
-  if (s.state === 'won') return s.winner === myPlayer.value ? '🎉' : '😅';
-  if (s.state === 'resigned') return s.winner === myPlayer.value ? '🎉' : '';
+  if (s.state === 'won' || s.state === 'resigned') return s.winner === myPlayer.value ? '🏆' : '🥈';
   if (s.state === 'draw') return '🤝';
   if (s.state === 'out-of-sync') return '😵';
   return '';
+});
+
+// Result overlay (FR-025): shown for every finished-with-a-result state until
+// the player peeks at the final board. Peeking is per-mount, local only.
+const peeked = ref(false);
+const showOverlay = computed(
+  () =>
+    !peeked.value &&
+    (status.value.state === 'won' || status.value.state === 'draw' || status.value.state === 'resigned'),
+);
+const overlayEmoji = computed((): string => {
+  const s = status.value;
+  if (s.state === 'draw') return '🤝';
+  return (s.state === 'won' || s.state === 'resigned') && s.winner === myPlayer.value ? '🏆' : '🥈';
 });
 
 // Resigning concedes the game — worth one explicit confirmation.
@@ -178,6 +215,28 @@ async function confirmResign(): Promise<void> {
   text-transform: uppercase;
   color: var(--app-text-muted);
   flex: none;
+}
+.game-stage {
+  position: relative;
+}
+.game-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  /* Scales the `large` (2.6em) result emoji to hero size. */
+  font-size: 26px;
+}
+.game-overlay-again {
+  font-size: 13px;
+  text-transform: none;
+  --color: #fff;
 }
 .game-status {
   display: flex;

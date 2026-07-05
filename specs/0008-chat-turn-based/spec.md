@@ -30,6 +30,7 @@
 - Q: How should animated emoji be chosen for game surfaces? → A: From the curated genre palette in `docs/ANIMATED-EMOJI.md` (the single source of truth for which emoji animate); the same concept always uses the same emoji across bubbles, previews, and stats.
 - Q: Should games look like more than X and O? → A: Yes — the starter picks a visual theme (mark pair + soft board accent) from the game's bundled theme list; the theme travels inside the sealed payload so both players see the identical game.
 - Q: What lives in a game bubble's message info? → A: Fun game stats — the matchup, when it started, the result, total game time, move count, each player's average reply time and fastest move, derived from move timestamps only.
+- Q: How should a finished game announce its result? → A: A half-transparent dark overlay covers the board with a large animated result — the gold trophy for the winner, the silver medal for the other player, a handshake for a draw — plus a phoenix-marked Play again. Tapping the overlay reveals the final board underneath (with the compact result line), so the record stays inspectable.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -125,6 +126,7 @@ A player who has left the chat or the app learns that their opponent has moved: 
 - **FR-022**: The game starter MUST be able to pick a visual theme (a mark pair and a soft board accent) from the game's bundled theme list; the choice travels inside the sealed payload so both devices render the identical game. Theme ids are frozen once shipped; an unknown theme id renders as the classic theme, never an error.
 - **FR-023**: Game surfaces MUST read like a game, not a form: minimal text, a matchup header showing who plays which mark, glanceable animated status cues drawn from the curated palette in `docs/ANIMATED-EMOJI.md`, and the most recently played mark animated on the board. The same concept always uses the same emoji everywhere.
 - **FR-024**: Message info on a game bubble MUST show the game's story in numbers: the matchup, when it started, the result, total game time to a final state, move count, each player's average reply time, and the fastest move. All timings derive from the moves' own timestamps (no extra tracking, no new wire data).
+- **FR-025**: A finished game (won, drawn, or resigned) MUST announce its result as a large animated overlay on the board over a half-transparent dark backdrop — gold trophy for the winner, silver medal for the other player, handshake for a draw — with a phoenix-marked Play again on it. Tapping the overlay MUST reveal the final board (the compact result line reappears), keeping the record inspectable. The result emoji set (🏆/🥈/🤝) is the SAME across the bubble, message info, and previews.
 
 ### Key Entities
 

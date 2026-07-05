@@ -314,8 +314,8 @@ const gameResultEmoji = computed((): string => {
   const s = gameStatus.value;
   if (!s) return '';
   if (s.state === 'ongoing') return '⏳';
-  if ((s.state === 'won' || s.state === 'resigned') && s.winner === myGamePlayer.value) return '🎉';
-  if (s.state === 'won') return '😅';
+  // Results use the SAME set as the bubble's overlay (FR-025): 🏆/🥈/🤝.
+  if (s.state === 'won' || s.state === 'resigned') return s.winner === myGamePlayer.value ? '🏆' : '🥈';
   if (s.state === 'draw') return '🤝';
   if (s.state === 'out-of-sync') return '😵';
   return '';

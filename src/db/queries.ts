@@ -875,15 +875,16 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   // applies to ordinary messages (mute, content prefs, open-chat suppression).
   const me = gameSelfPlayer(message);
   const status = deriveGameStatus(GAMES[message.game.gameType] ?? null, message.game);
+  // Result emoji match the bubble's overlay set (FR-025): 🏆/🥈/🤝.
   const text =
     status.state === 'won'
       ? status.winner === me
-        ? 'You won the game! 🎉'
-        : 'They won the game'
+        ? 'You won the game! 🏆'
+        : 'They won the game 🥈'
       : status.state === 'draw'
-        ? "It's a draw"
+        ? "It's a draw 🤝"
         : status.state === 'resigned'
-          ? 'They resigned. You win!'
+          ? 'They gave up. You win! 🏆'
           : 'Your move';
   chat.lastMessage = text;
   chat.lastKind = 'game';

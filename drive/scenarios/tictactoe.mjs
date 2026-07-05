@@ -51,10 +51,15 @@ for (const [who, chat, cell] of script) {
 }
 await poll(() => gameInfo(bob, mid), (g) => g?.status?.state === 'won', { label: 'win reached Bob' });
 
-// Fire & Ice finished: confetti on Alice, gentle loss + Play again on Bob, and
-// the bubble sits BELOW the burying text on both sides.
+// Fire & Ice finished: the result overlay (FR-025) — gold cup on Alice, silver
+// medal on Bob, phoenix Play again — and the bubble sits BELOW the burying text.
 await shot(alice, 'ttt-2-alice-won', { route: `/chat/${aChat}` });
 await shot(bob, 'ttt-2-bob-lost', { route: `/chat/${bChat}` });
+
+// Tap the overlay → peek at the final board (the compact result line returns).
+await bob.page.click('.game-overlay');
+await bob.page.waitForTimeout(300);
+await shot(bob, 'ttt-2b-bob-peeked');
 
 // The game's story in numbers (FR-024): the Message info page for the match.
 await shot(alice, 'ttt-3-alice-game-info', { route: `/chat/${aChat}/info/${mid}` });

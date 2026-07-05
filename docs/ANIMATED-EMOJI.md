@@ -166,11 +166,13 @@ the same emoji across bubbles, notifications, previews, and stats.
 |---------|-------|---------|
 | Game bubble, your turn | 🎲 `1f3b2` | your move (call to action) |
 | Game bubble, waiting | ⏳ `23f3` | their move |
-| Game bubble, you won | 🎉 `1f389` | victory |
-| Game bubble, you lost | 😅 `1f605` | gentle defeat |
-| Game bubble, draw | 🤝 `1f91d` | even game |
+| Result, winner (overlay + info + previews) | 🏆 `1f3c6` | the gold cup, large on the finished board |
+| Result, other player | 🥈 `1f948` | the silver medal — second place, never "loser" |
+| Result, draw | 🤝 `1f91d` | even game |
+| Rematch / Play again | 🐦‍🔥 `1f426_200d_1f525` | rise from the ashes |
 | Game bubble, out of sync | 😵 `1f635` | broken game |
 | Board, last move played | the theme's mark, animated | draws the eye to what just happened |
+| Celebration accents (sparingly) | 🎉 `1f389` | moments, not results — results are the 🏆/🥈/🤝 set |
 
 ## Tic-tac-toe themes (spec 0008)
 
