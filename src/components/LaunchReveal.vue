@@ -52,6 +52,7 @@
         <div class="rv-word">
           <div class="rv-name">Ring</div>
           <div class="rv-tag">Private, end-to-end encrypted</div>
+          <div class="rv-version">v{{ version }}</div>
         </div>
       </div>
     </ion-content>
@@ -62,9 +63,9 @@
 import { onMounted, onUnmounted, ref } from 'vue';
 import { IonPage, IonContent } from '@ionic/vue';
 
-// Set true to only play inside the installed PWA (skips it in a plain browser
-// tab / dev server). Left false so it's visible during local development too.
-const STANDALONE_ONLY = false;
+// Only play inside the installed PWA — a plain browser tab / the dev server
+// skips straight to the app. (`?launch-reveal` still forces it for previews.)
+const STANDALONE_ONLY = true;
 
 // Each glyph's scatter start (sx,sy) and convergence target (tx,ty) as pixel
 // offsets from the mark's center, plus its opacity, size, and stagger delay.
@@ -103,33 +104,60 @@ const standalone =
   window.matchMedia('(display-mode: standalone)').matches ||
   (navigator as unknown as { standalone?: boolean }).standalone === true;
 
-// Automation (Playwright e2e, the drive harness) loads hundreds of pages; a
-// 2.7s opaque overlay on each would slow the suite and block UI clicks. Real
+// Automation (Playwright e2e, the drive harness) loads hundreds of pages; an
+// opaque overlay on each would slow the suite and block UI clicks. Real
 // browsers never set navigator.webdriver. `?launch-reveal` forces it back on
 // for visual previews under automation.
 const automated = (navigator as unknown as { webdriver?: boolean }).webdriver === true;
 const forced = window.location.search.includes('launch-reveal');
 
-const visible = ref(forced || (!automated && (STANDALONE_ONLY ? standalone : true)));
+// Play on the FIRST launch and again after each UPDATE lands — not on every
+// cold start (a messenger opens many times a day). "New version" is simply the
+// stamped build version differing from the last one this device revealed.
+// localStorage (not IndexedDB) so the answer is synchronous at mount — no
+// flash of the app before the overlay decides to show.
+const version = __APP_VERSION__;
+const REVEAL_SEEN_KEY = 'ring.revealSeenVersion';
+const isNewVersion = ((): boolean => {
+  try {
+    return localStorage.getItem(REVEAL_SEEN_KEY) !== version;
+  } catch {
+    return true;
+  }
+})();
+
+const visible = ref(
+  forced || (isNewVersion && !automated && (STANDALONE_ONLY ? standalone : true)),
+);
 const leaving = ref(false);
 
 let cyc: number | undefined;
 
 onMounted(() => {
   if (!visible.value) return;
+  // Mark this version revealed immediately (not at the end), so an interrupted
+  // launch doesn't replay it forever.
+  try {
+    localStorage.setItem(REVEAL_SEEN_KEY, version);
+  } catch {
+    /* private-mode storage failure just means it may replay */
+  }
 
   // Cycle the glyph characters while they scatter/converge, then freeze.
   if (!reduce) {
     cyc = window.setInterval(() => {
       chars.value = GLYPHS.map(randChar);
-    }, 70);
+    }, 60);
     window.setTimeout(() => {
       if (cyc) clearInterval(cyc);
-    }, 1500);
+    }, 950);
   }
 
-  // Play once, then fade out and unmount so the app takes over.
-  const REVEAL_MS = reduce ? 500 : 2350;
+  // Play once, then fade out and unmount so the app takes over. The wordmark
+  // settles around 1.5s; the extra second is READING time for the name, the
+  // tagline, and the version (it only plays on install/update, so the linger
+  // is a moment, not a toll).
+  const REVEAL_MS = reduce ? 800 : 2600;
   const FADE_MS = 350;
   window.setTimeout(() => {
     leaving.value = true;
@@ -178,7 +206,7 @@ onUnmounted(() => {
   opacity: 0;
   text-shadow: 0 0 8px color-mix(in srgb, var(--ion-color-primary) 55%, transparent);
   will-change: transform, opacity;
-  animation: rv-glyph 1.5s ease-in-out both;
+  animation: rv-glyph 0.95s ease-in-out both;
 }
 
 /* App icon tile — the InstallGuard/Auth brand block. */
@@ -195,7 +223,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   transform: translate(-50%, -50%) scale(0);
-  animation: rv-iris 0.64s cubic-bezier(0.34, 1.56, 0.64, 1) 0.62s both;
+  animation: rv-iris 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) 0.4s both;
 }
 .rv-mark {
   width: 64px;
@@ -205,30 +233,30 @@ onUnmounted(() => {
 .rv-shield-stroke {
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
-  animation: rv-draw 0.55s cubic-bezier(0.4, 0, 0.2, 1) 0.9s both,
-             rv-sfade 0.3s ease 1.5s both;
+  animation: rv-draw 0.36s cubic-bezier(0.4, 0, 0.2, 1) 0.58s both,
+             rv-sfade 0.2s ease 0.96s both;
 }
 .rv-shield-fill {
   clip-path: inset(100% 0 0 0);
-  animation: rv-fill 0.55s cubic-bezier(0.4, 0, 0.2, 1) 1.35s both;
+  animation: rv-fill 0.36s cubic-bezier(0.4, 0, 0.2, 1) 0.86s both;
 }
 .rv-pulse {
   transform-box: fill-box;
   transform-origin: center;
   opacity: 0;
-  animation: rv-pulse 0.7s ease-out 2.02s both;
+  animation: rv-pulse 0.45s ease-out 1.18s both;
 }
 .rv-ring-dial {
   transform-box: fill-box;
   transform-origin: center;
   opacity: 0;
-  animation: rv-dial 0.9s cubic-bezier(0.16, 1, 0.3, 1) 1.15s both;
+  animation: rv-dial 0.58s cubic-bezier(0.16, 1, 0.3, 1) 0.74s both;
 }
 .rv-ring-solid {
   transform-box: fill-box;
   transform-origin: center;
   opacity: 0;
-  animation: rv-solid 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) 2.02s both;
+  animation: rv-solid 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) 1.18s both;
 }
 
 /* Wordmark, centered below the tile. */
@@ -246,14 +274,23 @@ onUnmounted(() => {
   letter-spacing: -0.02em;
   color: var(--app-text);
   opacity: 0;
-  animation: rv-rise 0.55s cubic-bezier(0.16, 1, 0.3, 1) 1.9s both;
+  animation: rv-rise 0.36s cubic-bezier(0.16, 1, 0.3, 1) 1.02s both;
 }
 .rv-tag {
   margin-top: 8px;
   font-size: 14px;
   color: var(--app-text-muted);
   opacity: 0;
-  animation: rv-rise 0.55s cubic-bezier(0.16, 1, 0.3, 1) 2.05s both;
+  animation: rv-rise 0.36s cubic-bezier(0.16, 1, 0.3, 1) 1.12s both;
+}
+.rv-version {
+  margin-top: 10px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', monospace;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--app-text-muted) 75%, transparent);
+  opacity: 0;
+  animation: rv-rise 0.36s cubic-bezier(0.16, 1, 0.3, 1) 1.24s both;
 }
 
 @keyframes rv-glyph {
@@ -298,7 +335,8 @@ onUnmounted(() => {
   .rv-ring-solid,
   .rv-pulse,
   .rv-name,
-  .rv-tag {
+  .rv-tag,
+  .rv-version {
     animation-duration: 0.01ms !important;
     animation-delay: 0ms !important;
   }
