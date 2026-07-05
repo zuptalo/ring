@@ -22,6 +22,7 @@ import {
   type TransportState,
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
+import { kickPendingPosts } from '@/services/pending-posts';
 import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, notifyPostActivity, pruneLocalPost } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
@@ -230,6 +231,20 @@ export function disconnectTransport(): void {
   transport?.disconnect();
 }
 
+/** Retry EVERYTHING unsent — the chat outbox, interrupted media transfers, and
+ *  pending Wall/chat posts — fired whenever a send might newly succeed: coming
+ *  online, unlocking, the app opening, or returning to the foreground. Each
+ *  drain is idempotent and cheap when its queue is empty, so over-firing is
+ *  harmless; under-firing strands a message until the next 15s tick (or, for
+ *  pending posts, used to strand it until a manual Retry). */
+function retryUnsent(): void {
+  if (transport && transport.state === 'online') void drainOutbox(transport);
+  if (isUnlocked.value) {
+    void resumePendingMediaJobs(); // interrupted media uploads/downloads
+    kickPendingPosts(); // queued Wall/chat posts (sealing needs the unlocked keys)
+  }
+}
+
 function start(): void {
   if (started) return;
   started = true;
@@ -244,6 +259,7 @@ function start(): void {
       void reconcileSeen(); // recover any 'seen' receipt dropped while we were offline (spec 1010)
       void sendDownloadedReceipts(); // confirm media we hold so senders can free the blobs
       void resumePendingMediaJobs(); // re-attempt any interrupted/failed-but-retryable media
+      kickPendingPosts(); // resume queued Wall/chat posts stranded by an offline gap or app kill
       // Publish our bundle (so peers can start sessions), then top up the
       // one-time prekey pool if it's low. Chained so the count check sees the
       // freshly-published pool.
@@ -472,6 +488,10 @@ function start(): void {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
         nudgeReconnect();
+        // Foreground = a fresh chance to send: if the socket never dropped, no
+        // 'online' transition will fire, so retry unsent work explicitly instead
+        // of waiting for the next periodic tick (which a frozen iOS page missed).
+        retryUnsent();
         void verifySessionOrReset(); // returning to the app → confirm we're still valid
         // Re-poll peer lifecycle so a contact who terminated while we sat
         // connected flips to "Ghosted" on return (reconnect alone won't fire if
@@ -495,7 +515,10 @@ function start(): void {
     });
     // Best-effort "going away" as the tab is hidden/closed.
     window.addEventListener('pagehide', () => void sendPresenceSelf(false));
-    window.addEventListener('online', () => nudgeReconnect());
+    window.addEventListener('online', () => {
+      nudgeReconnect();
+      retryUnsent(); // the socket may have survived the blip — retry immediately anyway
+    });
   }
 
   // When the identity is created (e.g. just after registration) while already
@@ -510,6 +533,7 @@ function start(): void {
     void sendPresenceSelf(selfActive()); // lock → offline, unlock → online to peers
     if (!unlocked) return;
     deferNotificationsFor(2500); // a couple seconds to land before alerting
+    retryUnsent(); // unlocking supplies the keys queued posts/media needed to seal
     void drainPendingIncoming(); // decrypt messages received behind the gate
     if (syncState.value === 'online') {
       void runOwnSync();
