@@ -901,12 +901,14 @@ func TestGameEngagementPushesAudience(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("list status = %d", rr.Code)
 	}
-	var listed []map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &listed); err != nil {
+	var listedWrap struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &listedWrap); err != nil {
 		t.Fatalf("list decode: %v", err)
 	}
 	var games int
-	for _, e := range listed {
+	for _, e := range listedWrap.Items {
 		if e["kind"] == "game" {
 			games++
 			if e["payload"] != "SEALED" && e["payload"] != "SEALED2" {
