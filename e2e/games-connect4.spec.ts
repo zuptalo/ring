@@ -181,3 +181,39 @@ test('group challenge plays Connect Four to a rising-diagonal win with an observ
 
   for (const x of ctxs) await x.close();
 });
+
+test('a Wall challenge plays Connect Four over sealed engagement records', async ({ browser }) => {
+  const ctxs = [await browser.newContext(), await browser.newContext()];
+  const a = await createAccount(ctxs[0], 'RINGC48');
+  const b = await createAccount(ctxs[1], 'RINGC49');
+  await pair(a, b);
+
+  const pid = (await a.page.evaluate(
+    () => (window as any).__ringTest.post({ game: { gameType: 'connect4', theme: 'fruits' } }),
+  )) as string;
+  const wg = (p: RingClient) =>
+    p.page.evaluate(async (id: string) => {
+      await (window as any).__ringTest.syncPosts();
+      await (window as any).__ringTest.syncEngagement(id);
+      return (window as any).__ringTest.wallGameInfo(id);
+    }, pid);
+  await expect.poll(async () => (await wg(b))?.phase, { timeout: 30_000 }).toBe('open');
+  await b.page.evaluate((id: string) => (window as any).__ringTest.acceptWallChallenge(id), pid);
+  await expect.poll(async () => (await wg(a))?.opponent, { timeout: 30_000 }).toBe(b.id);
+
+  // A stacks column 2 to the vertical four; B answers in column 5.
+  const seq = [2, 5, 2, 5, 2, 5, 2];
+  for (let k = 0; k < seq.length; k++) {
+    const who = k % 2 === 0 ? a : b;
+    await expect.poll(async () => (await wg(who))?.moves, { timeout: 30_000 }).toBe(k);
+    await who.page.evaluate(
+      (arg: { id: string; col: number }) => (window as any).__ringTest.playWallGameMove(arg.id, { col: arg.col }),
+      { id: pid, col: seq[k] },
+    );
+  }
+  for (const p of [a, b]) {
+    await expect.poll(async () => (await wg(p))?.status, { timeout: 30_000 }).toEqual({ state: 'won', winner: 0 });
+  }
+
+  for (const x of ctxs) await x.close();
+});
