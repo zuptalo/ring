@@ -40,8 +40,8 @@ implementation that satisfies them, committed failing first.
 
 ## Phase 5: Polish
 
-- [ ] T016 [P] Drive scenarios: 3-user group challenge (announcement, accept, observer board, race-lost line) + wall challenge; screenshots reviewed
-- [ ] T017 Docs + gates: `docs/ANIMATED-EMOJI.md` usage rows (🫵 challenge, 💪 accept, 🫠 withdrawn); spec Status lifecycle + `make roadmap`; full gate suite (`npm run build`, unit+coverage, both new e2e specs, `go build/vet/test`); verify the server diff is EXACTLY the two posts_handlers behaviors
+- [X] T016 [P] Drive scenarios: 3-user group challenge (announcement, accept, observer board, race-lost line) + wall challenge; screenshots reviewed
+- [X] T017 Docs + gates: `docs/ANIMATED-EMOJI.md` usage rows (🫵 challenge, 💪 accept, 🫠 withdrawn); spec Status lifecycle + `make roadmap`; full gate suite (`npm run build`, unit+coverage, both new e2e specs, `go build/vet/test`); verify the server diff is EXACTLY the two posts_handlers behaviors
 
 ## Dependencies
 
