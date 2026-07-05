@@ -394,6 +394,7 @@
                 v-else-if="m.kind === 'game' && m.game"
                 :game="m.game"
                 :outgoing="m.outgoing"
+                :peer-name="chat?.name"
                 @move="(mv) => playGameMove(chatId, m.id, mv)"
                 @resign="resignGame(chatId, m.id)"
                 @rematch="(gt) => onGameRematch(gt)"
@@ -1652,7 +1653,9 @@ async function openMenu(m: Message, ev: Event) {
     cssClass: 'reaction-popover',
     componentProps: {
       isOutgoing: m.outgoing,
-      canInfo: m.outgoing || hasMedia,
+      // Games get info in BOTH directions: the stats (FR-024) are as much the
+      // receiver's story as the sender's.
+      canInfo: m.outgoing || hasMedia || m.kind === 'game',
       canCopy: !!m.body,
       canView,
       canForward: m.kind !== 'game', // a game belongs to its conversation (spec 0008 FR-014)
@@ -3866,20 +3869,20 @@ async function onPollCreate(poll: { question: string; options: string[]; multi: 
 const gamePickerOpen = ref(false);
 const openGamePicker = () => (gamePickerOpen.value = true);
 
-async function onGamePick(gameType: string): Promise<void> {
+async function onGamePick(gameType: string, theme?: string): Promise<void> {
   gamePickerOpen.value = false;
   // Re-check the gate at send time — the sheet's answer may be stale by now.
   if (await hasOngoingGame(chatId)) {
     await appToast({ message: 'Finish the game you two are playing first.', duration: 2200 });
     return;
   }
-  await sendGame(chatId, gameType);
+  await sendGame(chatId, gameType, theme);
   void scrollToNewest();
 }
 
-// "Play again" on a finished bubble = a normal new game of the same type; the
-// chooser becomes the new game's first mover. Same gate as the picker.
-const onGameRematch = (gameType: string) => void onGamePick(gameType);
+// "Play again" on a finished bubble reopens the style picker — half the fun of
+// a rematch is picking a fresh look. Same gate as the picker.
+const onGameRematch = (_gameType: string) => openGamePicker();
 
 async function onContactSelect(c: SharedContact): Promise<void> {
   contactPickerOpen.value = false;

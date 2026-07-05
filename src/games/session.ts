@@ -124,7 +124,7 @@ export function applySignal(
 
   if (signal.action === 'resign') {
     return {
-      session: { ...session, resignedBy: sender },
+      session: { ...session, resignedBy: sender, resignedAt: signal.at },
       outcome: 'applied',
     }
   }

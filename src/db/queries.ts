@@ -774,20 +774,29 @@ export async function hasOngoingGame(chatId: string): Promise<boolean> {
 }
 
 /** Start a game in a 1:1 chat (the bubble is instantly playable, like a poll).
- *  Returns the new bubble's message id — it doubles as the game session id. */
-export async function sendGame(chatId: string, gameType: string): Promise<string> {
+ *  Returns the new bubble's message id — it doubles as the game session id.
+ *  `theme` is the starter's visual pick (FR-022); an id the module doesn't
+ *  know is dropped here so garbage never crosses the wire. */
+export async function sendGame(chatId: string, gameType: string, theme?: string): Promise<string> {
   const module = GAMES[gameType];
   if (!module) throw new Error(`unknown game: ${gameType}`);
+  const pickedTheme = theme && module.themes.some((t) => t.id === theme) ? theme : undefined;
   const ts = now();
   const chat = await getChat(chatId);
   await guardOutbound(chat);
   const message = newOutgoing(chat, chatId, 'game', ts);
-  message.game = { gameType, moves: [] };
+  message.game = { gameType, theme: pickedTheme, startedAt: ts, moves: [] };
   await put('messages', message);
   await bumpOutgoing(chat, 'game', module.displayName, ts);
-  // Only the registry id crosses the wire: both ends derive the initial board
-  // from the module, and roles from message direction (sender = player 0).
-  await enqueueMessage(chat, message.id, { body: '', kind: 'game', timestamp: ts, game: { gameType } });
+  // Only the registry id + theme id cross the wire: both ends derive the
+  // initial board from the module, and roles from message direction
+  // (sender = player 0).
+  await enqueueMessage(chat, message.id, {
+    body: '',
+    kind: 'game',
+    timestamp: ts,
+    game: { gameType, theme: pickedTheme },
+  });
   return message.id;
 }
 
@@ -1954,9 +1963,9 @@ export async function retryOutgoing(messageId: string): Promise<void> {
     location: m.location,
     contact: m.contact,
     poll: m.poll ? { question: m.poll.question, options: m.poll.options, multi: m.poll.multi, votes: [] } : undefined,
-    // A game bubble re-sends only its wire id (like a poll's empty votes): the
+    // A game bubble re-sends only its wire ids (like a poll's empty votes): the
     // peer derives the initial board; any moves made meanwhile follow as signals.
-    game: m.game ? { gameType: m.game.gameType } : undefined,
+    game: m.game ? { gameType: m.game.gameType, theme: m.game.theme } : undefined,
   };
   await enqueueMessage(chat, m.id, payload);
 }
@@ -4923,7 +4932,11 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     poll: payload.poll,
     // A fresh game session for an inbound bubble (moves arrive as signals). The
     // sender is player 0; on this side outgoing === false, so we are player 1.
-    game: payload.game ? { gameType: payload.game.gameType, moves: [] } : undefined,
+    // startedAt keeps the compose time — Message.timestamp becomes last-activity
+    // time once moves re-surface the bubble (FR-021), and stats need the start.
+    game: payload.game
+      ? { gameType: payload.game.gameType, theme: payload.game.theme, startedAt: ts, moves: [] }
+      : undefined,
     contact: payload.contact,
     audio: payload.audio,
     linkPreview: payload.linkPreview, // present only on the rare fast-enough inline send

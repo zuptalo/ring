@@ -570,8 +570,8 @@ export function installTestHook(): void {
     votePoll: (messageId: string, option: number) => dbVotePoll(messageId, option),
 
     /* ---- in-chat games (spec 0008) ---- */
-    /** Start a game in a 1:1 chat; returns the bubble's message id. */
-    sendGame: (chatId: string, gameType: string) => dbSendGame(chatId, gameType),
+    /** Start a game in a 1:1 chat (optionally themed); returns the bubble's message id. */
+    sendGame: (chatId: string, gameType: string, theme?: string) => dbSendGame(chatId, gameType, theme),
     /** Play a move on a game bubble (refused silently when not allowed). */
     playGameMove: (chatId: string, messageId: string, move: unknown) =>
       dbPlayGameMove(chatId, messageId, move),
@@ -581,6 +581,8 @@ export function installTestHook(): void {
       if (!m?.game) return null;
       return {
         gameType: m.game.gameType,
+        theme: m.game.theme ?? null,
+        startedAt: m.game.startedAt ?? null,
         moves: m.game.moves.length,
         status: deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game),
       };

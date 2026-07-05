@@ -35,6 +35,24 @@ export interface GameModule<S = unknown, M = unknown> {
   applyMove(state: S, move: M, player: 0 | 1): S | null
   turn(state: S): 0 | 1
   status(state: S): GameStatusResult
+  /** Bundled visual themes; the first entry is the default (FR-022). */
+  themes: GameTheme[]
+}
+
+/**
+ * A visual theme for a game: the two players' marks and a soft board accent
+ * (FR-022). `marks` are emoji characters (pick pairs from the ANIMATED set in
+ * docs/ANIMATED-EMOJI.md so the last-move pulse plays); a theme WITHOUT marks
+ * renders the game's built-in classic look (tic-tac-toe: color-coded SVG X/O).
+ * Theme ids ride the sealed payload and are frozen once shipped, like game ids.
+ */
+export interface GameTheme {
+  id: string
+  name: string
+  /** [player 0 mark, player 1 mark] as emoji; absent = the classic built-in look. */
+  marks?: [string, string]
+  /** Soft board tint as an "r, g, b" triplet for rgba() (absent = default). */
+  accent?: string
 }
 
 /** One accepted move in a session's append-only log. */
@@ -55,9 +73,16 @@ export interface GameMoveRec {
  */
 export interface GameSession {
   gameType: string
+  /** Visual theme id (FR-022); unknown/absent renders as the classic theme. */
+  theme?: string
+  /** The bubble's original compose time — kept here because Message.timestamp
+   *  becomes last-activity time once moves re-surface the bubble (FR-021). */
+  startedAt?: number
   moves: GameMoveRec[]
   /** Set when a resign was accepted; terminal. */
   resignedBy?: 0 | 1
+  /** The resign signal's `at` — the game's end time for stats (FR-024). */
+  resignedAt?: number
   /** Set when an invalid/conflicting inbound signal was seen; terminal. */
   outOfSync?: true
 }

@@ -218,6 +218,9 @@ export interface EraseSignal {
  */
 export interface GameStart {
   gameType: string;
+  // Visual theme id from the game's bundled theme list (spec 0008 FR-022).
+  // Frozen once shipped; unknown/absent renders as the classic theme.
+  theme?: string;
 }
 
 /**

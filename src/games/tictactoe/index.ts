@@ -23,6 +23,18 @@ const tictactoe: GameModule<TicTacToeState, TicTacToeMove> = {
   applyMove,
   turn,
   status,
+  // Visual themes (FR-022). Ids are frozen once shipped. Marks are pairs from
+  // the ANIMATED emoji set (docs/ANIMATED-EMOJI.md) so the last-move pulse
+  // plays; 'classic' has no marks and renders the color-coded SVG X/O.
+  // Accents are soft "r, g, b" board tints.
+  themes: [
+    { id: 'classic', name: 'Classic' },
+    { id: 'fire-ice', name: 'Fire & Ice', marks: ['🔥', '❄️'], accent: '234, 88, 12' },
+    { id: 'space', name: 'Space', marks: ['🚀', '👽'], accent: '99, 102, 241' },
+    { id: 'mythic', name: 'Mythic', marks: ['🦄', '🐉'], accent: '168, 85, 247' },
+    { id: 'arcade', name: 'Arcade', marks: ['👾', '🤖'], accent: '16, 185, 129' },
+    { id: 'snacks', name: 'Snacks', marks: ['🍕', '🍔'], accent: '245, 158, 11' },
+  ],
 }
 
 export default tictactoe

@@ -27,6 +27,61 @@
         </ion-item>
       </ion-list>
 
+      <!-- Game story (spec 0008 FR-024): the match in numbers, derived purely
+           from the session's own move timestamps. Shown in both directions. -->
+      <ion-list :inset="true" v-if="game && gameStats">
+        <ion-list-header>
+          <animated-emoji emoji="🎲" />
+          <ion-label>{{ gameModule?.displayName ?? 'Game' }}</ion-label>
+        </ion-list-header>
+        <ion-item lines="inset">
+          <ion-label>Players</ion-label>
+          <ion-note slot="end" class="gi-vs">
+            <game-mark :mark="gameTheme?.marks?.[myGamePlayer]" :player="myGamePlayer" />
+            You vs {{ peerFirstName }}
+            <game-mark :mark="gameTheme?.marks?.[theirGamePlayer]" :player="theirGamePlayer" />
+          </ion-note>
+        </ion-item>
+        <ion-item v-if="gameTheme && gameTheme.id !== 'classic'" lines="inset">
+          <ion-label>Style</ion-label>
+          <ion-note slot="end">{{ gameTheme.name }}</ion-note>
+        </ion-item>
+        <ion-item lines="inset">
+          <ion-label>Result</ion-label>
+          <ion-note slot="end" class="gi-vs">
+            <animated-emoji v-if="gameResultEmoji" :emoji="gameResultEmoji" />
+            {{ gameResultLine }}
+          </ion-note>
+        </ion-item>
+        <ion-item v-if="gameStats.startedAt" lines="inset">
+          <ion-label>Started</ion-label>
+          <ion-note slot="end">{{ formatTime(gameStats.startedAt) }}</ion-note>
+        </ion-item>
+        <ion-item v-if="gameStats.durationMs != null" lines="inset">
+          <ion-label>Game time</ion-label>
+          <ion-note slot="end">{{ durLabel(gameStats.durationMs) }}</ion-note>
+        </ion-item>
+        <ion-item lines="inset">
+          <ion-label>Moves</ion-label>
+          <ion-note slot="end">{{ gameStats.moveCount }}</ion-note>
+        </ion-item>
+        <ion-item v-if="gameStats.players[myGamePlayer].avgReplyMs != null" lines="inset">
+          <ion-label>Your average move</ion-label>
+          <ion-note slot="end">{{ durLabel(gameStats.players[myGamePlayer].avgReplyMs!) }}</ion-note>
+        </ion-item>
+        <ion-item v-if="gameStats.players[theirGamePlayer].avgReplyMs != null" lines="inset">
+          <ion-label>{{ peerFirstName }}'s average move</ion-label>
+          <ion-note slot="end">{{ durLabel(gameStats.players[theirGamePlayer].avgReplyMs!) }}</ion-note>
+        </ion-item>
+        <ion-item v-if="fastestMove" lines="none">
+          <ion-label>Fastest move</ion-label>
+          <ion-note slot="end" class="gi-vs">
+            <animated-emoji emoji="⚡" />
+            {{ durLabel(fastestMove.ms) }} by {{ fastestMove.who }}
+          </ion-note>
+        </ion-item>
+      </ion-list>
+
       <!-- Disappearing message: exact time left + when it self-destructs (the bubble shows a melting
            face; the numbers live here). -->
       <ion-list :inset="true" v-if="message?.expiresAt">
@@ -176,6 +231,11 @@ import { useLiveQuery } from '@/composables/useLiveQuery';
 import { isPreservedImageMime, qualityLabel } from '@/services/media-encode';
 import { fileSizeLabel } from '@/utils/media-meta';
 import { formatTime } from '@/utils/time';
+import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
+import GameMark from '@/components/GameMark.vue';
+import { GAMES } from '@/games/registry';
+import { deriveStatus } from '@/games/session';
+import { computeGameStats } from '@/games/stats';
 
 const route = useRoute();
 const chatId = route.params.id as string;
@@ -220,6 +280,63 @@ const media = useLiveQuery<Media | undefined>(
 );
 
 const isOutgoingMsg = computed(() => message.value?.outgoing === true);
+
+/* ---- game story (spec 0008 FR-024) ---- */
+const game = computed(() => message.value?.game);
+const gameModule = computed(() => (game.value ? GAMES[game.value.gameType] ?? null : null));
+const gameTheme = computed(() => {
+  const list = gameModule.value?.themes ?? [];
+  return list.find((t) => t.id === game.value?.theme) ?? list[0] ?? null;
+});
+const gameStats = computed(() =>
+  game.value ? computeGameStats(gameModule.value, game.value) : null,
+);
+const myGamePlayer = computed<0 | 1>(() => (isOutgoingMsg.value ? 0 : 1));
+const theirGamePlayer = computed<0 | 1>(() => (isOutgoingMsg.value ? 1 : 0));
+const peerFirstName = computed(() => (chat.value?.name ?? 'Them').split(' ')[0]);
+const gameStatus = computed(() =>
+  game.value ? deriveStatus(gameModule.value, game.value) : null,
+);
+// Mirrors the bubble's copy (docs/ANIMATED-EMOJI.md: same concept, same emoji).
+const gameResultLine = computed((): string => {
+  const s = gameStatus.value;
+  if (!s) return '';
+  switch (s.state) {
+    case 'ongoing': return 'Still playing';
+    case 'won': return s.winner === myGamePlayer.value ? 'You won!' : `${peerFirstName.value} won`;
+    case 'draw': return 'Draw';
+    case 'resigned': return s.winner === myGamePlayer.value ? 'They gave up. You win!' : 'You gave up';
+    case 'out-of-sync': return 'Out of sync';
+  }
+  return '';
+});
+const gameResultEmoji = computed((): string => {
+  const s = gameStatus.value;
+  if (!s) return '';
+  if (s.state === 'ongoing') return '⏳';
+  if ((s.state === 'won' || s.state === 'resigned') && s.winner === myGamePlayer.value) return '🎉';
+  if (s.state === 'won') return '😅';
+  if (s.state === 'draw') return '🤝';
+  if (s.state === 'out-of-sync') return '😵';
+  return '';
+});
+const fastestMove = computed((): { ms: number; who: string } | null => {
+  const st = gameStats.value;
+  if (!st) return null;
+  const mine = st.players[myGamePlayer.value].fastestReplyMs;
+  const theirs = st.players[theirGamePlayer.value].fastestReplyMs;
+  if (mine == null && theirs == null) return null;
+  if (theirs == null || (mine != null && mine <= theirs)) return { ms: mine!, who: 'you' };
+  return { ms: theirs, who: peerFirstName.value };
+});
+/** "42s" / "3m 05s" / "1h 12m" — game durations stay human-sized. */
+function durLabel(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}
 
 // Media facts (formerly a badge on the bubble) — shown here for media in BOTH
 // directions, so received media's quality/resolution/size is inspectable too.
@@ -328,6 +445,7 @@ function mediaLabel(kind: Message['kind']) {
     : kind === 'video' ? '🎥 Video'
     : kind === 'voice' ? '🎤 Voice message'
     : kind === 'file' ? '📎 Attachment'
+    : kind === 'game' ? '🎲 Game'
     : '';
 }
 </script>
@@ -368,5 +486,11 @@ function mediaLabel(kind: Message['kind']) {
 }
 .names {
   font-size: 14px;
+}
+/* Game rows: marks/emoji sit inline with their note text. */
+.gi-vs {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 </style>

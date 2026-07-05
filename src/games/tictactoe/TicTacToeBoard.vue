@@ -1,63 +1,61 @@
 <template>
   <!-- The 3×3 board. Composed from ion-grid (no Ionic primitive is a game
        board — the Principle XI carve-out reasoned in the spec 0008 plan);
-       cells are plain buttons styled with the existing theme tokens only.
-       Direction-neutral by construction (a symmetric grid), so RTL is safe.
+       cells are plain buttons styled with the existing theme tokens plus an
+       optional soft per-theme accent tint. Direction-neutral by construction
+       (a symmetric grid), so RTL is safe.
 
-       Marks are stroke SVGs, NOT text glyphs: ✕/◯ come from platform fonts
-       whose metrics differ wildly (they render at visibly mismatched sizes on
-       iOS), while an SVG path is identical geometry everywhere (FR-019 fix). -->
-  <div class="ttt-wrap">
-    <ion-grid class="ttt" :class="{ frozen: !canMove }">
-      <ion-row v-for="r in 3" :key="r">
-        <ion-col v-for="c in 3" :key="c" class="ttt-cell-col">
-          <button
-            type="button"
-            class="ttt-cell"
-            :class="{ x: cellAt(r, c) === 0, o: cellAt(r, c) === 1 }"
-            :disabled="!canMove || cellAt(r, c) !== null"
-            :aria-label="cellLabel(r, c)"
-            @click.stop="$emit('move', { cell: (r - 1) * 3 + (c - 1) })"
-          >
-            <svg v-if="cellAt(r, c) !== null" class="ttt-mark" viewBox="0 0 24 24" aria-hidden="true">
-              <path v-if="cellAt(r, c) === 0" d="M6.5 6.5 L17.5 17.5 M17.5 6.5 L6.5 17.5" />
-              <circle v-else cx="12" cy="12" r="6.5" />
-            </svg>
-          </button>
-        </ion-col>
-      </ion-row>
-    </ion-grid>
-    <!-- Who plays what (FR-019): your mark, in its board color, always visible. -->
-    <div class="ttt-legend">
-      <span>You play</span>
-      <svg
-        class="ttt-mark legend"
-        :class="myPlayer === 0 ? 'x' : 'o'"
-        viewBox="0 0 24 24"
-        role="img"
-        :aria-label="myPlayer === 0 ? 'cross' : 'circle'"
-      >
-        <path v-if="myPlayer === 0" d="M6.5 6.5 L17.5 17.5 M17.5 6.5 L6.5 17.5" />
-        <circle v-else cx="12" cy="12" r="6.5" />
-      </svg>
-    </div>
-  </div>
+       Marks render through GameMark: themed emoji (the most recently played
+       cell ANIMATES to draw the eye, FR-023) or the classic color-coded SVG. -->
+  <ion-grid
+    class="ttt"
+    :class="{ frozen: !canMove }"
+    :style="accent ? { '--game-accent': accent, '--game-accent-a': '0.12' } : undefined"
+  >
+    <ion-row v-for="r in 3" :key="r">
+      <ion-col v-for="c in 3" :key="c" class="ttt-cell-col">
+        <button
+          type="button"
+          class="ttt-cell"
+          :class="{ x: cellAt(r, c) === 0, o: cellAt(r, c) === 1 }"
+          :disabled="!canMove || cellAt(r, c) !== null"
+          :aria-label="cellLabel(r, c)"
+          @click.stop="$emit('move', { cell: idx(r, c) })"
+        >
+          <game-mark
+            v-if="cellAt(r, c) !== null"
+            :mark="marks?.[cellAt(r, c)!]"
+            :player="cellAt(r, c)!"
+            :animated="idx(r, c) === lastMove?.cell"
+          />
+        </button>
+      </ion-col>
+    </ion-row>
+  </ion-grid>
 </template>
 
 <script setup lang="ts">
 import { IonGrid, IonRow, IonCol } from '@ionic/vue';
-import type { TicTacToeState } from './logic';
+import GameMark from '@/components/GameMark.vue';
+import type { TicTacToeState, TicTacToeMove } from './logic';
 
 const props = defineProps<{
   state: TicTacToeState;
-  /** This viewer's role (0 = starter/cross, 1 = circle) — drives the legend + a11y labels. */
+  /** This viewer's role (0 = starter, moves first) — drives the a11y labels. */
   myPlayer: 0 | 1;
   /** Whether tapping an empty cell is allowed right now (your turn + ongoing). */
   canMove: boolean;
+  /** The theme's [player 0, player 1] emoji marks; absent = classic SVG X/O. */
+  marks?: [string, string];
+  /** Soft board tint as an "r, g, b" triplet (from the theme). */
+  accent?: string;
+  /** The most recently played move — its cell animates (FR-023). */
+  lastMove?: TicTacToeMove | null;
 }>();
-defineEmits<{ (e: 'move', move: { cell: number }): void }>();
+defineEmits<{ (e: 'move', move: TicTacToeMove): void }>();
 
-const cellAt = (r: number, c: number): 0 | 1 | null => props.state.cells[(r - 1) * 3 + (c - 1)];
+const idx = (r: number, c: number): number => (r - 1) * 3 + (c - 1);
+const cellAt = (r: number, c: number): 0 | 1 | null => props.state.cells[idx(r, c)];
 const cellLabel = (r: number, c: number): string => {
   const v = cellAt(r, c);
   const what = v === null ? 'empty' : v === props.myPlayer ? 'yours' : 'theirs';
@@ -66,11 +64,6 @@ const cellLabel = (r: number, c: number): string => {
 </script>
 
 <style scoped>
-.ttt-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
 .ttt {
   padding: 0;
   width: 100%;
@@ -83,45 +76,22 @@ const cellLabel = (r: number, c: number): string => {
   aspect-ratio: 1;
   border: none;
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(var(--game-accent, 0, 0, 0), var(--game-accent-a, 0.06));
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 24px;
   color: var(--ion-color-primary);
   cursor: pointer;
 }
-.ttt-mark {
-  width: 58%;
-  height: 58%;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.4;
-  stroke-linecap: round;
-}
-.ttt-cell.o,
-.ttt-mark.o {
+.ttt-cell.o {
   color: var(--ion-color-secondary, var(--ion-color-tertiary));
-}
-.ttt-mark.x {
-  color: var(--ion-color-primary);
 }
 .ttt-cell:disabled {
   cursor: default;
 }
 .frozen .ttt-cell:not(.x):not(.o) {
   opacity: 0.6;
-}
-.ttt-legend {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--app-text-muted);
-}
-.ttt-legend .ttt-mark {
-  width: 13px;
-  height: 13px;
-  stroke-width: 3;
 }
 </style>
