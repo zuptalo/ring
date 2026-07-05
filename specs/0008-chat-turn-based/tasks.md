@@ -205,6 +205,12 @@ mismatched sizes on iOS — font metrics differ per platform).
 
 ---
 
+## Phase 14: Animation behavior settings (user feedback, 2026-07-05)
+
+- [ ] T049 Capped avatar animations rest on the Lottie's FIRST FRAME (never swap back to the native glyph); chat rows with unread messages keep their emoji avatar animating; Appearance -> Animations gains a "Profile pictures" group: play once / twice (default) / three times / keep looping, plus a keep-animating-for-unread toggle (default on), resolved by a pure, unit-tested resolveAvatarAnimation() in useAnimationPrefs
+
+---
+
 ## GitHub Issues
 
 One issue per task (created 2026-07-05; the feature → develop PR must list `Closes #N`
@@ -214,7 +220,7 @@ T014 #774 · T015 #775 · T016 #776 · T017 #777 · T018 #778 · T019 #779 · T0
 T021 #781 · T022 #782 · T023 #783 · T024 #784 · T025 #785 · T026 #786 · T027 #787 ·
 T028 #788 · T029 #789 · T030 #790 · T031 #791 ·
 T032 #792 · T033 #793 · T034 #794 · T035 #795 · T036 #796 · T037 #797 · T038 #798 · T039 #799 · T040 #800 · T041 #801 · T042 #802 · T043 #803 · T044 #804 · T045 #805 ·
-T046 #806 · T047 #807 · T048 #808
+T046 #806 · T047 #807 · T048 #808 · T049 #809
 
 ---
 
