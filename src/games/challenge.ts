@@ -28,7 +28,7 @@ export interface WallGameRow {
   /** Server-attested actor userId (the same trust anchor reactions use). */
   actor: string
   payload:
-    | { t: 'accept'; at: number }
+    | { t: 'accept'; at: number; name?: string; avatar?: string }
     | { t: 'move'; seq: number; action: 'move' | 'resign'; move?: unknown; at: number; opponent?: string }
 }
 

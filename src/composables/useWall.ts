@@ -164,6 +164,10 @@ export function useWall() {
   const wall = computed<WallPost[]>(() => {
     const byId = new Map(contacts.value.map((c) => [c.id, c]));
     const nameOf = (id: string) => (id === selfId ? 'You' : byId.get(id)?.name ?? 'Someone');
+    // A game post carries its host's display info sealed with the game — use it
+    // when the author isn't resolvable as a contact (spec 0009).
+    const gameHostName = (p: Post) => (p.game?.hostName ? p.game.hostName : undefined);
+    const gameHostAvatar = (p: Post) => (p.game?.hostAvatar ? p.game.hostAvatar : undefined);
 
     // Group engagement by post in one pass.
     const byPost = new Map<string, PostEngagement[]>();
@@ -205,8 +209,8 @@ export function useWall() {
       return {
         ...p,
         isOwn,
-        authorName: isOwn ? 'You' : c?.name ?? 'Unknown',
-        authorAvatar: isOwn ? self.avatar.value : c?.avatar ?? '',
+        authorName: isOwn ? 'You' : c?.name ?? gameHostName(p) ?? 'Unknown',
+        authorAvatar: isOwn ? self.avatar.value : c?.avatar || gameHostAvatar(p) || '',
         authorUsername: isOwn ? undefined : c?.username,
         muted: !!mutedUsers.value[p.author],
         mediaUrl: mediaUrls.value[p.id],

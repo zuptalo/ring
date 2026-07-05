@@ -41,6 +41,8 @@ test('a Wall challenge plays out on the post for exactly its audience', async ({
   await pair(a, b);
   await pair(a, c);
   await pair(b, d); // dave exists, but is not alice's friend
+  // Bob sets a profile so his sealed accept can carry his name to non-contacts.
+  await b.page.evaluate(() => (window as any).__ringTest.setProfile('Bob Builder', ''));
 
   // Alice throws a challenge post to her friends.
   const pid = (await a.page.evaluate(
@@ -88,6 +90,12 @@ test('a Wall challenge plays out on the post for exactly its audience', async ({
       .toEqual({ state: 'won', winner: 0 });
     expect((await gameInfo(p, pid)).players).toEqual([a.id, b.id]);
   }
+
+  // Carol is NOT Bob's friend, yet she resolves his NAME: the accept carried
+  // his display info sealed under the post key (spec 0009 cross-audience naming).
+  await expect
+    .poll(async () => (await gameInfo(c, pid)).names?.[b.id], { timeout: 15_000 })
+    .toBe('Bob Builder');
 
   // Deleting the post deletes the game with it, everywhere.
   await a.page.evaluate((i) => (window as any).__ringTest.deletePost(i), pid);

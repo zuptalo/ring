@@ -63,7 +63,7 @@ import { computeGameStats } from '@/games/stats';
 import { deriveStatus } from '@/games/session';
 import { challengePhase, playerIndexOf } from '@/games/challenge';
 import { useLiveQuery } from '@/composables/useLiveQuery';
-import { wallGameSession, listContacts } from '@/db/queries';
+import { wallGameSession, wallGamePlayerMeta, listContacts } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import type { Contact } from '@/db/types';
 import type { GameSession, GameTheme } from '@/games/types';
@@ -76,6 +76,11 @@ const session = useLiveQuery<GameSession | null>(
   null,
 );
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+const meta = useLiveQuery(
+  () => wallGamePlayerMeta(props.postId),
+  ['posts', 'postEngagement'],
+  {} as Record<string, { name?: string; avatar?: string }>,
+);
 
 const selfId = computed(() => getSelfUserId() ?? '');
 const module = computed(() => (session.value ? GAMES[session.value.gameType] ?? null : null));
@@ -91,7 +96,8 @@ const me = computed(() => (session.value ? playerIndexOf(session.value, selfId.v
 const seatName = (idx: 0 | 1): string => {
   const uid = session.value?.players?.[idx];
   if (uid && uid === selfId.value) return 'You';
-  return (contacts.value.find((c) => c.id === uid)?.name ?? 'Someone').split(' ')[0];
+  const name = contacts.value.find((c) => c.id === uid)?.name ?? (uid ? meta.value[uid]?.name : undefined);
+  return (name ?? 'Someone').split(' ')[0];
 };
 
 const resultLine = computed((): string => {

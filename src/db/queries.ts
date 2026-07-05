@@ -2721,7 +2721,16 @@ export async function createPost(opts: {
   // reactive Proxy, which JSON-seals fine (so the fan-out would succeed) but
   // throws DataCloneError when the local Post row is put into IndexedDB —
   // "shared with everyone except yourself".
-  const game = opts.game ? { gameType: opts.game.gameType, theme: opts.game.theme } : undefined;
+  // The challenger's own display info rides SEALED with the game so audience
+  // members who don't hold them as a contact still see who is playing.
+  const game = opts.game
+    ? {
+        gameType: opts.game.gameType,
+        theme: opts.game.theme,
+        hostName: (await getSecret('profileName', '')).trim() || undefined,
+        hostAvatar: (await downscaleAvatar(await getSecret('profileAvatar', ''), 96).catch(() => '')) || undefined,
+      }
+    : undefined;
   const payload: PostPayload = { kind, body, game };
   const total = mediaList.length;
   for (const m of mediaList) {
@@ -3574,6 +3583,27 @@ export async function wallGameSession(postId: string): Promise<GameSession | nul
   return buildWallSession(GAMES[post.game.gameType] ?? null, post.author, post.game, rows);
 }
 
+/** Display info for a wall game's players, from the SEALED payloads themselves
+ *  (the post's hostName/hostAvatar; each accept's name/avatar) — so a viewer
+ *  resolves both players even when one isn't their contact. Contacts, being
+ *  fresher, should override this at render time. */
+export async function wallGamePlayerMeta(
+  postId: string,
+): Promise<Record<string, { name?: string; avatar?: string }>> {
+  const post = await get<Post>('posts', postId);
+  if (!post?.game) return {};
+  const meta: Record<string, { name?: string; avatar?: string }> = {};
+  if (post.game.hostName || post.game.hostAvatar) {
+    meta[post.author] = { name: post.game.hostName, avatar: post.game.hostAvatar };
+  }
+  const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
+  for (const e of rows) {
+    if (e.type !== 'game' || e.game?.t !== 'accept') continue;
+    if (e.game.name || e.game.avatar) meta[e.actor] = { name: e.game.name, avatar: e.game.avatar };
+  }
+  return meta;
+}
+
 /** Store the optimistic local row + submit the sealed record. The local id IS
  *  the server engagement id, so the next sync dedupes it naturally. */
 async function submitWallGame(post: Post, data: NonNullable<PostEngagement['game']>): Promise<void> {
@@ -3604,7 +3634,15 @@ export async function acceptWallChallenge(postId: string): Promise<void> {
   const self = getSelfUserId() ?? '';
   if (!session || challengePhase(session) !== 'open') return;
   if (session.players?.[0] === self) return; // the author can't take their own seat
-  await submitWallGame(post, { t: 'accept', at: now() });
+  // The acceptor's display info rides sealed in the accept: the audience are
+  // the AUTHOR's friends, not necessarily the acceptor's, and a game readable
+  // by them should name both players for them (spec 0009).
+  await submitWallGame(post, {
+    t: 'accept',
+    at: now(),
+    name: (await getSecret('profileName', '')).trim() || undefined,
+    avatar: (await downscaleAvatar(await getSecret('profileAvatar', ''), 96).catch(() => '')) || undefined,
+  });
   void playGameCue('gameaccept');
 }
 

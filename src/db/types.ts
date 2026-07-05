@@ -459,7 +459,7 @@ export interface Post {
   // A game-challenge post (spec 0009): the game plays out ON the post — accepts and
   // moves are engagement rows of type 'game'; the session is DERIVED from them
   // (buildWallSession), never stored. The author is the challenger (player 0).
-  game?: { gameType: string; theme?: string };
+  game?: { gameType: string; theme?: string; hostName?: string; hostAvatar?: string };
   updatedAt: number; // change-bus / dedup
 }
 
@@ -522,8 +522,11 @@ export interface PostEngagement {
   // A game accept/move on a challenge post (spec 0009), the OPENED sealed payload.
   // `id` is the server engagement id — the replay's dedupe key (contracts/
   // wall-game-engagement.md); ordering-bearing fields live inside.
+  // An accept carries the acceptor's OWN display info (sealed under K_post):
+  // the audience are the author's friends, not necessarily the acceptor's, and
+  // a game readable by them should name its players for them too (spec 0009).
   game?:
-    | { t: 'accept'; at: number }
+    | { t: 'accept'; at: number; name?: string; avatar?: string }
     | { t: 'move'; seq: number; action: 'move' | 'resign'; move?: unknown; at: number; opponent?: string };
   updatedAt: number;
 }

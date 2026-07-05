@@ -14,7 +14,12 @@ the existing content-free `post-engagement` WS nudge to the online audience.
 
 ```jsonc
 // sealed payloads (kind: "game")
-{ "t": "accept", "at": 1751712000000 }
+// An accept may carry the acceptor's own display name + a small avatar
+// thumbnail: the audience are the AUTHOR's friends, not necessarily the
+// acceptor's, and a game readable by them names its players for them too.
+// (The challenger's equivalents ride in the post payload: game.hostName /
+// game.hostAvatar.) Sealed under K_post like everything else.
+{ "t": "accept", "at": 1751712000000, "name": "Bob", "avatar": "data:image/..." }
 { "t": "move", "seq": 1, "action": "move", "move": { "cell": 4 }, "at": ..., "opponent": "<userId>" }
 { "t": "move", "seq": 6, "action": "resign", "at": ... }
 ```

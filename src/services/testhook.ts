@@ -60,6 +60,7 @@ import {
   followGame as dbFollowGame,
   unfollowGame as dbUnfollowGame,
   wallGameSession as dbWallGameSession,
+  wallGamePlayerMeta as dbWallGamePlayerMeta,
   acceptWallChallenge as dbAcceptWallChallenge,
   playWallGameMove as dbPlayWallGameMove,
   resignWallGame as dbResignWallGame,
@@ -1096,6 +1097,11 @@ export function installTestHook(): void {
     wallGameInfo: async (postId: string) => {
       const sess = await dbWallGameSession(postId);
       if (!sess) return null;
+      // Player names resolved the way the card does: sealed meta, contacts override.
+      const meta = await dbWallGamePlayerMeta(postId);
+      const names: Record<string, string> = {};
+      for (const [id, m] of Object.entries(meta)) if (m.name) names[id] = m.name;
+      for (const c of await listContacts()) names[c.id] = c.name;
       return {
         gameType: sess.gameType,
         theme: sess.theme ?? null,
@@ -1104,6 +1110,7 @@ export function installTestHook(): void {
         opponent: resolveOpponent(sess),
         moves: sess.moves.length,
         status: deriveGameStatus(GAMES[sess.gameType] ?? null, sess),
+        names,
       };
     },
     acceptWallChallenge: (postId: string) => dbAcceptWallChallenge(postId),

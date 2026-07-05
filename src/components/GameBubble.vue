@@ -13,11 +13,13 @@
       <div class="game-vs">
         <span class="game-side you">
           <game-mark :mark="theme.marks?.[leftSeat]" :player="leftSeat" />
+          <user-avatar v-if="seatAvatar(leftSeat)" :src="seatAvatar(leftSeat)!" :alt="seatName(leftSeat)" class="side-face" />
           <span class="side-name">{{ seatName(leftSeat) }}</span>
         </span>
         <span class="game-vs-word">vs</span>
         <span class="game-side">
           <span class="side-name">{{ seatName(rightSeat) }}</span>
+          <user-avatar v-if="seatAvatar(rightSeat)" :src="seatAvatar(rightSeat)!" :alt="seatName(rightSeat)" class="side-face" />
           <game-mark :mark="theme.marks?.[rightSeat]" :player="rightSeat" />
         </span>
       </div>
@@ -122,6 +124,7 @@ import { IonIcon, IonButton, alertController } from '@ionic/vue';
 import { gameControllerOutline } from 'ionicons/icons';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import GameMark from '@/components/GameMark.vue';
+import UserAvatar from '@/components/UserAvatar.vue';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
 import { deriveStatus, replayState } from '@/games/session';
@@ -143,6 +146,9 @@ const props = defineProps<{
   names?: Record<string, string>;
   /** Observer follow state (spec 0009 FR-006, device-local). */
   followed?: boolean;
+  /** Seat avatars (userId → image src), e.g. from the wall's sealed player
+   *  meta. Rendered beside the seat names when available. */
+  avatars?: Record<string, string>;
 }>();
 const emit = defineEmits<{
   (e: 'move', move: unknown): void;
@@ -161,6 +167,11 @@ const explicit = computed(() => !!props.game.players);
 const myPlayer = computed<0 | 1 | null>(() =>
   explicit.value ? playerIndexOf(props.game, props.selfId ?? '') : props.outgoing ? 0 : 1,
 );
+const seatAvatar = (idx: 0 | 1): string | null => {
+  if (!explicit.value || !props.avatars) return null;
+  const uid = props.game.players?.[idx] ?? (idx === 1 ? resolveOpponent(props.game) ?? '' : '');
+  return (uid && props.avatars[uid]) || null;
+};
 const seatName = (idx: 0 | 1): string => {
   if (!explicit.value) return idx === myPlayer.value ? 'You' : peerFirstName.value;
   const uid = props.game.players?.[idx] ?? (idx === 1 ? resolveOpponent(props.game) ?? '' : '');
@@ -283,6 +294,11 @@ async function confirmResign(): Promise<void> {
 }
 .game-side:last-child {
   justify-content: flex-end;
+}
+.game-side .side-face {
+  width: 18px;
+  height: 18px;
+  flex: none;
 }
 .game-side .side-name {
   min-width: 0;

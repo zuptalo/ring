@@ -349,8 +349,10 @@ onIonViewWillEnter(async () => {
     authorUsername.value = undefined;
   } else {
     const c = await getContact(post.value.author);
-    authorName.value = c?.name ?? 'Unknown';
-    authorAvatar.value = c?.avatar ?? '';
+    // A game post carries its host's display info sealed with the game — use it
+    // when the author isn't resolvable as a contact (spec 0009).
+    authorName.value = c?.name ?? post.value.game?.hostName ?? 'Unknown';
+    authorAvatar.value = c?.avatar || post.value.game?.hostAvatar || '';
     authorUsername.value = c?.username;
   }
   // Views: record ours on someone else's post; load the list on our own.

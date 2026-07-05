@@ -36,6 +36,7 @@
         :outgoing="isOwn"
         :self-id="selfId"
         :names="names"
+        :avatars="avatars"
         :followed="followed"
         @move="onMove"
         @resign="onResign"
@@ -57,6 +58,7 @@ import { challengePhase } from '@/games/challenge';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import {
   wallGameSession,
+  wallGamePlayerMeta,
   acceptWallChallenge,
   playWallGameMove,
   resignWallGame,
@@ -86,13 +88,27 @@ const session = useLiveQuery<GameSession | null>(
 );
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
 const follows = useLiveQuery(() => followedGames(), ['settings'], {} as Record<string, number>);
+// Player display info carried SEALED with the game (spec 0009): names/avatars
+// for players who aren't this viewer's contacts. Contacts override (fresher).
+const meta = useLiveQuery(
+  () => wallGamePlayerMeta(props.postId),
+  ['posts', 'postEngagement'],
+  {} as Record<string, { name?: string; avatar?: string }>,
+);
 
 const module = computed(() => (session.value ? GAMES[session.value.gameType] ?? null : null));
 const phase = computed(() => (session.value ? challengePhase(session.value) : 'open'));
 const followed = computed(() => follows.value[props.postId] !== undefined);
 const names = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {};
+  for (const [id, m] of Object.entries(meta.value)) if (m.name) map[id] = m.name;
   for (const c of contacts.value) map[c.id] = c.name;
+  return map;
+});
+const avatars = computed<Record<string, string>>(() => {
+  const map: Record<string, string> = {};
+  for (const [id, m] of Object.entries(meta.value)) if (m.avatar) map[id] = m.avatar;
+  for (const c of contacts.value) if (c.avatar) map[c.id] = c.avatar;
   return map;
 });
 const themeName = computed(
