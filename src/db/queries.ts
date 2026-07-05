@@ -2717,7 +2717,12 @@ export async function createPost(opts: {
   let mediaH: number | undefined;
   const mediaIds: string[] = [];
   const refs: NonNullable<PostPayload['album']> = [];
-  const payload: PostPayload = { kind, body, game: opts.game };
+  // Normalized to a PLAIN object at the choke point: a caller may hand us a Vue
+  // reactive Proxy, which JSON-seals fine (so the fan-out would succeed) but
+  // throws DataCloneError when the local Post row is put into IndexedDB —
+  // "shared with everyone except yourself".
+  const game = opts.game ? { gameType: opts.game.gameType, theme: opts.game.theme } : undefined;
+  const payload: PostPayload = { kind, body, game };
   const total = mediaList.length;
   for (const m of mediaList) {
     const index = mediaIds.length; // 0-based position of this item
@@ -2817,7 +2822,7 @@ export async function createPost(opts: {
     ttlMs,
     outgoing: true,
     postKey: built.postKey,
-    game: opts.game,
+    game,
     updatedAt: createdAt,
   };
   await put<Post>('posts', post);

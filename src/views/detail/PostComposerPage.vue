@@ -499,7 +499,10 @@ async function share(): Promise<void> {
         body: body.value.trim() || undefined,
         audience: audience.value,
         lifetime: lifetime.value,
-        game: challenge.value,
+        // A PLAIN copy — the reactive Proxy can't be structured-cloned into
+        // IndexedDB (iOS Safari throws "The object can not be cloned", and the
+        // post would fan out to friends but never land locally).
+        game: { gameType: challenge.value.gameType, theme: challenge.value.theme },
       });
       router.back();
       return;
