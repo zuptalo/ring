@@ -9,7 +9,7 @@
  * the win, and a resigned rematch — so the board, status line, and actions can
  * be inspected visually. Screenshots land in .tmp/drive/.
  */
-import { createAccount, pair, chatWith, poll, shot, sweep, done } from '../driver.mjs';
+import { createAccount, pair, chatWith, poll, say, waitForMessage, shot, sweep, done } from '../driver.mjs';
 
 const alice = await createAccount({ name: 'Alice' });
 const bob = await createAccount({ name: 'Bob', mobile: true });
@@ -27,9 +27,13 @@ const movesSeen = async (c, mid) => (await gameInfo(c, mid))?.moves ?? -1;
 const mid = await alice.page.evaluate((id) => window.__ringTest.sendGame(id, 'tictactoe'), aChat);
 await poll(() => gameInfo(bob, mid), (g) => !!g, { label: 'bubble reached Bob' });
 
-// Fresh boards on both sides: Alice sees "Your turn", Bob sees "Their turn".
+// Fresh boards on both sides: Alice sees "Your turn", Bob sees the waiting state.
 await shot(alice, 'ttt-1-alice-your-turn', { route: `/chat/${aChat}` });
 await shot(bob, 'ttt-1-bob-their-turn', { route: `/chat/${bChat}` });
+
+// FR-021: texts bury the game; Alice's move re-surfaces it below them.
+await say(bob, alice.id, 'nice game so far!');
+await waitForMessage(alice, bob.id, 'nice game so far');
 
 // Alternate to Alice's win (row 0-1-2 vs Bob's 3,5,7).
 const script = [
@@ -42,6 +46,9 @@ for (const [who, chat, cell] of script) {
   expected += 1;
 }
 await poll(() => gameInfo(bob, mid), (g) => g?.status?.state === 'won', { label: 'win reached Bob' });
+
+// Mid-list check: the finished game sits BELOW the burying text on both sides.
+await shot(bob, 'ttt-1b-bob-resurfaced', { route: `/chat/${bChat}` });
 
 // The finished board: winner on Alice's side, loss + Play again on Bob's.
 await shot(alice, 'ttt-2-alice-won', { route: `/chat/${aChat}` });

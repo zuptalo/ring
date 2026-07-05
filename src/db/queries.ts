@@ -801,6 +801,12 @@ async function applyGameMove(message: Message, sender: 0 | 1, signal: SessionSig
   const r = applyGameSignal(GAMES[message.game.gameType] ?? null, message.game, signal, sender);
   if (r.outcome !== 'dropped') {
     message.game = r.session;
+    // FR-021: an ACCEPTED move/resign re-surfaces the bubble to the newest spot
+    // so an active game never gets buried. Derived from the signal's own `at`
+    // (which both devices see), never local receive time — so both reorder the
+    // history identically. max() guards against a peer clock behind the bubble's
+    // own time; rejected (out-of-sync) signals deliberately don't bump.
+    if (r.outcome === 'applied') message.timestamp = Math.max(message.timestamp, signal.at);
     message.updatedAt = now();
     await put('messages', message);
   }

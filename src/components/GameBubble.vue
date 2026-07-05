@@ -18,7 +18,14 @@
         :can-move="canMove"
         @move="(mv: unknown) => $emit('move', mv)"
       />
-      <div class="game-status" role="status">{{ statusLine }}</div>
+      <!-- Glanceable turn state (FR-020): an animated cue via the app's existing
+           animated-emoji pipeline — 🎲 your move, ⏳ waiting, 🎉 you won. All three
+           exist in the Noto animated set; AnimatedEmoji falls back to the native
+           glyph when animation is off or the art can't load. -->
+      <div class="game-status" role="status">
+        <animated-emoji v-if="statusEmoji" :key="statusEmoji" :emoji="statusEmoji" />
+        <span>{{ statusLine }}</span>
+      </div>
       <div class="game-actions">
         <ion-button
           v-if="status.state === 'ongoing'"
@@ -46,6 +53,7 @@
 import { computed } from 'vue';
 import { IonIcon, IonButton, alertController } from '@ionic/vue';
 import { gameControllerOutline } from 'ionicons/icons';
+import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
 import { deriveStatus, replayState } from '@/games/session';
@@ -92,9 +100,9 @@ const statusLine = computed((): string => {
   const s = status.value;
   switch (s.state) {
     case 'ongoing':
-      return s.turn === myPlayer.value ? 'Your turn' : 'Their turn';
+      return s.turn === myPlayer.value ? 'Your turn' : 'Waiting for their move';
     case 'won':
-      return s.winner === myPlayer.value ? 'You won! 🎉' : 'They won';
+      return s.winner === myPlayer.value ? 'You won!' : 'They won';
     case 'draw':
       return "It's a draw";
     case 'resigned':
@@ -102,6 +110,15 @@ const statusLine = computed((): string => {
     case 'out-of-sync':
       return 'This game got out of sync';
   }
+  return '';
+});
+
+// The animated cue paired with the status line (FR-020). Only states that
+// benefit from a glance get one; the rest stay plain text.
+const statusEmoji = computed((): string => {
+  const s = status.value;
+  if (s.state === 'ongoing') return s.turn === myPlayer.value ? '🎲' : '⏳';
+  if ((s.state === 'won' || s.state === 'resigned') && s.winner === myPlayer.value) return '🎉';
   return '';
 });
 </script>
@@ -126,6 +143,9 @@ const statusLine = computed((): string => {
   color: var(--ion-color-primary);
 }
 .game-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 13px;
   color: var(--app-text-muted);
 }
