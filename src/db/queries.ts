@@ -3201,6 +3201,21 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
   const latest = others.sort((x, y) => x.at - y.at)[others.length - 1];
   const mover = (await getContact(latest.actor))?.name ?? 'Someone';
 
+  // WATCHING the game live — the Wall tab or this very post open, app visible —
+  // means the board updates in front of them: no toast, just the move cue for
+  // the players. The wall twin of the open-chat rule (spec 0008 FR-026): the
+  // notification path covers everyone who is NOT looking.
+  const path = typeof window !== 'undefined' ? window.location.pathname : '';
+  const watching =
+    typeof document !== 'undefined' &&
+    document.visibilityState === 'visible' &&
+    (path === '/tabs/wall' || path === `/wall/post/${post.id}`);
+  if (watching) {
+    for (const i of others) notifiedEngagementIds.add(i.id);
+    if (me !== null) void playGameCue(gameCueFor(status, me));
+    return;
+  }
+
   let body: string | null = null;
   if (me !== null) {
     // A player: someone accepted my challenge, my turn, or the result.
