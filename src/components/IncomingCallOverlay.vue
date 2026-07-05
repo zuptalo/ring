@@ -5,7 +5,7 @@
        incoming view on /call-active takes over instead, so the banner is suppressed there. -->
   <div v-if="callState === 'incoming' && callMeta && !onCallScreen" class="ring-banner">
     <ion-avatar class="ring-avatar">
-      <img :src="callMeta.avatar" :alt="callMeta.name" />
+      <user-avatar :src="callMeta.avatar" :alt="callMeta.name" />
     </ion-avatar>
     <div class="ring-text">
       <div class="ring-name">{{ callMeta.name }}</div>
@@ -37,6 +37,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { IonAvatar, IonIcon, actionSheetController } from '@ionic/vue';

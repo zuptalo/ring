@@ -22,13 +22,14 @@
     <speed-pill :rate="rate" @cycle="cycleRate" />
 
     <div v-if="avatar" class="vp-avatar">
-      <img :src="avatar" alt="" />
+      <user-avatar :src="avatar" alt="" />
       <span class="vp-mic"><ion-icon :icon="mic" /></span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, pause, mic } from 'ionicons/icons';

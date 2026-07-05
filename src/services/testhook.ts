@@ -50,6 +50,12 @@ import {
   sendPoll as dbSendPoll,
   sendContact as dbSendContact,
   votePoll as dbVotePoll,
+  sendGame as dbSendGame,
+  playGameMove as dbPlayGameMove,
+  resignGame as dbResignGame,
+  hasOngoingGame as dbHasOngoingGame,
+  forwardMessage as dbForwardMessage,
+  shareProfileUpdate as dbShareProfileUpdate,
   sendMediaMessage as dbSendMediaMessage,
   setChatTtl as dbSetChatTtl,
   setChatNotifyPrefs as dbSetChatNotifyPrefs,
@@ -133,7 +139,7 @@ import {
   listConnections as apiListConnections,
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
-import { notifyBanners, showActionBanner } from '@/services/notify';
+import { notifyBanners, showActionBanner, isChatActive as notifyIsChatActive } from '@/services/notify';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { recordCues, recordedCues } from '@/services/sound';
 import { syncContactEdges } from '@/services/directory';
@@ -152,7 +158,9 @@ import { activityFor } from '@/composables/useTyping';
 import type { ActivityKind, ActivityState } from '@/services/transport';
 import { setSecret } from '@/db/secrets';
 import { get, getAll, put, bulkPut } from '@/db/idb';
-import { initialsAvatar } from '@/db/avatars';
+import { GAMES } from '@/games/registry';
+import { deriveStatus as deriveGameStatus } from '@/games/session';
+import { initialsAvatar, emojiAvatar, emojiOfAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
 import type { Call, Chat, FriendRequest, Media, Message, Post, OutboxPost } from '@/db/types';
@@ -474,6 +482,7 @@ export function installTestHook(): void {
         id: m.id,
         body: m.body,
         kind: m.kind,
+        timestamp: m.timestamp, // display-order key (games re-surface by bumping it, spec 0008)
         status: m.status,
         hasPoster: !!m.posterData, // spec 1014: the bubble-tier preview rode the sealed envelope
         seenReportedAt: m.seenReportedAt ?? null, // spec 1013: this device reported it Seen
@@ -560,6 +569,51 @@ export function installTestHook(): void {
     sendContact: (chatId: string, userId: string, name: string, avatar?: string) =>
       dbSendContact(chatId, { userId, name, avatar }),
     votePoll: (messageId: string, option: number) => dbVotePoll(messageId, option),
+
+    /* ---- in-chat games (spec 0008) ---- */
+    /** Start a game in a 1:1 chat (optionally themed); returns the bubble's message id. */
+    sendGame: (chatId: string, gameType: string, theme?: string) => dbSendGame(chatId, gameType, theme),
+    /** Play a move on a game bubble (refused silently when not allowed). */
+    playGameMove: (chatId: string, messageId: string, move: unknown) =>
+      dbPlayGameMove(chatId, messageId, move),
+    /** A game bubble's derived session view — exactly what the GameBubble renders. */
+    gameInfo: async (messageId: string) => {
+      const m = await dbGetMessage(messageId);
+      if (!m?.game) return null;
+      return {
+        gameType: m.game.gameType,
+        theme: m.game.theme ?? null,
+        startedAt: m.game.startedAt ?? null,
+        moves: m.game.moves.length,
+        status: deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game),
+      };
+    },
+    /** Resign an ongoing game (the opponent wins by concession). */
+    resignGame: (chatId: string, messageId: string) => dbResignGame(chatId, messageId),
+    /** The one-game-per-chat gate's source of truth (FR-001a). */
+    hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
+    /** Whether the notify layer considers this chat actively viewed (gates game cues). */
+    isChatActive: (chatId: string) => notifyIsChatActive(chatId),
+    /** Pick an emoji profile picture (spec 0008 FR-027) — the same path the UI uses. */
+    setEmojiAvatar: async (emoji: string): Promise<void> => {
+      await setSecret('profileAvatar', emojiAvatar(emoji));
+      await publishOwnProfile();
+    },
+    /** Re-share the current profile into a chat (drives the E2EE profile card). */
+    shareProfileUpdate: (chatId: string) => dbShareProfileUpdate(chatId),
+    /** The emoji a contact's DISPLAYED avatar decodes to, or null (FR-027 asserts). */
+    contactAvatarEmoji: async (id: string): Promise<string | null> =>
+      emojiOfAvatar((await dbGetContact(id))?.avatar ?? ''),
+    /** The emoji a contact's STAGED (not yet adopted) avatar decodes to, or null. */
+    contactPendingAvatarEmoji: async (id: string): Promise<string | null> =>
+      emojiOfAvatar((await dbGetContact(id))?.pendingAvatar ?? ''),
+    /** A chat's list-preview line + icon kind (game-activity preview asserts, FR-013). */
+    chatPreview: async (chatId: string) => {
+      const c = await dbGetChat(chatId);
+      return c ? { lastMessage: c.lastMessage, lastKind: c.lastKind ?? null } : null;
+    },
+    /** Forward a message by id (games must be a no-op — asserting FR-014). */
+    forwardMessage: (messageId: string, chatIds: string[]) => dbForwardMessage(messageId, chatIds),
     sendAudio: (chatId: string, name: string, title: string, artist: string) =>
       dbSendMediaMessage(chatId, 'audio', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/mpeg' }), name, 12, {
         audio: { title, artist },

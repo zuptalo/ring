@@ -34,4 +34,15 @@ describe('notifyPreview', () => {
   it('falls back to a generic line for an unknown kind', () => {
     expect(notifyPreview(p({ kind: 'whatever' as MessagePayload['kind'] }))).toBe('New message');
   });
+
+  // Spec 0008 (US3): game bubbles and move signals get spelled-out lines.
+  it('spells out a game invitation, with a generic fallback for unknown games', () => {
+    expect(notifyPreview(p({ kind: 'game', game: { gameType: 'tictactoe' } }))).toBe(
+      'Wants to play Tic-tac-toe',
+    );
+    expect(notifyPreview(p({ kind: 'game', game: { gameType: 'from-the-future' } }))).toBe(
+      'Wants to play a game',
+    );
+  });
+
 });

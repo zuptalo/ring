@@ -8,6 +8,7 @@
  */
 import type { Chat } from '@/db/types';
 import type { MessagePayload } from './crypto/message';
+import { GAMES } from '@/games/registry';
 
 const durLabel = (sec?: number) =>
   sec ? ` (${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')})` : '';
@@ -28,7 +29,7 @@ export function previewKind(kind: string, albumName?: string, videoNote?: boolea
   if (albumName) return 'album';
   if (kind === 'video') return videoNote ? 'videonote' : 'video';
   if (kind === 'image' || kind === 'voice' || kind === 'file' || kind === 'audio') return kind;
-  if (kind === 'location' || kind === 'poll' || kind === 'contact') return kind;
+  if (kind === 'location' || kind === 'poll' || kind === 'contact' || kind === 'game') return kind;
   return 'text';
 }
 
@@ -41,7 +42,9 @@ export function chatListPreview(payload: MessagePayload, kind: string, durationS
       ? payload.location?.label || 'Location'
       : kind === 'poll'
         ? payload.poll?.question || 'Poll'
-        : kind === 'contact'
+        : kind === 'game'
+          ? GAMES[payload.game?.gameType ?? '']?.displayName ?? 'Game'
+          : kind === 'contact'
           ? payload.contact?.name || 'Contact'
           : kind === 'audio'
             ? payload.audio?.title || mediaPreview('audio', durationSec, payload.mediaRef?.name)

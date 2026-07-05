@@ -28,7 +28,7 @@
         >
           <div class="avatar-wrap" slot="start">
             <ion-avatar>
-              <img :src="u.avatar || initialsAvatar(u.displayName)" :alt="u.displayName" />
+              <user-avatar :src="u.avatar || initialsAvatar(u.displayName)" :alt="u.displayName" />
             </ion-avatar>
             <span v-if="peerPresence(u.id)?.online" class="presence-dot" aria-hidden="true" />
           </div>
@@ -53,6 +53,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {

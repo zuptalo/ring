@@ -18,7 +18,7 @@
       <div v-if="post" class="wrap">
         <div class="head">
           <ion-avatar class="avatar">
-            <img v-if="authorAvatar" :src="authorAvatar" :alt="authorName" />
+            <user-avatar v-if="authorAvatar" :src="authorAvatar" :alt="authorName" />
             <div v-else class="ph">{{ initial(authorName) }}</div>
           </ion-avatar>
           <div class="who">
@@ -98,7 +98,7 @@
             <ion-item-sliding v-for="c in comments" :key="c.id">
               <ion-item lines="none" class="citem">
                 <ion-avatar slot="start" class="cavatar">
-                  <img v-if="avatarOf(c.actor)" :src="avatarOf(c.actor)" :alt="nameOf(c.actor)" />
+                  <user-avatar v-if="avatarOf(c.actor)" :src="avatarOf(c.actor)" :alt="nameOf(c.actor)" />
                   <div v-else class="ph">{{ initial(nameOf(c.actor)) }}</div>
                 </ion-avatar>
                 <ion-label class="cwrap">
@@ -153,6 +153,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, reactive, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,

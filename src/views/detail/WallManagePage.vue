@@ -25,7 +25,7 @@
       <ion-list v-else :inset="true">
         <ion-item v-for="u in people" :key="u.id">
           <ion-avatar slot="start" class="avatar">
-            <img v-if="u.avatar" :src="u.avatar" :alt="u.name" />
+            <user-avatar v-if="u.avatar" :src="u.avatar" :alt="u.name" />
             <div v-else class="ph">{{ initial(u.name) }}</div>
           </ion-avatar>
           <ion-label>{{ u.name }}</ion-label>
@@ -46,6 +46,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonContent,
   IonList, IonItem, IonAvatar, IonLabel, IonToggle,

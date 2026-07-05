@@ -32,7 +32,7 @@
           @click="toggle(c.id)"
         >
           <ion-avatar slot="start">
-            <img :src="c.avatar" :alt="c.name" />
+            <user-avatar :src="c.avatar" :alt="c.name" />
           </ion-avatar>
           <ion-label>{{ c.name }}</ion-label>
           <!-- Presentational only: the row's tap toggles selection (pointer-events: none). -->
@@ -74,6 +74,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,

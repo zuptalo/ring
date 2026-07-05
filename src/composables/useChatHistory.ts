@@ -23,6 +23,7 @@ import { computed, isRef, onScopeDispose, ref, watch, type Ref } from 'vue';
 import { subscribe } from '@/db/idb';
 import { listMessagesOlder, listMessagesNewer, countChatMessages } from '@/db/queries';
 import { BATCH_SIZE, MAX_ROWS } from '@/utils/chat-window';
+import { compareByTimeId } from '@/utils/chat-pagination';
 import type { Message } from '@/db/types';
 
 export interface ChatHistory {
@@ -63,6 +64,7 @@ export interface ChatHistoryOpts {
 function sig(m: Message): string {
   return [
     m.updatedAt,
+    m.timestamp, // ordering can change post-insert (a game move re-surfaces its bubble, spec 0008)
     m.status,
     m.seenAt ?? '',
     m.deleted ?? '',
@@ -211,12 +213,18 @@ export function useChatHistory(
 
     const freshById = new Map(fresh.map((m) => [m.id, m]));
     // Patch changed rows + splice removed ones (walk backwards so splices are stable).
+    // A patched row whose TIMESTAMP moved (a game move re-surfaces its bubble, spec
+    // 0008 FR-021) also changes its rank, so the window is re-sorted after the loop —
+    // patch-by-id alone would update the board but leave the bubble stranded at its
+    // old position until the next full reload.
+    let orderChanged = false;
     for (let i = rows.value.length - 1; i >= 0; i--) {
       const cur = rows.value[i];
       const f = freshById.get(cur.id);
       if (!f) {
         rows.value.splice(i, 1); // remove-by-id
       } else if (sig(f) !== sig(cur)) {
+        if (f.timestamp !== cur.timestamp) orderChanged = true;
         Object.assign(rows.value[i], f); // patch-by-id (shallow-merge, same object)
       }
     }
@@ -229,6 +237,7 @@ export function useChatHistory(
         if (m.timestamp > newest && !have.has(m.id)) rows.value.push(m);
       }
     }
+    if (orderChanged) rows.value.sort(compareByTimeId);
     refreshCursors();
     total.value = t;
   }

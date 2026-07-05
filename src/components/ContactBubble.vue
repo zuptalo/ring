@@ -1,7 +1,7 @@
 <template>
   <div class="contact-card">
     <ion-avatar class="contact-av">
-      <img :src="avatar" :alt="contact.name" />
+      <user-avatar :src="avatar" :alt="contact.name" />
     </ion-avatar>
     <div class="contact-meta">
       <span class="contact-name">{{ contact.name }}</span>
@@ -14,6 +14,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed } from 'vue';
 import { IonAvatar, IonButton } from '@ionic/vue';
 import { initialsAvatar } from '@/db/avatars';

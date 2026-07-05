@@ -51,7 +51,7 @@
       <template v-else>
       <div class="profile ion-text-center" role="button" @click="open('profile')">
         <ion-avatar class="profile-avatar">
-          <img :src="avatar" :alt="profileName" />
+          <user-avatar :src="avatar" :alt="profileName" />
         </ion-avatar>
         <h2>{{ profileName }}</h2>
         <p>{{ about }}</p>
@@ -101,6 +101,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import {

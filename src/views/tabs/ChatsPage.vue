@@ -150,7 +150,7 @@
             @click="startChat(person)"
           >
             <ion-avatar slot="start">
-              <img :src="person.avatar" :alt="person.name" />
+              <user-avatar :src="person.avatar" :alt="person.name" />
             </ion-avatar>
             <ion-label>
               <h2>{{ person.name }}</h2>
@@ -164,6 +164,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { ref, computed, watch, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import {

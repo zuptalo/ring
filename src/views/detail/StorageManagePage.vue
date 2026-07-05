@@ -72,7 +72,7 @@
         <ion-list-header><ion-label>Storage by chat</ion-label></ion-list-header>
         <ion-item v-for="row in perChat" :key="row.chatId">
           <ion-avatar slot="start">
-            <img :src="row.avatar" :alt="row.name" />
+            <user-avatar :src="row.avatar" :alt="row.name" />
           </ion-avatar>
           <ion-label class="ion-text-wrap">
             <h2>{{ row.name }}</h2>
@@ -96,6 +96,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, onMounted, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,

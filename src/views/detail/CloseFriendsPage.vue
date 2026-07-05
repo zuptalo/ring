@@ -34,7 +34,7 @@
           </ion-list-header>
           <ion-item v-for="f in closeFriends" :key="f.id" class="closeitem">
             <ion-avatar slot="start" class="avatar">
-              <img v-if="f.avatar" :src="f.avatar" :alt="f.name" />
+              <user-avatar v-if="f.avatar" :src="f.avatar" :alt="f.name" />
               <div v-else class="ph">{{ initial(f.name) }}</div>
             </ion-avatar>
             <ion-label>
@@ -50,7 +50,7 @@
           <ion-list-header><ion-label>Friends</ion-label></ion-list-header>
           <ion-item v-for="f in otherFriends" :key="f.id">
             <ion-avatar slot="start" class="avatar">
-              <img v-if="f.avatar" :src="f.avatar" :alt="f.name" />
+              <user-avatar v-if="f.avatar" :src="f.avatar" :alt="f.name" />
               <div v-else class="ph">{{ initial(f.name) }}</div>
             </ion-avatar>
             <ion-label>
@@ -67,6 +67,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonContent,
   IonList, IonListHeader, IonItem, IonAvatar, IonLabel, IonToggle, IonIcon, IonSearchbar,

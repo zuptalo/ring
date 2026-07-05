@@ -272,3 +272,29 @@ describe('useChatHistory — reset on chatId/q change', () => {
     scope.stop();
   });
 });
+
+describe('useChatHistory — reconcile reorders on a timestamp change (spec 0008 FR-021)', () => {
+  it('a game bubble bumped by a move relocates to its new position LIVE, without a reload', async () => {
+    // Window: [game(10), t2(20), t3(30)] — the game sits at the top.
+    h.older.mockResolvedValueOnce([msg('game', 10, { kind: 'game' }), msg('t2', 20), msg('t3', 30)]);
+    h.count.mockResolvedValue(3);
+    const scope = effectScope();
+    let ch!: ReturnType<typeof useChatHistory>;
+    scope.run(() => (ch = useChatHistory('c1', undefined, { batchSize: 3, maxRows: 8 })));
+    await flush();
+    expect(ch.rows.value.map((m) => m.id)).toEqual(['game', 't2', 't3']);
+
+    // A move re-surfaces the game (timestamp 10 → 40, updatedAt bumped). The open
+    // chat must reorder in place — leaving and re-entering must not be required.
+    h.newer.mockResolvedValueOnce([
+      msg('t2', 20),
+      msg('t3', 30),
+      msg('game', 40, { kind: 'game', updatedAt: 41 }),
+    ]);
+    await fireChange();
+
+    expect(ch.rows.value.map((m) => m.id)).toEqual(['t2', 't3', 'game']);
+    expect(ch.newestLoadedTs.value).toBe(40);
+    scope.stop();
+  });
+});

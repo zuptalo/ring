@@ -16,7 +16,7 @@
     <ion-content>
       <ion-list>
         <ion-item v-for="c in filtered" :key="c.id" button :detail="false" @click="pick(c)">
-          <ion-avatar slot="start"><img :src="c.avatar" :alt="c.name" /></ion-avatar>
+          <ion-avatar slot="start"><user-avatar :src="c.avatar" :alt="c.name" /></ion-avatar>
           <ion-label>{{ c.name }}</ion-label>
         </ion-item>
       </ion-list>
@@ -26,6 +26,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref } from 'vue';
 import {
   IonModal, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,

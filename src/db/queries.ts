@@ -37,8 +37,17 @@ import { resolveInboundDirectChat, planStartDirectChat } from '@/services/hidden
 import { computeUnreadTotal, type HiddenBadgeMode } from '@/db/badge-count';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
-  EditSignal, EraseSignal, LinkPreviewSignal,
+  EditSignal, EraseSignal, LinkPreviewSignal, GameMoveSignal,
 } from '@/services/crypto/message';
+import { GAMES } from '@/games/registry';
+import {
+  applySignal as applyGameSignal,
+  deriveStatus as deriveGameStatus,
+  replayState as replayGameState,
+  localMoveAllowed as gameMoveAllowed,
+  type SessionSignal,
+} from '@/games/session';
+import { gameCueFor, playGameCue } from '@/services/game-sounds';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
   GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, OutboxItem, ChatDraft,
@@ -744,6 +753,165 @@ export async function sendContact(chatId: string, contact: SharedContact, replyT
   await enqueueMessage(chat, message.id, { body: '', kind: 'contact', timestamp: ts, contact, reply: replyTo });
 }
 
+/* ---- in-chat games (spec 0008) ---- */
+
+/**
+ * The one-game-per-chat gate (FR-001a): true while any bubble in the chat holds
+ * an ongoing session. Local/UX-level only — never a wire invariant, so a start
+ * race across an offline gap simply yields two playable games and the gate
+ * stays engaged until every one of them finishes. A gameType this build doesn't
+ * know is EXCLUDED: we can't play (or ever finish) it here, so counting it
+ * would deadlock the gate until that bubble expires.
+ */
+export async function hasOngoingGame(chatId: string): Promise<boolean> {
+  const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
+  return msgs.some(
+    (m) =>
+      m.game &&
+      !m.deleted &&
+      GAMES[m.game.gameType] &&
+      deriveGameStatus(GAMES[m.game.gameType], m.game).state === 'ongoing',
+  );
+}
+
+/** Start a game in a 1:1 chat (the bubble is instantly playable, like a poll).
+ *  Returns the new bubble's message id — it doubles as the game session id.
+ *  `theme` is the starter's visual pick (FR-022); an id the module doesn't
+ *  know is dropped here so garbage never crosses the wire. */
+export async function sendGame(chatId: string, gameType: string, theme?: string): Promise<string> {
+  const module = GAMES[gameType];
+  if (!module) throw new Error(`unknown game: ${gameType}`);
+  const pickedTheme = theme && module.themes.some((t) => t.id === theme) ? theme : undefined;
+  const ts = now();
+  const chat = await getChat(chatId);
+  await guardOutbound(chat);
+  const message = newOutgoing(chat, chatId, 'game', ts);
+  message.game = { gameType, theme: pickedTheme, startedAt: ts, moves: [] };
+  await put('messages', message);
+  await bumpOutgoing(chat, 'game', module.displayName, ts);
+  // Only the registry id + theme id cross the wire: both ends derive the
+  // initial board from the module, and roles from message direction
+  // (sender = player 0).
+  await enqueueMessage(chat, message.id, {
+    body: '',
+    kind: 'game',
+    timestamp: ts,
+    game: { gameType, theme: pickedTheme },
+  });
+  void playGameCue('gamestart'); // the match call (FR-026); starting is always in-chat
+  return message.id;
+}
+
+/** This device's role on a game bubble: the starter is player 0 (moves first). */
+const gameSelfPlayer = (m: Message): 0 | 1 => (m.outgoing ? 0 : 1);
+
+/** Run one signal through the session engine and persist any state change.
+ *  Shared by the local and inbound paths so both classify identically. */
+async function applyGameMove(message: Message, sender: 0 | 1, signal: SessionSignal): Promise<string> {
+  if (!message.game) return 'dropped';
+  const r = applyGameSignal(GAMES[message.game.gameType] ?? null, message.game, signal, sender);
+  if (r.outcome !== 'dropped') {
+    message.game = r.session;
+    // FR-021: an ACCEPTED move/resign re-surfaces the bubble to the newest spot
+    // so an active game never gets buried. Derived from the signal's own `at`
+    // (which both devices see), never local receive time — so both reorder the
+    // history identically. max() guards against a peer clock behind the bubble's
+    // own time; rejected (out-of-sync) signals deliberately don't bump.
+    if (r.outcome === 'applied') message.timestamp = Math.max(message.timestamp, signal.at);
+    message.updatedAt = now();
+    await put('messages', message);
+  }
+  return r.outcome;
+}
+
+/** Play a move on a game bubble. Pre-validated locally (your turn, game ongoing,
+ *  move legal) and refused SILENTLY otherwise — an honest device never emits an
+ *  invalid move, so anything invalid inbound is by definition tampering (FR-003). */
+export async function playGameMove(chatId: string, messageId: string, move: unknown): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m?.game || m.chatId !== chatId) return;
+  const module = GAMES[m.game.gameType];
+  const me = gameSelfPlayer(m);
+  if (!module || !gameMoveAllowed(module, m.game, me)) return;
+  if (module.applyMove(replayGameState(module, m.game), move, me) === null) return;
+  const at = now();
+  const seq = m.game.moves.length + 1;
+  if ((await applyGameMove(m, me, { seq, action: 'move', move, at })) !== 'applied') return;
+  // Your own move ticks (or lands the result cue when it ends the game, FR-026);
+  // playing is inherently in-chat, so no isChatActive check here.
+  void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  const chat = await getChat(m.chatId);
+  const signal: GameMoveSignal = { messageId, seq, action: 'move', move, at };
+  await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
+}
+
+/** Resign an ongoing game (valid for either player, whoever's turn it is).
+ *  The opponent wins by concession; the bubble stays in history (FR-008). */
+export async function resignGame(chatId: string, messageId: string): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m?.game || m.chatId !== chatId) return;
+  const module = GAMES[m.game.gameType];
+  if (!module || deriveGameStatus(module, m.game).state !== 'ongoing') return;
+  const me = gameSelfPlayer(m);
+  const at = now();
+  const seq = m.game.moves.length + 1;
+  if ((await applyGameMove(m, me, { seq, action: 'resign', at })) !== 'applied') return;
+  // Conceding sounds the losing tone for the resigner (FR-026).
+  void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  const chat = await getChat(m.chatId);
+  const signal: GameMoveSignal = { messageId, seq, action: 'resign', at };
+  await enqueueMessage(chat, uid(), { body: '', kind: 'gamemove', timestamp: at, gameMove: signal });
+}
+
+/** Apply an inbound game move/resign from `from` (side effect, never a stored
+ *  message). The bubble may be gone (TTL/deleted) — then the signal is dropped
+ *  (data-model rule 1). v1 is strictly 1:1: only the conversation's peer plays. */
+async function handleGameMove(from: string, signal: GameMoveSignal): Promise<void> {
+  const message = await getMessage(signal.messageId);
+  if (!message?.game) return;
+  const chat = await getChat(message.chatId);
+  if (!chat || chat.isGroup || chat.participantIds[0] !== from) return;
+  // The peer's role is the opposite of ours on this bubble.
+  const sender = (1 - gameSelfPlayer(message)) as 0 | 1;
+  if ((await applyGameMove(message, sender, signal)) !== 'applied') return;
+
+  // Deliberate divergence from silent poll votes (spec 0008 US3): a move
+  // demands the opponent's attention. The move is applied, so the line can be
+  // precise ("Your move" / the actual outcome); the SW preview path can't and
+  // says "Your move" for any move. notifyIncoming applies the same gates it
+  // applies to ordinary messages (mute, content prefs, open-chat suppression).
+  const me = gameSelfPlayer(message);
+  const status = deriveGameStatus(GAMES[message.game.gameType] ?? null, message.game);
+
+  // Their move sounds only while this chat is on screen (FR-026) — the
+  // notification path covers a closed/backgrounded chat, so never both.
+  if (isChatActive(message.chatId)) void playGameCue(gameCueFor(status, me));
+  // Name-first copy (T041), result emoji from the overlay set (FR-025).
+  const name = (await getContact(from))?.name ?? 'Someone';
+  const text =
+    status.state === 'won'
+      ? status.winner === me
+        ? 'You won the game! 🏆'
+        : `${name} won the game 🏆`
+      : status.state === 'draw'
+        ? "It's a draw 🤝"
+        : status.state === 'resigned'
+          ? `${name} gave up. You win! 🏆`
+          : `${name} made a move, your turn 😏`;
+  chat.lastMessage = text;
+  chat.lastKind = 'game';
+  chat.lastMessageTime = signal.at;
+  chat.updatedAt = signal.at;
+  await put('chats', chat);
+  await notifyIncoming({
+    kind: 'message',
+    chatId: message.chatId,
+    name,
+    body: text,
+    pushWoken: pushWakeActive(),
+  }).catch(() => {});
+}
+
 /** Ensure a shared contact exists locally and open a direct chat with them. */
 export async function messageSharedContact(shared: SharedContact): Promise<string> {
   await addContactWithId(shared.userId, shared.name);
@@ -1023,6 +1191,10 @@ export async function firstMessageOnOrAfter(chatId: string, sinceMs: number): Pr
 export async function forwardMessage(messageId: string, chatIds: string[]): Promise<void> {
   const m = await getMessage(messageId);
   if (!m) return;
+  // A game belongs to the conversation it was started in (spec 0008 FR-014) —
+  // forwarding a bubble would clone a session whose moves can never reach the
+  // new audience. The action menu hides Forward for games; this is the backstop.
+  if (m.kind === 'game') return;
   for (const cid of chatIds) {
     // Skip a target whose 1:1 peer is ghosted or blocked (the others still get it).
     const target = await getChat(cid);
@@ -1430,6 +1602,7 @@ function previewText(m: Message): string {
   if (m.body) return m.body.length > 28 ? `${m.body.slice(0, 28)}…` : m.body;
   if (m.kind === 'location') return m.location?.label || 'Location';
   if (m.kind === 'poll') return m.poll?.question || 'Poll';
+  if (m.kind === 'game') return GAMES[m.game?.gameType ?? '']?.displayName ?? 'Game';
   if (m.kind === 'contact') return m.contact?.name || 'Contact';
   return mediaPreview(m.kind, m.durationSec, undefined, m.videoNote);
 }
@@ -1801,6 +1974,9 @@ export async function retryOutgoing(messageId: string): Promise<void> {
     location: m.location,
     contact: m.contact,
     poll: m.poll ? { question: m.poll.question, options: m.poll.options, multi: m.poll.multi, votes: [] } : undefined,
+    // A game bubble re-sends only its wire ids (like a poll's empty votes): the
+    // peer derives the initial board; any moves made meanwhile follow as signals.
+    game: m.game ? { gameType: m.game.gameType, theme: m.game.theme } : undefined,
   };
   await enqueueMessage(chat, m.id, payload);
 }
@@ -4649,6 +4825,12 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     if (remoteId) await markInboundSeen(remoteId);
     return;
   }
+  // Game moves/resignations → mutate the target game bubble, never a stored message.
+  if (payload.gameMove) {
+    await handleGameMove(from, payload.gameMove);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
   // Edits → rewrite the target message's text, never a stored message.
   if (payload.edit) {
     await handleEdit(from, payload.edit);
@@ -4739,6 +4921,10 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     }
   }
 
+  // An incoming game start sounds the match call when its chat is on screen
+  // (FR-026); everywhere else the notification sound speaks for it.
+  if (payload.game && isChatActive(targetChatId)) void playGameCue('gamestart');
+
   const message: Message = {
     // Use the sender's message id so a read receipt we send back correlates to
     // their message; also dedupes a re-delivered message (same id → overwrite).
@@ -4759,6 +4945,13 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     videoNote: payload.videoNote,
     location: payload.location,
     poll: payload.poll,
+    // A fresh game session for an inbound bubble (moves arrive as signals). The
+    // sender is player 0; on this side outgoing === false, so we are player 1.
+    // startedAt keeps the compose time — Message.timestamp becomes last-activity
+    // time once moves re-surface the bubble (FR-021), and stats need the start.
+    game: payload.game
+      ? { gameType: payload.game.gameType, theme: payload.game.theme, startedAt: ts, moves: [] }
+      : undefined,
     contact: payload.contact,
     audio: payload.audio,
     linkPreview: payload.linkPreview, // present only on the rare fast-enough inline send

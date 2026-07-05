@@ -40,7 +40,7 @@
           @click="openInfo"
         >
           <ion-avatar class="chat-header-avatar">
-            <img :src="chat.avatar" :alt="chat.name" />
+            <user-avatar :src="chat.avatar" :alt="chat.name" />
           </ion-avatar>
           <span class="chat-header-text">
             <span class="chat-header-name">{{ chat.name }}</span>
@@ -387,6 +387,17 @@
                 v-else-if="m.kind === 'contact' && m.contact"
                 :contact="m.contact"
                 @message="openSharedContact(m.contact)"
+              />
+              <!-- In-chat game (spec 0008): board + status derived from the
+                   validated move log; taps send E2EE move signals. -->
+              <game-bubble
+                v-else-if="m.kind === 'game' && m.game"
+                :game="m.game"
+                :outgoing="m.outgoing"
+                :peer-name="chat?.name"
+                @move="(mv) => playGameMove(chatId, m.id, mv)"
+                @resign="resignGame(chatId, m.id)"
+                @rematch="(gt) => onGameRematch(gt)"
               />
 
               <!-- Rich link preview (generated sender-side, delivered E2EE — no
@@ -1083,6 +1094,7 @@
 
     <!-- Poll composer + contact picker + location composer (from the + sheet) -->
     <poll-composer :open="pollOpen" @create="onPollCreate" @close="pollOpen = false" />
+    <game-picker :open="gamePickerOpen" @pick="onGamePick" @close="gamePickerOpen = false" />
     <location-composer :open="locationOpen" @send="onLocationSend" @close="locationOpen = false" />
     <audio-review
       :open="audioReview.open"
@@ -1103,6 +1115,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
@@ -1130,6 +1143,7 @@ import {
   MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
+  sendGame, playGameMove, resignGame, hasOngoingGame,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
   backfillThumbTiers, getDraft, saveDraft, clearDraft, getDraftMedia, saveDraftMedia, clearDraftMedia,
@@ -1151,6 +1165,8 @@ import ForwardPicker from '@/components/ForwardPicker.vue';
 import LocationBubble from '@/components/LocationBubble.vue';
 import PollBubble from '@/components/PollBubble.vue';
 import ContactBubble from '@/components/ContactBubble.vue';
+import GameBubble from '@/components/GameBubble.vue';
+import GamePicker from '@/components/GamePicker.vue';
 import PollComposer from '@/components/PollComposer.vue';
 import ContactPicker from '@/components/ContactPicker.vue';
 import LocationComposer from '@/components/LocationComposer.vue';
@@ -1638,9 +1654,12 @@ async function openMenu(m: Message, ev: Event) {
     cssClass: 'reaction-popover',
     componentProps: {
       isOutgoing: m.outgoing,
-      canInfo: m.outgoing || hasMedia,
+      // Games get info in BOTH directions: the stats (FR-024) are as much the
+      // receiver's story as the sender's.
+      canInfo: m.outgoing || hasMedia || m.kind === 'game',
       canCopy: !!m.body,
       canView,
+      canForward: m.kind !== 'game', // a game belongs to its conversation (spec 0008 FR-014)
       canEdit: m.outgoing && m.kind === 'text' && !m.deleted,
       canSave,
       canSaveAll,
@@ -3788,6 +3807,9 @@ async function send() {
 /* ---- attachments ---- */
 
 async function openAttach() {
+  // One game at a time per chat (spec 0008 FR-001a): resolve the gate up front
+  // so the sheet can present the entry as unavailable with a brief explanation.
+  const gameBlocked = !chat.value?.isGroup && (await hasOngoingGame(chatId));
   const sheet = await actionSheetController.create({
     header: 'Share',
     buttons: [
@@ -3796,6 +3818,16 @@ async function openAttach() {
       { text: 'Location', handler: () => void shareLocation() },
       { text: 'Contact', handler: () => void openContactPicker() },
       { text: 'Poll', handler: () => void openPollComposer() },
+      // Games are 1:1 only in v1 — group chats simply don't get the entry.
+      ...(chat.value?.isGroup
+        ? []
+        : [{
+            text: gameBlocked ? 'Game (one game at a time)' : 'Game',
+            cssClass: gameBlocked ? 'attach-game-blocked' : undefined,
+            handler: gameBlocked
+              ? () => void appToast({ message: 'Finish the game you two are playing first.', duration: 2200 })
+              : () => void openGamePicker(),
+          }]),
       { text: 'Cancel', role: 'cancel' },
     ],
   });
@@ -3832,6 +3864,26 @@ async function onPollCreate(poll: { question: string; options: string[]; multi: 
   await sendPoll(chatId, poll.question, poll.options, poll.multi, takeReply());
   void scrollToNewest();
 }
+
+/* ---- in-chat games (spec 0008) ---- */
+
+const gamePickerOpen = ref(false);
+const openGamePicker = () => (gamePickerOpen.value = true);
+
+async function onGamePick(gameType: string, theme?: string): Promise<void> {
+  gamePickerOpen.value = false;
+  // Re-check the gate at send time — the sheet's answer may be stale by now.
+  if (await hasOngoingGame(chatId)) {
+    await appToast({ message: 'Finish the game you two are playing first.', duration: 2200 });
+    return;
+  }
+  await sendGame(chatId, gameType, theme);
+  void scrollToNewest();
+}
+
+// "Play again" on a finished bubble reopens the style picker — half the fun of
+// a rematch is picking a fresh look. Same gate as the picker.
+const onGameRematch = (_gameType: string) => openGamePicker();
 
 async function onContactSelect(c: SharedContact): Promise<void> {
   contactPickerOpen.value = false;

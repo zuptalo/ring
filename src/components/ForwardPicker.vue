@@ -22,7 +22,7 @@
       <ion-list v-if="frequent.length">
         <ion-list-header><ion-label>Frequently contacted</ion-label></ion-list-header>
         <ion-item v-for="c in frequent" :key="c.id" button :detail="false" @click="toggle(c.id)">
-          <ion-avatar slot="start"><img :src="c.avatar" :alt="c.name" /></ion-avatar>
+          <ion-avatar slot="start"><user-avatar :src="c.avatar" :alt="c.name" /></ion-avatar>
           <ion-label>{{ c.name }}</ion-label>
           <ion-checkbox slot="end" :checked="sel.has(c.id)" class="pick" aria-hidden="true" />
         </ion-item>
@@ -31,7 +31,7 @@
       <ion-list>
         <ion-list-header><ion-label>{{ q.trim() ? 'Results' : 'Recent chats' }}</ion-label></ion-list-header>
         <ion-item v-for="c in recent" :key="c.id" button :detail="false" @click="toggle(c.id)">
-          <ion-avatar slot="start"><img :src="c.avatar" :alt="c.name" /></ion-avatar>
+          <ion-avatar slot="start"><user-avatar :src="c.avatar" :alt="c.name" /></ion-avatar>
           <ion-label>{{ c.name }}</ion-label>
           <ion-checkbox slot="end" :checked="sel.has(c.id)" class="pick" aria-hidden="true" />
         </ion-item>
@@ -52,6 +52,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref, watch } from 'vue';
 import {
   IonModal, IonHeader, IonToolbar, IonButtons, IonButton, IonTitle, IonSearchbar,

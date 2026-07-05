@@ -18,7 +18,7 @@
 
       <div class="ps-avatar ion-text-center">
         <ion-avatar class="ps-img" :class="{ missing: !photo }" @click="editPhoto">
-          <img v-if="avatar" :src="avatar" alt="Your photo" />
+          <user-avatar v-if="avatar" :src="avatar" alt="Your photo" />
         </ion-avatar>
         <div>
           <ion-button fill="clear" size="small" @click="editPhoto">
@@ -74,16 +74,18 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, onMounted, ref } from 'vue';
 import {
   IonPage, IonHeader, IonFooter, IonToolbar, IonTitle, IonButtons, IonButton, IonIcon,
   IonContent, IonAvatar, IonList, IonItem, IonInput, actionSheetController, modalController,
 } from '@ionic/vue';
 import type { ActionSheetButton } from '@ionic/vue';
-import { cameraOutline, imageOutline, trashOutline, closeOutline } from 'ionicons/icons';
+import { cameraOutline, imageOutline, trashOutline, closeOutline, happyOutline } from 'ionicons/icons';
+import EmojiPickerModal from '@/components/EmojiPickerModal.vue';
 import { getSecret, setSecret } from '@/db/secrets';
 import { getSelfUsername } from '@/services/auth';
-import { initialsAvatar } from '@/db/avatars';
+import { initialsAvatar, emojiAvatar } from '@/db/avatars';
 import { publishOwnProfile } from '@/services/directory';
 import { pickImageFile, fileToDataUrl } from '@/utils/pick-image';
 import { capitalizeFirst } from '@/utils/text';
@@ -150,10 +152,30 @@ async function pickPhoto(capture: boolean): Promise<void> {
   void publishOwnProfile();
 }
 
+// Pick an emoji as the profile picture (spec 0008 FR-027) — a first-class
+// option at signup too. Persist-then-flip, same as pickPhoto, so canFinish
+// can't outrun the stored secret.
+async function pickEmoji(): Promise<void> {
+  const modal = await modalController.create({
+    component: EmojiPickerModal,
+    cssClass: 'emoji-picker-sheet',
+    breakpoints: [0, 0.6, 0.95],
+    initialBreakpoint: 0.6,
+  });
+  await modal.present();
+  const { data } = await modal.onWillDismiss<{ emoji?: string }>();
+  if (!data?.emoji) return;
+  const dataUrl = emojiAvatar(data.emoji);
+  await setSecret('profileAvatar', dataUrl);
+  photo.value = dataUrl;
+  void publishOwnProfile();
+}
+
 async function editPhoto() {
   const buttons: ActionSheetButton[] = [
     { text: 'Take photo', icon: cameraOutline, handler: () => pickPhoto(true) },
     { text: 'Choose photo', icon: imageOutline, handler: () => pickPhoto(false) },
+    { text: 'Pick an emoji', icon: happyOutline, handler: () => void pickEmoji() },
   ];
   if (photo.value) {
     buttons.push({

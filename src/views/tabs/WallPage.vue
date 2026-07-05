@@ -99,7 +99,7 @@
             <!-- Header: avatar + name + a subtle "disappears in …" countdown. -->
             <div class="phead">
               <ion-avatar class="avatar">
-                <img v-if="p.authorAvatar" :src="p.authorAvatar" :alt="p.authorName" />
+                <user-avatar v-if="p.authorAvatar" :src="p.authorAvatar" :alt="p.authorName" />
                 <div v-else class="ph">{{ initial(p.authorName) }}</div>
               </ion-avatar>
               <div class="who">
@@ -248,7 +248,7 @@
                 class="crow"
               >
                 <ion-avatar class="cmini">
-                  <img v-if="cm.authorAvatar" :src="cm.authorAvatar" :alt="cm.authorName" />
+                  <user-avatar v-if="cm.authorAvatar" :src="cm.authorAvatar" :alt="cm.authorName" />
                   <div v-else class="ph">{{ initial(cm.authorName) }}</div>
                 </ion-avatar>
                 <span class="cname">{{ cm.authorName }}</span>
@@ -295,6 +295,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, reactive, ref, watch } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton, IonContent,

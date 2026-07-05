@@ -20,7 +20,8 @@
     <ion-item button :detail="false" :class="{ 'hidden-row': isHidden }" @click="$emit('open', chat.id)">
       <div class="avatar-wrap" slot="start">
         <ion-avatar>
-          <img :src="chat.avatar" :alt="chat.name" />
+          <!-- Unread demands attention: the emoji picture keeps moving until read (FR-028). -->
+          <user-avatar :src="chat.avatar" :alt="chat.name" :attention="unread" />
         </ion-avatar>
         <span v-if="isOnline" class="presence-dot" aria-hidden="true" />
       </div>
@@ -42,7 +43,9 @@
               class="preview-ico"
               aria-hidden="true"
             />
-            <span class="preview">{{ chat.lastMessage }}</span>
+            <!-- EmojiText so a preview's emoji (a game's 😏/🏆, spec 0008 FR-023)
+                 plays its animation when it has one, like banners and chat bodies. -->
+            <span class="preview"><emoji-text :text="chat.lastMessage" /></span>
           </template>
         </p>
       </ion-label>
@@ -77,6 +80,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref } from 'vue';
 import {
   IonItemSliding, IonItem, IonItemOptions, IonItemOption, IonAvatar, IonLabel, IonNote,
@@ -87,11 +91,13 @@ import {
   notificationsOffOutline, lockClosedOutline, eyeOffOutline,
   cameraOutline, videocamOutline, micOutline, documentOutline, imagesOutline,
   locationOutline, barChartOutline, personOutline, musicalNotesOutline, callOutline,
+  gameControllerOutline,
 } from 'ionicons/icons';
 import {
   markChatRead, markChatUnread, setChatPinned, setChatArchived, MAX_PINNED_CHATS,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
+import EmojiText from '@/components/EmojiText.vue';
 import { isHiddenId } from '@/services/hidden-state';
 import { peerPresence } from '@/composables/usePresence';
 import { activityFor, activityKindLabel } from '@/composables/useTyping';
@@ -110,7 +116,7 @@ const PREVIEW_ICONS: Record<NonNullable<Chat['lastKind']>, string | null> = {
   image: cameraOutline, video: videocamOutline, videonote: videocamOutline, voice: micOutline,
   file: documentOutline, album: imagesOutline, location: locationOutline,
   poll: barChartOutline, contact: personOutline, audio: musicalNotesOutline, call: callOutline,
-  text: null, reaction: null,
+  game: gameControllerOutline, text: null, reaction: null,
 };
 const previewIcon = computed(() => (props.chat.lastKind ? PREVIEW_ICONS[props.chat.lastKind] : null));
 
