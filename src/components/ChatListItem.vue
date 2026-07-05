@@ -42,7 +42,9 @@
               class="preview-ico"
               aria-hidden="true"
             />
-            <span class="preview">{{ chat.lastMessage }}</span>
+            <!-- EmojiText so a preview's emoji (a game's 😏/🏆, spec 0008 FR-023)
+                 plays its animation when it has one, like banners and chat bodies. -->
+            <span class="preview"><emoji-text :text="chat.lastMessage" /></span>
           </template>
         </p>
       </ion-label>
@@ -93,6 +95,7 @@ import {
   markChatRead, markChatUnread, setChatPinned, setChatArchived, MAX_PINNED_CHATS,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
+import EmojiText from '@/components/EmojiText.vue';
 import { isHiddenId } from '@/services/hidden-state';
 import { peerPresence } from '@/composables/usePresence';
 import { activityFor, activityKindLabel } from '@/composables/useTyping';
