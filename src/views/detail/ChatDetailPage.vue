@@ -399,6 +399,19 @@
                 @resign="resignGame(chatId, m.id)"
                 @rematch="(gt) => onGameRematch(gt)"
               />
+              <!-- Open group challenge (spec 0009): announcement → board → withdrawn. -->
+              <challenge-bubble
+                v-else-if="m.kind === 'gamechallenge' && m.game"
+                :game="m.game"
+                :outgoing="m.outgoing"
+                :self-id="selfId"
+                :names="gameNames"
+                @accept="acceptGameChallenge(m.id)"
+                @cancel="cancelGameChallenge(m.id)"
+                @move="(mv) => playGameMove(chatId, m.id, mv)"
+                @resign="resignGame(chatId, m.id)"
+                @rematch="(gt) => onGameRematch(gt)"
+              />
 
               <!-- Rich link preview (generated sender-side, delivered E2EE — no
                    recipient-side fetch). Falls back to the domain-only card below
@@ -1144,6 +1157,7 @@ import {
   retryMediaMessage, resumePendingMediaJobs, downloadMessageMedia,
   sendLocation, sendPoll, sendContact, votePoll, messageSharedContact,
   sendGame, playGameMove, resignGame, hasOngoingGame,
+  sendGameChallenge, acceptGameChallenge, cancelGameChallenge,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
   backfillThumbTiers, getDraft, saveDraft, clearDraft, getDraftMedia, saveDraftMedia, clearDraftMedia,
@@ -1166,6 +1180,7 @@ import LocationBubble from '@/components/LocationBubble.vue';
 import PollBubble from '@/components/PollBubble.vue';
 import ContactBubble from '@/components/ContactBubble.vue';
 import GameBubble from '@/components/GameBubble.vue';
+import ChallengeBubble from '@/components/ChallengeBubble.vue';
 import GamePicker from '@/components/GamePicker.vue';
 import PollComposer from '@/components/PollComposer.vue';
 import ContactPicker from '@/components/ContactPicker.vue';
@@ -3807,9 +3822,11 @@ async function send() {
 /* ---- attachments ---- */
 
 async function openAttach() {
-  // One game at a time per chat (spec 0008 FR-001a): resolve the gate up front
-  // so the sheet can present the entry as unavailable with a brief explanation.
-  const gameBlocked = !chat.value?.isGroup && (await hasOngoingGame(chatId));
+  // One game at a time per chat (spec 0008 FR-001a, groups included per spec
+  // 0009): resolve the gate up front so the sheet can present the entry as
+  // unavailable with a brief explanation. In groups the entry throws an OPEN
+  // CHALLENGE — the first member to accept becomes the opponent.
+  const gameBlocked = await hasOngoingGame(chatId);
   const sheet = await actionSheetController.create({
     header: 'Share',
     buttons: [
@@ -3818,16 +3835,17 @@ async function openAttach() {
       { text: 'Location', handler: () => void shareLocation() },
       { text: 'Contact', handler: () => void openContactPicker() },
       { text: 'Poll', handler: () => void openPollComposer() },
-      // Games are 1:1 only in v1 — group chats simply don't get the entry.
-      ...(chat.value?.isGroup
-        ? []
-        : [{
-            text: gameBlocked ? 'Game (one game at a time)' : 'Game',
-            cssClass: gameBlocked ? 'attach-game-blocked' : undefined,
-            handler: gameBlocked
-              ? () => void appToast({ message: 'Finish the game you two are playing first.', duration: 2200 })
-              : () => void openGamePicker(),
-          }]),
+      {
+        text: gameBlocked
+          ? 'Game (one game at a time)'
+          : chat.value?.isGroup
+            ? 'Game challenge'
+            : 'Game',
+        cssClass: gameBlocked ? 'attach-game-blocked' : undefined,
+        handler: gameBlocked
+          ? () => void appToast({ message: 'Finish the game in this chat first.', duration: 2200 })
+          : () => void openGamePicker(),
+      },
       { text: 'Cancel', role: 'cancel' },
     ],
   });
@@ -3874,12 +3892,21 @@ async function onGamePick(gameType: string, theme?: string): Promise<void> {
   gamePickerOpen.value = false;
   // Re-check the gate at send time — the sheet's answer may be stale by now.
   if (await hasOngoingGame(chatId)) {
-    await appToast({ message: 'Finish the game you two are playing first.', duration: 2200 });
+    await appToast({ message: 'Finish the game in this chat first.', duration: 2200 });
     return;
   }
-  await sendGame(chatId, gameType, theme);
+  // Groups throw an open challenge (spec 0009); 1:1 starts the game directly.
+  if (chat.value?.isGroup) await sendGameChallenge(chatId, gameType, theme);
+  else await sendGame(chatId, gameType, theme);
   void scrollToNewest();
 }
+
+// Seat names for challenge bubbles (spec 0009): every contact by id, plus me.
+const gameNames = computed<Record<string, string>>(() => {
+  const map: Record<string, string> = {};
+  for (const c of contacts.value) map[c.id] = c.name;
+  return map;
+});
 
 // "Play again" on a finished bubble reopens the style picker — half the fun of
 // a rematch is picking a fresh look. Same gate as the picker.
