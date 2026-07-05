@@ -45,7 +45,9 @@ describe('noteForPayload — game moves (spec 0008 US3/T041)', () => {
       },
     } as any;
     const winning = { gameMove: { messageId: 'g1', seq: 5, action: 'move', move: { cell: 2 }, at: 5 } } as any;
-    const { note } = noteForPayload(frame, winning, [chat()], contacts, true, true, new Set(), '', gameRow);
+    const { note } = noteForPayload(frame, winning, [chat()], contacts, true, true, new Set(), '', {
+      row: gameRow,
+    });
     expect(note!.body).toBe('Peer One won the game 🏆');
   });
 
@@ -86,5 +88,104 @@ describe('noteForPayload — game moves (spec 0008 US3/T041)', () => {
   it('global "Show notifications" off → nothing', () => {
     const r = noteForPayload(frame, move, [chat()], contacts, false, true);
     expect(r.note).toBeNull();
+  });
+});
+
+// Spec 0009 US2 — group games in the SW: players-only turn alerts, quiet
+// observers, follow-gated updates, all decided from the stored session row
+// (players + selfId) and the device's own prefs/follow set.
+describe('noteForPayload — GROUP game moves (spec 0009 US2)', () => {
+  const gframe = { id: 'f2', from: 'peer-1', t: 'msg', ciphertext: '' } as any;
+  const gchat = (): Chat =>
+    ({ id: 'g1', name: 'Arena', isGroup: true, participantIds: ['peer-1', 'peer-2'] }) as unknown as Chat;
+  const gmove = (seq: number, cell: number, opponent?: string) =>
+    ({ groupId: 'g1', gameMove: { messageId: 'gc1', seq, action: 'move', move: { cell }, at: seq, opponent } }) as any;
+  // A seated group session where I ('me') am player 1 vs peer-1.
+  const playerRow = (moves: any[] = []) =>
+    ({
+      id: 'gc1',
+      outgoing: false,
+      game: { gameType: 'tictactoe', players: ['peer-1', 'me'], challenge: { accepts: [{ userId: 'me', at: 1 }] }, moves },
+    }) as any;
+  // A session I merely observe (two other players).
+  const observerRow = (moves: any[] = []) =>
+    ({
+      id: 'gc1',
+      outgoing: false,
+      game: { gameType: 'tictactoe', players: ['peer-1', 'peer-2'], challenge: { accepts: [{ userId: 'peer-2', at: 1 }] }, moves },
+    }) as any;
+
+  it("the seated player gets 'your turn' when the opponent's move lands", () => {
+    const { note } = noteForPayload(gframe, gmove(1, 4, 'me'), [gchat()], contacts, true, true, new Set(), 'me', {
+      row: playerRow(),
+    });
+    expect(note!.body).toBe('Peer One made a move, your turn 😏');
+    expect(note!.url).toBe('/chat/g1');
+  });
+
+  it('observers stay silent by default', () => {
+    const r = noteForPayload(gframe, gmove(1, 4, 'peer-2'), [gchat()], contacts, true, true, new Set(), 'me', {
+      row: observerRow(),
+    });
+    expect(r.note).toBeNull();
+  });
+
+  it('a FOLLOWED game notifies the observer per move, named', () => {
+    const { note } = noteForPayload(gframe, gmove(1, 4, 'peer-2'), [gchat()], contacts, true, true, new Set(), 'me', {
+      row: observerRow(),
+      follows: { gc1: 123 },
+    });
+    expect(note!.body).toBe('Peer One made a move 🎲');
+  });
+
+  it('a followed game names the winner at the end', () => {
+    // peer-1 (cells 0,1) one move from the top-row win; peer-2 on 3,4.
+    const moves = [
+      { seq: 1, player: 0, move: { cell: 0 }, at: 1 },
+      { seq: 2, player: 1, move: { cell: 3 }, at: 2 },
+      { seq: 3, player: 0, move: { cell: 1 }, at: 3 },
+      { seq: 4, player: 1, move: { cell: 4 }, at: 4 },
+    ];
+    const { note } = noteForPayload(gframe, gmove(5, 2), [gchat()], contacts, true, true, new Set(), 'me', {
+      row: observerRow(moves),
+      follows: { gc1: 123 },
+    });
+    expect(note!.body).toBe('Peer One won the game 🏆');
+  });
+
+  it('the games.turn preference silences even the seated player', () => {
+    const r = noteForPayload(gframe, gmove(1, 4, 'me'), [gchat()], contacts, true, true, new Set(), 'me', {
+      row: playerRow(),
+      prefs: { turn: false, challenges: true, followMoves: true, followResults: true },
+    });
+    expect(r.note).toBeNull();
+  });
+
+  it('the followMoves preference silences follower move updates (results still land)', () => {
+    const prefs = { turn: true, challenges: true, followMoves: false, followResults: true };
+    const mid = noteForPayload(gframe, gmove(1, 4, 'peer-2'), [gchat()], contacts, true, true, new Set(), 'me', {
+      row: observerRow(),
+      follows: { gc1: 123 },
+      prefs,
+    });
+    expect(mid.note).toBeNull();
+  });
+
+  it("an accept tells the CHALLENGER someone is in (behind games.challenges)", () => {
+    const acceptPayload = { groupId: 'g1', gameAccept: { messageId: 'gc1', at: 5 } } as any;
+    const myChallenge = {
+      id: 'gc1',
+      outgoing: true,
+      game: { gameType: 'tictactoe', players: ['me'], challenge: { accepts: [] }, moves: [] },
+    } as any;
+    const { note } = noteForPayload(gframe, acceptPayload, [gchat()], contacts, true, true, new Set(), 'me', {
+      row: myChallenge,
+    });
+    expect(note!.body).toBe('Peer One accepted your challenge 💪 Your move!');
+    const off = noteForPayload(gframe, acceptPayload, [gchat()], contacts, true, true, new Set(), 'me', {
+      row: myChallenge,
+      prefs: { turn: true, challenges: false, followMoves: true, followResults: true },
+    });
+    expect(off.note).toBeNull();
   });
 });
