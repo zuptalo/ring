@@ -63,10 +63,6 @@
 import { onMounted, onUnmounted, ref } from 'vue';
 import { IonPage, IonContent } from '@ionic/vue';
 
-// Only play inside the installed PWA — a plain browser tab / the dev server
-// skips straight to the app. (`?launch-reveal` still forces it for previews.)
-const STANDALONE_ONLY = true;
-
 // Each glyph's scatter start (sx,sy) and convergence target (tx,ty) as pixel
 // offsets from the mark's center, plus its opacity, size, and stagger delay.
 const GLYPHS = [
@@ -100,10 +96,6 @@ const randChar = (): string => CHARSET[(Math.random() * CHARSET.length) | 0];
 const chars = ref<string[]>(GLYPHS.map(randChar));
 
 const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const standalone =
-  window.matchMedia('(display-mode: standalone)').matches ||
-  (navigator as unknown as { standalone?: boolean }).standalone === true;
-
 // Automation (Playwright e2e, the drive harness) loads hundreds of pages; an
 // opaque overlay on each would slow the suite and block UI clicks. Real
 // browsers never set navigator.webdriver. `?launch-reveal` forces it back on
@@ -126,9 +118,10 @@ const isNewVersion = ((): boolean => {
   }
 })();
 
-const visible = ref(
-  forced || (isNewVersion && !automated && (STANDALONE_ONLY ? standalone : true)),
-);
+// Plays in the installed app AND in a plain browser tab — there it sits above
+// the install gate (z-40 over z-30), so it fades straight into the install
+// guide: the brand moment introduces the invitation to install.
+const visible = ref(forced || (isNewVersion && !automated));
 const leaving = ref(false);
 
 let cyc: number | undefined;
