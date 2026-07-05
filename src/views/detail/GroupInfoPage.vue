@@ -14,7 +14,7 @@
         <div class="profile ion-text-center">
           <button class="avatar-btn" type="button" @click="editPhoto" aria-label="Change group photo">
             <ion-avatar class="profile-avatar">
-              <img :src="chat.avatar" :alt="chat.name" />
+              <user-avatar :src="chat.avatar" :alt="chat.name" />
             </ion-avatar>
             <span class="cam"><ion-icon :icon="cameraOutline" /></span>
           </button>

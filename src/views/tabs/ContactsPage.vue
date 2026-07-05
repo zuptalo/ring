@@ -79,7 +79,7 @@
         </ion-list-header>
         <ion-item v-for="inv in groupInvites" :key="inv.id" :detail="false">
           <ion-avatar slot="start">
-            <img :src="inv.avatar" :alt="inv.name || 'Group'" />
+            <user-avatar :src="inv.avatar" :alt="inv.name || 'Group'" />
           </ion-avatar>
           <ion-label>
             <h2>{{ inv.name || inv.memberPreview || 'Group' }}</h2>

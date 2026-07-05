@@ -98,7 +98,7 @@
             <ion-item-sliding v-for="c in comments" :key="c.id">
               <ion-item lines="none" class="citem">
                 <ion-avatar slot="start" class="cavatar">
-                  <img v-if="avatarOf(c.actor)" :src="avatarOf(c.actor)" :alt="nameOf(c.actor)" />
+                  <user-avatar v-if="avatarOf(c.actor)" :src="avatarOf(c.actor)" :alt="nameOf(c.actor)" />
                   <div v-else class="ph">{{ initial(nameOf(c.actor)) }}</div>
                 </ion-avatar>
                 <ion-label class="cwrap">

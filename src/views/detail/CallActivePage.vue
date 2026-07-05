@@ -7,7 +7,7 @@
            is never pushed. -->
       <div v-if="callState === 'incoming' && callMeta" class="incoming-fs">
         <div class="incoming-info">
-          <ion-avatar class="incoming-avatar"><img :src="callMeta.avatar" :alt="callMeta.name" /></ion-avatar>
+          <ion-avatar class="incoming-avatar"><user-avatar :src="callMeta.avatar" :alt="callMeta.name" /></ion-avatar>
           <h2 class="incoming-name">{{ callMeta.name }}</h2>
           <p class="incoming-kind">
             {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
@@ -65,7 +65,7 @@
         >
           <div class="cw-prompt-head">
             <ion-avatar class="cw-avatar">
-              <img v-if="incomingSecond.avatar" :src="incomingSecond.avatar" :alt="incomingSecond.name" />
+              <user-avatar v-if="incomingSecond.avatar" :src="incomingSecond.avatar" :alt="incomingSecond.name" />
               <ion-icon v-else :icon="personOutline" />
             </ion-avatar>
             <div class="cw-text">
@@ -131,7 +131,7 @@
                    and grow). No toast — the tile itself is the goodbye. -->
               <template v-if="t.leaving">
                 <div class="tile-camoff">
-                  <img v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
+                  <user-avatar v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
                   <ion-icon v-else :icon="personOutline" />
                 </div>
                 <span class="leave-wave"><emoji emoji="👋" /></span>
@@ -156,7 +156,7 @@
                      pending tile (ringing/connecting) adds a spinner so they read as
                      on-the-way, not camera-off. The <video> stays mounted so audio plays. -->
                 <div v-if="!tileHasVideo(t)" class="tile-camoff" :class="{ pending: t.state !== 'live' }">
-                  <img v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
+                  <user-avatar v-if="t.avatar" class="tile-avatar" :src="t.avatar" :alt="t.name" />
                   <ion-icon v-else :icon="t.state === 'live' ? videocamOffOutline : personOutline" />
                   <ion-spinner
                     v-if="t.state === 'ringing' || t.state === 'connecting'"
@@ -226,7 +226,7 @@
                video call, instead of the old tiny bottom pill. -->
           <div v-if="!mainHasVideo" class="audio-stage" :class="{ 'held-frozen': remoteHeld && !mainIsLocal }">
             <ion-avatar class="big-avatar">
-              <img v-if="callMeta" :src="callMeta.avatar" :alt="callMeta.name" />
+              <user-avatar v-if="callMeta" :src="callMeta.avatar" :alt="callMeta.name" />
             </ion-avatar>
           </div>
 
@@ -425,6 +425,7 @@
 </template>
 
 <script setup lang="ts">
+import UserAvatar from '@/components/UserAvatar.vue';
 import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { IonPage, IonContent, IonAvatar, IonIcon, IonSpinner, actionSheetController } from '@ionic/vue';
 import Emoji from '@/components/Emoji.vue';
