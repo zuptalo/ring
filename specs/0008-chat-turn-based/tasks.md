@@ -116,8 +116,8 @@ shows game activity
 
 - [X] T024 [P] Add `drive/scenarios/tictactoe.mjs` using `drive/driver.mjs` (createAccount/pair/say/shot/sweep): two users play to a win, screenshots of the bubble states land in `.tmp/drive/`
 - [X] T025 [P] Accessibility + i18n pass over `GameBubble.vue`, `GamePicker.vue`, `TicTacToeBoard.vue`: aria-labels on cells and actions, focus order, RTL-neutral layout check, all user-visible strings through the app's existing copy conventions (warm, plain, "you"; no em-dashes/semicolons)
-- [ ] T026 Update `specs/0008-chat-turn-based/spec.md` `**Status**:` to `in-progress` at implementation start (already due) → `in-review` at PR time, and run `make roadmap` so the CI roadmap guard stays green
-- [ ] T027 Run the full gate suite and the zero-knowledge proof point: `npm run build`, `npm run test:unit` (coverage floors), `npm run test:e2e`, and verify `git diff --stat develop -- server/` is empty; validate `specs/0008-chat-turn-based/quickstart.md` steps as written
+- [X] T026 Update `specs/0008-chat-turn-based/spec.md` `**Status**:` to `in-progress` at implementation start (already due) → `in-review` at PR time, and run `make roadmap` so the CI roadmap guard stays green
+- [X] T027 Run the full gate suite and the zero-knowledge proof point: `npm run build`, `npm run test:unit` (coverage floors), `npm run test:e2e`, and verify `git diff --stat develop -- server/` is empty; validate `specs/0008-chat-turn-based/quickstart.md` steps as written
 
 ---
 
@@ -149,10 +149,10 @@ glanceable turn state via existing animated emoji, a "you play ✕" legend, acce
 activity re-surfacing the bubble, and SVG marks (the ✕/◯ text glyphs render at
 mismatched sizes on iOS — font metrics differ per platform).
 
-- [ ] T028 [P] Write FAILING e2e in `e2e/games.spec.ts`: a text message buries the game bubble (bubble is no longer last in `messages()` order), then an accepted move re-surfaces it as the NEWEST message on both devices (FR-021)
-- [ ] T029 Implement the activity bump in `src/db/queries.ts` `applyGameMove()`: on outcome `'applied'` only, `message.timestamp = max(timestamp, signal.at)` — derived from the signal so both devices reorder identically; dropped/out-of-sync signals never bump
-- [ ] T030 `src/games/tictactoe/TicTacToeBoard.vue` + `src/components/GameBubble.vue`: draw ✕/◯ as stroke SVGs (identical geometry on every platform, fixes the iOS glyph-size mismatch) and add a "You play ✕" legend with the viewer's mark colored to match the board (FR-019); status row gains an `AnimatedEmoji` cue — 🎲 your turn, ⏳ their turn, 🎉 you won — all verified present in the Noto set, native-glyph fallback otherwise (FR-020)
-- [ ] T031 Update `drive/scenarios/tictactoe.mjs` screenshots for the new bubble; re-run gates (`npm run build`, `npm run test:unit`, `npx playwright test games.spec.ts`)
+- [X] T028 [P] Write FAILING e2e in `e2e/games.spec.ts`: a text message buries the game bubble (bubble is no longer last in `messages()` order), then an accepted move re-surfaces it as the NEWEST message on both devices (FR-021)
+- [X] T029 Implement the activity bump in `src/db/queries.ts` `applyGameMove()`: on outcome `'applied'` only, `message.timestamp = max(timestamp, signal.at)` — derived from the signal so both devices reorder identically; dropped/out-of-sync signals never bump
+- [X] T030 `src/games/tictactoe/TicTacToeBoard.vue` + `src/components/GameBubble.vue`: draw ✕/◯ as stroke SVGs (identical geometry on every platform, fixes the iOS glyph-size mismatch) and add a "You play ✕" legend with the viewer's mark colored to match the board (FR-019); status row gains an `AnimatedEmoji` cue — 🎲 your turn, ⏳ their turn, 🎉 you won — all verified present in the Noto set, native-glyph fallback otherwise (FR-020)
+- [X] T031 Update `drive/scenarios/tictactoe.mjs` screenshots for the new bubble; re-run gates (`npm run build`, `npm run test:unit`, `npx playwright test games.spec.ts`)
 
 ---
 
