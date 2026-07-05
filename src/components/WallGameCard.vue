@@ -7,23 +7,26 @@
        idb bus — no state of its own. -->
   <div v-if="session" class="wgc">
     <template v-if="phase === 'open'">
+      <!-- One row: the pointing hero, then EVERYTHING else in the copy column
+           (title, game, and the waiting line / accept button) so nothing floats
+           off to the card edge on wide or narrow screens. -->
       <div class="wgc-announce">
         <animated-emoji emoji="🫵" large class="wgc-point" />
         <div class="wgc-copy">
-          <span class="wgc-title">{{ authorName }} throws down a challenge</span>
+          <span class="wgc-title">{{ isOwn ? 'You threw down a challenge' : `${authorName} throws down a challenge` }}</span>
           <span class="wgc-game">
             <animated-emoji emoji="🎲" />
             {{ module?.displayName ?? 'a game' }}
             <template v-if="themeName"> · {{ themeName }}</template>
           </span>
+          <span v-if="isOwn" class="wgc-waiting">Waiting for a challenger…</span>
+          <div v-else class="wgc-actions">
+            <ion-button size="small" shape="round" @click.stop="onAccept">
+              <animated-emoji emoji="💪" />&nbsp;I'm in
+            </ion-button>
+          </div>
         </div>
       </div>
-      <div v-if="!isOwn" class="wgc-actions">
-        <ion-button size="small" shape="round" @click.stop="onAccept">
-          <animated-emoji emoji="💪" />&nbsp;I'm in
-        </ion-button>
-      </div>
-      <p v-else class="wgc-waiting">Waiting for a challenger…</p>
     </template>
 
     <template v-else>
@@ -138,13 +141,14 @@ const onRematch = () => void router.push('/wall/compose');
 }
 .wgc-actions {
   display: flex;
+  margin-top: 2px;
 }
 .wgc-actions ion-button {
   font-size: 14px;
   text-transform: none;
+  margin-inline-start: 0;
 }
 .wgc-waiting {
-  margin: 0;
   font-size: 13px;
   color: var(--app-text-muted);
 }
