@@ -12,7 +12,9 @@
 
 import type { GameModule } from './types'
 import tictactoe from './tictactoe'
+import connect4 from './connect4'
 
 export const GAMES: Record<string, GameModule> = {
   [tictactoe.id]: tictactoe as GameModule,
+  [connect4.id]: connect4 as GameModule,
 }

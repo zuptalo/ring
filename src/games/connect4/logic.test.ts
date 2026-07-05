@@ -118,3 +118,18 @@ describe('connect4 rules', () => {
     }
   });
 });
+
+describe('connect4 deterministic draw', () => {
+  it('round-robin columns 0→6 for 42 moves is a checkerboard draw', () => {
+    // Move k lands col k%7; owners form a checkerboard ((r+c) parity), which
+    // cannot contain four in a row in any direction — the canonical scripted
+    // draw the e2e reuses.
+    let s = createInitialState();
+    for (let k = 0; k < 42; k++) {
+      const next = applyMove(s, { col: k % 7 }, turn(s));
+      expect(next).not.toBeNull();
+      s = next!;
+    }
+    expect(status(s)).toEqual({ state: 'draw' });
+  });
+});
