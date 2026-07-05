@@ -30,4 +30,5 @@ T001→T002→T003; T004 red after T003 (needs the picker entry); T005 greens T0
 
 ## GitHub Issues
 
-(filled by taskstoissues)
+One issue per task (created 2026-07-06; the feature → develop PR must list Closes #N for each):
+T001 #832 · T002 #833 · T003 #834 · T004 #835 · T005 #836 · T006 #837 · T007 #838 · T008 #839 · 
