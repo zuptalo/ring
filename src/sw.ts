@@ -349,7 +349,9 @@ async function showPostNotification(): Promise<number> {
     /* fall through to the generic placeholder */
   }
   if (notes.length) {
-    // notes carry "<author> · posted on their Wall"; reuse the conn-note renderer (same shape).
+    // notes carry "<author> · posted on their Wall" (or the urgent challenge
+    // line when the SW could unseal a game post, spec 0009); reuse the
+    // conn-note renderer (same shape).
     await showConnNotes(notes);
     return newCount;
   }

@@ -25,9 +25,9 @@
  * Import-clean for the SW: depends only on idb, the crypto/decrypt path, and the
  * IDB-backed session token (no DOM / Ionic / page-only modules).
  */
-import { attemptDeviceUnlock } from './crypto/identity';
+import { attemptDeviceUnlock, getIdentityKeys } from './crypto/identity';
 import { ready as sodiumReady } from './crypto/primitives';
-import { openPostEngagement } from './posts';
+import { openPostEngagement, openReceivedPost } from './posts';
 import { previewPacket } from './messaging';
 import { readHiddenSet, readHiddenSetOrNull } from './hidden-chats';
 import { readSessionToken, readSessionUserId } from './session';
@@ -891,7 +891,10 @@ export async function previewPosts(): Promise<{ notes: ConnNote[]; newCount: num
   if (!token) return { notes: [], newCount: 0 };
   const self = await readSessionUserId();
   const since = (await setting<number>(POST_SINCE_KEY, 0)) || 0;
-  let data: { posts?: Array<{ id: string; author: string; createdAt: number }>; cursor?: number };
+  let data: {
+    posts?: Array<{ id: string; author: string; createdAt: number; blobId?: string; size?: number; wrappedKey?: string }>;
+    cursor?: number;
+  };
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
@@ -916,7 +919,11 @@ export async function previewPosts(): Promise<{ notes: ConnNote[]; newCount: num
     notes.push({
       keys: [`post:${p.id}`],
       title: await connName(p.author, token),
-      body: 'posted on their Wall',
+      // A game-challenge post earns the urgent line (spec 0009): unseal the
+      // post right here in the SW when the keystore allows. Anything else —
+      // PIN-locked, offline blob, media post, tampered — keeps the generic
+      // content-free line, exactly what all posts said before.
+      body: (await swPostChallengeLine(p, token)) ?? 'posted on their Wall',
       url: '/tabs/wall',
       tag: `ring:post:${p.author}`,
     });
@@ -925,6 +932,44 @@ export async function previewPosts(): Promise<{ notes: ConnNote[]; newCount: num
     await put<Setting<number>>('settings', { key: POST_SINCE_KEY, value: data.cursor });
   }
   return { notes, newCount: fresh.length };
+}
+
+// A challenge post is text-only and tiny; never pull a media post's blob just
+// for notification copy.
+const CHALLENGE_POST_MAX_BYTES = 16_384;
+
+/** If this fresh post is a game CHALLENGE, return the urgent line for its push
+ *  note; null for everything else (generic line) — including every failure
+ *  (locked keystore, blob fetch, tampered seal): silence about content beats a
+ *  wrong claim. Decryption happens on-device, same trust as the page. */
+async function swPostChallengeLine(
+  p: { id: string; blobId?: string; size?: number; wrappedKey?: string },
+  token: string,
+): Promise<string | null> {
+  try {
+    if (!p.wrappedKey || !p.blobId || (p.size ?? Infinity) > CHALLENGE_POST_MAX_BYTES) return null;
+    await sodiumReady();
+    if (!(await attemptDeviceUnlock())) return null;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${API}/blobs/${encodeURIComponent(p.blobId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const { payload } = openReceivedPost(bytes, p.wrappedKey, getIdentityKeys().x.privateKey);
+    if (!payload.game) return null;
+    const gname = GAMES[payload.game.gameType]?.displayName ?? 'game';
+    return `started a ${gname} challenge, be quick if you want it 🫵`;
+  } catch {
+    return null;
+  }
 }
 
 /* ---- owner-only Wall engagement notifications (spec 1031) ---- */
