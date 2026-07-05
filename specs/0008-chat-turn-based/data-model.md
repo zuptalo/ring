@@ -31,8 +31,11 @@ Lives on the game-start bubble's `Message` row, like `poll`. Never a separate st
 | Field | Type | Notes |
 |-------|------|-------|
 | `gameType` | `string` | `GameModule.id`. Unknown id (future game, old app) → bubble renders an "update to play" fallback. |
+| `theme` | `string` (optional) | Visual theme id from the module's bundled list (FR-022); unknown/absent → classic. |
+| `startedAt` | `number` (optional) | The bubble's original compose time, kept here because FR-021 re-purposes `Message.timestamp` as last-activity time. Drives the stats' "started" and first reply time. |
 | `moves` | `GameMoveRec[]` | Accepted moves only, ascending `seq`, contiguous from 1. Board/turn/outcome are always **derived** by replay — never stored. |
 | `resignedBy` | `0 \| 1` (optional) | Set when a resign was accepted; terminal. |
+| `resignedAt` | `number` (optional) | The resign signal's `at` — the game's end time for stats (FR-024). |
 | `outOfSync` | `true` (optional) | Set on invalid/conflicting inbound; terminal (D9). |
 
 **GameMoveRec**: `{ seq: number, player: 0 | 1, move: M, at: number }`.

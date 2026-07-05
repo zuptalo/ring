@@ -28,13 +28,23 @@ const gameIsLast = async (p: RingClient, chatId: string, msgId: string): Promise
 };
 
 /** Start a game from `starter` and wait until BOTH sides hold the bubble. */
-async function startGame(a: RingClient, b: RingClient, aChat: string, bChat: string): Promise<string> {
+async function startGame(
+  a: RingClient,
+  b: RingClient,
+  aChat: string,
+  bChat: string,
+  theme?: string,
+): Promise<string> {
   const before = (await a.page.evaluate(
     (id: string) => (window as any).__ringTest.messages(id),
     aChat,
   )) as any[];
   const seen = new Set(before.filter((m) => m.kind === 'game').map((m) => m.id));
-  await a.page.evaluate((id: string) => (window as any).__ringTest.sendGame(id, 'tictactoe'), aChat);
+  await a.page.evaluate(
+    (args: { chatId: string; theme?: string }) =>
+      (window as any).__ringTest.sendGame(args.chatId, 'tictactoe', args.theme),
+    { chatId: aChat, theme },
+  );
   const msgId = (await a.page
     .waitForFunction(
       async (args: { chatId: string; seen: string[] }) => {
@@ -173,7 +183,10 @@ test('1:1 tic-tac-toe: resign ends it for both, and Play again starts a fresh ga
 
   const aChat = (await a.page.evaluate((id) => (window as any).__ringTest.chatWith(id), b.id)) as string;
   const bChat = (await b.page.evaluate((id) => (window as any).__ringTest.chatWith(id), a.id)) as string;
-  const msgId = await startGame(a, b, aChat, bChat);
+  // FR-022: the starter's theme rides the sealed payload — both devices render it.
+  const msgId = await startGame(a, b, aChat, bChat, 'space');
+  expect((await gameInfo(a, msgId)).theme).toBe('space');
+  await expect.poll(async () => (await gameInfo(b, msgId))?.theme, { timeout: 15_000 }).toBe('space');
 
   // Mid-game, B resigns → both sides show A (player 0) as winner by concession.
   await playMove(a, aChat, msgId, 4);

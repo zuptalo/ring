@@ -156,6 +156,20 @@ mismatched sizes on iOS — font metrics differ per platform).
 
 ---
 
+## Phase 8: Visual polish — game vibe, themes, stats (user feedback, 2026-07-05)
+
+**Purpose**: FR-022/FR-023/FR-024 + the animated-emoji design-language doc
+
+- [ ] T032 Generate `docs/ANIMATED-EMOJI.md`: the full Noto animated inventory (from the official manifest, 881 emoji), a curated game-genre palette (winner, loser, tie, waiting, call-to-action, thinking, taunt, love, surprise, game objects), the current game usage table, and the tic-tac-toe theme table — the single source of truth for future animation design
+- [ ] T033 [P] Write FAILING unit tests `src/games/stats.test.ts` for pure `computeGameStats()`: startedAt/endedAt/duration for win, resign (uses `resignedAt`), and ongoing; move count; per-player average and fastest reply times from move timestamps (first move measured from `startedAt`); graceful partial data (no `startedAt` on legacy sessions)
+- [ ] T034 [P] Extend `e2e/games.spec.ts` with a FAILING theme round-trip: a game started with theme `space` reports the same theme on both devices via `gameInfo` (FR-022 wire check)
+- [ ] T035 Types + wire + storage for themes and stats: `GameTheme` (`{ id, name, marks?, accent? }`) and `themes` on `GameModule`; `theme`/`startedAt`/`resignedAt` on `GameSession`; `theme` on the `GameStart` payload; `sendGame(chatId, gameType, theme?)` + inbound + retry carry it; the session engine stamps `resignedAt`; implement `src/games/stats.ts`
+- [ ] T036 Board + bubble game feel: theme mark pairs render as emoji (classic keeps the color-coded SVG marks), the most recently played cell animates via `AnimatedEmoji`, soft per-theme board accent, a matchup header (`[your mark] You vs Name [their mark]`) replacing the legend, and minimal-word statuses with the FR-023 emoji palette (🎲/⏳/🎉/😅/🤝/😵)
+- [ ] T037 `src/components/GamePicker.vue` gains theme selection (theme chips with mark pairs under the chosen game); `src/views/detail/MessageInfoPage.vue` gains the Game section (matchup, started, result, game time, moves, average reply per player, fastest move) and `ChatDetailPage` enables Message info for game bubbles in both directions
+- [ ] T038 Refresh `drive/scenarios/tictactoe.mjs` (theme showcase + info-page screenshot); re-run gates (`npm run build`, `npm run test:unit`, `npx playwright test games.spec.ts`)
+
+---
+
 ## GitHub Issues
 
 One issue per task (created 2026-07-05; the feature → develop PR must list `Closes #N`
@@ -163,7 +177,8 @@ for each): T001 #761 · T002 #762 · T003 #763 · T004 #764 · T005 #765 · T006
 T007 #767 · T008 #768 · T009 #769 · T010 #770 · T011 #771 · T012 #772 · T013 #773 ·
 T014 #774 · T015 #775 · T016 #776 · T017 #777 · T018 #778 · T019 #779 · T020 #780 ·
 T021 #781 · T022 #782 · T023 #783 · T024 #784 · T025 #785 · T026 #786 · T027 #787 ·
-T028 #788 · T029 #789 · T030 #790 · T031 #791
+T028 #788 · T029 #789 · T030 #790 · T031 #791 ·
+T032 #792 · T033 #793 · T034 #794 · T035 #795 · T036 #796 · T037 #797 · T038 #798
 
 ---
 

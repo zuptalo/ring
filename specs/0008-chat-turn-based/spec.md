@@ -25,6 +25,12 @@
 - Q: How do players remember which mark is theirs mid-game? → A: The bubble always states which mark you play, colored to match the board.
 - Q: Should an active game stay visible as messages arrive? → A: Yes — any accepted move or resignation re-surfaces the game bubble to the newest position in the conversation, identically on both devices; the bubble's displayed time then reflects its latest activity.
 
+### Session 2026-07-05 (visual polish round)
+
+- Q: How should animated emoji be chosen for game surfaces? → A: From the curated genre palette in `docs/ANIMATED-EMOJI.md` (the single source of truth for which emoji animate); the same concept always uses the same emoji across bubbles, previews, and stats.
+- Q: Should games look like more than X and O? → A: Yes — the starter picks a visual theme (mark pair + soft board accent) from the game's bundled theme list; the theme travels inside the sealed payload so both players see the identical game.
+- Q: What lives in a game bubble's message info? → A: Fun game stats — the matchup, when it started, the result, total game time, move count, each player's average reply time and fastest move, derived from move timestamps only.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Play tic-tac-toe inside a 1:1 chat (Priority: P1)
@@ -116,6 +122,9 @@ A player who has left the chat or the app learns that their opponent has moved: 
 - **FR-019**: The bubble MUST always show which mark the viewer plays (e.g. "you play ✕"), visually matched to the board, for the whole life of the game.
 - **FR-020**: Whose-turn state MUST be glanceable on the bubble: an animated cue (reusing the app's existing animated-emoji capability) distinguishes "your move" from "waiting for them", degrading to plain status text when animation is off or the art is unavailable.
 - **FR-021**: Every accepted move or resignation MUST re-surface the game bubble to the newest position in the conversation on BOTH devices identically (derived from the signal's own timestamp, never local receive time), so an active game is never buried by later messages. The bubble's displayed time then reflects its latest activity. Rejected/out-of-sync signals do not re-surface it.
+- **FR-022**: The game starter MUST be able to pick a visual theme (a mark pair and a soft board accent) from the game's bundled theme list; the choice travels inside the sealed payload so both devices render the identical game. Theme ids are frozen once shipped; an unknown theme id renders as the classic theme, never an error.
+- **FR-023**: Game surfaces MUST read like a game, not a form: minimal text, a matchup header showing who plays which mark, glanceable animated status cues drawn from the curated palette in `docs/ANIMATED-EMOJI.md`, and the most recently played mark animated on the board. The same concept always uses the same emoji everywhere.
+- **FR-024**: Message info on a game bubble MUST show the game's story in numbers: the matchup, when it started, the result, total game time to a final state, move count, each player's average reply time, and the fastest move. All timings derive from the moves' own timestamps (no extra tracking, no new wire data).
 
 ### Key Entities
 

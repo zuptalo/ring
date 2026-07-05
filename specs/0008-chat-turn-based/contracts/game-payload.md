@@ -22,7 +22,10 @@ A normal message whose `kind` is `'game'` and which carries:
 {
   "kind": "game",
   "game": {
-    "gameType": "tictactoe"     // GameModule.id from the registry; immutable wire id
+    "gameType": "tictactoe",    // GameModule.id from the registry; immutable wire id
+    "theme": "space"            // optional visual theme id from the game's bundled
+                                // theme list (FR-022); frozen once shipped; an
+                                // unknown/absent theme renders as 'classic'
   }
 }
 ```
