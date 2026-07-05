@@ -35,7 +35,7 @@ import { get, getAll, put } from '@/db/idb';
 import { notifyPreview } from '@/utils/notify-preview';
 import { GAMES } from '@/games/registry';
 import { applySignal as applyGameSignal, deriveStatus as deriveGameStatus } from '@/games/session';
-import { playerIndexOf, lockOpponent } from '@/games/challenge';
+import { playerIndexOf, lockOpponent, buildWallSession, challengePhase, type WallGameRow } from '@/games/challenge';
 import type { Chat, Contact, Message, Setting } from '@/db/types';
 import type { MessagePayload } from './crypto/message';
 
@@ -994,6 +994,87 @@ export function classifyPostActivity(args: {
   return items;
 }
 
+/**
+ * Wall games on push wake (spec 0009 US3): the audience-wide 'post-activity'
+ * push fans to every device that can see a challenge post; THIS pure classifier
+ * replays the fetched game rows through the same engine every page uses and
+ * decides, from my seat + my private follow + my prefs, whether to say anything.
+ * Returns null when nothing is fresh; otherwise the fresh ledger keys plus a
+ * note (or `note: null` for a deliberate quiet — keys still get ledgered so a
+ * repeated tickle stays silent too).
+ */
+export function classifyWallGameActivity(args: {
+  post:
+    | { author?: string; outgoing?: boolean; postKey?: string; game?: { gameType: string; theme?: string } }
+    | null
+    | undefined;
+  self: string;
+  rows: PostActivityRow[];
+  seen: Set<string>;
+  prefs: { turn: boolean; challenges: boolean; followMoves: boolean; followResults: boolean };
+  followed: boolean;
+  openGame: (postKeyB64: string, payload: string) => WallGameRow['payload'];
+  names: Map<string, string>;
+}): { keys: string[]; note: { title: string; body: string } | null } | null {
+  const { post, self, rows, seen, prefs, followed, openGame, names } = args;
+  if (!post?.game || !post.postKey || !post.author) return null;
+  const gameRows: WallGameRow[] = [];
+  const fresh: { id: string; actor: string; at: number }[] = [];
+  for (const r of rows) {
+    if (r.kind !== 'game') continue;
+    let payload: WallGameRow['payload'];
+    try {
+      payload = openGame(post.postKey, r.payload);
+    } catch {
+      continue; // unopenable (locked/cold) → treat as absent
+    }
+    gameRows.push({ id: r.id, actor: r.actor, payload });
+    if (!seen.has(r.id) && r.actor && r.actor !== self) fresh.push({ id: r.id, actor: r.actor, at: payload.at });
+  }
+  if (!fresh.length) return null;
+  const session = buildWallSession(GAMES[post.game.gameType] ?? null, post.author, post.game, gameRows);
+  const status = deriveGameStatus(GAMES[session.gameType] ?? null, session);
+  const me = playerIndexOf(session, self);
+  const latest = fresh.sort((x, y) => x.at - y.at)[fresh.length - 1];
+  const mover = names.get(latest.actor) ?? 'Someone';
+  const nameOf = (uid: string | undefined): string =>
+    !uid ? 'Someone' : uid === self ? 'You' : names.get(uid) ?? 'Someone';
+  const keys = fresh.map((f) => f.id);
+  const quiet = { keys, note: null };
+
+  let body: string | null = null;
+  if (me !== null) {
+    if (challengePhase(session) === 'accepted' && session.moves.length === 0 && me === 0) {
+      if (!prefs.challenges) return quiet;
+      body = `${mover} accepted your challenge 💪 Your move!`;
+    } else if (status.state === 'ongoing') {
+      if (status.turn !== me) return quiet; // my own side already knows; their move next
+      if (!prefs.turn) return quiet;
+      body = `${mover} made a move, your turn 😏`;
+    } else if (status.state === 'won' || status.state === 'resigned') {
+      const winnerId = session.players?.[status.winner];
+      body = winnerId === self ? 'You won the game! 🏆' : `${nameOf(winnerId)} won the game 🏆`;
+    } else if (status.state === 'draw') {
+      body = "It's a draw 🤝";
+    }
+  } else if (followed) {
+    if (status.state === 'ongoing') {
+      if (!prefs.followMoves) return quiet;
+      body = `${mover} made a move 🎲`;
+    } else if (status.state === 'won' || status.state === 'resigned') {
+      if (!prefs.followResults) return quiet;
+      body = `${nameOf(session.players?.[status.winner])} won the game 🏆`;
+    } else if (status.state === 'draw') {
+      if (!prefs.followResults) return quiet;
+      body = "It's a draw 🤝";
+    }
+  } else {
+    return quiet; // a quiet observer — ledger the keys, say nothing
+  }
+  if (!body) return quiet;
+  return { keys, note: { title: mover, body } };
+}
+
 /** Render the surviving items as notification note(s): one item → an actor-named
  *  note; several → ONE collapsed note (per-post tag) covering all their ledger keys. */
 export function buildPostActivityNotes(
@@ -1035,7 +1116,13 @@ export async function previewPostActivity(postId: string): Promise<ConnNote[]> {
   const token = await readSessionToken();
   if (!token) return [];
   const self = (await readSessionUserId()) ?? '';
-  const post = await get<{ id: string; outgoing?: boolean; postKey?: string }>('posts', postId);
+  const post = await get<{
+    id: string;
+    author?: string;
+    outgoing?: boolean;
+    postKey?: string;
+    game?: { gameType: string; theme?: string };
+  }>('posts', postId);
   let rows: PostActivityRow[] = [];
   try {
     const ctrl = new AbortController();
@@ -1059,19 +1146,51 @@ export async function previewPostActivity(postId: string): Promise<ConnNote[]> {
   await sodiumReady().catch(() => {});
   const seen = new Set((await loadWallActShownEntries()).map((e) => e.id));
   const items = classifyPostActivity({ post, self, rows, seen, now: Date.now(), openReaction: openPostEngagement });
-  if (!items.length) return [];
+
+  // A game-challenge post (spec 0009): the audience-wide push means WE may be a
+  // player or follower — replay the game rows and decide locally.
+  let gameKeys: string[] = [];
+  let gameNote: ConnNote | null = null;
+  if (post?.game) {
+    const prefs = {
+      turn: await setting<boolean>('notifications.games.turn', true),
+      challenges: await setting<boolean>('notifications.games.challenges', true),
+      followMoves: await setting<boolean>('notifications.games.followMoves', true),
+      followResults: await setting<boolean>('notifications.games.followResults', true),
+    };
+    const follows = await setting<Record<string, number>>('games.follows', {});
+    const gnames = new Map<string, string>();
+    for (const actor of new Set(rows.filter((r) => r.kind === 'game').map((r) => r.actor))) {
+      gnames.set(actor, await connName(actor, token));
+    }
+    const g = classifyWallGameActivity({
+      post, self, rows, seen, prefs,
+      followed: follows[postId] !== undefined,
+      openGame: openPostEngagement,
+      names: gnames,
+    });
+    if (g) {
+      gameKeys = g.keys;
+      if (g.note) {
+        gameNote = { keys: g.keys, title: g.note.title, body: g.note.body, url: `/wall/post/${postId}`, tag: `ring:post:game:${postId}` };
+      }
+    }
+  }
+  if (!items.length && !gameKeys.length) return [];
   const names = new Map<string, string>();
   for (const actor of new Set(items.map((i) => i.actor))) {
     names.set(actor, await connName(actor, token));
   }
   // Persist the ledger for what we're about to display so a repeated tickle
   // (collapse topic re-fire, multi-device) doesn't re-announce the same items.
+  // Game keys ledger even when deliberately quiet.
   const entries = await loadWallActShownEntries();
   const known = new Set(entries.map((e) => e.id));
   const ts = Date.now();
   for (const it of items) if (!known.has(it.id)) entries.push({ id: it.id, ts });
+  for (const k of gameKeys) if (!known.has(k)) entries.push({ id: k, ts });
   await put<Setting<ShownEntry[]>>('settings', { key: WALL_ACT_SHOWN_KEY, value: entries.slice(-WALL_ACT_SHOWN_MAX) });
-  return buildPostActivityNotes(postId, items, names);
+  return [...buildPostActivityNotes(postId, items, names), ...(gameNote ? [gameNote] : [])];
 }
 
 /** Persist the conn-ledger keys we displayed, so the same event doesn't re-notify

@@ -62,7 +62,8 @@
         </div>
         <audio v-else-if="mediaUrl && post.kind === 'voice'" class="vaudio" :src="mediaUrl" controls />
 
-        <p v-if="post.body" class="body"><EmojiText :text="post.body" big /></p>
+        <wall-game-card v-if="post.game" :post-id="post.id" :author-name="authorName" :is-own="!!post.outgoing" />
+        <p v-else-if="post.body" class="body"><EmojiText :text="post.body" big /></p>
 
         <p v-if="post.expiresAt" class="expiry" :title="when(post.expiresAt)">
           <ion-icon :icon="timeOutline" /> Disappears in {{ leftLabel }}
@@ -154,6 +155,7 @@
 
 <script setup lang="ts">
 import UserAvatar from '@/components/UserAvatar.vue';
+import WallGameCard from '@/components/WallGameCard.vue';
 import { computed, reactive, ref } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
