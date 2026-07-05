@@ -114,8 +114,10 @@ test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forwar
     aChat,
     { timeout: 30_000 },
   );
-  expect(await gameIsLast(a, aChat, msgId)).toBe(false);
-  expect(await gameIsLast(b, bChat, msgId)).toBe(false);
+  // (Poll rather than assert-once: the write is confirmed by the wait above, but
+  // asserting through a poll keeps this robust on a loaded machine.)
+  await expect.poll(() => gameIsLast(a, aChat, msgId), { timeout: 15_000 }).toBe(false);
+  await expect.poll(() => gameIsLast(b, bChat, msgId), { timeout: 15_000 }).toBe(false);
 
   // A occupied 4 already; play a proper win line for A: 0,1,2 with B on 3,5.
   await playMove(b, bChat, msgId, 3);

@@ -481,6 +481,7 @@ export function installTestHook(): void {
         id: m.id,
         body: m.body,
         kind: m.kind,
+        timestamp: m.timestamp, // display-order key (games re-surface by bumping it, spec 0008)
         status: m.status,
         hasPoster: !!m.posterData, // spec 1014: the bubble-tier preview rode the sealed envelope
         seenReportedAt: m.seenReportedAt ?? null, // spec 1013: this device reported it Seen
