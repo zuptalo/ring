@@ -145,6 +145,41 @@ test('challenge → first accept seats → observers watch read-only → win for
   for (const x of ctx) await x.close();
 });
 
+test('observers are quiet by default, loud when they Follow, quiet again on unfollow', async ({ browser }) => {
+  const { a, b, c, gid, ctx } = await setupTrio(browser, ['RINGGC7', 'RINGGC8', 'RINGGC9']);
+
+  const mid = await startChallenge(a, gid, [a, b, c]);
+  await accept(b, mid);
+  for (const p of [a, b, c]) {
+    await expect.poll(async () => (await gameInfo(p, mid)).opponent, { timeout: 30_000 }).toBe(b.id);
+  }
+  const notices = (p: RingClient) =>
+    p.page.evaluate(() => (window as any).__ringTest.notices() as { body: string }[]);
+
+  // Alice moves. Bob (his turn now) is alerted; Carol the observer is NOT.
+  await move(a, gid, mid, 4);
+  await expect
+    .poll(async () => (await notices(b)).some((n) => n.body.includes('your turn')), { timeout: 30_000 })
+    .toBe(true);
+  expect((await notices(c)).some((n) => n.body.includes('move'))).toBe(false);
+
+  // Carol taps Follow -> the very next move reaches her, named.
+  await c.page.evaluate((id: string) => (window as any).__ringTest.followGame(id), mid);
+  await move(b, gid, mid, 0);
+  await expect
+    .poll(async () => (await notices(c)).some((n) => n.body.includes('made a move')), { timeout: 30_000 })
+    .toBe(true);
+
+  // Unfollow -> quiet again (no NEW move notice for Alice's next move).
+  await c.page.evaluate((id: string) => (window as any).__ringTest.unfollowGame(id), mid);
+  const before = (await notices(c)).length;
+  await move(a, gid, mid, 8);
+  await expect.poll(async () => (await gameInfo(c, mid)).moves, { timeout: 30_000 }).toBe(3);
+  expect((await notices(c)).length).toBe(before);
+
+  for (const x of ctx) await x.close();
+});
+
 test('accept race across an offline gap converges via the seat lock; a leaving player resigns', async ({ browser }) => {
   const { a, b, c, gid, ctx } = await setupTrio(browser, ['RINGGC4', 'RINGGC5', 'RINGGC6']);
 

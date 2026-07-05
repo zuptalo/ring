@@ -15,6 +15,10 @@ export const SYNCED_PREF_KEYS: string[] = [
   'notifications.message.show', 'notifications.message.reactions', 'notifications.message.sound',
   'notifications.group.show', 'notifications.group.reactions', 'notifications.group.sound',
   'notifications.wall.show', 'notifications.wall.activity', 'notifications.showPreview', 'notifications.badge',
+  // Game notifications (spec 0009). Deliberately NOT games.follows — the follow
+  // set is device-local and private by spec FR-006.
+  'notifications.games.turn', 'notifications.games.challenges',
+  'notifications.games.followMoves', 'notifications.games.followResults',
   'notifications.inapp.enabled', 'notifications.inapp.style', 'notifications.inapp.sounds', 'notifications.inapp.vibrate',
   'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters', 'chats.keepArchived',
 ];

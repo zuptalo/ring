@@ -47,9 +47,11 @@
         :outgoing="outgoing"
         :self-id="selfId"
         :names="names"
+        :followed="followed"
         @move="(mv: unknown) => $emit('move', mv)"
         @resign="$emit('resign')"
         @rematch="(gt: string) => $emit('rematch', gt)"
+        @follow="$emit('follow')"
       />
     </template>
   </div>
@@ -70,6 +72,7 @@ const props = defineProps<{
   selfId: string;
   /** userId → display name for everyone who might appear on the bubble. */
   names: Record<string, string>;
+  followed?: boolean;
 }>();
 defineEmits<{
   (e: 'accept'): void;
@@ -77,6 +80,7 @@ defineEmits<{
   (e: 'move', move: unknown): void;
   (e: 'resign'): void;
   (e: 'rematch', gameType: string): void;
+  (e: 'follow'): void;
 }>();
 
 const module = computed(() => GAMES[props.game.gameType] ?? null);

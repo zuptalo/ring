@@ -71,6 +71,17 @@
           >
             Resign
           </ion-button>
+          <!-- Observers can privately follow a live game for move/result alerts
+               (spec 0009 FR-006 — device-local, nobody learns who follows). -->
+          <ion-button
+            v-else-if="status.state === 'ongoing' && myPlayer === null && explicit"
+            size="small"
+            fill="clear"
+            :color="followed ? 'primary' : 'medium'"
+            @click.stop="$emit('follow')"
+          >
+            <animated-emoji emoji="👀" />&nbsp;{{ followed ? 'Following' : 'Follow' }}
+          </ion-button>
           <!-- Rematch only once the game is OVER (observers included — anyone
                may throw the next open challenge, spec 0009). -->
           <ion-button
@@ -112,12 +123,16 @@ const props = defineProps<{
   selfId?: string;
   /** …and how to name the seats (userId → display name). */
   names?: Record<string, string>;
+  /** Observer follow state (spec 0009 FR-006, device-local). */
+  followed?: boolean;
 }>();
 const emit = defineEmits<{
   (e: 'move', move: unknown): void;
   (e: 'resign'): void;
   /** Play again: start a fresh bubble of the same game (the chooser moves first). */
   (e: 'rematch', gameType: string): void;
+  /** Observer toggling their private follow of this game. */
+  (e: 'follow'): void;
 }>();
 
 const module = computed(() => GAMES[props.game.gameType] ?? null);

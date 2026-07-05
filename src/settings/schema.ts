@@ -538,9 +538,14 @@ export const SETTINGS: Record<string, SettingNode> = {
       {
         header: 'Games',
         items: [
+          { type: 'toggle', title: 'Your turn', key: 'notifications.games.turn', default: true },
+          { type: 'toggle', title: 'New challenges', key: 'notifications.games.challenges', default: true },
+          { type: 'toggle', title: 'Followed games, moves', key: 'notifications.games.followMoves', default: true },
+          { type: 'toggle', title: 'Followed games, results', key: 'notifications.games.followResults', default: true },
           { type: 'toggle', title: 'Game sounds', key: 'notifications.gameSounds', default: true },
         ],
-        footer: 'Playful cues while a game chat is open: a match starting, each move landing, and the result.',
+        footer:
+          'Alerts when it is your move, when someone answers your challenge, and for games you follow as a spectator. Sounds cover a game chat you have open: a match starting, each move landing, and the result.',
       },
       {
         header: 'Home screen notifications',

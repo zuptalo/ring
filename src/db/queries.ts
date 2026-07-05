@@ -917,6 +917,7 @@ async function handleGameAccept(from: string, signal: GameAcceptSignal): Promise
   if (playerIndexOf(message.game, getSelfUserId() ?? '') === 0) {
     const name = await gameNameOf(from);
     if (isChatActive(message.chatId)) void playGameCue('gameaccept');
+    if (!(await getSetting<boolean>('notifications.games.challenges', true))) return;
     await notifyIncoming({
       kind: 'message',
       chatId: message.chatId,
@@ -925,6 +926,26 @@ async function handleGameAccept(from: string, signal: GameAcceptSignal): Promise
       pushWoken: pushWakeActive(),
     }).catch(() => {});
   }
+}
+
+/* ---- following a game (spec 0009 FR-006): device-local, private ---- */
+
+/** The follow set: gameId (bubble messageId / postId) → followedAt. NEVER
+ *  own-data-synced and never on the wire — nobody learns who follows. */
+export async function followedGames(): Promise<Record<string, number>> {
+  return getSetting<Record<string, number>>('games.follows', {});
+}
+
+export async function followGame(gameId: string): Promise<void> {
+  const f = await followedGames();
+  f[gameId] = now();
+  await setSetting('games.follows', f);
+}
+
+export async function unfollowGame(gameId: string): Promise<void> {
+  const f = await followedGames();
+  delete f[gameId];
+  await setSetting('games.follows', f);
 }
 
 /** A player who left group `chatId` resigns all their ongoing games there —
@@ -1121,10 +1142,22 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   chat.updatedAt = signal.at;
   await put('chats', chat);
 
-  // NOTIFICATIONS go to players only (FR-005): your turn, or the result.
-  const notifyMe =
-    me !== null && (status.state !== 'ongoing' || status.turn === me);
-  if (!notifyMe) return;
+  // NOTIFICATIONS (spec 0009 FR-005/FR-006/FR-009): players get their turn and
+  // the result; observers only when they FOLLOW this game — each lane behind
+  // its own Settings → Notifications → Games switch, all beneath the existing
+  // mute/content gates inside notifyIncoming.
+  let notify = false;
+  if (me !== null) {
+    notify =
+      status.state !== 'ongoing' ||
+      (status.turn === me && (await getSetting<boolean>('notifications.games.turn', true)));
+  } else if (message.game.players && (await followedGames())[message.id] !== undefined) {
+    notify =
+      status.state === 'ongoing'
+        ? await getSetting<boolean>('notifications.games.followMoves', true)
+        : await getSetting<boolean>('notifications.games.followResults', true);
+  }
+  if (!notify) return;
   await notifyIncoming({
     kind: 'message',
     chatId: message.chatId,

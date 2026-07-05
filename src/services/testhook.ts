@@ -57,6 +57,8 @@ import {
   sendGameChallenge as dbSendGameChallenge,
   acceptGameChallenge as dbAcceptGameChallenge,
   cancelGameChallenge as dbCancelGameChallenge,
+  followGame as dbFollowGame,
+  unfollowGame as dbUnfollowGame,
   forwardMessage as dbForwardMessage,
   shareProfileUpdate as dbShareProfileUpdate,
   sendMediaMessage as dbSendMediaMessage,
@@ -604,6 +606,9 @@ export function installTestHook(): void {
     /** Claim an open challenge's seat / withdraw one (creator only). */
     acceptGameChallenge: (messageId: string) => dbAcceptGameChallenge(messageId),
     cancelGameChallenge: (messageId: string) => dbCancelGameChallenge(messageId),
+    /** Observer follow toggles (spec 0009 FR-006, device-local). */
+    followGame: (gameId: string) => dbFollowGame(gameId),
+    unfollowGame: (gameId: string) => dbUnfollowGame(gameId),
     /** The one-game-per-chat gate's source of truth (FR-001a). */
     hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
     /** Whether the notify layer considers this chat actively viewed (gates game cues). */

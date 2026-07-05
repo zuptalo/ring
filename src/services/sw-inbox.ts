@@ -35,6 +35,7 @@ import { get, getAll, put } from '@/db/idb';
 import { notifyPreview } from '@/utils/notify-preview';
 import { GAMES } from '@/games/registry';
 import { applySignal as applyGameSignal, deriveStatus as deriveGameStatus } from '@/games/session';
+import { playerIndexOf, lockOpponent } from '@/games/challenge';
 import type { Chat, Contact, Message, Setting } from '@/db/types';
 import type { MessagePayload } from './crypto/message';
 
@@ -172,9 +173,14 @@ export function noteForPayload(
   showPreview: boolean,
   hidden: Set<string> = new Set(),
   selfId = '',
-  // The gameMove target's stored row (prefetched by previewPending), so a
-  // game-ending move can name the WINNER in the web push (spec 0008 T041).
-  gameRow?: Message,
+  // Game context, prefetched by previewPending (spec 0008 T041 / spec 0009 US2):
+  // the target's stored row (winner naming + group seat mapping), the device's
+  // game-notification prefs, and its private follow set.
+  gameCtx?: {
+    row?: Message;
+    prefs?: { turn: boolean; challenges: boolean; followMoves: boolean; followResults: boolean };
+    follows?: Record<string, number>;
+  },
 ): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
@@ -213,11 +219,14 @@ export function noteForPayload(
   // (Copy nuance: a game-ENDING move also reads "Your move" here — the SW
   // hasn't applied the move, so it can't know; the page path, which has, uses
   // the precise outcome line.)
-  if (payload.gameMove) {
+  if (payload.gameMove || payload.gameAccept) {
     if (!showMessages) return { note: null, wasMessage: false };
-    const gchat = chats.find(
-      (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from,
-    );
+    const row = gameCtx?.row;
+    const prefs = gameCtx?.prefs ?? { turn: true, challenges: true, followMoves: true, followResults: true };
+    const follows = gameCtx?.follows ?? {};
+    const gchat = payload.groupId
+      ? chats.find((c) => c.id === payload.groupId && c.isGroup)
+      : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
     if (gchat && hidden.has(gchat.id)) {
       return {
         note: { ids: [f.id as string], title: 'Ring', body: 'New message', url: '/tabs/chats', tag: `ring:${gchat.id}` },
@@ -229,28 +238,83 @@ export function noteForPayload(
     const gcontent = gchat?.notifyContent ?? 'full';
     if (gcontent === 'none') return { note: null, wasMessage: false, silenced: true };
     const gshowText = gcontent === 'full' && showPreview;
-    // Name-first copy (T041): the mover by name, and a game-ENDING move names
-    // the winner. A resign always crowns the recipient; a winning move is
-    // derived by running the signal through the pure session engine against
-    // the stored row (when previewPending could fetch it).
     const mover = known || 'Someone';
-    let gline = `${mover} made a move, your turn 😏`;
-    if (payload.gameMove.action === 'resign') {
-      gline = `${mover} gave up. You win! 🏆`;
-    } else if (gameRow?.game) {
-      const gmodule = GAMES[gameRow.game.gameType] ?? null;
-      const gme = gameRow.outgoing ? 0 : 1;
-      const r = applyGameSignal(gmodule, gameRow.game, payload.gameMove, (1 - gme) as 0 | 1);
-      if (r.outcome === 'applied') {
-        const st = deriveGameStatus(gmodule, r.session);
-        if (st.state === 'won') gline = st.winner === gme ? 'You won the game! 🏆' : `${mover} won the game 🏆`;
-        else if (st.state === 'draw') gline = "It's a draw 🤝";
+    const nameOf = (uid: string | undefined): string =>
+      !uid ? 'Someone' : uid === selfId ? 'You' : contacts.find((c) => c.id === uid)?.name ?? 'Someone';
+
+    let gline: string | null;
+    if (payload.gameAccept) {
+      // Only the CHALLENGER cares that someone took the seat (spec 0009 US2).
+      if (row?.game?.players?.[0] !== selfId || row.game.players.length !== 1) {
+        return { note: null, wasMessage: false };
+      }
+      if (!prefs.challenges) return { note: null, wasMessage: false, silenced: true };
+      gline = `${mover} accepted your challenge 💪 Your move!`;
+    } else {
+      const sig = payload.gameMove!;
+      if (row?.game?.players) {
+        // Group/wall challenge session: derive the post-move outcome and MY
+        // seat with the same pure engine every device uses (spec 0009).
+        let session = row.game;
+        if (sig.seq === 1 && sig.opponent && session.players!.length === 1 && playerIndexOf(session, from) === 0) {
+          session = lockOpponent(session, sig.opponent);
+        }
+        const senderIdx = playerIndexOf(session, from);
+        if (senderIdx === null) return { note: null, wasMessage: false };
+        const after = applyGameSignal(GAMES[session.gameType] ?? null, session, sig, senderIdx).session;
+        const st = deriveGameStatus(GAMES[session.gameType] ?? null, after);
+        const myIdx = playerIndexOf(after, selfId);
+        const winnerLine = (): string | null => {
+          if (st.state === 'won' || st.state === 'resigned') {
+            const winnerId = after.players?.[st.winner!];
+            return winnerId === selfId ? 'You won the game! 🏆' : `${nameOf(winnerId)} won the game 🏆`;
+          }
+          if (st.state === 'draw') return "It's a draw 🤝";
+          return null;
+        };
+        if (myIdx !== null) {
+          // A PLAYER: my turn now, or the result — behind the turn pref.
+          if (st.state === 'ongoing') {
+            if (st.turn !== myIdx) return { note: null, wasMessage: false };
+            if (!prefs.turn) return { note: null, wasMessage: false, silenced: true };
+            gline = `${mover} made a move, your turn 😏`;
+          } else {
+            gline = winnerLine();
+          }
+        } else {
+          // An OBSERVER: silent unless this game is followed (device-local set).
+          if (follows[sig.messageId] === undefined) return { note: null, wasMessage: false };
+          if (st.state === 'ongoing') {
+            if (!prefs.followMoves) return { note: null, wasMessage: false, silenced: true };
+            gline = `${mover} made a move 🎲`;
+          } else {
+            if (!prefs.followResults) return { note: null, wasMessage: false, silenced: true };
+            gline = winnerLine();
+          }
+        }
+      } else {
+        // 1:1 (spec 0008 T041): name the winner when the stored row lets the
+        // engine derive it; a resign always crowns the recipient.
+        gline = `${mover} made a move, your turn 😏`;
+        if (sig.action === 'resign') {
+          gline = `${mover} gave up. You win! 🏆`;
+        } else if (row?.game) {
+          const gmodule = GAMES[row.game.gameType] ?? null;
+          const gme = row.outgoing ? 0 : 1;
+          const r = applyGameSignal(gmodule, row.game, sig, (1 - gme) as 0 | 1);
+          if (r.outcome === 'applied') {
+            const st = deriveGameStatus(gmodule, r.session);
+            if (st.state === 'won') gline = st.winner === gme ? 'You won the game! 🏆' : `${mover} won the game 🏆`;
+            else if (st.state === 'draw') gline = "It's a draw 🤝";
+          }
+        }
       }
     }
+    if (gline === null) return { note: null, wasMessage: false };
     return {
       note: {
         ids: [f.id as string],
-        title: showPreview ? known || 'Someone' : 'Ring',
+        title: showPreview ? (payload.groupId ? gchat?.name || 'Group' : mover) : 'Ring',
         body: gshowText ? gline : 'New message',
         url: gchat ? `/chat/${gchat.id}` : '/tabs/chats',
         tag: gchat ? `ring:${gchat.id}` : `ring:from:${from}`,
@@ -612,12 +676,23 @@ export async function previewPending(): Promise<PreviewResult> {
         : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === f.from);
       if (bChat && !hidden.has(bChat.id)) badgeable += 1;
     }
-    // A gameMove note can name the winner when the target bubble is on-device
-    // (spec 0008 T041); absent row → the generic named-mover line.
-    const gameRow = payload.gameMove
-      ? await get<Message>('messages', payload.gameMove.messageId)
+    // Game context (spec 0008 T041 / spec 0009 US2): the target bubble's stored
+    // row (winner naming + group seats), the game-notification prefs, and the
+    // device-local follow set. Absent row → the generic named-mover fallback.
+    const gameTargetId = payload.gameMove?.messageId ?? payload.gameAccept?.messageId;
+    const gameCtx = gameTargetId
+      ? {
+          row: await get<Message>('messages', gameTargetId),
+          prefs: {
+            turn: await setting<boolean>('notifications.games.turn', true),
+            challenges: await setting<boolean>('notifications.games.challenges', true),
+            followMoves: await setting<boolean>('notifications.games.followMoves', true),
+            followResults: await setting<boolean>('notifications.games.followResults', true),
+          },
+          follows: await setting<Record<string, number>>('games.follows', {}),
+        }
       : undefined;
-    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameRow);
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx);
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;
