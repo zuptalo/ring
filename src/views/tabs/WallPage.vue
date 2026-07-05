@@ -544,9 +544,14 @@ async function openPostMenu(post: WallPost): Promise<void> {
         },
         { text: 'Hide all their posts', handler: () => void hideUser(post) },
       ];
+  // A game post's story in numbers (spec 0009) lives on the post page — the
+  // menu is the discoverable way in from the feed.
+  const gameStats = post.game
+    ? [{ text: 'Game stats', handler: () => void router.push(`/wall/post/${post.id}`) }]
+    : [];
   const sheet = await actionSheetController.create({
     header: post.isOwn ? 'Your post' : post.authorName,
-    buttons: [...buttons, { text: 'Cancel', role: 'cancel' as const }],
+    buttons: [...gameStats, ...buttons, { text: 'Cancel', role: 'cancel' as const }],
   });
   await sheet.present();
 }
