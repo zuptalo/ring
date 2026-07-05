@@ -35,20 +35,38 @@
         />
         <!-- Result overlay (FR-025): the finished board announces itself — gold
              trophy, silver medal, or a handshake — large and animated over a
-             half-transparent backdrop, with a phoenix rematch. Tapping it peeks
-             at the final board (the compact line below keeps the outcome). -->
+             half-transparent backdrop. PLAYERS can tap to peek at the final
+             board and get the phoenix rematch; OBSERVERS (spec 0009) get the
+             winner by name and an invitation to throw their own challenge —
+             the finished board is the players' business, not a replay surface. -->
         <div
           v-if="showOverlay"
           class="game-overlay"
-          role="button"
-          tabindex="0"
-          :aria-label="`${statusLine}. Show the board`"
-          @click.stop="peeked = true"
-          @keydown.enter.stop="peeked = true"
+          :role="isObserver ? undefined : 'button'"
+          :tabindex="isObserver ? undefined : 0"
+          :aria-label="isObserver ? statusLine : `${statusLine}. Show the board`"
+          @click.stop="isObserver ? undefined : (peeked = true)"
+          @keydown.enter.stop="isObserver ? undefined : (peeked = true)"
         >
           <animated-emoji :emoji="overlayEmoji" large class="game-overlay-result" />
-          <ion-button size="small" fill="clear" class="game-overlay-again" @click.stop="$emit('rematch', game.gameType)">
+          <span v-if="isObserver" class="game-overlay-line">{{ statusLine }}</span>
+          <ion-button
+            v-if="!isObserver"
+            size="small"
+            fill="clear"
+            class="game-overlay-again"
+            @click.stop="$emit('rematch', game.gameType)"
+          >
             <animated-emoji emoji="🐦‍🔥" />&nbsp;Play again
+          </ion-button>
+          <ion-button
+            v-else
+            size="small"
+            fill="clear"
+            class="game-overlay-again"
+            @click.stop="$emit('rematch', game.gameType)"
+          >
+            <animated-emoji emoji="🫵" />&nbsp;Start your own challenge
           </ion-button>
         </div>
       </div>
@@ -209,11 +227,13 @@ const statusEmoji = computed((): string => {
 });
 
 // Result overlay (FR-025): shown for every finished-with-a-result state until
-// the player peeks at the final board. Peeking is per-mount, local only.
+// the player peeks at the final board. Peeking is per-mount, local only — and
+// players-only: observers keep the announcement (spec 0009).
 const peeked = ref(false);
+const isObserver = computed(() => explicit.value && myPlayer.value === null);
 const showOverlay = computed(
   () =>
-    !peeked.value &&
+    (!peeked.value || isObserver.value) &&
     (status.value.state === 'won' || status.value.state === 'draw' || status.value.state === 'resigned'),
 );
 const overlayEmoji = computed((): string => {
@@ -298,6 +318,13 @@ async function confirmResign(): Promise<void> {
   font-size: 13px;
   text-transform: none;
   --color: #fff;
+}
+.game-overlay-line {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+  padding: 0 8px;
 }
 .game-status {
   display: flex;
