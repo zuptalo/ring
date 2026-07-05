@@ -188,9 +188,18 @@ test('1:1 tic-tac-toe: resign ends it for both, and Play again starts a fresh ga
   expect((await gameInfo(a, msgId)).theme).toBe('space');
   await expect.poll(async () => (await gameInfo(b, msgId))?.theme, { timeout: 15_000 }).toBe('space');
 
+  // FR-026: with the chat OPEN, an inbound move ticks and a self-resign plays
+  // the losing tone — asserted via the cue recorder (a recorded cue passed both
+  // the Game sounds gate and the de-dup).
+  await b.page.evaluate((id: string) => (window as any).__ringTest.navigate(`/chat/${id}`), bChat);
+  await b.page.evaluate(() => (window as any).__ringTest.recordCues(true));
+
   // Mid-game, B resigns → both sides show A (player 0) as winner by concession.
   await playMove(a, aChat, msgId, 4);
   await expect.poll(async () => (await gameInfo(b, msgId)).moves, { timeout: 30_000 }).toBe(1);
+  await expect
+    .poll(() => b.page.evaluate(() => (window as any).__ringTest.cuesFired()), { timeout: 15_000 })
+    .toContain('gamemove');
   await b.page.evaluate(
     (args: { chatId: string; msgId: string }) => (window as any).__ringTest.resignGame(args.chatId, args.msgId),
     { chatId: bChat, msgId },
@@ -203,6 +212,10 @@ test('1:1 tic-tac-toe: resign ends it for both, and Play again starts a fresh ga
     state: 'resigned',
     winner: 0,
   });
+  // FR-026: resigning yourself sounds the losing tone.
+  await expect
+    .poll(() => b.page.evaluate(() => (window as any).__ringTest.cuesFired()), { timeout: 15_000 })
+    .toContain('gamelose');
 
   // The finished board is locked (a late move is refused/dropped on both sides)…
   await playMove(a, aChat, msgId, 0);

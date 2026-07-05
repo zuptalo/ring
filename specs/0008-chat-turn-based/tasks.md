@@ -176,6 +176,12 @@ mismatched sizes on iOS — font metrics differ per platform).
 
 ---
 
+## Phase 10: Game audio (user feedback, 2026-07-05)
+
+- [ ] T040 FR-026 game sound cues, tests first: extend `src/services/sound.ts` RECIPES with `gamestart`/`gamemove`/`gamewin`/`gamelose`/`gamedraw` (sound.test.ts completeness check goes red first); new `src/services/game-sounds.ts` with pure `gameCueFor(status, me)` (unit-tested) + a `notifications.gameSounds`-gated player (no import cycle: reads the setting via idb directly); hooks in `queries.ts` (sendGame + inbound bubble while chat active → match call; applied moves → tick or result cue; self resign → lose cue; inbound only while `isChatActive`); "Game sounds" toggle beside "In-call sounds" in `settings/schema.ts`; e2e asserts fired cues via the existing `recordCues`/`cuesFired` hook
+
+---
+
 ## GitHub Issues
 
 One issue per task (created 2026-07-05; the feature → develop PR must list `Closes #N`
@@ -184,7 +190,7 @@ T007 #767 · T008 #768 · T009 #769 · T010 #770 · T011 #771 · T012 #772 · T0
 T014 #774 · T015 #775 · T016 #776 · T017 #777 · T018 #778 · T019 #779 · T020 #780 ·
 T021 #781 · T022 #782 · T023 #783 · T024 #784 · T025 #785 · T026 #786 · T027 #787 ·
 T028 #788 · T029 #789 · T030 #790 · T031 #791 ·
-T032 #792 · T033 #793 · T034 #794 · T035 #795 · T036 #796 · T037 #797 · T038 #798 · T039 #799
+T032 #792 · T033 #793 · T034 #794 · T035 #795 · T036 #796 · T037 #797 · T038 #798 · T039 #799 · T040 #800
 
 ---
 

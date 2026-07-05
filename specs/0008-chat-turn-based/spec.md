@@ -31,6 +31,7 @@
 - Q: Should games look like more than X and O? → A: Yes — the starter picks a visual theme (mark pair + soft board accent) from the game's bundled theme list; the theme travels inside the sealed payload so both players see the identical game.
 - Q: What lives in a game bubble's message info? → A: Fun game stats — the matchup, when it started, the result, total game time, move count, each player's average reply time and fastest move, derived from move timestamps only.
 - Q: How should a finished game announce its result? → A: A half-transparent dark overlay covers the board with a large animated result — the gold trophy for the winner, the silver medal for the other player, a handshake for a draw — plus a phoenix-marked Play again. Tapping the overlay reveals the final board underneath (with the compact result line), so the record stays inspectable.
+- Q: Should games make sound? → A: Yes — short synthesized cues (the app's existing royalty-free WebAudio recipes, no audio files) for a match starting, each move, winning, losing, and a draw. They play only while the game's chat is open (notifications cover the rest), behind a "Game sounds" toggle next to "In-call sounds", on by default.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -127,6 +128,7 @@ A player who has left the chat or the app learns that their opponent has moved: 
 - **FR-023**: Game surfaces MUST read like a game, not a form: minimal text, a matchup header showing who plays which mark, glanceable animated status cues drawn from the curated palette in `docs/ANIMATED-EMOJI.md`, and the most recently played mark animated on the board. The same concept always uses the same emoji everywhere.
 - **FR-024**: Message info on a game bubble MUST show the game's story in numbers: the matchup, when it started, the result, total game time to a final state, move count, each player's average reply time, and the fastest move. All timings derive from the moves' own timestamps (no extra tracking, no new wire data).
 - **FR-025**: A finished game (won, drawn, or resigned) MUST announce its result as a large animated overlay on the board over a half-transparent dark backdrop — gold trophy for the winner, silver medal for the other player, handshake for a draw — with a phoenix-marked Play again on it. Tapping the overlay MUST reveal the final board (the compact result line reappears), keeping the record inspectable. The result emoji set (🏆/🥈/🤝) is the SAME across the bubble, message info, and previews.
+- **FR-026**: Games MUST have audio cues — a match call when a game starts (including rematches), a soft tick per accepted move, a small fanfare for winning, a warm descending tone for losing, and a neutral pair for a draw — synthesized like the app's existing call cues (no audio files). Cues play only while the game's chat is open (notification sounds cover everything else), never for rejected/out-of-sync signals, and sit behind a "Game sounds" toggle (default on) beside "In-call sounds".
 
 ### Key Entities
 
