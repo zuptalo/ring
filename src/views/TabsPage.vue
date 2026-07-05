@@ -103,6 +103,12 @@ function switchTab(path: string): void {
 ion-tab-bar {
   --color: var(--app-text);
   --color-selected: var(--ion-color-primary);
+  /* The 32px circled icons + a label need ~56px, but iOS mode's bar is 50px and
+     only LOOKS right when the home-indicator safe-area adds room below it. On
+     inset-less screens (desktop PWA windows) the labels clipped at the window
+     edge. On phones the inset padding already makes the bar taller than this,
+     so the floor changes nothing there. */
+  min-height: 58px;
   /* Match the chat composer footer: the same subtle toolbar tint, just slightly
      translucent with a gentle backdrop blur so the bar + its safe-area inset read as one
      quiet pane and anything scrolling underneath is softly frosted, not sharp. Borderless
