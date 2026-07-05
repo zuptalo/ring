@@ -27,9 +27,9 @@ implementation that satisfies them, committed failing first.
 
 ## Phase 3: US2 — quiet observers, follow, notification settings
 
-- [ ] T009 [US2] FAILING tests: SW unit (`sw-inbox.games` extension) — group gameMove notifies ONLY the next-turn player, follow-gated observer note, accept note to the challenger ("{Name} accepted your challenge 💪"), each `notifications.games.*` pref silences its lane; e2e additions — C stays silent through a full game, C follows → per-move + result cues recorded, C unfollows → silent
-- [ ] T010 [US2] Follow storage (`games.follows` device-local settings helpers + prune) and Settings schema "Game notifications" group (`notifications.games.turn/.challenges/.followMoves/.followResults`, all default on; `gameSounds` moves beside it); the four pref keys join `SYNCED_PREF_KEYS` (`ownsync-keys.ts`) — `games.follows` deliberately does NOT
-- [ ] T011 [US2] Routing implementation: page path (`handleGameMove` group branch + accept/cancel handlers decide player-turn vs follower vs silent, behind prefs + existing mute/content gates) and SW path (`sw-inbox.ts` group gameMove/gameAccept branches using the prefetched game row, `players`, selfId, follow set + prefs passed from `previewPending`)
+- [X] T009 [US2] FAILING tests: SW unit (`sw-inbox.games` extension) — group gameMove notifies ONLY the next-turn player, follow-gated observer note, accept note to the challenger ("{Name} accepted your challenge 💪"), each `notifications.games.*` pref silences its lane; e2e additions — C stays silent through a full game, C follows → per-move + result cues recorded, C unfollows → silent
+- [X] T010 [US2] Follow storage (`games.follows` device-local settings helpers + prune) and Settings schema "Game notifications" group (`notifications.games.turn/.challenges/.followMoves/.followResults`, all default on; `gameSounds` moves beside it); the four pref keys join `SYNCED_PREF_KEYS` (`ownsync-keys.ts`) — `games.follows` deliberately does NOT
+- [X] T011 [US2] Routing implementation: page path (`handleGameMove` group branch + accept/cancel handlers decide player-turn vs follower vs silent, behind prefs + existing mute/content gates) and SW path (`sw-inbox.ts` group gameMove/gameAccept branches using the prefetched game row, `players`, selfId, follow set + prefs passed from `previewPending`)
 
 ## Phase 4: US3 — the Wall
 

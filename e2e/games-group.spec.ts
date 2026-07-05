@@ -148,6 +148,11 @@ test('challenge → first accept seats → observers watch read-only → win for
 test('observers are quiet by default, loud when they Follow, quiet again on unfollow', async ({ browser }) => {
   const { a, b, c, gid, ctx } = await setupTrio(browser, ['RINGGC7', 'RINGGC8', 'RINGGC9']);
 
+  // Let every device's post-unlock notification SETTLE window (2.5s, the
+  // banner-burst damper ordinary messages get too) expire — this test asserts
+  // on banners, and the hook-driven setup is faster than any human.
+  await c.page.waitForTimeout(2700);
+
   const mid = await startChallenge(a, gid, [a, b, c]);
   await accept(b, mid);
   for (const p of [a, b, c]) {
@@ -202,9 +207,26 @@ test('accept race across an offline gap converges via the seat lock; a leaving p
     await expect.poll(async () => (await gameInfo(p, mid)).players, { timeout: 30_000 }).toEqual([a.id, b.id]);
   }
 
-  // Mid-game, the seated opponent leaves the group → the game ends as Bob's
-  // resignation on every remaining device, from the shared roster card alone.
+  for (const x of ctx) await x.close();
+});
+
+test('a seated player leaving the group resigns their game on every remaining device', async ({ browser }) => {
+  const { a, b, c, gid, ctx } = await setupTrio(browser, ['RINGGL1', 'RINGGL2', 'RINGGL3']);
+
+  const mid = await startChallenge(a, gid, [a, b, c]);
+  await accept(b, mid);
+  for (const p of [a, b, c]) {
+    await expect.poll(async () => (await gameInfo(p, mid)).opponent, { timeout: 30_000 }).toBe(b.id);
+  }
+  await move(a, gid, mid, 4);
   await expect.poll(async () => (await gameInfo(b, mid)).moves, { timeout: 30_000 }).toBe(1);
+  await expect.poll(async () => (await gameInfo(c, mid)).moves, { timeout: 30_000 }).toBe(1);
+
+  // The seated opponent leaves mid-game → the game ends as Bob's resignation on
+  // every remaining device, derived from the shared roster card alone (no extra
+  // wire signal). Kept OUT of the offline-race test: an offline gap stresses the
+  // ratchet with concurrent drains/sends, and a rare dropped frame there is a
+  // transport edge, not what leave-resign is about.
   await b.page.evaluate((id: string) => (window as any).__ringTest.leaveGroup(id), gid);
   for (const p of [a, c]) {
     await expect
