@@ -96,9 +96,10 @@
             <div class="bs-radar-sweep" /><div class="bs-radar-ping" />
           </div>
           <div class="bs-overlay">
-            <!-- their wrecks: only once the END-OF-GAME reveal made them public -->
-            <div v-for="(ship, i) in theirWrecks" :key="'w' + i" class="bs-ship" :style="shipBox(ship)">
-              <submarine-svg :len="ship.len" :vertical="ship.dir === 'v'" wreck />
+            <!-- their boats: sunk ones as wrecks the moment they're confirmed;
+                 survivors appear (as ordinary subs) only with the final reveal -->
+            <div v-for="({ ship, sunk }, i) in theirShips" :key="'w' + i" class="bs-ship" :style="shipBox(ship)">
+              <submarine-svg :len="ship.len" :vertical="ship.dir === 'v'" :wreck="sunk" />
             </div>
             <div v-for="[cell, r] in theirSea" :key="'s' + cell" class="bs-mark" :style="boxStyle(Math.floor(cell / 8), cell % 8, 1, 1)">
               <span v-if="r === 'pending'" class="bs-reticle" aria-hidden="true">
@@ -116,7 +117,7 @@
                   <circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="2" class="rip rip-b" />
                 </svg>
               </span>
-              <span v-else-if="!theirWrecks.length || r === 'hit'" class="bs-flame" aria-hidden="true">
+              <span v-else-if="!theirWreckCells.has(cell)" class="bs-flame" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
                   <path d="M12 2 C15 7 18 9.5 16.5 14 A5.4 5.4 0 1 1 7.5 14 C6.6 10.6 9.6 9.6 10 6.4 C10.7 8.4 11 8.2 12 2 Z" fill="#fb923c" class="fl fl-a" />
                   <path d="M12 8 C13.7 10.6 15 11.6 14 14.6 A3 3 0 1 1 9.6 14.7 C9.3 12.7 11.1 12.1 12 8 Z" fill="#fde047" class="fl fl-b" />
@@ -331,8 +332,51 @@ const ownShips = computed(() => {
   const hits = new Set([...mySea.value.entries()].filter(([, r]) => r === 'hit' || r === 'sunk').map(([c]) => c));
   return layout.map((ship) => ({ ship, sunk: cellsOf(ship).every((c) => hits.has(c)) }));
 });
-// Their fleet exists for us ONLY as the end-of-game reveal (protocol timing).
-const theirWrecks = computed<Layout>(() => props.state.reveals[(1 - myIdx.value) as 0 | 1]?.layout ?? []);
+// Their SUNK boats surface as wrecks the moment the sunk answer lands (the
+// handoff's rule): each 'sunk' closes the straight run of hits through its
+// cell. Ships may touch, so a collinear pair can briefly read as one long
+// wreck — the end-of-game reveal corrects any such guess, and additionally
+// shows their SURVIVING boats as ordinary submarines.
+const theirDerivedWrecks = computed<Ship[]>(() => {
+  const shots = props.state.shots[myIdx.value];
+  const hitCells = new Set<number>();
+  const assigned = new Set<number>();
+  const wrecks: Ship[] = [];
+  const avail = (cell: number): boolean => hitCells.has(cell) && !assigned.has(cell);
+  for (const rec of shots) {
+    if (rec.r !== 'miss') hitCells.add(rec.cell);
+    if (rec.r !== 'sunk') continue;
+    const r0 = Math.floor(rec.cell / 8);
+    const c0 = rec.cell % 8;
+    let c1 = c0, c2 = c0, r1 = r0, r2 = r0;
+    while (c1 > 0 && avail(r0 * 8 + c1 - 1)) c1--;
+    while (c2 < 7 && avail(r0 * 8 + c2 + 1)) c2++;
+    while (r1 > 0 && avail((r1 - 1) * 8 + c0)) r1--;
+    while (r2 < 7 && avail((r2 + 1) * 8 + c0)) r2++;
+    const hLen = c2 - c1 + 1;
+    const vLen = r2 - r1 + 1;
+    const ship: Ship =
+      hLen >= vLen ? { r: r0, c: c1, len: hLen, dir: 'h' } : { r: r1, c: c0, len: vLen, dir: 'v' };
+    if (ship.len < 2) continue;
+    wrecks.push(ship);
+    cellsOf(ship).forEach((c) => assigned.add(c));
+  }
+  return wrecks;
+});
+const theirShips = computed(() => {
+  const reveal = props.state.reveals[(1 - myIdx.value) as 0 | 1]?.layout;
+  if (reveal) {
+    const hits = new Set(props.state.shots[myIdx.value].filter((x) => x.r !== 'miss').map((x) => x.cell));
+    return reveal.map((ship) => ({ ship, sunk: cellsOf(ship).every((c) => hits.has(c)) }));
+  }
+  return theirDerivedWrecks.value.map((ship) => ({ ship, sunk: true }));
+});
+// Cells whose flames the wreck replaced (handoff: a finished sub burns no more).
+const theirWreckCells = computed(() => {
+  const set = new Set<number>();
+  for (const { ship, sunk } of theirShips.value) if (sunk) cellsOf(ship).forEach((c) => set.add(c));
+  return set;
+});
 
 async function loadSecret(): Promise<void> {
   const h = props.state.commits[props.myPlayer];

@@ -1714,6 +1714,15 @@ async function openMenu(m: Message, ev: Event) {
 // viewer instead; the react button opens the quick-react popover. No long-press.
 function onBubbleTap(m: Message, ev: Event): void {
   if (m.deleted) return;
+  // Game boards are dense interactive surfaces — a stray tap between cells must
+  // not summon the message menu. For games, only the footer strip (timestamp +
+  // reactions) opens it.
+  if (
+    (m.kind === 'game' || m.kind === 'gamechallenge') &&
+    !(ev.target as HTMLElement | null)?.closest?.('.msg-foot')
+  ) {
+    return;
+  }
   void openMenu(m, ev);
 }
 
