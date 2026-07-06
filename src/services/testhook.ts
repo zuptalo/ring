@@ -172,6 +172,8 @@ import { get, getAll, put, bulkPut } from '@/db/idb';
 import { GAMES } from '@/games/registry';
 import { deriveStatus as deriveGameStatus } from '@/games/session';
 import { challengePhase, resolveOpponent } from '@/games/challenge';
+import { commitment as bsCommitment, judgeShot as bsJudge, type Layout as BsLayout } from '@/games/battleship/logic';
+import { setFleetSecret as bsSetSecret } from '@/games/battleship/secret';
 import { initialsAvatar, emojiAvatar, emojiOfAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
@@ -615,6 +617,17 @@ export function installTestHook(): void {
     /** Observer follow toggles (spec 0009 FR-006, device-local). */
     followGame: (gameId: string) => dbFollowGame(gameId),
     unfollowGame: (gameId: string) => dbUnfollowGame(gameId),
+    /** Battleship (spec 0011): commit a KNOWN layout (stores the device-local
+     *  secret exactly like the Ready button, then plays the commit move). */
+    battleshipCommit: async (chatId: string, messageId: string, layout: BsLayout, salt: string) => {
+      const h = bsCommitment(layout, salt);
+      await bsSetSecret(h, { layout, salt });
+      await dbPlayGameMove(chatId, messageId, { t: 'commit', h });
+    },
+    /** The truthful answer for a shot against a layout (test-side honesty). */
+    battleshipJudge: (layout: BsLayout, cell: number, hits: number[]) => bsJudge(layout, cell, hits),
+    /** The RAW stored session — the secrecy probe (spec 0011 SC-002) scans it. */
+    gameSessionRaw: async (messageId: string) => (await dbGetMessage(messageId))?.game ?? null,
     /** The one-game-per-chat gate's source of truth (FR-001a). */
     hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
     /** Whether the notify layer considers this chat actively viewed (gates game cues). */

@@ -21,6 +21,8 @@ Specs are grouped by category band; status moves
 | [0007](specs/0007-adaptive-call-quality/spec.md) | Adaptive call quality — per-receiver, network- and screen-aware, with peer-reported health | 🔵 in-review |
 | [0008](specs/0008-chat-turn-based/spec.md) | In-Chat Turn-Based Games | 🟢 shipped |
 | [0009](specs/0009-game-challenges-groups/spec.md) | Game Challenges in Groups and on the Wall | 🟢 shipped |
+| [0010](specs/0010-connect-four-second/spec.md) | Connect Four, the Second Built-in Game | 🔵 in-review |
+| [0011](specs/0011-battleship-hidden-fleets/spec.md) | Battleship with Hidden Fleets | 🔵 in-review |
 
 ## ⚡ Ad-hoc (1001–1999)
 
