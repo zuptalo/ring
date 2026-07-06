@@ -29,9 +29,10 @@ rules enforce it unchanged.
 - After the winner's reveal: verify BOTH reveals — (a) commitment matches,
   (b) layout is legal, (c) every answer that side gave matches the layout
   (miss/hit per cell; 'sunk' exactly on each ship's last hit cell).
-- Both honest → `won` by the attacker of the final sunk. Either reveal
-  invalid → `won` by the OTHER side (the cheat flip). Both invalid →
-  `out-of-sync` (a broken game, not a winner).
+- Both honest → `won` by the attacker of the final sunk. The WINNER's reveal
+  invalid → the win flips to the loser; the LOSER's reveal invalid → the
+  verdict stands (the cheater lost anyway) — in every case the proven cheater
+  cannot profit. Both invalid → `draw` (two cheaters share the disgrace).
 - Resign at any point → the engine's native resigned status; no reveals.
 
 ## What each party ever learns
