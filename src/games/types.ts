@@ -36,6 +36,10 @@ export interface GameModule<S = unknown, M = unknown> {
   turn(state: S): 0 | 1
   status(state: S): GameStatusResult
   /** Bundled visual themes; the first entry is the default (FR-022). */
+  /** Optional per-move FOLEY (spec 1033): the game may name the cue a just-
+   *  applied move deserves (e.g. Battleship's splash vs impact); null/absent
+   *  falls back to the platform's generic status cues. */
+  moveCue?: (move: unknown, status: GameSessionStatus, me: 0 | 1) => string | null
   themes: GameTheme[]
 }
 

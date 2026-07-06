@@ -49,6 +49,12 @@ describe('claimCue — call-cue rate limiter (spec 0004 US5)', () => {
     }
   });
 
+  it('has a recipe for every Battleship foley cue (spec 1033)', () => {
+    for (const name of ['bs-fire', 'bs-splash', 'bs-hit', 'bs-sunk', 'bs-sonar']) {
+      expect(RECIPE_NAMES).toContain(name);
+    }
+  });
+
   it('de-dups a rapid hold→swap→hold storm so cue-fatigue is bounded (spec 0005 T027)', () => {
     // Fumbling the swap button shouldn't machine-gun the same cue.
     expect(claimCue('swap', 10_000)).toBe(true);

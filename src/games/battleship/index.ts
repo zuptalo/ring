@@ -7,6 +7,18 @@ import { boatOutline } from 'ionicons/icons'
 import type { GameModule } from '../types'
 import { applyMove, createInitialState, status, turn, type BsMove, type BsState } from './logic'
 
+/** The foley a just-applied move deserves (spec 1033): torpedo, splash,
+ *  impact, or the groan of a sinking boat. Terminal moves fall back to the
+ *  platform's win/lose fanfare; commits and reveals are silent bookkeeping. */
+function moveCue(move: unknown, st: { state: string }, _me: 0 | 1): string | null {
+  const m = move as BsMove | null
+  if (!m || typeof m !== 'object') return null
+  if (st.state !== 'ongoing') return null // the result fanfare owns the ending
+  if (m.t === 'shot') return 'bs-fire'
+  if (m.t === 'answer') return m.r === 'miss' ? 'bs-splash' : m.r === 'sunk' ? 'bs-sunk' : 'bs-hit'
+  return null
+}
+
 const battleship: GameModule<BsState, BsMove> = {
   id: 'battleship',
   displayName: 'Battleship',
@@ -16,6 +28,7 @@ const battleship: GameModule<BsState, BsMove> = {
   applyMove,
   turn,
   status,
+  moveCue,
   // ONE look (spec 1033): the submarine design from the handoff IS Battleship's
   // identity — no theme choice. The id stays 'classic' (frozen default), and
   // ids from games started on older builds ('pirates', 'sea-monsters') fall

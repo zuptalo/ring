@@ -1073,8 +1073,12 @@ export async function playGameMove(chatId: string, messageId: string, move: unkn
   const opponent = seq === 1 && m.game.players?.length === 2 ? m.game.players[1] : undefined;
   if ((await applyGameMove(m, me, { seq, action: 'move', move, at })) !== 'applied') return;
   // Your own move ticks (or lands the result cue when it ends the game, FR-026);
-  // playing is inherently in-chat, so no isChatActive check here.
-  void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  // playing is inherently in-chat, so no isChatActive check here. A game may
+  // name its own foley for the move (spec 1033), falling back to the generic cue.
+  {
+    const st = deriveGameStatus(module, m.game);
+    void playGameCue((module.moveCue?.(move, st, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(st, me));
+  }
   await bumpOwnGamePreview(m, 'move', at);
   const chat = await getChat(m.chatId);
   const signal: GameMoveSignal = { messageId, seq, action: 'move', move, at, opponent };
@@ -1155,7 +1159,12 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   const status = deriveGameStatus(GAMES[message.game.gameType] ?? null, message.game);
 
   // Their move sounds only while this chat is on screen (FR-026) — players only.
-  if (me !== null && isChatActive(message.chatId)) void playGameCue(gameCueFor(status, me));
+  if (me !== null && isChatActive(message.chatId)) {
+    const gmod = GAMES[message.game.gameType] ?? null;
+    void playGameCue(
+      (gmod?.moveCue?.(signal.move, status, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(status, me),
+    );
+  }
 
   // Chat-list preview for EVERYONE (it's just the list line), name-first, with
   // third-person copy for observers.
@@ -3731,7 +3740,10 @@ export async function playWallGameMove(postId: string, move: unknown): Promise<v
   const opponent = seq === 1 && session.players?.length === 2 ? session.players[1] : undefined;
   await submitWallGame(post, { t: 'move', seq, action: 'move', move, at, opponent });
   const after = await wallGameSession(postId);
-  if (after) void playGameCue(gameCueFor(deriveGameStatus(module, after), me));
+  if (after) {
+    const st = deriveGameStatus(module, after);
+    void playGameCue((module.moveCue?.(move, st, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(st, me));
+  }
 }
 
 /** Concede a Wall game (players only, once seated). */

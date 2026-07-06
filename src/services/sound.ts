@@ -60,7 +60,14 @@ export type ToneName =
   // Group challenge cues (spec 0009): the announcement fanfare-let and the
   // "someone's in!" confirmation.
   | 'gamechallenge'
-  | 'gameaccept';
+  | 'gameaccept'
+  // Battleship foley (spec 1033): torpedo away, splash, impact, the groan of a
+  // sinking boat, and the sonar ping when the scope is yours.
+  | 'bs-fire'
+  | 'bs-splash'
+  | 'bs-hit'
+  | 'bs-sunk'
+  | 'bs-sonar';
 
 interface Note {
   freq: number;
@@ -231,6 +238,36 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
   gameaccept: [
     { freq: C5, start: 0, dur: 0.09, type: 'triangle', gain: 0.22 },
     { freq: G5, start: 0.09, dur: 0.16, type: 'triangle', gain: 0.24 },
+  ],
+  // Torpedo away: a fast falling sawtooth thunk-whoosh.
+  'bs-fire': [
+    { freq: 180, start: 0, dur: 0.06, type: 'sawtooth', gain: 0.16 },
+    { freq: 140, start: 0.05, dur: 0.07, type: 'sawtooth', gain: 0.14 },
+    { freq: 110, start: 0.11, dur: 0.09, type: 'sawtooth', gain: 0.12 },
+  ],
+  // Nothing but water: a soft descending bloop.
+  'bs-splash': [
+    { freq: 420, start: 0, dur: 0.05, type: 'sine', gain: 0.12 },
+    { freq: 300, start: 0.06, dur: 0.08, type: 'sine', gain: 0.11 },
+    { freq: 220, start: 0.13, dur: 0.12, type: 'sine', gain: 0.1 },
+  ],
+  // Impact: a low boom with a sharp crack riding it.
+  'bs-hit': [
+    { freq: 240, start: 0, dur: 0.04, type: 'square', gain: 0.14 },
+    { freq: 90, start: 0, dur: 0.12, type: 'square', gain: 0.22 },
+    { freq: 55, start: 0.02, dur: 0.18, type: 'sawtooth', gain: 0.2 },
+  ],
+  // A boat goes down: a longer descending groan under a final boom.
+  'bs-sunk': [
+    { freq: 90, start: 0, dur: 0.14, type: 'square', gain: 0.22 },
+    { freq: 70, start: 0.1, dur: 0.16, type: 'sawtooth', gain: 0.2 },
+    { freq: 55, start: 0.24, dur: 0.2, type: 'sawtooth', gain: 0.16 },
+    { freq: 45, start: 0.42, dur: 0.28, type: 'sine', gain: 0.12 },
+  ],
+  // The scope is yours: a clean sonar ping with a faint echo.
+  'bs-sonar': [
+    { freq: 1150, start: 0, dur: 0.18, type: 'sine', gain: 0.12 },
+    { freq: 1150, start: 0.45, dur: 0.22, type: 'sine', gain: 0.045 },
   ],
 };
 

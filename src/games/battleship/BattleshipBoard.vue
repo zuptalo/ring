@@ -183,6 +183,7 @@ import {
   type Ship,
 } from './logic';
 import { getFleetSecret, setFleetSecret, clearFleetSecret } from './secret';
+import { playGameCue } from '@/services/game-sounds';
 
 const props = defineProps<{
   state: BsState;
@@ -323,6 +324,11 @@ const canFire = computed(
   () => props.canMove && bothCommitted.value && !props.state.pending && props.state.finalBy === null,
 );
 const fire = (cell: number): void => emit('move', { t: 'shot', cell });
+// The scope brightening is audible too: one sonar ping when the turn becomes
+// yours (gated by the same Game sounds setting as every cue).
+watch(canFire, (now, was) => {
+  if (now && !was) void playGameCue('bs-sonar');
+});
 const fireLabel = (cell: number): string =>
   `Fire at row ${Math.floor(cell / 8) + 1}, column ${(cell % 8) + 1}`;
 
