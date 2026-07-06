@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-06
 
-**Status**: planned
+**Status**: in-progress
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User description: "Add Battleship as the third built-in game before

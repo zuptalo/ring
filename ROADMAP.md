@@ -22,6 +22,7 @@ Specs are grouped by category band; status moves
 | [0008](specs/0008-chat-turn-based/spec.md) | In-Chat Turn-Based Games | 🟢 shipped |
 | [0009](specs/0009-game-challenges-groups/spec.md) | Game Challenges in Groups and on the Wall | 🟢 shipped |
 | [0010](specs/0010-connect-four-second/spec.md) | Connect Four, the Second Built-in Game | 🟡 in-progress |
+| [0011](specs/0011-battleship-hidden-fleets/spec.md) | Battleship with Hidden Fleets | 🟡 in-progress |
 
 ## ⚡ Ad-hoc (1001–1999)
 

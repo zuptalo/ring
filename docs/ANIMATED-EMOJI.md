@@ -194,6 +194,23 @@ pairs so the last-dropped disc plays.
 | Fruits | 🍎 `red-apple 1f34e` | 🍋 `lemon 1f34b` | lime `132, 204, 22` |
 | Day & Night | 🌞 `sun-with-face 1f31e` | 🌝 `moon-face-full 1f31d` | sky `14, 165, 233` |
 
+## Battleship (spec 0011)
+
+Marks style YOUR fleet's ships (both sides use the same glyph — fleets are
+secret, so there is nothing to tell apart); shot results are a FIXED language:
+
+| Result | Emoji | Meaning |
+|--------|-------|---------|
+| Miss | 💦 `sweat-droplets 1f4a6` | a splash in open water |
+| Hit | 💥 `collision 1f4a5` | a ship is struck |
+| Sunk | 🔥 `fire 1f525` | the whole ship is gone |
+
+| Theme | Ship glyph | Accent |
+|-------|-----------|--------|
+| Classic | 🚢 `ship 1f6a2` | navy `30, 64, 175` |
+| Pirates | 🏴‍☠️ `pirate-flag 1f3f4_200d_2620_fe0f` | rum brown `120, 53, 15` |
+| Sea Monsters | 🐙 `octopus 1f419` | teal `13, 148, 136` |
+
 ## Tic-tac-toe themes (spec 0008)
 
 Each theme is a pair of marks (player 0 vs player 1) plus a soft accent tint on the
