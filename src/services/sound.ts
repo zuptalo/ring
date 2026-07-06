@@ -63,11 +63,10 @@ export type ToneName =
   | 'gameaccept'
   // Battleship foley (spec 1033): torpedo away, splash, impact, the groan of a
   // sinking boat, and the sonar ping when the scope is yours.
-  | 'bs-fire'
-  | 'bs-splash'
-  | 'bs-hit'
-  | 'bs-sunk'
-  | 'bs-sonar';
+  | FxName;
+
+/** Effect-layer cues (spec 1033): synthesized foley, not note recipes. */
+export type FxName = 'bs-fire' | 'bs-splash' | 'bs-hit' | 'bs-sunk' | 'bs-sonar';
 
 interface Note {
   freq: number;
@@ -90,7 +89,7 @@ const A4 = 440.0;
 const F4 = 349.23;
 const Bb4 = 466.16;
 
-const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
+const RECIPES: Record<Exclude<ToneName, 'none' | FxName>, Note[]> = {
   // Soft single blip, the default.
   note: [{ freq: A5, start: 0, dur: 0.18, type: 'sine' }],
   // Two ascending bell-like notes.
@@ -239,36 +238,6 @@ const RECIPES: Record<Exclude<ToneName, 'none'>, Note[]> = {
     { freq: C5, start: 0, dur: 0.09, type: 'triangle', gain: 0.22 },
     { freq: G5, start: 0.09, dur: 0.16, type: 'triangle', gain: 0.24 },
   ],
-  // Torpedo away: a fast falling sawtooth thunk-whoosh.
-  'bs-fire': [
-    { freq: 180, start: 0, dur: 0.06, type: 'sawtooth', gain: 0.16 },
-    { freq: 140, start: 0.05, dur: 0.07, type: 'sawtooth', gain: 0.14 },
-    { freq: 110, start: 0.11, dur: 0.09, type: 'sawtooth', gain: 0.12 },
-  ],
-  // Nothing but water: a soft descending bloop.
-  'bs-splash': [
-    { freq: 420, start: 0, dur: 0.05, type: 'sine', gain: 0.12 },
-    { freq: 300, start: 0.06, dur: 0.08, type: 'sine', gain: 0.11 },
-    { freq: 220, start: 0.13, dur: 0.12, type: 'sine', gain: 0.1 },
-  ],
-  // Impact: a low boom with a sharp crack riding it.
-  'bs-hit': [
-    { freq: 240, start: 0, dur: 0.04, type: 'square', gain: 0.14 },
-    { freq: 90, start: 0, dur: 0.12, type: 'square', gain: 0.22 },
-    { freq: 55, start: 0.02, dur: 0.18, type: 'sawtooth', gain: 0.2 },
-  ],
-  // A boat goes down: a longer descending groan under a final boom.
-  'bs-sunk': [
-    { freq: 90, start: 0, dur: 0.14, type: 'square', gain: 0.22 },
-    { freq: 70, start: 0.1, dur: 0.16, type: 'sawtooth', gain: 0.2 },
-    { freq: 55, start: 0.24, dur: 0.2, type: 'sawtooth', gain: 0.16 },
-    { freq: 45, start: 0.42, dur: 0.28, type: 'sine', gain: 0.12 },
-  ],
-  // The scope is yours: a clean sonar ping with a faint echo.
-  'bs-sonar': [
-    { freq: 1150, start: 0, dur: 0.18, type: 'sine', gain: 0.12 },
-    { freq: 1150, start: 0.45, dur: 0.22, type: 'sine', gain: 0.045 },
-  ],
 };
 
 /** All defined recipe names (for tests / completeness checks). */
@@ -307,9 +276,135 @@ function playNote(ac: AudioContext, note: Note): void {
 }
 
 /** Play a notification tone by name. No-op for 'none' or when audio is blocked. */
+/* ---- synthesized sound effects (spec 1033) ----
+ *
+ * The note recipes above are melodic: fixed-frequency oscillator beeps. Real
+ * FOLEY — explosions, water, sonar — is the other classic synthesis family:
+ * filtered NOISE with swept envelopes. An explosion is a noise burst through a
+ * closing low-pass over a sub-bass drop; a splash is a high-passed spray with
+ * a pitch-falling bloop; a sonar ping is a long exponential sine decay with a
+ * gentle bend and an echo. Still zero audio files, still royalty-free. */
+
+const EPS = 0.0001; // exponential ramps cannot reach zero
+
+let noiseBuf: AudioBuffer | null = null;
+function noise(ac: AudioContext): AudioBufferSourceNode {
+  if (!noiseBuf || noiseBuf.sampleRate !== ac.sampleRate) {
+    noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const src = ac.createBufferSource();
+  src.buffer = noiseBuf;
+  src.loop = true;
+  return src;
+}
+
+/** Gain node with an attack + exponential-decay envelope. */
+function env(ac: AudioContext, t0: number, peak: number, attack: number, end: number): GainNode {
+  const g = ac.createGain();
+  g.gain.setValueAtTime(EPS, t0);
+  g.gain.exponentialRampToValueAtTime(peak, t0 + attack);
+  g.gain.exponentialRampToValueAtTime(EPS, t0 + end);
+  return g;
+}
+
+/** Filtered-noise burst whose filter frequency sweeps f0 → f1. */
+function noiseSweep(
+  ac: AudioContext,
+  t0: number,
+  type: BiquadFilterType,
+  f0: number,
+  f1: number,
+  sweep: number,
+  q: number,
+  peak: number,
+  attack: number,
+  end: number,
+): void {
+  const src = noise(ac);
+  const filt = ac.createBiquadFilter();
+  filt.type = type;
+  filt.frequency.setValueAtTime(f0, t0);
+  filt.frequency.exponentialRampToValueAtTime(Math.max(f1, 20), t0 + sweep);
+  filt.Q.value = q;
+  const g = env(ac, t0, peak, attack, end);
+  src.connect(filt).connect(g).connect(ac.destination);
+  src.start(t0);
+  src.stop(t0 + end + 0.05);
+}
+
+/** Oscillator whose pitch sweeps f0 → f1 under an envelope. */
+function oscSweep(
+  ac: AudioContext,
+  t0: number,
+  type: OscillatorType,
+  f0: number,
+  f1: number,
+  sweep: number,
+  peak: number,
+  attack: number,
+  end: number,
+): void {
+  const o = ac.createOscillator();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t0);
+  o.frequency.exponentialRampToValueAtTime(Math.max(f1, 20), t0 + sweep);
+  const g = env(ac, t0, peak, attack, end);
+  o.connect(g).connect(ac.destination);
+  o.start(t0);
+  o.stop(t0 + end + 0.05);
+}
+
+const FX: Record<string, (ac: AudioContext, t0: number) => void> = {
+  // Torpedo away: a compressed-air whoosh (band-passed noise diving from
+  // bright to low) over a soft launch thump.
+  'bs-fire': (ac, t0) => {
+    noiseSweep(ac, t0, 'bandpass', 2200, 250, 0.38, 1.2, 0.2, 0.012, 0.42);
+    oscSweep(ac, t0, 'sine', 110, 55, 0.12, 0.16, 0.008, 0.16);
+  },
+  // Nothing but water: a droplet plop with its spray, and a tiny second drip.
+  'bs-splash': (ac, t0) => {
+    noiseSweep(ac, t0, 'highpass', 900, 700, 0.3, 0.7, 0.12, 0.006, 0.32);
+    oscSweep(ac, t0, 'sine', 330, 130, 0.18, 0.16, 0.006, 0.22);
+    oscSweep(ac, t0 + 0.22, 'sine', 520, 220, 0.1, 0.045, 0.006, 0.12);
+  },
+  // Impact: the classic synthesized explosion — a noise burst through a
+  // closing low-pass, a sub-bass drop, and a bright initial crack.
+  'bs-hit': (ac, t0) => {
+    noiseSweep(ac, t0, 'lowpass', 3200, 120, 0.5, 0.7, 0.32, 0.008, 0.6);
+    oscSweep(ac, t0, 'sine', 90, 33, 0.4, 0.3, 0.008, 0.5);
+    noiseSweep(ac, t0, 'highpass', 2500, 2000, 0.06, 0.7, 0.1, 0.004, 0.07);
+  },
+  // A boat goes down: a deeper, longer blast, a groan sliding down the
+  // register, and a couple of bubbles gurgling up after.
+  'bs-sunk': (ac, t0) => {
+    noiseSweep(ac, t0, 'lowpass', 2400, 60, 0.9, 0.7, 0.32, 0.01, 1.0);
+    oscSweep(ac, t0, 'sine', 75, 26, 0.8, 0.3, 0.01, 0.9);
+    oscSweep(ac, t0 + 0.08, 'sawtooth', 90, 34, 1.0, 0.07, 0.1, 1.15);
+    oscSweep(ac, t0 + 0.85, 'sine', 280, 540, 0.09, 0.04, 0.008, 0.12);
+    oscSweep(ac, t0 + 1.02, 'sine', 340, 640, 0.08, 0.03, 0.008, 0.1);
+  },
+  // The scope is yours: a long decaying ping with a gentle downward bend, a
+  // watery band-passed tail, and a fainter echo.
+  'bs-sonar': (ac, t0) => {
+    oscSweep(ac, t0, 'sine', 1500, 1380, 1.1, 0.14, 0.008, 1.15);
+    noiseSweep(ac, t0, 'bandpass', 1500, 1400, 0.8, 9, 0.02, 0.02, 0.8);
+    oscSweep(ac, t0 + 0.55, 'sine', 1500, 1390, 0.7, 0.045, 0.008, 0.8);
+  },
+};
+
+/** Names of the effect-layer cues (unioned with RECIPE_NAMES for coverage tests). */
+export const FX_NAMES = Object.keys(FX);
+
 export function playTone(name: string): void {
   if (!name || name === 'none') return;
-  const recipe = RECIPES[name as Exclude<ToneName, 'none'>];
+  const ac0 = FX[name] ? audioCtx() : null;
+  if (FX[name]) {
+    if (ac0) FX[name](ac0, ac0.currentTime);
+    return;
+  }
+  const recipe = RECIPES[name as Exclude<ToneName, 'none' | FxName>];
   if (!recipe) return;
   const ac = audioCtx();
   if (!ac) return;
