@@ -107,8 +107,7 @@ const lostRace = computed(() => {
 
 <style scoped>
 .ch {
-  width: 230px;
-  max-width: 100%;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;

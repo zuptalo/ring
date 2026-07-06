@@ -17,9 +17,9 @@ await shot(bob, 'bs-1-placing');
 // Both lock fleets through the REAL buttons.
 await alice.page.goto(`http://localhost:5173/chat/${aChat}`);
 await alice.page.waitForTimeout(1200);
-await alice.page.getByRole('button', { name: /Ready/ }).click();
+await alice.page.getByRole('button', { name: /Deploy fleet/ }).click();
 await poll(() => bob.page.evaluate((m) => window.__ringTest.gameInfo(m), mid), g => g?.moves === 1, { label: 'a committed' });
-await bob.page.getByRole('button', { name: /Ready/ }).click();
+await bob.page.getByRole('button', { name: /Deploy fleet/ }).click();
 await poll(() => alice.page.evaluate((m) => window.__ringTest.gameInfo(m), mid), g => g?.moves === 2, { label: 'b committed' });
 
 // A few shots; defenders answer automatically (both chats are open).

@@ -149,7 +149,7 @@
         <div
           v-else
           class="bubble-row"
-          :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id) }"
+          :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id), 'game-row': (m.kind === 'game' || m.kind === 'gamechallenge') && !m.deleted }"
           v-memo="[
             m.updatedAt,
             mediaInfo[m.mediaId!]?.posterUrl,
@@ -4832,6 +4832,22 @@ function cancelRecording() {
 }
 .bubble.out {
   background: var(--app-bubble-out);
+}
+/* Game cards (spec 1033): a game is a SHARED surface, not one side's message —
+   full message-column width and a neutral card either direction (the
+   submarine-handoff shell: 18px radius, 14px padding, soft double shadow). */
+.bubble-row.game-row .bubble-col {
+  max-width: 100%;
+  width: 100%;
+}
+.bubble-row.game-row .bubble,
+.bubble-row.game-row .bubble.out {
+  width: 100%;
+  background: var(--app-game-card-bg);
+  border: 1px solid var(--app-game-card-border);
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 10px 26px -14px rgba(0, 0, 0, 0.28);
 }
 /* Reserve a minimum bubble width that fits ~3 reaction pills side by side, so a
    short message NEVER (a) shrinks when the react button hides at the 3-reaction cap,

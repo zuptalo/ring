@@ -1043,6 +1043,11 @@ async function applyGameMove(message: Message, sender: 0 | 1, signal: SessionSig
  *  move legal) and refused SILENTLY otherwise — an honest device never emits an
  *  invalid move, so anything invalid inbound is by definition tampering (FR-003). */
 export async function playGameMove(chatId: string, messageId: string, move: unknown): Promise<void> {
+  // Choke-point normalization: boards may hand us Vue-reactive move objects
+  // (a Proxy inside the move throws DataCloneError when the applied session is
+  // stored — the trap has now bitten posts, fleet secrets, AND auto-reveals).
+  // Moves are small plain JSON by contract, so a round-trip is free.
+  if (move && typeof move === 'object') move = JSON.parse(JSON.stringify(move)) as unknown;
   const m = await getMessage(messageId);
   if (!m?.game || m.chatId !== chatId) return;
   const module = GAMES[m.game.gameType];

@@ -1,5 +1,5 @@
 <template>
-  <div class="game">
+  <div class="game" :class="{ wide: game.gameType === 'battleship' }">
     <!-- A gameType this build doesn't know (a newer app started it): show a
          graceful fallback rather than a broken board (contract §1). -->
     <div v-if="!module || !boardComponent" class="game-fallback">
@@ -50,7 +50,14 @@
           @click.stop="isObserver ? undefined : (peeked = true)"
           @keydown.enter.stop="isObserver ? undefined : (peeked = true)"
         >
-          <animated-emoji :emoji="overlayEmoji" large class="game-overlay-result" />
+          <!-- Battleship earns the struck medallion (spec 1033); the other
+               games keep the platform's emoji result language. -->
+          <medallion-svg
+            v-if="game.gameType === 'battleship' && status.state !== 'draw'"
+            :kind="overlayEmoji === '🏆' ? 'gold' : 'silver'"
+          />
+          <animated-emoji v-else :emoji="overlayEmoji" large class="game-overlay-result" />
+          <span v-if="game.gameType === 'battleship' && !isObserver" class="game-overlay-line">{{ statusLine }}</span>
           <span v-if="isObserver" class="game-overlay-line">{{ statusLine }}</span>
           <ion-button
             v-if="!isObserver"
@@ -125,6 +132,7 @@ import { gameControllerOutline } from 'ionicons/icons';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import GameMark from '@/components/GameMark.vue';
 import UserAvatar from '@/components/UserAvatar.vue';
+import MedallionSvg from '@/games/battleship/MedallionSvg.vue';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
 import { deriveStatus, replayState } from '@/games/session';
@@ -270,11 +278,19 @@ async function confirmResign(): Promise<void> {
 
 <style scoped>
 .game {
-  width: 220px;
-  max-width: 100%;
+  /* Full-width inside the shared game card (spec 1033). Small square boards
+     (tic-tac-toe, Connect Four) stay their compact size, centered; 'wide'
+     games (Battleship's two seas) use the whole card. */
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.game:not(.wide) .game-vs,
+.game:not(.wide) .game-stage {
+  width: 100%;
+  max-width: 240px;
+  margin-inline: auto;
 }
 /* Grid keeps "vs" DEAD CENTER regardless of name lengths (T041): the two
    sides get equal tracks and ellipsize long names instead of pushing it. */
