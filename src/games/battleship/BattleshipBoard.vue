@@ -91,6 +91,7 @@
 import { computed, ref, watch, onMounted } from 'vue';
 import { IonButton } from '@ionic/vue';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
+import { ready as sodiumReady } from '@/services/crypto/primitives';
 import {
   randomLayout,
   randomSalt,
@@ -137,9 +138,17 @@ const shuffle = (): void => {
 };
 const ready = (): void => {
   const layout = preview.value;
-  const salt = randomSalt();
-  const h = commitment(layout, salt);
-  void setFleetSecret(h, { layout, salt }).then(() => emit('move', { t: 'commit', h }));
+  // Salting and hashing need the crypto core — a fast tap right after a cold
+  // load can land before libsodium finishes initializing, so await it (the
+  // caught failure leaves the button armed for another tap rather than a
+  // half-committed fleet).
+  void (async () => {
+    await sodiumReady();
+    const salt = randomSalt();
+    const h = commitment(layout, salt);
+    await setFleetSecret(h, { layout, salt });
+    emit('move', { t: 'commit', h });
+  })().catch(() => {});
 };
 
 /* ---- battle rendering (all PUBLIC data) ---- */

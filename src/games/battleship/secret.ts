@@ -21,7 +21,14 @@ export async function getFleetSecret(gameId: string): Promise<FleetSecret | null
 }
 
 export async function setFleetSecret(gameId: string, secret: FleetSecret): Promise<void> {
-  await put('settings', { key: key(gameId), value: secret })
+  // Normalize to PLAIN objects at the choke point: callers hand us Vue
+  // reactive refs, and a Proxy-wrapped array throws DataCloneError in
+  // IndexedDB (the same trap the wall composer hit on iOS).
+  const plain: FleetSecret = {
+    layout: secret.layout.map((s) => ({ r: s.r, c: s.c, len: s.len, dir: s.dir })),
+    salt: secret.salt,
+  }
+  await put('settings', { key: key(gameId), value: plain })
 }
 
 /** Called when the game reaches a terminal state (the reveal made the secret
