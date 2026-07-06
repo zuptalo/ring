@@ -32,6 +32,7 @@
     "@ionic/vue-router": "^8.8.8",
     "@zxing/browser": "^0.2.0",
     "emoji-picker-element": "^1.29.1",
+    "flubber": "^0.4.2",
     "ionicons": "^7.4.0",
     "libsodium-wrappers-sumo": "^0.7.16",
     "lottie-web": "^5.13.0",

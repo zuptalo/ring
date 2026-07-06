@@ -1,58 +1,67 @@
 <template>
-  <!-- Cold-start launch reveal. Like KeyGuard / InstallGuard this overlays the
-       (always-mounted) router outlet as an opaque ion-page and sits ABOVE both
-       gates (z-index 40), so it's the very first thing seen on a fresh launch.
-       It plays once, then fades out and unmounts, handing off to whatever is
-       beneath (the passcode gate, the install gate, or a tab). The content uses
-       the app background wash, so the hand-off is seamless — no flash (see the
-       note in index.html about the launch screen → passcode gate transition). -->
+  <!-- Cold-start reveal, shown on first install and after each update. Overlays
+       the (always-mounted) router outlet as an opaque ion-page above both gates
+       (z-index 40), plays once, then fades out and unmounts — handing off to the
+       passcode gate / install gate / tab beneath. A single white silhouette
+       inside the app tile morphs through a symbol for each feature (messaging →
+       voice → video → group → wall & games) and resolves into the Ring mark,
+       name, purpose, and the running version.
+
+       Drop-in replacement for the previous LaunchReveal.vue: same component name,
+       same App.vue slot, same version + show-once-per-version wiring. Requires
+       flubber for path morphing:  npm i flubber
+       and an ambient declaration (flubber ships no types) — add to
+       src/vite-env.d.ts:  declare module 'flubber'; -->
   <ion-page v-if="visible" class="launch-reveal" :class="{ leaving }">
     <ion-content :fullscreen="true">
       <div class="rv-content" aria-hidden="true">
-        <!-- Encrypted-glyph field: sealed ciphertext scatters, then converges
-             into the mark. Anchored on the mark's center. -->
-        <div class="rv-glyphs">
-          <span
-            v-for="(g, i) in GLYPHS"
-            :key="i"
-            class="rv-glyph"
-            :style="{
-              '--sx': g.sx + 'px', '--sy': g.sy + 'px',
-              '--tx': g.tx + 'px', '--ty': g.ty + 'px',
-              '--o': g.o,
-              fontSize: g.size + 'px',
-              animationDelay: g.d + 'ms',
-            }"
-          >{{ chars[i] }}</span>
-        </div>
+        <!-- ambient glow -->
+        <div class="rv-glow" :style="{ opacity: 0.5 + 0.5 * glowPulse }"></div>
 
-        <!-- The app icon (matches the brand block in InstallGuard / Auth). -->
-        <div class="rv-tile">
-          <svg class="rv-mark" viewBox="0 0 100 100">
-            <!-- Shield outline drawn in white on the emerald tile, then filled. -->
-            <path
-              class="rv-shield-stroke"
-              d="M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z"
-              pathLength="100" fill="none" stroke="#fff" stroke-width="3"
-              stroke-linejoin="round" stroke-linecap="round"
-            />
-            <path
-              class="rv-shield-fill"
-              d="M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z"
-              fill="#fff"
-            />
-            <!-- The ring: a combination dial that spins, then clicks shut. -->
-            <circle class="rv-pulse" cx="50" cy="49" r="18" fill="none" stroke="var(--ion-color-primary)" stroke-width="2" />
-            <circle class="rv-ring-dial" cx="50" cy="49" r="18" fill="none" stroke="var(--ion-color-primary)" stroke-width="7" stroke-dasharray="6 7" stroke-linecap="round" />
-            <circle class="rv-ring-solid" cx="50" cy="49" r="18" fill="none" stroke="var(--ion-color-primary)" stroke-width="7" />
+        <!-- app tile with the morphing silhouette -->
+        <div class="rv-tile" :style="{ transform: `translate(-50%, -50%) scale(${f.breathe})` }">
+          <svg :width="MARK" :height="MARK" viewBox="0 0 100 100" style="display:block; overflow:visible">
+            <path :d="f.d" fill="#fff" />
+
+            <!-- gamepad detail: visible only while the controller is held -->
+            <g v-if="f.detailOp > 0" :style="{ opacity: f.detailOp }">
+              <rect x="17" y="53.5" width="19" height="7" rx="2.2" :fill="PRIMARY" />
+              <rect x="23" y="47.5" width="7" height="19" rx="2.2" :fill="PRIMARY" />
+              <circle cx="72" cy="50" r="3.1" :fill="PRIMARY" />
+              <circle cx="64.5" cy="57" r="3.1" :fill="PRIMARY" />
+              <circle cx="79.5" cy="57" r="3.1" :fill="PRIMARY" />
+              <circle cx="72" cy="64" r="3.1" :fill="PRIMARY" />
+              <circle cx="50" cy="64" r="7" :fill="PRIMARY" />
+              <circle cx="50" cy="64" r="3.2" fill="#fff" />
+            </g>
+
+            <!-- finale: the ring spins in and clicks shut -->
+            <template v-if="f.finale">
+              <circle v-if="f.pulseOp > 0" :cx="RING.cx" :cy="RING.cy" :r="f.pulseR" fill="none" :stroke="PRIMARY" stroke-width="1.6" :style="{ opacity: f.pulseOp }" />
+              <g :transform="f.ringTransform" :style="{ opacity: f.ringOp }">
+                <circle :cx="RING.cx" :cy="RING.cy" :r="RING.r" fill="none" :stroke="PRIMARY" :stroke-width="f.rsw" stroke-linecap="round" :stroke-dasharray="f.solid ? undefined : '5 6'" />
+              </g>
+            </template>
           </svg>
         </div>
 
-        <!-- Wordmark. -->
+        <!-- caption: feature label during the montage; name/purpose/version at the end -->
         <div class="rv-word">
-          <div class="rv-name">Ring</div>
-          <div class="rv-tag">Private, end-to-end encrypted</div>
-          <div class="rv-version">v{{ version }}</div>
+          <div v-if="!f.finale" class="rv-feature" :style="{ opacity: f.labelOp }">{{ f.label }}</div>
+          <template v-else>
+            <div class="rv-name" :style="{ opacity: f.w1, transform: `translateY(${(1 - f.w1) * 14}px)` }">Ring</div>
+            <div class="rv-tag" :style="{ opacity: f.w2, transform: `translateY(${(1 - f.w2) * 10}px)` }">Private, end-to-end encrypted</div>
+            <div class="rv-version" :style="{ opacity: f.w3 }">v{{ version }}</div>
+          </template>
+        </div>
+
+        <!-- through-line pill -->
+        <div class="rv-pill" :style="{ opacity: f.pillOp }">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M6 11h12v9a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1z" :stroke="PRIMARY" stroke-width="2.2" stroke-linejoin="round" />
+            <path d="M8.5 11V7.5a3.5 3.5 0 0 1 7 0V11" :stroke="PRIMARY" stroke-width="2.2" stroke-linecap="round" />
+          </svg>
+          <span>All inside Ring</span>
         </div>
       </div>
     </ion-content>
@@ -60,113 +69,183 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { IonPage, IonContent } from '@ionic/vue';
+import { interpolate, separate, combine } from 'flubber';
 
-// Each glyph's scatter start (sx,sy) and convergence target (tx,ty) as pixel
-// offsets from the mark's center, plus its opacity, size, and stagger delay.
-const GLYPHS = [
-  { sx: -220, sy: -120, tx: -38, ty: -70, o: 0.5, size: 13, d: 0 },
-  { sx: 210, sy: -150, tx: 42, ty: -60, o: 0.45, size: 14, d: 40 },
-  { sx: -180, sy: 160, tx: -30, ty: 72, o: 0.5, size: 13, d: 20 },
-  { sx: 190, sy: 180, tx: 40, ty: 66, o: 0.4, size: 15, d: 60 },
-  { sx: -10, sy: -260, tx: 0, ty: -78, o: 0.55, size: 14, d: 0 },
-  { sx: -250, sy: 20, tx: -46, ty: -10, o: 0.5, size: 12, d: 50 },
-  { sx: 250, sy: 30, tx: 48, ty: -8, o: 0.45, size: 13, d: 30 },
-  { sx: -120, sy: 250, tx: -30, ty: 76, o: 0.4, size: 14, d: 70 },
-  { sx: 130, sy: 250, tx: 36, ty: 74, o: 0.5, size: 13, d: 10 },
-  { sx: -230, sy: 110, tx: -44, ty: 38, o: 0.45, size: 12, d: 50 },
-  { sx: 240, sy: -90, tx: 46, ty: -30, o: 0.5, size: 15, d: 20 },
-  { sx: -60, sy: -200, tx: -18, ty: -72, o: 0.4, size: 13, d: 60 },
-  { sx: 70, sy: -230, tx: 22, ty: -76, o: 0.5, size: 14, d: 0 },
-  { sx: -200, sy: -50, tx: -40, ty: -24, o: 0.45, size: 13, d: 40 },
-  { sx: 205, sy: 120, tx: 44, ty: 40, o: 0.5, size: 12, d: 30 },
-  { sx: -90, sy: 210, tx: -30, ty: 62, o: 0.4, size: 14, d: 70 },
-  { sx: 120, sy: 200, tx: 36, ty: 60, o: 0.5, size: 13, d: 20 },
-  { sx: 10, sy: 270, tx: 0, ty: 78, o: 0.45, size: 15, d: 50 },
-  { sx: -150, sy: -160, tx: -34, ty: -64, o: 0.5, size: 12, d: 10 },
-  { sx: 160, sy: -180, tx: 42, ty: -62, o: 0.4, size: 13, d: 60 },
-  { sx: 40, sy: 250, tx: 20, ty: 76, o: 0.5, size: 14, d: 30 },
-  { sx: -110, sy: 130, tx: -30, ty: 44, o: 0.45, size: 12, d: 20 },
-];
+const PRIMARY = 'var(--ion-color-primary)';
+const MARK = 84; // px, the morphing symbol inside the 128px tile
 
-const CHARSET = '0123456789ABCDEF#<>*/{}=+';
-const randChar = (): string => CHARSET[(Math.random() * CHARSET.length) | 0];
+// ── single-outline silhouettes (viewBox 100, no arcs so flubber parses cleanly) ──
+const BUBBLE = 'M28 22 L72 22 C77.5 22 82 26.5 82 32 L82 58 C82 63.5 77.5 68 72 68 L44 68 L30 82 L30 68 L28 68 C22.5 68 18 63.5 18 58 L18 32 C18 26.5 22.5 22 28 22 Z';
+const HANDSET = 'M32 20 C40 18 46 24 48 32 L50 44 C48 47 45 49 42 50 C48 60 54 66 64 72 C65 69 67 66 70 64 L82 66 C90 68 94 76 90 84 C84 94 70 95 60 90 C38 80 22 60 16 36 C14 27 22 20 32 20 Z';
+const CAMERA = 'M24 36 L56 36 C60.4 36 64 39.6 64 44 L64 47 L84 35 L84 77 L64 65 L64 68 C64 72.4 60.4 76 56 76 L24 76 C19.6 76 16 72.4 16 68 L16 44 C16 39.6 19.6 36 24 36 Z';
+const CONTROLLER = 'M34 38 L66 38 C78 38 87 47 90 59 L93 73 C95 82 86 87 79 83 L71 75 L29 75 L21 83 C14 87 5 82 7 73 L10 59 C13 47 22 38 34 38 Z';
+// Shield pre-transformed to the favicon's inner placement (translate 8.98,8.16 · scale 0.82).
+const SHIELD = 'M49.98 14.72 L81.14 25.38 L81.14 50.8 C81.14 67.2 68.02 79.5 49.98 85.24 C31.94 79.5 18.82 67.2 18.82 50.8 L18.82 25.38 Z';
+const RING = { cx: 49.98, cy: 48.34, r: 14.76, sw: 5.74 };
 
-const chars = ref<string[]>(GLYPHS.map(randChar));
+function circlePts(cx: number, cy: number, r: number, n = 34): [number, number][] {
+  return Array.from({ length: n }, (_, i) => { const a = (i / n) * Math.PI * 2; return [cx + Math.cos(a) * r, cy + Math.sin(a) * r] as [number, number]; });
+}
+const CIRCLES = [circlePts(32, 39, 12), circlePts(68, 39, 12), circlePts(32, 71, 12), circlePts(68, 71, 12)];
 
+// ── flubber interpolators (built once) ───────────────────────────────────────
+const O = { maxSegmentLength: 3 };
+const I = {
+  a: interpolate(BUBBLE, HANDSET, O),
+  b: interpolate(HANDSET, CAMERA, O),
+  c: separate(CAMERA, CIRCLES, { single: true, ...O }),
+  d: combine(CIRCLES, CONTROLLER, { single: true, ...O }),
+  e: interpolate(CONTROLLER, SHIELD, O),
+} as Record<string, (t: number) => string>;
+
+// ── timeline ─────────────────────────────────────────────────────────────────
+const H = 1.05, M = 0.68, FINALE_DUR = 3.6;
+type Seg = { kind: 'hold'; shape: string; label: string; t0: number; t1: number } | { kind: 'morph'; key: string; t0: number; t1: number };
+const SEG: Seg[] = [];
+let cur = 0;
+const hold = (shape: string, label: string) => { SEG.push({ kind: 'hold', shape, label, t0: cur, t1: cur + H }); cur += H; };
+const morph = (key: string) => { SEG.push({ kind: 'morph', key, t0: cur, t1: cur + M }); cur += M; };
+hold('bubble', 'Messaging'); morph('a');
+hold('handset', 'Voice calls'); morph('b');
+hold('camera', 'Video calls'); morph('c');
+hold('group', 'Group calls'); morph('d');
+hold('controller', 'Wall & games'); morph('e');
+const FINALE_START = cur;
+const TOTAL = FINALE_START + FINALE_DUR;
+
+// ── easing ───────────────────────────────────────────────────────────────────
+const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const easeOutQuart = (t: number) => 1 - Math.pow(1 - t, 4);
+
+const holdD = (shape: string): string => {
+  switch (shape) {
+    case 'bubble': return BUBBLE;
+    case 'handset': return HANDSET;
+    case 'camera': return CAMERA;
+    case 'group': return I.c(1);
+    case 'controller': return CONTROLLER;
+    default: return SHIELD;
+  }
+};
+
+// ── per-frame state ──────────────────────────────────────────────────────────
+const t = ref(0);
+const glowPulse = computed(() => Math.sin(t.value * 1.8) * 0.5 + 0.5);
+
+const f = computed(() => {
+  const tv = t.value;
+  const inFinale = tv >= FINALE_START;
+  let d = SHIELD, label = '', labelOp = 1, detailOp = 0;
+
+  if (!inFinale) {
+    const seg = SEG.find((s) => tv >= s.t0 && tv < s.t1) || SEG[SEG.length - 1];
+    if (seg.kind === 'hold') {
+      d = holdD(seg.shape);
+      label = seg.label;
+      labelOp = 1;
+      if (seg.shape === 'controller') detailOp = 1;
+    } else {
+      const dur = seg.t1 - seg.t0;
+      const tt = easeInOutCubic(clamp((tv - seg.t0) / dur, 0, 1));
+      d = I[seg.key](tt);
+      const half = (tv - seg.t0) / dur;
+      const i = SEG.indexOf(seg);
+      const prev = SEG[i - 1] as Seg | undefined;
+      const next = SEG[i + 1] as Seg | undefined;
+      label = half < 0.5 ? (prev && prev.kind === 'hold' ? prev.label : '') : (next && next.kind === 'hold' ? next.label : '');
+      labelOp = Math.abs(half - 0.5) * 2;
+      if (seg.key === 'd') detailOp = clamp((half - 0.6) / 0.4, 0, 1);
+      if (seg.key === 'e') detailOp = clamp(1 - half / 0.4, 0, 1);
+    }
+  }
+
+  // finale ring assembly
+  const fl = tv - FINALE_START;
+  const ringStart = 0.35, spinEnd = 1.25;
+  const ringOp = inFinale ? clamp((fl - ringStart) / 0.28, 0, 1) : 0;
+  const spinP = clamp((fl - ringStart) / (spinEnd - ringStart), 0, 1);
+  const rot = easeOutQuart(spinP) * 812;
+  const solid = fl >= spinEnd;
+  const rsw = 1.6 + (RING.sw - 1.6) * easeOutCubic(clamp((fl - ringStart) / 0.35, 0, 1));
+  const clickP = clamp((fl - spinEnd) / 0.14, 0, 1);
+  const ringScale = clickP > 0 && clickP < 1 ? 1 + Math.sin(clickP * Math.PI) * 0.14 : 1;
+  const pulseP = clamp((fl - spinEnd) / 0.7, 0, 1);
+  const pulseR = RING.r + 28 * easeOutCubic(pulseP);
+  const pulseOp = inFinale && pulseP > 0 && pulseP < 1 ? 0.55 * (1 - pulseP) : 0;
+  const ringTransform = `translate(${RING.cx} ${RING.cy}) scale(${ringScale}) translate(${-RING.cx} ${-RING.cy}) rotate(${rot} ${RING.cx} ${RING.cy})`;
+
+  return {
+    d, finale: inFinale, label, labelOp, detailOp,
+    ringOp, rot, solid, rsw, ringScale, pulseR, pulseOp, ringTransform,
+    w1: inFinale ? easeOutCubic(clamp((fl - 1.7) / 0.6, 0, 1)) : 0,
+    w2: inFinale ? easeOutCubic(clamp((fl - 1.95) / 0.6, 0, 1)) : 0,
+    w3: inFinale ? easeOutCubic(clamp((fl - 2.2) / 0.6, 0, 1)) : 0,
+    pillOp: inFinale ? clamp(1 - fl / 0.6, 0, 1) : clamp((tv - 0.3) / 0.5, 0, 1),
+    breathe: 1 + Math.sin(tv * 1.8) * 0.008,
+  };
+});
+
+// ── show-once-per-version wiring (identical to the previous LaunchReveal) ─────
 const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-// Automation (Playwright e2e, the drive harness) loads hundreds of pages; an
-// opaque overlay on each would slow the suite and block UI clicks. Real
-// browsers never set navigator.webdriver. `?launch-reveal` forces it back on
-// for visual previews under automation.
 const automated = (navigator as unknown as { webdriver?: boolean }).webdriver === true;
 const forced = window.location.search.includes('launch-reveal');
 
-// Play on the FIRST launch and again after each UPDATE lands — not on every
-// cold start (a messenger opens many times a day). "New version" is simply the
-// stamped build version differing from the last one this device revealed.
-// localStorage (not IndexedDB) so the answer is synchronous at mount — no
-// flash of the app before the overlay decides to show.
 const version = __APP_VERSION__;
 const REVEAL_SEEN_KEY = 'ring.revealSeenVersion';
 const isNewVersion = ((): boolean => {
-  try {
-    return localStorage.getItem(REVEAL_SEEN_KEY) !== version;
-  } catch {
-    return true;
-  }
+  try { return localStorage.getItem(REVEAL_SEEN_KEY) !== version; } catch { return true; }
 })();
 
-// Plays in the installed app AND in a plain browser tab — there it sits above
-// the install gate (z-40 over z-30), so it fades straight into the install
-// guide: the brand moment introduces the invitation to install.
 const visible = ref(forced || (isNewVersion && !automated));
 const leaving = ref(false);
 
-let cyc: number | undefined;
+let raf: number | undefined;
+let startTs: number | undefined;
+let done = false;
+
+function beginExit(): void {
+  if (done) return;
+  done = true;
+  window.setTimeout(() => { leaving.value = true; }, 0);
+  window.setTimeout(() => { visible.value = false; }, 350);
+}
 
 onMounted(() => {
   if (!visible.value) return;
-  // Mark this version revealed immediately (not at the end), so an interrupted
-  // launch doesn't replay it forever.
-  try {
-    localStorage.setItem(REVEAL_SEEN_KEY, version);
-  } catch {
-    /* private-mode storage failure just means it may replay */
+  // Mark this version revealed immediately, so an interrupted launch doesn't replay forever.
+  try { localStorage.setItem(REVEAL_SEEN_KEY, version); } catch { /* private-mode: may replay */ }
+
+  if (reduce) {
+    // Skip the montage; hold the final logo + version briefly, then hand off.
+    t.value = TOTAL;
+    window.setTimeout(beginExit, 900);
+    return;
   }
 
-  // Cycle the glyph characters while they scatter/converge, then freeze.
-  if (!reduce) {
-    cyc = window.setInterval(() => {
-      chars.value = GLYPHS.map(randChar);
-    }, 60);
-    window.setTimeout(() => {
-      if (cyc) clearInterval(cyc);
-    }, 950);
-  }
-
-  // Play once, then fade out and unmount so the app takes over. The wordmark
-  // settles around 1.5s; the extra second is READING time for the name, the
-  // tagline, and the version (it only plays on install/update, so the linger
-  // is a moment, not a toll).
-  const REVEAL_MS = reduce ? 800 : 2600;
-  const FADE_MS = 350;
-  window.setTimeout(() => {
-    leaving.value = true;
-  }, REVEAL_MS);
-  window.setTimeout(() => {
-    visible.value = false;
-  }, REVEAL_MS + FADE_MS);
+  const loop = (now: number): void => {
+    if (startTs === undefined) startTs = now;
+    const elapsed = (now - startTs) / 1000;
+    if (elapsed >= TOTAL) {
+      t.value = TOTAL;
+      beginExit();
+      return;
+    }
+    t.value = elapsed;
+    raf = requestAnimationFrame(loop);
+  };
+  raf = requestAnimationFrame(loop);
 });
 
 onUnmounted(() => {
-  if (cyc) clearInterval(cyc);
+  if (raf) cancelAnimationFrame(raf);
 });
 </script>
 
 <style scoped>
-/* Overlay everything, including both gates (KeyGuard z-20, InstallGuard z-30). */
 .launch-reveal {
   z-index: 40;
   opacity: 1;
@@ -176,105 +255,59 @@ onUnmounted(() => {
   opacity: 0;
   pointer-events: none;
 }
-
 .rv-content {
   position: absolute;
   inset: 0;
   overflow: hidden;
 }
-
-/* Zero-size anchor at the mark's center; glyph children position against it. */
-.rv-glyphs {
+.rv-glow {
   position: absolute;
   left: 50%;
   top: 50%;
+  width: 300px;
+  height: 300px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(16, 185, 129, 0.3), rgba(16, 185, 129, 0) 62%);
+  filter: blur(6px);
+  pointer-events: none;
 }
-.rv-glyph {
-  position: absolute;
-  left: 0;
-  top: 0;
-  color: var(--ion-color-primary);
-  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', monospace;
-  font-weight: 600;
-  opacity: 0;
-  text-shadow: 0 0 8px color-mix(in srgb, var(--ion-color-primary) 55%, transparent);
-  will-change: transform, opacity;
-  animation: rv-glyph 0.95s ease-in-out both;
-}
-
-/* App icon tile — the InstallGuard/Auth brand block. */
 .rv-tile {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 84px;
-  height: 84px;
-  border-radius: 24px;
+  width: 128px;
+  height: 128px;
+  border-radius: 30px;
   background: var(--ion-color-primary);
-  box-shadow: 0 14px 34px rgba(16, 185, 129, 0.45);
+  box-shadow: 0 16px 40px rgba(16, 185, 129, 0.42);
   display: flex;
   align-items: center;
   justify-content: center;
-  transform: translate(-50%, -50%) scale(0);
-  animation: rv-iris 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) 0.4s both;
 }
-.rv-mark {
-  width: 64px;
-  height: 64px;
-  overflow: visible;
-}
-.rv-shield-stroke {
-  stroke-dasharray: 100;
-  stroke-dashoffset: 100;
-  animation: rv-draw 0.36s cubic-bezier(0.4, 0, 0.2, 1) 0.58s both,
-             rv-sfade 0.2s ease 0.96s both;
-}
-.rv-shield-fill {
-  clip-path: inset(100% 0 0 0);
-  animation: rv-fill 0.36s cubic-bezier(0.4, 0, 0.2, 1) 0.86s both;
-}
-.rv-pulse {
-  transform-box: fill-box;
-  transform-origin: center;
-  opacity: 0;
-  animation: rv-pulse 0.45s ease-out 1.18s both;
-}
-.rv-ring-dial {
-  transform-box: fill-box;
-  transform-origin: center;
-  opacity: 0;
-  animation: rv-dial 0.58s cubic-bezier(0.16, 1, 0.3, 1) 0.74s both;
-}
-.rv-ring-solid {
-  transform-box: fill-box;
-  transform-origin: center;
-  opacity: 0;
-  animation: rv-solid 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) 1.18s both;
-}
-
-/* Wordmark, centered below the tile. */
 .rv-word {
   position: absolute;
   left: 50%;
-  top: calc(50% + 68px);
+  top: calc(50% + 96px);
   transform: translateX(-50%);
   text-align: center;
   width: max-content;
+}
+.rv-feature {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--app-text);
 }
 .rv-name {
   font-size: 30px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--app-text);
-  opacity: 0;
-  animation: rv-rise 0.36s cubic-bezier(0.16, 1, 0.3, 1) 1.02s both;
 }
 .rv-tag {
   margin-top: 8px;
   font-size: 14px;
   color: var(--app-text-muted);
-  opacity: 0;
-  animation: rv-rise 0.36s cubic-bezier(0.16, 1, 0.3, 1) 1.12s both;
 }
 .rv-version {
   margin-top: 10px;
@@ -282,56 +315,26 @@ onUnmounted(() => {
   font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', monospace;
   letter-spacing: 0.04em;
   color: color-mix(in srgb, var(--app-text-muted) 75%, transparent);
-  opacity: 0;
-  animation: rv-rise 0.36s cubic-bezier(0.16, 1, 0.3, 1) 1.24s both;
 }
-
-@keyframes rv-glyph {
-  0% { opacity: 0; transform: translate(calc(-50% + var(--sx)), calc(-50% + var(--sy))); }
-  12% { opacity: var(--o); }
-  40% { opacity: var(--o); transform: translate(calc(-50% + var(--sx)), calc(-50% + var(--sy))); }
-  88% { opacity: 0; transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))); }
-  100% { opacity: 0; transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))); }
+.rv-pill {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 150px);
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  white-space: nowrap;
 }
-@keyframes rv-iris { from { transform: translate(-50%, -50%) scale(0); } to { transform: translate(-50%, -50%) scale(1); } }
-@keyframes rv-draw { to { stroke-dashoffset: 0; } }
-@keyframes rv-sfade { to { opacity: 0; } }
-@keyframes rv-fill { from { clip-path: inset(100% 0 0 0); } to { clip-path: inset(0 0 0 0); } }
-@keyframes rv-dial {
-  0% { opacity: 0; transform: rotate(0deg); }
-  12% { opacity: 1; }
-  88% { opacity: 1; transform: rotate(800deg); }
-  100% { opacity: 0; transform: rotate(812deg); }
-}
-@keyframes rv-solid {
-  0% { opacity: 0; transform: scale(0.55); }
-  60% { opacity: 1; transform: scale(1.16); }
-  100% { opacity: 1; transform: scale(1); }
-}
-@keyframes rv-pulse {
-  0% { opacity: 0; transform: scale(1); }
-  8% { opacity: 0.55; }
-  100% { opacity: 0; transform: scale(2.4); }
-}
-@keyframes rv-rise {
-  from { opacity: 0; transform: translateY(14px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* Respect reduced motion: skip the choreography, just settle and hand off. */
-@media (prefers-reduced-motion: reduce) {
-  .rv-glyph { display: none; }
-  .rv-tile,
-  .rv-shield-stroke,
-  .rv-shield-fill,
-  .rv-ring-dial,
-  .rv-ring-solid,
-  .rv-pulse,
-  .rv-name,
-  .rv-tag,
-  .rv-version {
-    animation-duration: 0.01ms !important;
-    animation-delay: 0ms !important;
-  }
+.rv-pill span {
+  font-family: ui-monospace, SFMono-Regular, 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ion-color-primary) 78%, #fff);
 }
 </style>
