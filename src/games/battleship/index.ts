@@ -5,7 +5,7 @@
 
 import { boatOutline } from 'ionicons/icons'
 import type { GameModule } from '../types'
-import { applyMove, createInitialState, status, turn, type BsMove, type BsState } from './logic'
+import { applyMove, createInitialState, mayMove as bsMayMove, status, turn, type BsMove, type BsState } from './logic'
 
 /** The foley a just-applied move deserves (spec 1033): torpedo, splash,
  *  impact, or the groan of a sinking boat. Terminal moves fall back to the
@@ -29,6 +29,7 @@ const battleship: GameModule<BsState, BsMove> = {
   turn,
   status,
   moveCue,
+  mayMove: (state, player) => bsMayMove(state as BsState, player),
   // ONE look (spec 1033): the submarine design from the handoff IS Battleship's
   // identity — no theme choice. The id stays 'classic' (frozen default), and
   // ids from games started on older builds ('pirates', 'sea-monsters') fall

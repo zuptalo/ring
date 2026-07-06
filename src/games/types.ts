@@ -36,6 +36,12 @@ export interface GameModule<S = unknown, M = unknown> {
   turn(state: S): 0 | 1
   status(state: S): GameStatusResult
   /** Bundled visual themes; the first entry is the default (FR-022). */
+  /** Optional finer-grained acting gate (spec 1033): when defined, it replaces
+   *  the strict `turn(state) === player` check in BOTH the local-send gate and
+   *  inbound validation — e.g. Battleship's parallel fleet placement, where
+   *  each player owes their own commit in any order. `turn()` still names who
+   *  is being waited on (nudges, previews). */
+  mayMove?: (state: unknown, player: 0 | 1) => boolean
   /** Optional per-move FOLEY (spec 1033): the game may name the cue a just-
    *  applied move deserves (e.g. Battleship's splash vs impact); null/absent
    *  falls back to the platform's generic status cues. */
