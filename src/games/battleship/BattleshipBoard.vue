@@ -139,7 +139,12 @@
             <div v-for="(ship, i) in ownShips" :key="'o' + i" class="bs-ship" :style="shipBox(ship.ship)">
               <submarine-svg :len="ship.ship.len" :vertical="ship.ship.dir === 'v'" :wreck="ship.sunk" />
             </div>
-            <div v-for="[cell, r] in mySeaMarks" :key="'m' + cell" class="bs-mark" :style="boxStyle(Math.floor(cell / 8), cell % 8, 1, 1)">
+            <div
+              v-for="[cell, r] in mySeaMarks.filter(([c, rr]) => rr === 'miss' || !myWreckCells.has(c))"
+              :key="'m' + cell"
+              class="bs-mark"
+              :style="boxStyle(Math.floor(cell / 8), cell % 8, 1, 1)"
+            >
               <span v-if="r === 'miss'" class="bs-ripple" aria-hidden="true">
                 <svg viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.45" />
@@ -331,6 +336,12 @@ const ownShips = computed(() => {
   if (!layout) return [] as { ship: Ship; sunk: boolean }[];
   const hits = new Set([...mySea.value.entries()].filter(([, r]) => r === 'hit' || r === 'sunk').map(([c]) => c));
   return layout.map((ship) => ({ ship, sunk: cellsOf(ship).every((c) => hits.has(c)) }));
+});
+// A wreck burns no more (either sea): its cells drop their flames.
+const myWreckCells = computed(() => {
+  const set = new Set<number>();
+  for (const { ship, sunk } of ownShips.value) if (sunk) cellsOf(ship).forEach((c) => set.add(c));
+  return set;
 });
 // Their SUNK boats surface as wrecks the moment the sunk answer lands (the
 // handoff's rule): each 'sunk' closes the straight run of hits through its
@@ -558,7 +569,10 @@ watch(() => props.state, autoActions, { deep: true });
 .bs-radar-ring.r1 { inset: 15%; border: 1px solid rgba(16, 185, 129, 0.16); }
 .bs-radar-ring.r2 { inset: 32%; border: 1px solid rgba(16, 185, 129, 0.13); }
 .bs-radar-ring.r3 { inset: 47%; border: 1px solid rgba(16, 185, 129, 0.11); }
-/* The NEGATIVE rotation keeps the bright edge leading and the fade trailing. */
+/* Real radar sweeps CLOCKWISE (a PPI scope follows compass bearings). The
+   glow must trail BEHIND the bright leading edge, so the gradient is mirrored
+   (bright at 360° fading backwards through ~334°/304°) and the rotation is
+   positive — same trailing-fade effect as the handoff, authentic direction. */
 .bs-radar-sweep {
   position: absolute;
   left: -25%;
@@ -568,7 +582,7 @@ watch(() => props.state, autoActions, { deep: true });
   border-radius: 50%;
   transform-origin: center;
   animation: radar-sweep 3.8s linear infinite;
-  background: conic-gradient(from 0deg, rgba(16, 185, 129, 0.32), rgba(16, 185, 129, 0.06) 26deg, rgba(16, 185, 129, 0) 56deg, rgba(16, 185, 129, 0) 360deg);
+  background: conic-gradient(from 0deg, rgba(16, 185, 129, 0) 0deg, rgba(16, 185, 129, 0) 304deg, rgba(16, 185, 129, 0.06) 334deg, rgba(16, 185, 129, 0.32) 360deg);
 }
 .bs-radar-ping {
   position: absolute;
@@ -665,7 +679,7 @@ watch(() => props.state, autoActions, { deep: true });
 @keyframes rip { 0% { transform: scale(0.32); opacity: 0.85; } 100% { transform: scale(1.7); opacity: 0; } }
 @keyframes mark-pop { 0% { transform: scale(0.15); opacity: 0; } 60% { transform: scale(1.2); } 100% { transform: scale(1); opacity: 1; } }
 @keyframes flicker { 0% { transform: scaleY(0.86) scaleX(1.04); } 100% { transform: scaleY(1.14) scaleX(0.94); } }
-@keyframes radar-sweep { to { transform: rotate(-360deg); } }
+@keyframes radar-sweep { to { transform: rotate(360deg); } }
 @keyframes sonar-ping { 0% { transform: scale(0.12); opacity: 0.55; } 80% { opacity: 0; } 100% { transform: scale(1); opacity: 0; } }
 @keyframes bs-spin { to { transform: rotate(360deg); } }
 </style>
