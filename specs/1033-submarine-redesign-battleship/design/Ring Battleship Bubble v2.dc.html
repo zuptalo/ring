@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(120% 100% at 50% 0%, #26262e 0%, #17171c 60%, #101014 100%);
+      min-height: 100vh;
+    }
+    @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes heroPop { 0% { transform: scale(0.2) rotate(-14deg); opacity: 0; } 55% { transform: scale(1.2) rotate(6deg); } 100% { transform: scale(1) rotate(0); opacity: 1; } }
+    @keyframes reticleSpin { to { transform: rotate(360deg); } }
+    @keyframes reticlePulse { 0%,100% { opacity: .28; transform: scale(1); } 50% { opacity: .6; transform: scale(1.28); } }
+    @keyframes ripple { 0% { transform: scale(.32); opacity: .85; } 100% { transform: scale(1.7); opacity: 0; } }
+    @keyframes markPop { 0% { transform: scale(.15); opacity: 0; } 60% { transform: scale(1.2); } 100% { transform: scale(1); opacity: 1; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes shipIn { from { opacity: 0; transform: translateY(-2px) scale(.94); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @keyframes flicker { 0% { transform: scaleY(.86) scaleX(1.04); } 100% { transform: scaleY(1.14) scaleX(.94); } }
+    @keyframes ghostIn { 0% { opacity: 0; transform: translateY(7px) scale(.9) rotate(-3deg); } 60% { opacity: .8; } 100% { opacity: 1; transform: translateY(0) scale(1) rotate(-4deg); } }
+    @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2.5px); } }
+    @keyframes radarSweep { to { transform: rotate(-360deg); } }
+    @keyframes sonarPing { 0% { transform: scale(0.12); opacity: 0.55; } 80% { opacity: 0; } 100% { transform: scale(1); opacity: 0; } }
+  </style>
+</helmet>
+<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:32px 16px;">
+
+  <div style="width:400px;height:812px;background:linear-gradient(160deg,#2a2a30,#0c0c10);border-radius:52px;padding:11px;box-shadow:0 40px 80px -20px rgba(0,0,0,0.7),0 0 0 2px rgba(255,255,255,0.04) inset;position:relative;flex:none;">
+    <div style="{{ screenStyle }}">
+
+      <!-- status bar -->
+      <div style="height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 28px 0 32px;flex:none;font-weight:600;font-size:14px;color:{{ textColor }};">
+        <span>9:41</span>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <span>5G</span>
+          <span style="display:inline-block;width:22px;height:11px;border:1.5px solid {{ textColor }};border-radius:3px;position:relative;opacity:0.9;"><span style="position:absolute;inset:1.5px;right:5px;background:{{ textColor }};border-radius:1px;"></span></span>
+        </div>
+      </div>
+
+      <!-- chat header -->
+      <div style="height:56px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:{{ headerBg }};border-bottom:1px solid {{ borderColor }};">
+        <span style="font-size:26px;line-height:1;color:{{ primary }};font-weight:300;margin-right:-2px;">‹</span>
+        <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#f0a76b,#d9663f);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:15px;flex:none;">M</div>
+        <div style="display:flex;flex-direction:column;min-width:0;flex:1;">
+          <span style="font-weight:600;font-size:15px;color:{{ textColor }};">Mia Chen</span>
+          <span style="font-size:12px;color:{{ primary }};">online</span>
+        </div>
+        <span style="font-size:22px;color:{{ mutedColor }};letter-spacing:1px;">⋯</span>
+      </div>
+
+      <!-- messages -->
+      <div style="flex:1;min-height:0;overflow-y:auto;padding:16px 14px 12px;display:flex;flex-direction:column;justify-content:flex-start;gap:8px;">
+
+        <div style="align-self:flex-start;max-width:78%;background:{{ bubbleIn }};color:{{ textColor }};padding:8px 12px;border-radius:16px 16px 16px 5px;font-size:15px;">Rematch? Best of three.</div>
+        <div style="align-self:flex-end;max-width:78%;background:{{ bubbleOut }};color:{{ textColor }};padding:8px 12px;border-radius:16px 16px 5px 16px;font-size:15px;">You're on.</div>
+
+        <!-- GAME CARD (shared, full width) -->
+        <div style="align-self:stretch;background:{{ cardBg }};color:{{ textColor }};padding:14px;border-radius:18px;border:1px solid {{ cardBorder }};box-shadow:0 1px 2px rgba(0,0,0,0.06),0 10px 26px -14px rgba(0,0,0,0.28);">
+          <div style="width:100%;display:flex;flex-direction:column;gap:9px;">
+
+            <!-- matchup header -->
+            <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;font-size:16px;font-weight:600;">
+              <span style="display:flex;align-items:center;gap:8px;min-width:0;">
+                <span style="width:24px;height:24px;flex:none;display:flex;">{{ markIcon }}</span>
+                <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">You</span>
+              </span>
+              <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:{{ mutedColor }};">vs</span>
+              <span style="display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;">
+                <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Mia</span>
+                <span style="width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#f0a76b,#d9663f);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:10px;flex:none;">M</span>
+                <span style="width:24px;height:24px;flex:none;display:flex;transform:scaleX(-1);">{{ markIcon }}</span>
+              </span>
+            </div>
+
+            <!-- stage -->
+            <div style="position:relative;">
+
+              <!-- PLACING -->
+              <sc-if value="{{ isPlacing }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:{{ primary }};margin:0 2px 8px;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ primary }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><polyline points="5 9 2 12 5 15"></polyline><polyline points="9 5 12 2 15 5"></polyline><polyline points="15 19 12 22 9 19"></polyline><polyline points="19 9 22 12 19 15"></polyline><line x1="2" y1="12" x2="22" y2="12"></line><line x1="12" y1="2" x2="12" y2="22"></line></svg>
+                  <span>Drag ships to move · tap to rotate</span>
+                </div>
+                <div style="position:relative;">
+                  <div style="display:grid;grid-template-columns:repeat(8,1fr);gap:2px;padding:4px;border-radius:10px;background:{{ gridBg }};">
+                    <sc-for list="{{ placingCells }}" as="cell" hint-placeholder-count="64">
+                      <button type="button" disabled="{{ cell.disabled }}" style="{{ cell.style }}"></button>
+                    </sc-for>
+                  </div>
+                  {{ placingOverlay }}
+                </div>
+                <div style="display:flex;justify-content:flex-end;align-items:center;gap:4px;margin-top:8px;">
+                  <button type="button" onClick="{{ shuffle }}" style="background:none;border:none;color:{{ primary }};font-size:13px;font-weight:600;padding:6px 8px;cursor:pointer;display:flex;align-items:center;gap:5px;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="{{ primary }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>
+                    Shuffle
+                  </button>
+                  <button type="button" onClick="{{ ready }}" style="background:{{ primary }};border:none;color:#04150f;font-size:13px;font-weight:700;padding:7px 15px;border-radius:999px;cursor:pointer;display:flex;align-items:center;gap:5px;box-shadow:0 4px 10px -3px rgba(16,185,129,0.6);">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#04150f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                    Deploy fleet
+                  </button>
+                </div>
+              </sc-if>
+
+              <!-- BATTLE -->
+              <sc-if value="{{ isBattle }}" hint-placeholder-val="{{ true }}">
+                <sc-if value="{{ showTurnStrip }}" hint-placeholder-val="{{ true }}">
+                  <div style="{{ turnStripStyle }}">
+                    <sc-if value="{{ stripMine }}" hint-placeholder-val="{{ true }}">
+                      <svg width="16" height="16" viewBox="0 0 24 24" style="overflow:visible;flex:none;"><circle cx="12" cy="12" r="7" fill="none" stroke="{{ primary }}" stroke-width="2" stroke-dasharray="5 4.5" stroke-linecap="round" style="transform-box:fill-box;transform-origin:center;animation:reticleSpin 3.5s linear infinite;"></circle><circle cx="12" cy="12" r="2" fill="{{ primary }}"></circle></svg>
+                    </sc-if>
+                    <sc-if value="{{ stripWait }}" hint-placeholder-val="{{ false }}">
+                      <svg width="16" height="16" viewBox="0 0 24 24" style="flex:none;"><circle cx="12" cy="12" r="8" fill="none" stroke="{{ mutedColor }}" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="13 40" style="transform-box:fill-box;transform-origin:center;animation:spin .9s linear infinite;"></circle></svg>
+                    </sc-if>
+                    <span>{{ turnStripText }}</span>
+                  </div>
+                </sc-if>
+
+                <div style="margin-bottom:6px;">
+                  <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:{{ mutedColor }};margin:2px 2px 3px;">Their sea</div>
+                  <div style="position:relative;">
+                    <div style="{{ theirGridStyle }}">
+                      <sc-for list="{{ theirCells }}" as="cell" hint-placeholder-count="64">
+                        <button type="button" disabled="{{ cell.disabled }}" onClick="{{ cell.onClick }}" style="{{ cell.style }}">
+                          <sc-if value="{{ cell.isTarget }}" hint-placeholder-val="{{ false }}">
+                            <svg width="80%" height="80%" viewBox="0 0 24 24" style="overflow:visible;">
+                              <circle cx="12" cy="12" r="9" fill="none" stroke="{{ primary }}" stroke-width="1.5" style="transform-box:fill-box;transform-origin:center;animation:reticlePulse 1.4s ease-in-out infinite;"></circle>
+                              <circle cx="12" cy="12" r="6.5" fill="none" stroke="{{ primary }}" stroke-width="2" stroke-dasharray="5 4.5" stroke-linecap="round" style="transform-box:fill-box;transform-origin:center;animation:reticleSpin 3.5s linear infinite;"></circle>
+                              <circle cx="12" cy="12" r="2" fill="{{ primary }}"></circle>
+                              <path d="M12 1v3.2M12 19.8V23M1 12h3.2M19.8 12H23" stroke="{{ primary }}" stroke-width="2" stroke-linecap="round"></path>
+                            </svg>
+                          </sc-if>
+                          <sc-if value="{{ cell.isMiss }}" hint-placeholder-val="{{ false }}">
+                            <svg width="76%" height="76%" viewBox="0 0 24 24" style="overflow:visible;">
+                              <circle cx="12" cy="12" r="6" fill="none" stroke="{{ ink }}" stroke-width="1.6" opacity="0.45"></circle>
+                              <circle cx="12" cy="12" r="6" fill="none" stroke="{{ ink }}" stroke-width="2" style="transform-box:fill-box;transform-origin:center;animation:ripple .7s ease-out both;"></circle>
+                              <circle cx="12" cy="12" r="6" fill="none" stroke="{{ ink }}" stroke-width="2" style="transform-box:fill-box;transform-origin:center;animation:ripple .7s .18s ease-out both;"></circle>
+                            </svg>
+                          </sc-if>
+                        </button>
+                      </sc-for>
+                    </div>
+                    <div style="position:absolute;inset:4px;border-radius:10px;overflow:hidden;pointer-events:none;opacity:{{ radarOpacity }};transition:opacity .35s ease;">
+                      <div style="position:absolute;left:50%;top:7%;bottom:7%;width:1px;margin-left:-0.5px;background:rgba(16,185,129,0.13);"></div>
+                      <div style="position:absolute;top:50%;left:7%;right:7%;height:1px;margin-top:-0.5px;background:rgba(16,185,129,0.13);"></div>
+                      <div style="position:absolute;inset:15%;border-radius:50%;border:1px solid rgba(16,185,129,0.16);"></div>
+                      <div style="position:absolute;inset:32%;border-radius:50%;border:1px solid rgba(16,185,129,0.13);"></div>
+                      <div style="position:absolute;inset:47%;border-radius:50%;border:1px solid rgba(16,185,129,0.11);"></div>
+                      <div style="position:absolute;left:-25%;top:-25%;width:150%;height:150%;border-radius:50%;transform-origin:center;animation:radarSweep 3.8s linear infinite;background:conic-gradient(from 0deg, rgba(16,185,129,0.32), rgba(16,185,129,0.06) 26deg, rgba(16,185,129,0) 56deg, rgba(16,185,129,0) 360deg);"></div>
+                      <div style="position:absolute;inset:15%;border-radius:50%;border:1.5px solid rgba(16,185,129,0.45);transform-origin:center;animation:sonarPing 3.8s ease-out infinite;"></div>
+                    </div>
+                    {{ theirOverlay }}
+                  </div>
+                </div>
+
+                <div>
+                  <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;color:{{ mutedColor }};margin:2px 2px 3px;">Your sea</div>
+                  <div style="position:relative;">
+                    <div style="display:grid;grid-template-columns:repeat(8,1fr);gap:2px;padding:4px;border-radius:10px;background:{{ gridBg }};">
+                      <sc-for list="{{ ownCells }}" as="cell" hint-placeholder-count="64">
+                        <button type="button" disabled="{{ cell.disabled }}" style="{{ cell.style }}">
+                          <sc-if value="{{ cell.isMiss }}" hint-placeholder-val="{{ false }}">
+                            <svg width="72%" height="72%" viewBox="0 0 24 24" style="overflow:visible;">
+                              <circle cx="12" cy="12" r="6" fill="none" stroke="{{ ink }}" stroke-width="1.6" opacity="0.45"></circle>
+                              <circle cx="12" cy="12" r="6" fill="none" stroke="{{ ink }}" stroke-width="2" style="transform-box:fill-box;transform-origin:center;animation:ripple .7s ease-out both;"></circle>
+                            </svg>
+                          </sc-if>
+                        </button>
+                      </sc-for>
+                    </div>
+                    {{ ownOverlay }}
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- RESULT OVERLAY -->
+              <sc-if value="{{ showOverlay }}" hint-placeholder-val="{{ false }}">
+                <div onClick="{{ peek }}" style="position:absolute;inset:0;border-radius:10px;background:rgba(6,10,18,0.62);backdrop-filter:blur(2px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;cursor:pointer;animation:overlayIn 0.25s ease both;">
+                  <svg width="92" height="92" viewBox="0 0 32 32" style="filter:drop-shadow(0 6px 12px rgba(0,0,0,0.45));animation:heroPop 0.55s cubic-bezier(.2,1.3,.5,1) both;">
+                    <path d="M12 4 L12 8 M20 4 L20 8" stroke="{{ medalRing }}" stroke-width="2.4" stroke-linecap="round"></path>
+                    <circle cx="16" cy="18" r="12" fill="{{ medalFill }}" stroke="{{ medalRing }}" stroke-width="1.6"></circle>
+                    <circle cx="16" cy="18" r="8.6" fill="none" stroke="{{ medalRing }}" stroke-width="0.9" opacity="0.55"></circle>
+                    <svg x="8" y="10" width="16" height="16" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="{{ medalStar }}"></path></svg>
+                  </svg>
+                  <span style="font-size:15px;font-weight:700;color:#fff;">{{ statusText }}</span>
+                  <button type="button" onClick="{{ playAgain }}" style="background:rgba(255,255,255,0.14);border:1px solid rgba(255,255,255,0.24);border-radius:999px;color:#fff;font-size:13px;font-weight:600;padding:6px 14px;cursor:pointer;display:flex;align-items:center;gap:6px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    Rematch
+                  </button>
+                </div>
+              </sc-if>
+            </div>
+
+            <!-- status + actions -->
+            <sc-if value="{{ showStatus }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:{{ mutedColor }};">
+                <sc-if value="{{ stTarget }}" hint-placeholder-val="{{ true }}">
+                  <svg width="15" height="15" viewBox="0 0 24 24" style="flex:none;"><circle cx="12" cy="12" r="7" fill="none" stroke="{{ primary }}" stroke-width="2" stroke-dasharray="5 4.5" stroke-linecap="round" style="transform-box:fill-box;transform-origin:center;animation:reticleSpin 3.5s linear infinite;"></circle><circle cx="12" cy="12" r="2" fill="{{ primary }}"></circle></svg>
+                </sc-if>
+                <sc-if value="{{ stSpin }}" hint-placeholder-val="{{ false }}">
+                  <svg width="15" height="15" viewBox="0 0 24 24" style="flex:none;"><circle cx="12" cy="12" r="8" fill="none" stroke="{{ mutedColor }}" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="13 40" style="transform-box:fill-box;transform-origin:center;animation:spin .9s linear infinite;"></circle></svg>
+                </sc-if>
+                <sc-if value="{{ stMedal }}" hint-placeholder-val="{{ false }}">
+                  <svg width="16" height="16" viewBox="0 0 32 32" style="flex:none;"><circle cx="16" cy="18" r="12" fill="{{ medalFill }}" stroke="{{ medalRing }}" stroke-width="1.6"></circle><svg x="8" y="10" width="16" height="16" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="{{ medalStar }}"></path></svg></svg>
+                </sc-if>
+                <span>{{ statusText }}</span>
+              </div>
+              <div style="display:flex;justify-content:flex-end;margin:-4px -4px -4px 0;">
+                <sc-if value="{{ showResign }}" hint-placeholder-val="{{ false }}">
+                  <button type="button" onClick="{{ resign }}" style="background:none;border:none;color:{{ mutedColor }};font-size:13px;padding:4px 8px;cursor:pointer;">Resign</button>
+                </sc-if>
+                <sc-if value="{{ showPlayAgain }}" hint-placeholder-val="{{ false }}">
+                  <button type="button" onClick="{{ playAgain }}" style="background:none;border:none;color:{{ primary }};font-size:13px;font-weight:600;padding:4px 8px;cursor:pointer;display:flex;align-items:center;gap:5px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ primary }}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                    Rematch
+                  </button>
+                </sc-if>
+              </div>
+            </sc-if>
+
+          </div>
+        </div>
+
+        <div style="align-self:flex-end;font-size:11px;color:{{ mutedColor }};margin:-3px 6px 0;">Delivered</div>
+      </div>
+
+      <!-- composer -->
+      <div style="height:56px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;background:{{ headerBg }};border-top:1px solid {{ borderColor }};">
+        <span style="font-size:24px;color:{{ mutedColor }};">＋</span>
+        <div style="flex:1;height:36px;border-radius:18px;background:{{ inputBg }};border:1px solid {{ borderColor }};display:flex;align-items:center;padding:0 14px;color:{{ mutedColor }};font-size:14px;">Message</div>
+        <div style="width:34px;height:34px;border-radius:50%;background:{{ primary }};display:flex;align-items:center;justify-content:center;color:#04150f;font-size:18px;font-weight:700;flex:none;">↑</div>
+      </div>
+
+    </div>
+  </div>
+
+  <button type="button" onClick="{{ restart }}" style="background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.7);border:1px solid rgba(255,255,255,0.12);border-radius:999px;padding:7px 16px;font-size:13px;font-weight:500;cursor:pointer;">↺ Restart game</button>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: 460, &quot;height&quot;: 920 },
+  &quot;scheme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;light&quot;, &quot;dark&quot;], &quot;default&quot;: &quot;light&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Appearance&quot; },
+  &quot;startPhase&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;placing&quot;, &quot;battle&quot;], &quot;default&quot;: &quot;placing&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Game&quot; }
+}">
+const e = React.createElement;
+
+const ACCENT = '28, 92, 140';
+const FLEET = [4, 3, 3, 2];
+const FLEET_CELLS = 12;
+
+function placeFleet() {
+  for (;;) {
+    const ships = [];
+    const taken = new Set();
+    let ok = true;
+    for (const len of FLEET) {
+      let placed = false;
+      for (let a = 0; a < 200 && !placed; a++) {
+        const dir = Math.random() < 0.5 ? 'h' : 'v';
+        const r = Math.floor(Math.random() * (dir === 'v' ? 8 - len + 1 : 8));
+        const c = Math.floor(Math.random() * (dir === 'h' ? 8 - len + 1 : 8));
+        const cells = [];
+        for (let k = 0; k < len; k++) cells.push(dir === 'h' ? r * 8 + c + k : (r + k) * 8 + c);
+        if (cells.every((x) => !taken.has(x))) {
+          cells.forEach((x) => taken.add(x));
+          ships.push({ r, c, len, dir });
+          placed = true;
+        }
+      }
+      if (!placed) { ok = false; break; }
+    }
+    if (ok) return ships;
+  }
+}
+
+function shipCells(sh) {
+  const out = [];
+  for (let k = 0; k < sh.len; k++) out.push(sh.dir === 'h' ? sh.r * 8 + sh.c + k : (sh.r + k) * 8 + sh.c);
+  return out;
+}
+
+/* ---------- submarine artwork (drawn horizontal, bow to the right) ---------- */
+function subArt(W, len) {
+  const hull = '#454f5a', hullHi = '#707b86', hullLo = '#262d34', dark = '#1a2026', tower = '#374049', trim = '#8b96a1', glow = '#7dd3fc', prop = '#c6a24a';
+  const cx = W * 0.5;
+  const tx = cx - W * 0.05;
+  const els = [];
+  // stern shaft + rudder + propeller
+  els.push(e('line', { key: 'shaft', x1: 4, y1: 56, x2: 13, y2: 56, stroke: dark, strokeWidth: 3, strokeLinecap: 'round' }));
+  els.push(e('path', { key: 'rudder', d: `M11 49 L5 46 L5 66 L11 63 Z`, fill: tower, stroke: dark, strokeWidth: 1.2, strokeLinejoin: 'round' }));
+  els.push(e('g', { key: 'prop', transform: 'translate(5,56)' }, [
+    e('ellipse', { key: 'a', cx: 0, cy: 0, rx: 2, ry: 6, fill: prop }),
+    e('ellipse', { key: 'b', cx: 0, cy: 0, rx: 6, ry: 2, fill: prop }),
+    e('circle', { key: 'c', cx: 0, cy: 0, r: 1.7, fill: dark }),
+  ]));
+  // pressure hull (rounded capsule, bow to the right)
+  els.push(e('path', { key: 'hull', d: `M18 43 H${W - 20} Q${W - 4} 43 ${W - 4} 56 Q${W - 4} 69 ${W - 20} 69 H18 Q8 69 8 56 Q8 43 18 43 Z`, fill: hull, stroke: dark, strokeWidth: 2.5, strokeLinejoin: 'round' }));
+  els.push(e('path', { key: 'hi', d: `M16 49 Q${cx} 45.5 ${W - 18} 49`, fill: 'none', stroke: hullHi, strokeWidth: 2.4, strokeLinecap: 'round', opacity: 0.7 }));
+  els.push(e('path', { key: 'lo', d: `M18 64 H${W - 20}`, fill: 'none', stroke: hullLo, strokeWidth: 2.5, strokeLinecap: 'round', opacity: 0.5 }));
+  // bow dive plane
+  els.push(e('path', { key: 'plane', d: `M${W - 24} 60 L${W - 8} 63 L${W - 24} 66 Z`, fill: tower, stroke: dark, strokeWidth: 1, strokeLinejoin: 'round' }));
+  // glowing portholes
+  const lights = Math.max(2, len + 1);
+  for (let i = 0; i < lights; i++) { const lx = 24 + i * ((W - 48) / lights); if (Math.abs(lx - tx) < 12) continue; els.push(e('circle', { key: 'l' + i, cx: lx, cy: 57, r: 2, fill: glow, opacity: 0.9 })); }
+  // conning tower (sail)
+  els.push(e('path', { key: 'tower', d: `M${tx - 11} 44 V33 Q${tx - 11} 27 ${tx - 5} 27 H${tx + 7} Q${tx + 13} 27 ${tx + 13} 33 V44 Z`, fill: tower, stroke: dark, strokeWidth: 2, strokeLinejoin: 'round' }));
+  els.push(e('line', { key: 'twhi', x1: tx - 8, y1: 31, x2: tx + 9, y2: 31, stroke: trim, strokeWidth: 1.5, opacity: 0.55 }));
+  els.push(e('rect', { key: 'twl', x: tx - 2, y: 35, width: 4, height: 4, rx: 1, fill: glow, opacity: 0.85 }));
+  // periscope + antenna
+  els.push(e('line', { key: 'per', x1: tx - 3, y1: 27, x2: tx - 3, y2: 15, stroke: dark, strokeWidth: 2, strokeLinecap: 'round' }));
+  els.push(e('line', { key: 'pertop', x1: tx - 4, y1: 16, x2: tx + 1, y2: 16, stroke: dark, strokeWidth: 2, strokeLinecap: 'round' }));
+  els.push(e('line', { key: 'ant', x1: tx + 5, y1: 27, x2: tx + 5, y2: 19, stroke: trim, strokeWidth: 1.6, strokeLinecap: 'round' }));
+  return els;
+}
+function ghostArt(W) {
+  const g = 'rgba(200,214,226,0.58)', gd = 'rgba(255,255,255,0.55)', dk = 'rgba(6,12,20,0.32)';
+  const cx = W * 0.5;
+  return [
+    // broken, powerless sub hull
+    e('path', { key: 'h', d: `M18 44 H${W - 20} Q${W - 5} 44 ${W - 5} 56 Q${W - 5} 68 ${W - 20} 68 H18 Q8 68 8 56 Q8 44 18 44 Z`, fill: g, stroke: gd, strokeWidth: 2, strokeLinejoin: 'round' }),
+    e('path', { key: 'tw', d: `M${cx - 9} 44 V34 Q${cx - 9} 30 ${cx - 4} 30 H${cx + 6} Q${cx + 10} 30 ${cx + 10} 34 V44 Z`, fill: g, stroke: gd, strokeWidth: 1.6 }),
+    e('path', { key: 'crack', d: `M${cx - 20} 52 l7 4 l-4 4`, fill: 'none', stroke: dk, strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+    e('circle', { key: 'ho', cx: cx + W * 0.24, cy: 58, r: 3.5, fill: dk }),
+    // dead X eyes on the tower
+    e('path', { key: 'x1', d: `M${cx - 5} 35 l4 4 M${cx - 1} 35 l-4 4`, stroke: '#33414f', strokeWidth: 1.4, strokeLinecap: 'round' }),
+    e('path', { key: 'x2', d: `M${cx + 2} 35 l4 4 M${cx + 6} 35 l-4 4`, stroke: '#33414f', strokeWidth: 1.4, strokeLinecap: 'round' }),
+    e('circle', { key: 'bu1', cx: cx - W * 0.2, cy: 30, r: 2.4, fill: gd, style: { animation: 'bob 2.4s ease-in-out infinite' } }),
+    e('circle', { key: 'bu2', cx: cx + W * 0.26, cy: 26, r: 1.9, fill: gd, style: { animation: 'bob 2.8s ease-in-out .5s infinite' } }),
+  ];
+}
+
+function shipSvg(info, ghost, invalid) {
+  const W = info.len * 100;
+  const content = ghost ? ghostArt(W) : subArt(W, info.len);
+  const fat = e('g', { transform: 'translate(0,54) scale(1,1.14) translate(0,-54)' }, content);
+  const inner = info.horiz ? fat : e('g', { transform: `translate(100,0) rotate(90)` }, fat);
+  const shadow = invalid
+    ? 'drop-shadow(0 0 2px rgba(239,68,68,0.95)) drop-shadow(0 0 3px rgba(239,68,68,0.75))'
+    : 'drop-shadow(0 1px 1.5px rgba(0,0,0,0.28))';
+  return e('svg', {
+    viewBox: info.horiz ? `0 0 ${W} 100` : `0 0 100 ${W}`,
+    preserveAspectRatio: 'none', width: '100%', height: '100%',
+    style: { display: 'block', overflow: 'visible', filter: shadow, animation: ghost ? 'ghostIn .55s ease both' : 'shipIn .4s ease both' },
+  }, inner);
+}
+function flameSvg() {
+  return e('svg', { viewBox: '0 0 24 24', width: '74%', height: '74%', style: { overflow: 'visible', animation: 'markPop .3s ease-out both' } }, [
+    e('path', { key: 'a', d: 'M12 2 C15 7 18 9.5 16.5 14 A5.4 5.4 0 1 1 7.5 14 C6.6 10.6 9.6 9.6 10 6.4 C10.7 8.4 11 8.2 12 2 Z', fill: '#fb923c', style: { transformBox: 'fill-box', transformOrigin: '50% 92%', animation: 'flicker .5s ease-in-out infinite alternate' } }),
+    e('path', { key: 'b', d: 'M12 8 C13.7 10.6 15 11.6 14 14.6 A3 3 0 1 1 9.6 14.7 C9.3 12.7 11.1 12.1 12 8 Z', fill: '#fde047', style: { transformBox: 'fill-box', transformOrigin: '50% 92%', animation: 'flicker .38s ease-in-out .12s infinite alternate' } }),
+  ]);
+}
+
+// Absolute box for a cell region (col c, row r, spanning cs×rs cells) inside an
+// 8×8 board with 2px gaps. Each ship's box is a pure function of its OWN
+// coords — independent of every other ship, so moving/rotating one never
+// reflows the others (no shared grid to re-solve).
+function boxStyle(r, c, cs, rs) {
+  const off = (n) => `calc((100% - 14px) / 8 * ${n} + ${n * 2}px)`;
+  const sz = (n) => `calc((100% - 14px) / 8 * ${n} + ${(n - 1) * 2}px)`;
+  return { position: 'absolute', left: off(c), top: off(r), width: sz(cs), height: sz(rs) };
+}
+function flame(c) {
+  return e('div', { key: 'f' + c, style: { ...boxStyle(Math.floor(c / 8), c % 8, 1, 1), display: 'flex', alignItems: 'center', justifyContent: 'center' } }, flameSvg());
+}
+function buildOverlay(ships, sea, showIntact, opts) {
+  opts = opts || {};
+  const kids = [];
+  ships.forEach((ship, si) => {
+    const info = { r: ship.r, c: ship.c, len: ship.len, horiz: ship.dir === 'h' };
+    const cs = info.horiz ? info.len : 1, rs = info.horiz ? 1 : info.len;
+    const cells = shipCells(ship);
+    const hitCells = cells.filter((c) => sea[c] === 'hit' || sea[c] === 'sunk');
+    const sunk = cells.length > 0 && hitCells.length === cells.length;
+    const place = boxStyle(info.r, info.c, cs, rs);
+    if (sunk) {
+      kids.push(e('div', { key: 'g' + si, style: place }, shipSvg(info, true)));
+    } else if (showIntact) {
+      const active = opts.dragIdx === si;
+      const invalid = active && opts.dragInvalid;
+      const style = { ...place };
+      if (opts.interactive) {
+        style.pointerEvents = 'auto'; style.cursor = active ? 'grabbing' : 'grab'; style.touchAction = 'none';
+        style.zIndex = active ? 5 : 1;
+        if (active) style.filter = 'drop-shadow(0 4px 5px rgba(0,0,0,0.35))';
+      }
+      const props = { key: 's' + si, style };
+      if (opts.interactive) props.onPointerDown = (ev) => opts.onDown(si, ev);
+      kids.push(e('div', props, shipSvg(info, false, invalid)));
+      hitCells.forEach((c) => kids.push(flame(c)));
+    } else {
+      hitCells.forEach((c) => kids.push(flame(c)));
+    }
+  });
+  return e('div', { style: { position: 'absolute', inset: '4px', pointerEvents: 'none' } }, kids);
+}
+
+function fresh(phase) {
+  return {
+    phase: phase === 'battle' ? 'battle' : 'placing',
+    myShips: placeFleet(),
+    theirShips: placeFleet(),
+    theirSea: {},
+    mySea: {},
+    turn: 0,
+    busy: false,
+    winner: null,
+    resignedByMe: false,
+    peeked: false,
+    dragIdx: -1,
+    dragInvalid: false,
+  };
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this._timers = [];
+    this.state = fresh(props.startPhase);
+  }
+  componentDidUpdate(prev) {
+    if (prev.startPhase !== this.props.startPhase) this.restart();
+  }
+  componentWillUnmount() {
+    this._timers.forEach(clearTimeout);
+    if (this._onMove) { window.removeEventListener('pointermove', this._onMove); window.removeEventListener('pointerup', this._onUp); }
+  }
+  later(fn, ms) { const t = setTimeout(fn, ms); this._timers.push(t); return t; }
+
+  hitCount(sea) { return Object.values(sea).filter((r) => r === 'hit' || r === 'sunk').length; }
+
+  judge(ships, sea, cell) {
+    const ship = ships.find((s) => shipCells(s).includes(cell));
+    if (!ship) return 'miss';
+    const hit = new Set();
+    for (const k in sea) if (sea[k] === 'hit' || sea[k] === 'sunk') hit.add(+k);
+    hit.add(cell);
+    return shipCells(ship).every((c) => hit.has(c)) ? 'sunk' : 'hit';
+  }
+
+  shuffle() { if (this.state.phase === 'placing') this.setState({ myShips: placeFleet(), dragIdx: -1, dragInvalid: false }); }
+  ready() { if (this.state.phase === 'placing') this.setState({ phase: 'battle', turn: 0 }); }
+
+  // ----- placement: drag to move, tap to rotate -----
+  canPlace(sh, exclude) {
+    const h = sh.dir === 'h';
+    if (sh.r < 0 || sh.c < 0 || (h ? sh.c + sh.len > 8 || sh.r > 7 : sh.r + sh.len > 8 || sh.c > 7)) return false;
+    const occ = new Set();
+    this.state.myShips.forEach((s, idx) => { if (idx === exclude) return; shipCells(s).forEach((c) => occ.add(c)); });
+    return shipCells(sh).every((c) => !occ.has(c));
+  }
+  cellAt(ev) {
+    const rect = this._dragGrid.getBoundingClientRect();
+    const cs = rect.width / 8;
+    return { r: Math.floor((ev.clientY - rect.top) / cs), c: Math.floor((ev.clientX - rect.left) / cs) };
+  }
+  shipDown(i, ev) {
+    if (this.state.phase !== 'placing') return;
+    ev.preventDefault(); ev.stopPropagation();
+    this._dragGrid = ev.currentTarget.parentElement;
+    const { r: pr, c: pc } = this.cellAt(ev);
+    const sh = this.state.myShips[i];
+    this._drag = { i, dr: pr - sh.r, dc: pc - sh.c, from: { r: sh.r, c: sh.c }, moved: false };
+    this._onMove = (e) => this.shipMove(e);
+    this._onUp = () => this.shipUp();
+    window.addEventListener('pointermove', this._onMove);
+    window.addEventListener('pointerup', this._onUp);
+    this.setState({ dragIdx: i, dragInvalid: false });
+  }
+  shipMove(ev) {
+    if (!this._drag) return;
+    ev.preventDefault();
+    const { r: pr, c: pc } = this.cellAt(ev);
+    const { i, dr, dc, from } = this._drag;
+    const sh = this.state.myShips[i];
+    const h = sh.dir === 'h';
+    let nr = Math.max(0, Math.min(h ? 7 : 8 - sh.len, pr - dr));
+    let nc = Math.max(0, Math.min(h ? 8 - sh.len : 7, pc - dc));
+    if (nr !== from.r || nc !== from.c) this._drag.moved = true;
+    const cand = { ...sh, r: nr, c: nc };
+    const ships = this.state.myShips.map((x, idx) => (idx === i ? cand : x));
+    this.setState({ myShips: ships, dragInvalid: !this.canPlace(cand, i) });
+  }
+  shipUp() {
+    window.removeEventListener('pointermove', this._onMove);
+    window.removeEventListener('pointerup', this._onUp);
+    const d = this._drag; this._drag = null;
+    if (!d) { this.setState({ dragIdx: -1, dragInvalid: false }); return; }
+    const sh = this.state.myShips[d.i];
+    if (!d.moved) {
+      // tap → rotate 90°
+      const dir = sh.dir === 'h' ? 'v' : 'h';
+      let r = sh.r, c = sh.c;
+      if (dir === 'v' && r + sh.len > 8) r = 8 - sh.len;
+      if (dir === 'h' && c + sh.len > 8) c = 8 - sh.len;
+      const cand = { ...sh, dir, r: Math.max(0, r), c: Math.max(0, c) };
+      if (this.canPlace(cand, d.i)) {
+        this.setState({ myShips: this.state.myShips.map((x, idx) => (idx === d.i ? cand : x)), dragIdx: -1, dragInvalid: false });
+        return;
+      }
+    } else if (this.state.dragInvalid) {
+      // invalid drop → snap back
+      this.setState({ myShips: this.state.myShips.map((x, idx) => (idx === d.i ? { ...x, r: d.from.r, c: d.from.c } : x)), dragIdx: -1, dragInvalid: false });
+      return;
+    }
+    this.setState({ dragIdx: -1, dragInvalid: false });
+  }
+  restart() { this._timers.forEach(clearTimeout); this._timers = []; this.setState(fresh(this.props.startPhase)); }
+  playAgain() { this.restart(); }
+  peek() { this.setState({ peeked: true }); }
+  resign() {
+    if (this.state.winner !== null) return;
+    this._timers.forEach(clearTimeout); this._timers = [];
+    this.setState({ winner: 1, resignedByMe: true, busy: false });
+  }
+
+  canFire() {
+    const s = this.state;
+    return s.phase === 'battle' && s.turn === 0 && s.winner === null && !s.busy;
+  }
+
+  fire(i) {
+    if (!this.canFire() || this.state.theirSea[i]) return;
+    this.setState({ theirSea: { ...this.state.theirSea, [i]: 'pending' }, busy: true });
+    this.later(() => {
+      const base = { ...this.state.theirSea };
+      delete base[i];
+      const r = this.judge(this.state.theirShips, base, i);
+      const sea = { ...this.state.theirSea, [i]: r };
+      if (this.hitCount(sea) >= FLEET_CELLS) {
+        this.setState({ theirSea: sea, winner: 0, busy: false });
+      } else {
+        this.setState({ theirSea: sea, turn: 1 });
+        this.later(() => this.opponentMove(), 900);
+      }
+    }, 640);
+  }
+
+  opponentMove() {
+    if (this.state.winner !== null) return;
+    const open = [];
+    for (let i = 0; i < 64; i++) if (!(i in this.state.mySea)) open.push(i);
+    let cell = -1;
+    const wounded = Object.keys(this.state.mySea).filter((k) => this.state.mySea[k] === 'hit').map(Number);
+    if (wounded.length) {
+      const adj = [];
+      for (const w of wounded) for (const d of [-8, 8, -1, 1]) {
+        const n = w + d;
+        if (n < 0 || n >= 64) continue;
+        if (d === -1 && w % 8 === 0) continue;
+        if (d === 1 && w % 8 === 7) continue;
+        if (!(n in this.state.mySea)) adj.push(n);
+      }
+      if (adj.length) cell = adj[Math.floor(Math.random() * adj.length)];
+    }
+    if (cell < 0) cell = open[Math.floor(Math.random() * open.length)];
+    if (cell == null) return;
+    const base = { ...this.state.mySea };
+    const r = this.judge(this.state.myShips, base, cell);
+    const sea = { ...this.state.mySea, [cell]: r };
+    if (this.hitCount(sea) >= FLEET_CELLS) {
+      this.setState({ mySea: sea, winner: 1, busy: false });
+    } else {
+      this.setState({ mySea: sea, turn: 0, busy: false });
+    }
+  }
+
+  renderVals() {
+    const s = this.state;
+    const dark = (this.props.scheme ?? 'light') === 'dark';
+    const accent = ACCENT;
+    const primary = '#10b981';
+
+    const base = dark ? '#000000' : '#ffffff';
+    const textColor = dark ? '#ffffff' : '#0b0b0c';
+    const mutedColor = dark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.55)';
+    const ink = dark ? 'rgba(255,255,255,0.55)' : 'rgba(2,6,23,0.42)';
+    const bg = `linear-gradient(165deg, rgba(16,185,129,${dark ? 0.22 : 0.16}), rgba(16,185,129,${dark ? 0.05 : 0.03}) 70%), ${base}`;
+    const screenStyle = `width:100%;height:100%;border-radius:42px;overflow:hidden;background:${bg};display:flex;flex-direction:column;position:relative;`;
+
+    const firable = this.canFire();
+    const water = `rgba(${accent}, 0.13)`;
+    const charHit = 'rgba(120,60,30,0.20)';
+    const charSunk = 'rgba(70,84,110,0.22)';
+    const gridBg = `linear-gradient(180deg, rgba(${accent}, 0.07), rgba(${accent}, 0.16))`;
+    const cellStyle = (bgc, cur) => `width:100%;aspect-ratio:1;border:none;padding:0;position:relative;display:flex;align-items:center;justify-content:center;background:${bgc};border-radius:4px;cursor:${cur};`;
+
+    const theirCells = [];
+    for (let i = 0; i < 64; i++) {
+      const r = s.theirSea[i];
+      const bgc = r === 'hit' ? charHit : r === 'sunk' ? charSunk : water;
+      theirCells.push({ style: cellStyle(bgc, firable && !r ? 'pointer' : 'default'), isTarget: r === 'pending', isMiss: r === 'miss', disabled: !(firable && !r), onClick: () => this.fire(i) });
+    }
+    const ownCells = [];
+    for (let i = 0; i < 64; i++) {
+      const r = s.mySea[i];
+      const bgc = r === 'hit' ? charHit : r === 'sunk' ? charSunk : water;
+      ownCells.push({ style: cellStyle(bgc, 'default'), isMiss: r === 'miss', disabled: true });
+    }
+    const placingCells = [];
+    for (let i = 0; i < 64; i++) placingCells.push({ style: cellStyle(water, 'default'), disabled: true });
+
+    let theirGridStyle = `display:grid;grid-template-columns:repeat(8,1fr);gap:2px;padding:4px;border-radius:10px;background:${gridBg};transition:opacity .25s ease,box-shadow .25s ease;`;
+    if (firable) theirGridStyle += 'box-shadow:0 0 0 2px rgba(16,185,129,0.55);';
+    else if (s.winner === null && s.turn === 1) theirGridStyle += 'opacity:0.6;';
+
+    const mineTurn = s.turn === 0 && s.winner === null;
+    const turnStripStyle = `display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;margin:0 2px 6px;color:${mineTurn ? primary : mutedColor};`;
+
+    let statusText;
+    const win = s.winner === 0;
+    if (s.winner !== null) {
+      if (win) statusText = 'You won!';
+      else if (s.resignedByMe) statusText = 'You gave up';
+      else statusText = 'Mia won';
+    } else {
+      statusText = s.turn === 0 ? 'Your move' : "Mia's move";
+    }
+    const medal = win
+      ? { medalFill: '#f6c453', medalRing: '#c99a2e', medalStar: '#fff8e6' }
+      : { medalFill: '#d7dde3', medalRing: '#98a2ac', medalStar: '#ffffff' };
+    const showOverlay = s.winner !== null && !s.peeked;
+
+    // submarine fleet mark for the header
+    const markIcon = e('svg', { viewBox: '0 0 100 100', width: '100%', height: '100%', preserveAspectRatio: 'xMidYMid meet' },
+      subArt(100, 1).map((el, i) => React.cloneElement(el, { key: 'm' + i })));
+
+    return {
+      screenStyle, primary, textColor, mutedColor, ink,
+      markIcon,
+      headerBg: dark ? 'rgba(16,185,129,0.05)' : 'rgba(16,185,129,0.06)',
+      borderColor: dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
+      inputBg: dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+      bubbleIn: dark ? '#232d33' : '#e7e8ec',
+      bubbleOut: dark ? '#103a2c' : '#d6f3cc',
+      cardBg: dark ? '#181f1b' : '#ffffff',
+      cardBorder: dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.07)',
+      gridBg,
+
+      isPlacing: s.phase === 'placing',
+      isBattle: s.phase === 'battle',
+      placingCells, theirCells, ownCells,
+      theirGridStyle,
+      ownOverlay: buildOverlay(s.myShips, s.mySea, true),
+      theirOverlay: buildOverlay(s.theirShips, s.theirSea, false),
+      placingOverlay: buildOverlay(s.myShips, {}, true, { interactive: true, onDown: (i, ev) => this.shipDown(i, ev), dragIdx: s.dragIdx, dragInvalid: s.dragInvalid }),
+
+      showTurnStrip: s.winner === null,
+      turnStripStyle,
+      stripMine: mineTurn,
+      stripWait: !mineTurn,
+      radarOpacity: mineTurn ? 0.95 : 0.5,
+      turnStripText: mineTurn ? 'Your shot — tap their sea' : 'Waiting for their move…',
+
+      showStatus: !showOverlay,
+      statusText,
+      stTarget: s.winner === null && s.turn === 0,
+      stSpin: s.winner === null && s.turn === 1,
+      stMedal: s.winner !== null,
+      showResign: s.phase === 'battle' && s.winner === null,
+      showPlayAgain: s.winner !== null,
+
+      showOverlay,
+      ...medal,
+
+      shuffle: () => this.shuffle(),
+      ready: () => this.ready(),
+      resign: () => this.resign(),
+      playAgain: () => this.playAgain(),
+      peek: () => this.peek(),
+      restart: () => this.restart(),
+    };
+  }
+}
+</script>
+</body>
+</html>
