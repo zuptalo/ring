@@ -205,11 +205,9 @@ secret, so there is nothing to tell apart); shot results are a FIXED language:
 | Hit | 💥 `collision 1f4a5` | a ship is struck |
 | Sunk | 🔥 `fire 1f525` | the whole ship is gone |
 
-| Theme | Ship glyph | Accent |
-|-------|-----------|--------|
-| Classic | 🚢 `ship 1f6a2` | navy `30, 64, 175` |
-| Pirates | 🏴‍☠️ `pirate-flag 1f3f4_200d_2620_fe0f` | rum brown `120, 53, 15` |
-| Sea Monsters | 🐙 `octopus 1f419` | teal `13, 148, 136` |
+Since spec 1033, Battleship has ONE look: the submarine vector design from the
+vendored handoff (specs/1033-submarine-redesign-battleship/design/) — no theme
+choice, no emoji ship glyphs. Old theme ids fall back to it gracefully.
 
 ## Tic-tac-toe themes (spec 0008)
 

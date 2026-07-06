@@ -132,18 +132,18 @@ test('a full verified game: commitments, shots, forced reveals — and the loser
   for (const x of ctxs) await x.close();
 });
 
-test('the real flow: Ready buttons commit, and the defender device answers by itself', async ({ browser }) => {
+test('the real flow: Deploy fleet commits, and the defender device answers by itself', async ({ browser }) => {
   const { a, b, aChat, bChat, mid, ctxs } = await setupGame(browser, ['RINGBS3', 'RINGBS4']);
 
   // Both players open the chat and lock their randomly shuffled fleets.
   await a.page.goto(`/chat/${aChat}`);
   await b.page.goto(`/chat/${bChat}`);
-  await a.page.getByRole('button', { name: /Ready/ }).click();
+  await a.page.getByRole('button', { name: /Deploy fleet/ }).click();
   // Bisect: A's OWN device must apply the commit locally first…
   await expect.poll(async () => (await gameInfo(a, mid))?.moves, { timeout: 15_000 }).toBe(1);
   // …then the sealed signal reaches B.
   await expect.poll(async () => (await gameInfo(b, mid))?.moves, { timeout: 30_000 }).toBe(1);
-  await b.page.getByRole('button', { name: /Ready/ }).click();
+  await b.page.getByRole('button', { name: /Deploy fleet/ }).click();
   await expect.poll(async () => (await gameInfo(a, mid))?.moves, { timeout: 30_000 }).toBe(2);
 
   // A fires one shot; B's OPEN board answers automatically from its secret.

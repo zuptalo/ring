@@ -1,5 +1,5 @@
 <template>
-  <div class="game">
+  <div class="game" :class="{ wide: game.gameType === 'battleship' }">
     <!-- A gameType this build doesn't know (a newer app started it): show a
          graceful fallback rather than a broken board (contract §1). -->
     <div v-if="!module || !boardComponent" class="game-fallback">
@@ -12,7 +12,8 @@
            1:1 keeps you-first exactly as shipped. -->
       <div class="game-vs">
         <span class="game-side you">
-          <game-mark :mark="theme.marks?.[leftSeat]" :player="leftSeat" />
+          <span v-if="game.gameType === 'battleship'" class="mini-sub" aria-hidden="true"><submarine-svg :len="1" /></span>
+          <game-mark v-else :mark="theme.marks?.[leftSeat]" :player="leftSeat" />
           <user-avatar v-if="seatAvatar(leftSeat)" :src="seatAvatar(leftSeat)!" :alt="seatName(leftSeat)" class="side-face" />
           <span class="side-name">{{ seatName(leftSeat) }}</span>
         </span>
@@ -20,7 +21,8 @@
         <span class="game-side">
           <span class="side-name">{{ seatName(rightSeat) }}</span>
           <user-avatar v-if="seatAvatar(rightSeat)" :src="seatAvatar(rightSeat)!" :alt="seatName(rightSeat)" class="side-face" />
-          <game-mark :mark="theme.marks?.[rightSeat]" :player="rightSeat" />
+          <span v-if="game.gameType === 'battleship'" class="mini-sub mirrored" aria-hidden="true"><submarine-svg :len="1" /></span>
+          <game-mark v-else :mark="theme.marks?.[rightSeat]" :player="rightSeat" />
         </span>
       </div>
 
@@ -50,7 +52,14 @@
           @click.stop="isObserver ? undefined : (peeked = true)"
           @keydown.enter.stop="isObserver ? undefined : (peeked = true)"
         >
-          <animated-emoji :emoji="overlayEmoji" large class="game-overlay-result" />
+          <!-- Battleship earns the struck medallion (spec 1033); the other
+               games keep the platform's emoji result language. -->
+          <medallion-svg
+            v-if="game.gameType === 'battleship' && status.state !== 'draw'"
+            :kind="overlayEmoji === '🏆' ? 'gold' : 'silver'"
+          />
+          <animated-emoji v-else :emoji="overlayEmoji" large class="game-overlay-result" />
+          <span v-if="game.gameType === 'battleship' && !isObserver" class="game-overlay-line">{{ statusLine }}</span>
           <span v-if="isObserver" class="game-overlay-line">{{ statusLine }}</span>
           <ion-button
             v-if="!isObserver"
@@ -125,6 +134,8 @@ import { gameControllerOutline } from 'ionicons/icons';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import GameMark from '@/components/GameMark.vue';
 import UserAvatar from '@/components/UserAvatar.vue';
+import MedallionSvg from '@/games/battleship/MedallionSvg.vue';
+import SubmarineSvg from '@/games/battleship/SubmarineSvg.vue';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
 import { deriveStatus, replayState } from '@/games/session';
@@ -270,11 +281,19 @@ async function confirmResign(): Promise<void> {
 
 <style scoped>
 .game {
-  width: 220px;
-  max-width: 100%;
+  /* Full-width inside the shared game card (spec 1033). Small square boards
+     (tic-tac-toe, Connect Four) stay their compact size, centered; 'wide'
+     games (Battleship's two seas) use the whole card. */
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.game:not(.wide) .game-vs,
+.game:not(.wide) .game-stage {
+  width: 100%;
+  max-width: 240px;
+  margin-inline: auto;
 }
 /* Grid keeps "vs" DEAD CENTER regardless of name lengths (T041): the two
    sides get equal tracks and ellipsize long names instead of pushing it. */
@@ -294,6 +313,15 @@ async function confirmResign(): Promise<void> {
 }
 .game-side:last-child {
   justify-content: flex-end;
+}
+.mini-sub {
+  width: 30px;
+  height: 22px;
+  flex: none;
+  display: inline-flex;
+}
+.mini-sub.mirrored {
+  transform: scaleX(-1);
 }
 .game-side .side-face {
   width: 18px;

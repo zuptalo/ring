@@ -63,7 +63,9 @@ export function localMoveAllowed(
 ): boolean {
   if (!module) return false
   const status = deriveStatus(module, session)
-  return status.state === 'ongoing' && status.turn === player
+  if (status.state !== 'ongoing') return false
+  if (module.mayMove) return module.mayMove(replayState(module, session), player)
+  return status.turn === player
 }
 
 function broken(session: GameSession): { session: GameSession; outcome: ApplyOutcome } {
@@ -131,7 +133,8 @@ export function applySignal(
 
   // Rules 6/7 — turn order, then legality, judged on the replayed state.
   const state = replayState(module, session)
-  if (module.turn(state) !== sender) return broken(session)
+  const allowed = module.mayMove ? module.mayMove(state, sender) : module.turn(state) === sender
+  if (!allowed) return broken(session)
   if (module.applyMove(state, signal.move, sender) === null) return broken(session)
 
   return {

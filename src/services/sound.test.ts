@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { claimCue, RECIPE_NAMES } from './sound';
+import { claimCue, FX_NAMES, RECIPE_NAMES } from './sound';
 
 describe('claimCue — call-cue rate limiter (spec 0004 US5)', () => {
   it('allows the first play and suppresses an immediate repeat of the same cue', () => {
@@ -46,6 +46,12 @@ describe('claimCue — call-cue rate limiter (spec 0004 US5)', () => {
   it('has a recipe for every challenge cue (spec 0009 FR-001)', () => {
     for (const name of ['gamechallenge', 'gameaccept']) {
       expect(RECIPE_NAMES).toContain(name);
+    }
+  });
+
+  it('has an effect for every Battleship foley cue (spec 1033)', () => {
+    for (const name of ['bs-fire', 'bs-splash', 'bs-hit', 'bs-sunk', 'bs-sonar']) {
+      expect([...RECIPE_NAMES, ...FX_NAMES]).toContain(name);
     }
   });
 

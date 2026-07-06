@@ -68,7 +68,16 @@ watch(
   },
 );
 
-const choose = (id: string) => (selected.value = GAMES[id] ?? null);
+// A game with ONE style has nothing to choose either — start it directly
+// (Battleship's submarine design is its whole identity, spec 1033).
+const choose = (id: string): void => {
+  const g = GAMES[id] ?? null;
+  if (g && g.themes.length <= 1) {
+    emit('pick', g.id, g.themes[0]?.id ?? 'classic');
+    return;
+  }
+  selected.value = g;
+};
 const close = () => {
   emit('close');
 };

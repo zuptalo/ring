@@ -149,7 +149,7 @@
         <div
           v-else
           class="bubble-row"
-          :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id) }"
+          :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id), 'game-row': (m.kind === 'game' || m.kind === 'gamechallenge') && !m.deleted }"
           v-memo="[
             m.updatedAt,
             mediaInfo[m.mediaId!]?.posterUrl,
@@ -1180,6 +1180,9 @@ import LocationBubble from '@/components/LocationBubble.vue';
 import PollBubble from '@/components/PollBubble.vue';
 import ContactBubble from '@/components/ContactBubble.vue';
 import GameBubble from '@/components/GameBubble.vue';
+import { GAMES } from '@/games/registry';
+import { deriveStatus as deriveGameStatus } from '@/games/session';
+import { challengePhase } from '@/games/challenge';
 import ChallengeBubble from '@/components/ChallengeBubble.vue';
 import GamePicker from '@/components/GamePicker.vue';
 import PollComposer from '@/components/PollComposer.vue';
@@ -1674,7 +1677,9 @@ async function openMenu(m: Message, ev: Event) {
       canInfo: m.outgoing || hasMedia || m.kind === 'game',
       canCopy: !!m.body,
       canView,
-      canForward: m.kind !== 'game', // a game belongs to its conversation (spec 0008 FR-014)
+      canForward: m.kind !== 'game' && m.kind !== 'gamechallenge', // a game belongs to its conversation (spec 0008 FR-014)
+      canReply: m.kind !== 'game' && m.kind !== 'gamechallenge', // a shared board isn't a quotable line
+      canDelete: !gameLocked(m), // a live board can't be ripped out from under the players
       canEdit: m.outgoing && m.kind === 'text' && !m.deleted,
       canSave,
       canSaveAll,
@@ -1709,6 +1714,15 @@ async function openMenu(m: Message, ev: Event) {
 // viewer instead; the react button opens the quick-react popover. No long-press.
 function onBubbleTap(m: Message, ev: Event): void {
   if (m.deleted) return;
+  // Game boards are dense interactive surfaces — a stray tap between cells must
+  // not summon the message menu. For games, only the footer strip (timestamp +
+  // reactions) opens it.
+  if (
+    (m.kind === 'game' || m.kind === 'gamechallenge') &&
+    !(ev.target as HTMLElement | null)?.closest?.('.msg-foot')
+  ) {
+    return;
+  }
   void openMenu(m, ev);
 }
 
@@ -1971,7 +1985,11 @@ function forwardSelected(): void {
   forwardOpen.value = true;
 }
 function confirmDeleteSelected(): void {
-  if (selected.value.length) void presentDeleteSheet(selectedMessages.value);
+  const targets = selectedMessages.value.filter((m) => !gameLocked(m));
+  if (targets.length < selectedMessages.value.length) {
+    void appToast({ message: 'Games still being played were left out.', duration: 2200 });
+  }
+  if (targets.length) void presentDeleteSheet(targets);
 }
 
 /* ---- reply ---- */
@@ -2336,6 +2354,7 @@ function swipeStyle(id: string): Record<string, string> | undefined {
 }
 function onSwipeStart(e: TouchEvent, m: Message): void {
   if (m.deleted || selecting.value) return;
+  if (m.kind === 'game' || m.kind === 'gamechallenge') return; // boards aren't reply-swipeable
   swipeStartX = e.touches[0].clientX;
   swipeStartY = e.touches[0].clientY;
   swipeDir = null;
@@ -2386,7 +2405,20 @@ function onSwipeEnd(): void {
     else void confirmDelete(m);
   }
 }
+/** An unfinished game is not deletable: pulling a live board out from under
+ *  both players breaks placement and play alike. Cancelled challenges and any
+ *  terminal result delete like ordinary messages. */
+function gameLocked(m: Message): boolean {
+  if ((m.kind !== 'game' && m.kind !== 'gamechallenge') || !m.game || m.deleted) return false;
+  if (m.game.challenge && challengePhase(m.game) === 'cancelled') return false;
+  return deriveGameStatus(GAMES[m.game.gameType] ?? null, m.game).state === 'ongoing';
+}
+
 async function confirmDelete(m: Message): Promise<void> {
+  if (gameLocked(m)) {
+    await appToast({ message: 'Finish or resign the game first.', duration: 2200 });
+    return;
+  }
   const targets = m.albumId ? allMedia.value.filter((x) => x.albumId === m.albumId) : [m];
   await presentDeleteSheet(targets);
 }
@@ -4832,6 +4864,26 @@ function cancelRecording() {
 }
 .bubble.out {
   background: var(--app-bubble-out);
+}
+/* Game cards (spec 1033): a game is a SHARED surface, not one side's message —
+   full message-column width and a neutral card either direction (the
+   submarine-handoff shell: 18px radius, 14px padding, soft double shadow). */
+.bubble-row.game-row .bubble-col {
+  max-width: 100%;
+  width: 100%;
+}
+.bubble-row.game-row .swipe-wrap {
+  width: 100%;
+  align-items: stretch;
+}
+.bubble-row.game-row .bubble,
+.bubble-row.game-row .bubble.out {
+  width: 100%;
+  background: var(--app-game-card-bg);
+  border: 1px solid var(--app-game-card-border);
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 10px 26px -14px rgba(0, 0, 0, 0.28);
 }
 /* Reserve a minimum bubble width that fits ~3 reaction pills side by side, so a
    short message NEVER (a) shrinks when the react button hides at the 3-reaction cap,

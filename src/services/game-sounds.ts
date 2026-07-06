@@ -21,6 +21,11 @@ export type GameCue =
   | 'gamedraw'
   | 'gamechallenge'
   | 'gameaccept'
+  | 'bs-fire'
+  | 'bs-splash'
+  | 'bs-hit'
+  | 'bs-sunk'
+  | 'bs-sonar'
 
 /** The cue a game's new status earns for the player `me` — null for silence
  *  (out of sync is a failure state, not a moment; FR-026). */

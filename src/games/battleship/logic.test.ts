@@ -6,6 +6,7 @@ import { ready } from '@/services/crypto/primitives';
 import {
   createInitialState,
   applyMove,
+  mayMove,
   status,
   turn,
   randomLayout,
@@ -115,14 +116,19 @@ describe('placement', () => {
 });
 
 describe('phase machine', () => {
-  it('commits go P0 then P1; nothing else is legal while placing', () => {
+  it('placement is PARALLEL: either player may commit first, once each, and nothing else is legal', () => {
     let s = createInitialState();
-    expect(turn(s)).toBe(0);
-    expect(applyMove(s, { t: 'commit', h: 'x' }, 1)).toBeNull(); // P1 cannot jump the queue
+    expect(turn(s)).toBe(0); // the nudge still points at the inviter
+    expect(mayMove(s, 0)).toBe(true);
+    expect(mayMove(s, 1)).toBe(true);
     expect(applyMove(s, { t: 'shot', cell: 0 }, 0)).toBeNull();
+    // The INVITEE deploys first — legal (spec 1033: don't block their placing).
+    s = apply(s, { t: 'commit', h: commitment(L1, S1) }, 1);
+    expect(mayMove(s, 1)).toBe(false); // committed players wait
+    expect(applyMove(s, { t: 'commit', h: 'y' }, 1)).toBeNull(); // no double commit
+    expect(turn(s)).toBe(0);
     s = apply(s, { t: 'commit', h: commitment(L0, S0) }, 0);
-    expect(turn(s)).toBe(1);
-    expect(applyMove(s, { t: 'commit', h: 'y' }, 0)).toBeNull(); // no double commit
+    expect(turn(s)).toBe(0); // battle: P0 fires first as always
   });
 
   it('battle alternates shot → answer, P0 firing first', () => {

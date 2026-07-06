@@ -189,10 +189,19 @@ function lastOf(s: BsState): 0 | 1 {
   return 1
 }
 
+/** May this player act right now? Placement is PARALLEL: while fleets are
+ *  being placed, each player owes exactly their own commit, in any order
+ *  (neither depends on the other). From battle on, strict turn order rules.
+ *  `turn()` still names the player being waited on for nudges/previews. */
+export function mayMove(s: BsState, player: 0 | 1): boolean {
+  if (status(s).state !== 'ongoing') return false
+  if (s.commits[0] === null || s.commits[1] === null) return s.commits[player] === null
+  return player === turn(s)
+}
+
 export function applyMove(s: BsState, move: BsMove, player: 0 | 1): BsState | null {
   if (!move || typeof move !== 'object') return null
-  if (status(s).state !== 'ongoing') return null
-  if (player !== turn(s)) return null
+  if (!mayMove(s, player)) return null
 
   // Placing.
   if (s.commits[0] === null || s.commits[1] === null) {

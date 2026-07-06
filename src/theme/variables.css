@@ -30,6 +30,11 @@
   /* Wall pending/unfinished post card — a warm amber so an unsent, uploading or failed post reads
      as "not final yet" against the settled green posts. Opaque, like the bubbles, for legible text. */
   --app-bubble-pending: #ffe6ad;
+  /* Game cards (spec 1033): games render as a full-width NEUTRAL shared card,
+     not a sided bubble — a game belongs to both players. Values from the
+     submarine-redesign handoff. */
+  --app-game-card-bg: #ffffff;
+  --app-game-card-border: rgba(0, 0, 0, 0.07);
   /* Full-screen media viewer (spec 1014 FR-023): follows the app theme rather than a
      hardcoded black surface. Light defaults here; dark overrides below. The chrome (top/
      bottom bars) sits over the media, so the scrims + pill fills are theme-tinted for
@@ -60,6 +65,9 @@
   --app-bubble-out: #103a2c;
   /* Deep amber pending card for dark mode (mirrors the light --app-bubble-pending). */
   --app-bubble-pending: #43320c;
+  /* Game cards, dark (spec 1033 handoff). */
+  --app-game-card-bg: #181f1b;
+  --app-game-card-border: rgba(255, 255, 255, 0.08);
   /* Media viewer — immersive dark surface in dark mode (spec 1014 FR-023). */
   --viewer-surface: #000000;
   --viewer-text: #ffffff;
