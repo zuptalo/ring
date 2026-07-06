@@ -16,12 +16,11 @@ const battleship: GameModule<BsState, BsMove> = {
   applyMove,
   turn,
   status,
-  // Marks are the SHIP glyphs (your fleet's look); results are always 💦💥🔥.
-  themes: [
-    { id: 'classic', name: 'Classic', marks: ['🚢', '🚢'], accent: '30, 64, 175' },
-    { id: 'pirates', name: 'Pirates', marks: ['🏴‍☠️', '🏴‍☠️'], accent: '120, 53, 15' },
-    { id: 'sea-monsters', name: 'Sea Monsters', marks: ['🐙', '🐙'], accent: '13, 148, 136' },
-  ],
+  // ONE look (spec 1033): the submarine design from the handoff IS Battleship's
+  // identity — no theme choice. The id stays 'classic' (frozen default), and
+  // ids from games started on older builds ('pirates', 'sea-monsters') fall
+  // back here gracefully per the 0008 theme contract.
+  themes: [{ id: 'classic', name: 'Submarine' }],
 }
 
 export default battleship

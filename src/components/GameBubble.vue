@@ -12,7 +12,8 @@
            1:1 keeps you-first exactly as shipped. -->
       <div class="game-vs">
         <span class="game-side you">
-          <game-mark :mark="theme.marks?.[leftSeat]" :player="leftSeat" />
+          <span v-if="game.gameType === 'battleship'" class="mini-sub" aria-hidden="true"><submarine-svg :len="1" /></span>
+          <game-mark v-else :mark="theme.marks?.[leftSeat]" :player="leftSeat" />
           <user-avatar v-if="seatAvatar(leftSeat)" :src="seatAvatar(leftSeat)!" :alt="seatName(leftSeat)" class="side-face" />
           <span class="side-name">{{ seatName(leftSeat) }}</span>
         </span>
@@ -20,7 +21,8 @@
         <span class="game-side">
           <span class="side-name">{{ seatName(rightSeat) }}</span>
           <user-avatar v-if="seatAvatar(rightSeat)" :src="seatAvatar(rightSeat)!" :alt="seatName(rightSeat)" class="side-face" />
-          <game-mark :mark="theme.marks?.[rightSeat]" :player="rightSeat" />
+          <span v-if="game.gameType === 'battleship'" class="mini-sub mirrored" aria-hidden="true"><submarine-svg :len="1" /></span>
+          <game-mark v-else :mark="theme.marks?.[rightSeat]" :player="rightSeat" />
         </span>
       </div>
 
@@ -133,6 +135,7 @@ import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import GameMark from '@/components/GameMark.vue';
 import UserAvatar from '@/components/UserAvatar.vue';
 import MedallionSvg from '@/games/battleship/MedallionSvg.vue';
+import SubmarineSvg from '@/games/battleship/SubmarineSvg.vue';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
 import { deriveStatus, replayState } from '@/games/session';
@@ -310,6 +313,15 @@ async function confirmResign(): Promise<void> {
 }
 .game-side:last-child {
   justify-content: flex-end;
+}
+.mini-sub {
+  width: 30px;
+  height: 22px;
+  flex: none;
+  display: inline-flex;
+}
+.mini-sub.mirrored {
+  transform: scaleX(-1);
 }
 .game-side .side-face {
   width: 18px;
