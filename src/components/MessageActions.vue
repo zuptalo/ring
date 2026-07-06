@@ -8,7 +8,7 @@
         <ion-icon slot="start" :icon="expandOutline" />
         <ion-label>View</ion-label>
       </ion-item>
-      <ion-item button :detail="false" @click="choose('reply')">
+      <ion-item v-if="canReply ?? true" button :detail="false" @click="choose('reply')">
         <ion-icon slot="start" :icon="arrowUndoOutline" />
         <ion-label>Reply</ion-label>
       </ion-item>
@@ -44,7 +44,7 @@
         <ion-icon slot="start" :icon="checkmarkCircleOutline" />
         <ion-label>Select</ion-label>
       </ion-item>
-      <ion-item button :detail="false" @click="choose('delete')">
+      <ion-item v-if="canDelete ?? true" button :detail="false" @click="choose('delete')">
         <ion-icon slot="start" :icon="trashOutline" color="danger" />
         <ion-label color="danger">Delete</ion-label>
       </ion-item>
@@ -65,6 +65,8 @@ defineProps<{
   canCopy: boolean;
   canView?: boolean; // image/video/album: offer "View" (open the full-screen viewer)
   canForward?: boolean; // games are excluded (spec 0008 FR-014); default true
+  canReply?: boolean; // games are excluded too — a shared board isn't a quotable line; default true
+  canDelete?: boolean; // an UNFINISHED game can't be deleted out from under the players; default true
   canEdit?: boolean; // own, not-deleted text message: offer "Edit"
   canSave?: boolean; // single image/video/file/audio: offer "Save"
   canSaveAll?: boolean; // album bubble: offer "Save all"
