@@ -40,9 +40,26 @@
 
     <!-- BATTLE / VERIFY / DONE: the public seas. -->
     <template v-else>
+      <!-- The turn strip: one glance says whether the next shot is YOURS.
+           (The bubble's generic status line sits below two tall grids, too far
+           away to answer that question here.) -->
+      <div v-if="!gameOver" class="bs-turn" :class="{ mine: canFire }">
+        <template v-if="canFire">
+          <animated-emoji emoji="🎯" />
+          <span>Your shot — tap their sea</span>
+        </template>
+        <template v-else-if="observing">
+          <animated-emoji emoji="⏳" />
+          <span>Battle under way</span>
+        </template>
+        <template v-else>
+          <animated-emoji emoji="⏳" />
+          <span>Waiting for their move…</span>
+        </template>
+      </div>
       <div class="bs-sea">
         <div class="bs-sea-label">{{ observing ? "Second player's sea" : 'Their sea' }}</div>
-        <div class="bs-grid">
+        <div class="bs-grid" :class="{ 'bs-live': canFire, 'bs-dim': !canFire && !observing && !gameOver }">
           <button
             v-for="cell in 64"
             :key="cell"
@@ -181,6 +198,9 @@ const lastShot = computed(() => {
 const canFire = computed(
   () => props.canMove && bothCommitted.value && !props.state.pending && props.state.finalBy === null,
 );
+const gameOver = computed(
+  () => props.state.finalBy !== null && props.state.reveals[0] !== null && props.state.reveals[1] !== null,
+);
 const fire = (cell: number): void => emit('move', { t: 'shot', cell });
 const fireLabel = (cell: number): string =>
   `Fire at row ${Math.floor(cell / 8) + 1}, column ${(cell % 8) + 1}`;
@@ -254,6 +274,27 @@ watch(() => props.state, autoActions, { deep: true });
   padding: 4px;
   border-radius: 10px;
   background: rgba(var(--game-accent, 30, 64, 175), 0.1);
+  transition: opacity 0.25s ease, box-shadow 0.25s ease;
+}
+/* Your shot: the TARGET grid glows; waiting: it visibly rests. Together with
+   the turn strip, the state reads without any words at all. */
+.bs-live {
+  box-shadow: 0 0 0 2px rgba(var(--ion-color-primary-rgb), 0.55);
+}
+.bs-dim {
+  opacity: 0.55;
+}
+.bs-turn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-text-muted);
+  margin: 0 2px;
+}
+.bs-turn.mine {
+  color: var(--ion-color-primary);
 }
 .bs-cell {
   aspect-ratio: 1;
