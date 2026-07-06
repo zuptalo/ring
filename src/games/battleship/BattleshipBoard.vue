@@ -53,10 +53,13 @@
             :aria-label="fireLabel(cell - 1)"
             @click.stop="fire(cell - 1)"
           >
+            <!-- Every splash/explosion PLAYS (two loops, then rests on its
+                 first frame); the latest shot keeps looping until the next
+                 move — the board's attention cue (FR-023). -->
             <animated-emoji
               v-if="theirSea.has(cell - 1)"
               :emoji="resultEmoji(theirSea.get(cell - 1)!)"
-              :animate="lastShot?.by === myIdx && lastShot?.cell === cell - 1"
+              :plays="lastShot?.by === myIdx && lastShot?.cell === cell - 1 ? undefined : 2"
               class="bs-mark"
             />
           </button>
@@ -76,7 +79,7 @@
             <animated-emoji
               v-if="mySea.has(cell - 1)"
               :emoji="resultEmoji(mySea.get(cell - 1)!)"
-              :animate="lastShot?.by !== myIdx && lastShot?.cell === cell - 1"
+              :plays="lastShot?.by !== myIdx && lastShot?.cell === cell - 1 ? undefined : 2"
               class="bs-mark"
             />
             <span v-else-if="ownCells.has(cell - 1)" class="bs-ship-glyph">{{ shipGlyph }}</span>
@@ -161,7 +164,9 @@ const shotMap = (attacker: 0 | 1) => {
 };
 const theirSea = computed(() => shotMap(myIdx.value)); // MY shots land on THEIR sea
 const mySea = computed(() => shotMap((1 - myIdx.value) as 0 | 1));
-const resultEmoji = (r: 'miss' | 'hit' | 'sunk'): string => (r === 'miss' ? '💦' : r === 'sunk' ? '🔥' : '💥');
+// The shot language, all from the ANIMATED set (docs/ANIMATED-EMOJI.md):
+// 🌊 rolling water for a miss, 💥 for a hit, 🔥 for a sunk ship.
+const resultEmoji = (r: 'miss' | 'hit' | 'sunk'): string => (r === 'miss' ? '🌊' : r === 'sunk' ? '🔥' : '💥');
 const lastShot = computed(() => {
   const p = props.state.pending;
   if (p) return { by: p.by, cell: p.cell };

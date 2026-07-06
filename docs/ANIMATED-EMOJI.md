@@ -201,7 +201,7 @@ secret, so there is nothing to tell apart); shot results are a FIXED language:
 
 | Result | Emoji | Meaning |
 |--------|-------|---------|
-| Miss | 💦 `sweat-droplets 1f4a6` | a splash in open water |
+| Miss | 🌊 `ocean 1f30a` | rolling water, nothing there |
 | Hit | 💥 `collision 1f4a5` | a ship is struck |
 | Sunk | 🔥 `fire 1f525` | the whole ship is gone |
 
