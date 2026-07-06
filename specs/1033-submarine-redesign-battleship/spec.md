@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-06
 
-**Status**: in-review
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: A high-fidelity design handoff (vendored at
