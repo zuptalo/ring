@@ -24,6 +24,7 @@ import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive, pushWakeActive } from '@/services/notify';
+import { isGameActive } from '@/services/game-active';
 import { wallActivityAlert } from '@/services/wall-activity-policy';
 import { compressImage, compressVideo, achievedQuality } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
@@ -1247,8 +1248,11 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   const me = gameSelfIndex(message);
   const status = deriveGameStatus(GAMES[message.game.gameType] ?? null, message.game);
 
-  // Their move sounds only while this chat is on screen (FR-026) — players only.
-  if (me !== null && isChatActive(message.chatId)) {
+  // Their move sounds while this chat is on screen (FR-026) — or while THIS
+  // game's fullscreen overlay is (spec 1038: the overlay is the chat-open
+  // equivalent for a game). Players only.
+  const inOverlay = isGameActive(message.id);
+  if (me !== null && (isChatActive(message.chatId) || inOverlay)) {
     const gmod = GAMES[message.game.gameType] ?? null;
     void playGameCue(
       (gmod?.moveCue?.(signal.move, status, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(status, me),
@@ -1301,6 +1305,9 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
         ? await getSetting<boolean>('notifications.games.followMoves', true)
         : await getSetting<boolean>('notifications.games.followResults', true);
   }
+  // Spec 1038 FR-007: the player is WATCHING this game fullscreen — the board
+  // (and the cue above) already delivered the news; no banner for its own moves.
+  if (inOverlay) return;
   if (!notify) return;
   await notifyIncoming({
     kind: 'message',
@@ -3349,9 +3356,13 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
   // notification path covers everyone who is NOT looking.
   const path = typeof window !== 'undefined' ? window.location.pathname : '';
   const watching =
-    typeof document !== 'undefined' &&
-    document.visibilityState === 'visible' &&
-    (path === '/tabs/wall' || path === `/wall/post/${post.id}`);
+    (typeof document !== 'undefined' &&
+      document.visibilityState === 'visible' &&
+      (path === '/tabs/wall' || path === `/wall/post/${post.id}`)) ||
+    // The fullscreen overlay is a watching surface too (spec 1038 FR-007):
+    // this game's own activity never toasts over its own board — the player
+    // sees the move land live. Other games and chats still banner.
+    isGameActive(post.id);
   if (watching) {
     for (const i of others) notifiedEngagementIds.add(i.id);
     if (me !== null) void playGameCue(gameCueFor(status, me));

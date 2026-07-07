@@ -22,6 +22,12 @@
     <!-- Persistent remote-audio sink: keeps call audio playing across navigation
          (e.g. while minimized), independent of any call screen. -->
     <call-media-sink />
+    <!-- Fullscreen game overlay (spec 1038): covers the app while a game is
+         played; the notification banners below stay ABOVE it (z 19000 > 16000)
+         so other chats' toasts render over the game. -->
+    <game-overlay />
+    <!-- Floating return-to-game button while an ongoing game is off screen. -->
+    <floating-game-button />
     <!-- In-app notification banners (green, with avatar + name): over any route. -->
     <notification-banners />
   </ion-app>
@@ -51,6 +57,10 @@ import MinimizedCall from '@/components/MinimizedCall.vue';
 import MinimizedAudio from '@/components/MinimizedAudio.vue';
 import CallMediaSink from '@/components/CallMediaSink.vue';
 import NotificationBanners from '@/components/NotificationBanners.vue';
+import GameOverlay from '@/components/GameOverlay.vue';
+import FloatingGameButton from '@/components/FloatingGameButton.vue';
+import { useGameOverlay } from '@/composables/useGameOverlay';
+import { useGameDuty } from '@/composables/useGameDuty';
 import { callState } from '@/composables/useCall';
 import { stopAudio } from '@/composables/useAudioPlayer';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
@@ -66,6 +76,10 @@ import type { Message } from '@/db/types';
 // Owns the transport and sync engine: connects when registered, drains the
 // outbox, and applies inbound frames (delivery receipts, records, tombstones).
 useSync();
+// Fullscreen games (spec 1038): overlay wiring (back/route/fullscreen) + the
+// duty officer that emits owed answers/reveals/staged commits app-wide.
+useGameOverlay();
+useGameDuty();
 
 // Registers the service worker and prompts (with the version) when a new deploy is
 // ready, instead of silently reloading. See useAppUpdate + vite.config 'prompt'.
