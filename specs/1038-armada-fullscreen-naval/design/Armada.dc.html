@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: #0a0e14; -webkit-font-smoothing: antialiased; }
+  a { color: #7b9cff; text-decoration: none; }
+  a:hover { color: #8faeff; }
+  @keyframes splashIn { 0%{transform:scale(0);opacity:0} 55%{transform:scale(1.2);opacity:1} 100%{transform:scale(1);opacity:.85} }
+  @keyframes impactIn { 0%{transform:scale(.2);opacity:0} 45%{transform:scale(1.3);opacity:1} 100%{transform:scale(1);opacity:1} }
+  @keyframes resultFade { 0%{opacity:0} 100%{opacity:1} }
+  @keyframes medalPop { 0%{transform:scale(.3) rotate(-14deg);opacity:0} 55%{transform:scale(1.12) rotate(4deg);opacity:1} 100%{transform:scale(1) rotate(0)} }
+  @keyframes medalShine { 0%{transform:translateX(-120%) rotate(20deg)} 100%{transform:translateX(320%) rotate(20deg)} }
+  @keyframes cardRise { 0%{transform:translateY(28px) scale(.96);opacity:0} 100%{transform:translateY(0) scale(1);opacity:1} }
+  @keyframes reticlePulse { 0%,100%{transform:scale(1);opacity:.8} 50%{transform:scale(1.16);opacity:1} }
+  @keyframes deployIn { 0%{transform:scale(.82);opacity:0} 100%{transform:scale(1);opacity:1} }
+  @keyframes sinkSettle { 0%{transform:translateY(-3px) rotate(-1.2deg)} 55%{transform:translateY(2px) rotate(1deg)} 100%{transform:translateY(0) rotate(0)} }
+  @keyframes overlayIn { 0%{opacity:0;transform:translateY(14px)} 100%{opacity:1;transform:translateY(0)} }
+  @keyframes radarSweep { to { transform: rotate(360deg); } }
+  @keyframes flameFlicker { 0%,100%{transform:scale(1,1) translateY(0);opacity:.92} 25%{transform:scale(1.09,0.94) translateY(-1px);opacity:1} 50%{transform:scale(0.93,1.07) translateY(0);opacity:.82} 75%{transform:scale(1.06,0.97) translateY(-1px);opacity:1} }
+  @keyframes explosionBurst { 0%{transform:scale(.2);opacity:0} 28%{transform:scale(1.25);opacity:1} 100%{transform:scale(1.75);opacity:0} }
+  @keyframes emberGlow { 0%,100%{opacity:.5} 50%{opacity:.95} }
+  @keyframes smokeRise { 0%{opacity:0;transform:translate(-50%,0) scale(.4)} 18%{opacity:.72} 60%{opacity:.5} 100%{opacity:0;transform:translate(-50%,-420%) scale(2.1)} }
+  @keyframes smokeRiseL { 0%{opacity:0;transform:translate(-50%,0) scale(.4)} 18%{opacity:.68} 60%{opacity:.46} 100%{opacity:0;transform:translate(-135%,-400%) scale(2)} }
+  @keyframes smokeRiseR { 0%{opacity:0;transform:translate(-50%,0) scale(.4)} 18%{opacity:.68} 60%{opacity:.46} 100%{opacity:0;transform:translate(35%,-410%) scale(2)} }
+  [data-devicebox]:fullscreen { width:100vw !important; height:100dvh !important; border-radius:0 !important; border:none !important; }
+</style>
+</helmet>
+<div style="min-height:100vh;background:#0a0e14;padding:22px 20px 40px;display:flex;flex-direction:column;align-items:center;gap:16px;overflow:auto;font-family:'Inter',sans-serif;">
+
+  <div style="display:flex;align-items:center;gap:10px;">
+    <span style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:2px;color:rgba(143,174,255,0.55);margin-right:4px;">PREVIEW ON</span>
+    <button onClick="{{ setPhone }}" style="display:inline-flex;align-items:center;gap:7px;padding:8px 15px;border-radius:9px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;color:{{ phoneColor }};background:{{ phoneBg }};border:1px solid {{ phoneBorder }};transition:all .16s;">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.5"></rect><path d="M11 18h2"></path></svg>Phone</button>
+    <button onClick="{{ setTablet }}" style="display:inline-flex;align-items:center;gap:7px;padding:8px 15px;border-radius:9px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;color:{{ tabletColor }};background:{{ tabletBg }};border:1px solid {{ tabletBorder }};transition:all .16s;">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2.5"></rect><path d="M18 8v8"></path></svg>Tablet</button>
+  </div>
+
+  <div data-devicebox="1" ref="{{ boxRef }}" style="position:relative;width:{{ deviceW }}px;height:{{ deviceH }}px;max-width:100%;background:#0e1116;border:1px solid rgba(143,174,255,0.16);border-radius:34px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,0.55);flex-shrink:0;transition:width .25s ease, height .25s ease;">
+
+    <div style="height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-family:'JetBrains Mono',monospace;font-size:12px;color:rgba(245,245,245,0.65);flex-shrink:0;">
+      <span>9:41</span>
+      <span style="display:inline-flex;align-items:center;gap:6px;">
+        <svg viewBox="0 0 18 12" width="17" height="11" fill="rgba(245,245,245,0.65)"><rect x="0" y="7" width="3" height="5" rx="1"></rect><rect x="4.5" y="4.5" width="3" height="7.5" rx="1"></rect><rect x="9" y="2" width="3" height="10" rx="1"></rect><rect x="13.5" y="0" width="3" height="12" rx="1" opacity="0.4"></rect></svg>
+        <svg viewBox="0 0 24 12" width="22" height="11" fill="none"><rect x="1" y="1" width="19" height="10" rx="2.5" stroke="rgba(245,245,245,0.5)"></rect><rect x="3" y="3" width="13" height="6" rx="1" fill="rgba(245,245,245,0.65)"></rect><rect x="21" y="4" width="2" height="4" rx="1" fill="rgba(245,245,245,0.5)"></rect></svg>
+      </span>
+    </div>
+
+    <div style="display:flex;flex-direction:column;height:calc(100% - 30px);">
+
+      <div style="flex-shrink:0;background:rgba(13,17,28,0.72);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid rgba(255,255,255,0.06);">
+        <sc-if value="{{ viewMaya }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;">
+            <button onClick="{{ back }}" style="width:34px;height:34px;border:none;background:transparent;color:#7b9cff;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg></button>
+            <div style="width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#41537e,#7b9cff);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:#fff;flex-shrink:0;">MO</div>
+            <div style="min-width:0;flex:1;"><div style="font-size:16px;font-weight:600;color:#f5f5f5;">Maya Okonkwo</div><div style="font-size:12px;color:#42d77d;">online · end-to-end encrypted</div></div>
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="rgba(245,245,245,0.6)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 10l5-3v10l-5-3"></path><rect x="3" y="6" width="12" height="12" rx="2"></rect></svg>
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="rgba(245,245,245,0.6)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h3l2 5-2 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"></path></svg>
+          </div>
+        </sc-if>
+        <sc-if value="{{ viewCrew }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;">
+            <button onClick="{{ back }}" style="width:34px;height:34px;border:none;background:transparent;color:#7b9cff;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"></path></svg></button>
+            <div style="width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#2c3e70,#42d77d);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#fff;flex-shrink:0;">WC</div>
+            <div style="min-width:0;flex:1;"><div style="font-size:16px;font-weight:600;color:#f5f5f5;">Weekend Crew</div><div style="font-size:12px;color:rgba(245,245,245,0.5);">Dami, Aisha, You +1</div></div>
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="rgba(245,245,245,0.6)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h3l2 5-2 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"></path></svg>
+          </div>
+        </sc-if>
+        <sc-if value="{{ showTitleBar }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 12px;">
+            <div style="font-size:22px;font-weight:700;color:#f5f5f5;">{{ tabTitle }}</div>
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="rgba(245,245,245,0.55)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4h6a2 2 0 0 1 2 2v6"></path><path d="M12 12l7-7"></path><path d="M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3"></path></svg>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="flex:1;overflow-y:auto;background:#0e1116;">
+
+        <sc-if value="{{ viewChatList }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:6px 0;">
+            <button onClick="{{ openMaya }}" style="display:flex;align-items:center;gap:13px;width:100%;text-align:left;padding:12px 18px;background:transparent;border:none;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;">
+              <div style="width:50px;height:50px;border-radius:50%;background:linear-gradient(135deg,#41537e,#7b9cff);display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:600;color:#fff;flex-shrink:0;">MO</div>
+              <div style="flex:1;min-width:0;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:15px;font-weight:600;color:#f5f5f5;">Maya Okonkwo</span><span style="font-size:11px;color:rgba(245,245,245,0.4);">now</span></div>
+                <div style="font-size:13px;color:rgba(245,245,245,0.55);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;">Sent you an Armada challenge</div>
+              </div>
+              <span style="width:9px;height:9px;border-radius:50%;background:#7b9cff;flex-shrink:0;"></span>
+            </button>
+            <button onClick="{{ openCrew }}" style="display:flex;align-items:center;gap:13px;width:100%;text-align:left;padding:12px 18px;background:transparent;border:none;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer;">
+              <div style="width:50px;height:50px;border-radius:50%;background:linear-gradient(135deg,#2c3e70,#42d77d);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600;color:#fff;flex-shrink:0;">WC</div>
+              <div style="flex:1;min-width:0;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:15px;font-weight:600;color:#f5f5f5;">Weekend Crew</span><span style="font-size:11px;color:rgba(245,245,245,0.4);">2m</span></div>
+                <div style="font-size:13px;color:rgba(245,245,245,0.55);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;">Dami: who's in for a naval duel?</div>
+              </div>
+            </button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ viewMaya }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:16px 14px;display:flex;flex-direction:column;gap:10px;">
+            <div style="align-self:flex-start;max-width:78%;background:#1c2030;color:#f5f5f5;padding:9px 13px;border-radius:14px 14px 14px 4px;font-size:14px;line-height:1.45;">Rematch? I've been practicing my grid tactics.</div>
+            <div style="align-self:flex-end;max-width:78%;background:#7b9cff;color:#0e1116;padding:9px 13px;border-radius:14px 14px 4px 14px;font-size:14px;line-height:1.45;font-weight:500;">You're on. Deploy the fleet.</div>
+            <div style="align-self:flex-start;width:100%;max-width:320px;background:linear-gradient(160deg,#1b2440,#141a2b);border:1px solid rgba(143,174,255,0.25);border-radius:16px;padding:14px;margin-top:4px;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <svg viewBox="0 0 44 44" width="46" height="46"><rect x="1" y="1" width="42" height="42" rx="9" fill="rgba(123,156,255,0.08)" stroke="rgba(143,174,255,0.3)"></rect><rect x="8" y="8" width="8" height="8" rx="2" fill="#7b9cff"></rect><rect x="18" y="8" width="8" height="8" rx="2" fill="#7b9cff"></rect><rect x="28" y="8" width="8" height="8" rx="2" fill="rgba(123,156,255,0.35)"></rect><circle cx="12" cy="30" r="3.2" fill="#eb445a"></circle><circle cx="24" cy="24" r="2.4" fill="rgba(143,174,255,0.5)"></circle><circle cx="33" cy="33" r="3.2" fill="#ffca22"></circle></svg>
+                <div style="flex:1;"><div style="font-size:15px;font-weight:700;letter-spacing:1px;color:#f5f7ff;">ARMADA</div><div style="font-size:12px;color:rgba(220,226,245,0.6);">Naval duel · Maya challenged you</div></div>
+              </div>
+              <button onClick="{{ playDm }}" style="margin-top:12px;width:100%;padding:11px;border-radius:10px;border:1px solid rgba(143,174,255,0.5);background:linear-gradient(135deg,#41537e,#2c3e70);color:#fff;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;">Play in fullscreen ▸</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ viewCrew }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:16px 14px;display:flex;flex-direction:column;gap:10px;">
+            <div style="align-self:flex-start;max-width:78%;"><div style="font-size:11px;color:#8faeff;margin:0 0 3px 4px;">Dami</div><div style="background:#1c2030;color:#f5f5f5;padding:9px 13px;border-radius:14px 14px 14px 4px;font-size:14px;line-height:1.45;">Tournament night. Who's in for a naval duel?</div></div>
+            <div style="align-self:flex-start;width:100%;max-width:320px;background:linear-gradient(160deg,#1b2440,#141a2b);border:1px solid rgba(143,174,255,0.25);border-radius:16px;padding:14px;margin-top:2px;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <svg viewBox="0 0 44 44" width="46" height="46"><rect x="1" y="1" width="42" height="42" rx="9" fill="rgba(123,156,255,0.08)" stroke="rgba(143,174,255,0.3)"></rect><rect x="8" y="8" width="8" height="8" rx="2" fill="#7b9cff"></rect><rect x="18" y="8" width="8" height="8" rx="2" fill="#7b9cff"></rect><rect x="28" y="8" width="8" height="8" rx="2" fill="rgba(123,156,255,0.35)"></rect><circle cx="12" cy="30" r="3.2" fill="#eb445a"></circle><circle cx="24" cy="24" r="2.4" fill="rgba(143,174,255,0.5)"></circle><circle cx="33" cy="33" r="3.2" fill="#ffca22"></circle></svg>
+                <div style="flex:1;"><div style="font-size:15px;font-weight:700;letter-spacing:1px;color:#f5f7ff;">ARMADA</div><div style="font-size:12px;color:rgba(220,226,245,0.6);">Group duel · 4 players in lobby</div></div>
+              </div>
+              <button onClick="{{ playGroup }}" style="margin-top:12px;width:100%;padding:11px;border-radius:10px;border:1px solid rgba(143,174,255,0.5);background:linear-gradient(135deg,#41537e,#2c3e70);color:#fff;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;">Join &amp; play ▸</button>
+            </div>
+            <div style="align-self:flex-end;max-width:78%;background:#7b9cff;color:#0e1116;padding:9px 13px;border-radius:14px 14px 4px 14px;font-size:14px;line-height:1.45;font-weight:500;">Deploying now.</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ viewWalls }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:14px;display:flex;flex-direction:column;gap:14px;">
+            <div style="background:#1c2030;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:15px;">
+              <div style="display:flex;align-items:center;gap:11px;margin-bottom:10px;">
+                <div style="width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#41537e,#7b9cff);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;color:#fff;">MO</div>
+                <div><div style="font-size:14px;font-weight:600;color:#f5f5f5;">Maya Okonkwo</div><div style="font-size:12px;color:rgba(245,245,245,0.45);">5m · to close friends</div></div>
+              </div>
+              <div style="font-size:14px;color:#e6ebf5;line-height:1.5;margin-bottom:12px;">Threw down an Armada challenge to the whole crew. First to sink my fleet earns bragging rights.</div>
+              <div style="background:linear-gradient(160deg,#1b2440,#12182a);border:1px solid rgba(143,174,255,0.22);border-radius:14px;padding:14px;">
+                <div style="display:flex;align-items:center;gap:12px;">
+                  <svg viewBox="0 0 44 44" width="46" height="46"><rect x="1" y="1" width="42" height="42" rx="9" fill="rgba(123,156,255,0.08)" stroke="rgba(143,174,255,0.3)"></rect><rect x="8" y="8" width="8" height="8" rx="2" fill="#7b9cff"></rect><rect x="18" y="8" width="8" height="8" rx="2" fill="#7b9cff"></rect><rect x="28" y="8" width="8" height="8" rx="2" fill="rgba(123,156,255,0.35)"></rect><circle cx="12" cy="30" r="3.2" fill="#eb445a"></circle><circle cx="33" cy="33" r="3.2" fill="#ffca22"></circle></svg>
+                  <div style="flex:1;"><div style="font-size:15px;font-weight:700;letter-spacing:1px;color:#f5f7ff;">ARMADA</div><div style="font-size:12px;color:rgba(220,226,245,0.6);">Open challenge · 6 friends playing</div></div>
+                </div>
+                <button onClick="{{ playWall }}" style="margin-top:12px;width:100%;padding:11px;border-radius:10px;border:1px solid rgba(143,174,255,0.5);background:linear-gradient(135deg,#41537e,#2c3e70);color:#fff;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;">Accept challenge ▸</button>
+              </div>
+              <div style="display:flex;gap:18px;margin-top:12px;color:rgba(245,245,245,0.5);font-size:13px;">
+                <span style="display:inline-flex;align-items:center;gap:6px;"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 5.6a5.5 5.5 0 0 0-7.8 0L12 6.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8z"></path></svg>14</span>
+                <span style="display:inline-flex;align-items:center;gap:6px;"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8 8 0 0 1-11.5 7.2L4 20l1.3-5.5A8 8 0 1 1 21 11.5z"></path></svg>8</span>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ viewOther }}" hint-placeholder-val="{{ false }}">
+          <div style="height:100%;min-height:300px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:rgba(245,245,245,0.4);padding:40px;text-align:center;">
+            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="rgba(143,174,255,0.35)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4l3 2"></path></svg>
+            <div style="font-size:14px;">{{ tabTitle }} — nothing here yet</div>
+          </div>
+        </sc-if>
+
+      </div>
+
+      <div style="flex-shrink:0;display:flex;background:rgba(13,17,28,0.72);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);border-top:1px solid rgba(255,255,255,0.06);padding:8px 4px 10px;">
+        <button onClick="{{ navContacts }}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:transparent;border:none;cursor:pointer;color:{{ colContacts }};font-family:inherit;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3.5 20a5.5 5.5 0 0 1 11 0"></path><path d="M16 5.5a3 3 0 0 1 0 5.6"></path><path d="M18.5 20a5.5 5.5 0 0 0-3-4.9"></path></svg>
+          <span style="font-size:10px;font-weight:500;">Contacts</span></button>
+        <button onClick="{{ navCalls }}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:transparent;border:none;cursor:pointer;color:{{ colCalls }};font-family:inherit;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h3l2 5-2 1.5a11 11 0 0 0 5 5L15 13l5 2v3a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"></path></svg>
+          <span style="font-size:10px;font-weight:500;">Calls</span></button>
+        <button onClick="{{ navWalls }}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:transparent;border:none;cursor:pointer;color:{{ colWalls }};font-family:inherit;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="14" rx="2.5"></rect><path d="M6 4.5h12"></path></svg>
+          <span style="font-size:10px;font-weight:500;">Walls</span></button>
+        <button onClick="{{ navChats }}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:transparent;border:none;cursor:pointer;color:{{ colChats }};font-family:inherit;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H9l-4 3v-3H6a2 2 0 0 1-2-2z"></path><path d="M17 9h1a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-1v3l-3-3"></path></svg>
+          <span style="font-size:10px;font-weight:500;">Chats</span></button>
+        <button onClick="{{ navSettings }}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;background:transparent;border:none;cursor:pointer;color:{{ colSettings }};font-family:inherit;">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9"></path><path d="M17 7h3"></path><circle cx="15" cy="7" r="2.2"></circle><path d="M4 17h3"></path><path d="M11 17h9"></path><circle cx="9" cy="17" r="2.2"></circle></svg>
+          <span style="font-size:10px;font-weight:500;">Settings</span></button>
+      </div>
+
+    </div>
+
+    <sc-if value="{{ gameActive }}" hint-placeholder-val="{{ false }}">
+      {{ gameOverlay }}
+    </sc-if>
+
+  </div>
+
+  <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:rgba(143,174,255,0.4);text-align:center;max-width:420px;line-height:1.6;">
+    Launch Armada from a 1:1 chat, group, or the Wall. It opens fullscreen and returns you here on exit.
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: &quot;440px&quot;, &quot;height&quot;: &quot;1000px&quot; },
+  &quot;accent&quot;: { &quot;editor&quot;: &quot;color&quot;, &quot;default&quot;: &quot;#10d51d&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Theme&quot; },
+  &quot;difficulty&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;Recruit&quot;, &quot;Admiral&quot;], &quot;default&quot;: &quot;Recruit&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Gameplay&quot; },
+  &quot;radar&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Gameplay&quot; },
+  &quot;revealEnemy&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Gameplay&quot; }
+}">
+class Component extends DCLogic {
+  mono = "'JetBrains Mono', ui-monospace, monospace";
+
+  state = {
+    // ---- shell ----
+    device: 'phone',       // phone | tablet
+    tab: 'chats',          // chats | walls | contacts | calls | settings
+    convo: null,           // null | 'maya' | 'crew'
+    game: null,            // null | { source, subtitle }
+    // ---- game engine ----
+    phase: 'place',        // place | battle | over
+    orient: 'h',
+    placeIndex: 0,
+    playerFleet: [],
+    enemyFleet: [],
+    shotsOnEnemy: {},
+    shotsOnPlayer: {},
+    hoverIdx: null,
+    hoverShip: null,
+    dragging: false,
+    smoking: {},
+    turn: 'player',
+    winner: null,
+    resultDismissed: false,
+    message: '',
+    log: [],
+    aiQueue: [],
+  };
+
+  fleet() {
+    return [
+      { name: 'Carrier',    size: 5, key: 'carrier' },
+      { name: 'Battleship', size: 4, key: 'battleship' },
+      { name: 'Cruiser',    size: 3, key: 'cruiser' },
+      { name: 'Submarine',  size: 3, key: 'submarine' },
+      { name: 'Destroyer',  size: 2, key: 'destroyer' },
+    ];
+  }
+
+  acc() { return (this.props && this.props.accent) || '#7b9cff'; }
+
+  // ---- responsive geometry ----
+  device() { return this.state.device === 'tablet' ? { w: 1024, h: 768 } : { w: 390, h: 812 }; }
+  dims() {
+    const d = this.device();
+    const twoCol = d.w >= 760;
+    const gap = 4;
+    const outerPad = twoCol ? 20 : 12, panelPad = twoCol ? 16 : 12, colGap = 20;
+    const contentW = twoCol
+      ? ((d.w - 2 * outerPad - colGap) / 2 - 2 * panelPad)
+      : (d.w - 2 * outerPad - 2 * panelPad);
+    let cell = Math.floor((contentW - 22 - 9 * gap) / 10);
+    cell = Math.max(24, Math.min(cell, 40));
+    return { cell, gap, twoCol, outerPad, panelPad, colGap, pitch: cell + gap };
+  }
+
+  componentDidMount() {
+    this._key = (e) => { if (this.state.game && this.state.phase === 'place' && (e.key === 'r' || e.key === 'R')) this.onRotate(); };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this._key);
+    if (this._onMove) window.removeEventListener('pointermove', this._onMove);
+    if (this._onUp) { window.removeEventListener('pointerup', this._onUp); window.removeEventListener('pointercancel', this._onUp); }
+    this._smokeTimers && this._smokeTimers.forEach(t => clearTimeout(t));
+  }
+
+  // ---- shell navigation ----
+  launch(source, subtitle) {
+    this.setState({
+      game: { source, subtitle },
+      phase: 'place', orient: 'h', placeIndex: 0, playerFleet: [], enemyFleet: [],
+      shotsOnEnemy: {}, shotsOnPlayer: {}, hoverIdx: null, hoverShip: null, dragging: false,
+      turn: 'player', winner: null, message: '', log: [], aiQueue: [], smoking: {}, resultDismissed: false,
+    });
+    try { const el = this._boxEl; const p = el && el.requestFullscreen && el.requestFullscreen(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+  }
+  onExitGame = () => {
+    try { if (document.fullscreenElement) { const p = document.exitFullscreen(); if (p && p.catch) p.catch(() => {}); } } catch (e) {}
+    this._smokeTimers && this._smokeTimers.forEach(t => clearTimeout(t));
+    this._smokeTimers = [];
+    this.setState({ game: null, smoking: {} });
+  };
+
+  // smoke billows briefly after a sink, then stops rendering to spare the GPU
+  startSmoke(key) {
+    this._smokeTimers = this._smokeTimers || [];
+    this.setState(st => ({ smoking: { ...st.smoking, [key]: true } }));
+    const t = setTimeout(() => {
+      this.setState(st => { const m = { ...st.smoking }; delete m[key]; return { smoking: m }; });
+    }, 6500);
+    this._smokeTimers.push(t);
+  }
+
+  // ---- geometry ----
+  cellsFor(idx, orient, size) {
+    const r = Math.floor(idx / 10), c = idx % 10, cells = [];
+    for (let i = 0; i < size; i++) {
+      const rr = orient === 'v' ? r + i : r;
+      const cc = orient === 'h' ? c + i : c;
+      if (rr > 9 || cc > 9) return null;
+      cells.push(rr * 10 + cc);
+    }
+    return cells;
+  }
+  canPlace(cells, fleet) {
+    const occ = new Set();
+    (fleet || this.state.playerFleet).forEach(s => s.cells.forEach(c => occ.add(c)));
+    return cells.every(c => !occ.has(c));
+  }
+  placeRandom() {
+    const out = [];
+    for (const def of this.fleet()) {
+      let tries = 0;
+      while (tries < 800) {
+        tries++;
+        const orient = Math.random() < 0.5 ? 'h' : 'v';
+        const idx = Math.floor(Math.random() * 100);
+        const cells = this.cellsFor(idx, orient, def.size);
+        if (cells && this.canPlace(cells, out)) { out.push({ ...def, orient, start: idx, cells }); break; }
+      }
+    }
+    return out;
+  }
+
+  setHover(i) { if (this.state.hoverIdx !== i) this.setState({ hoverIdx: i }); }
+
+  onRotate = () => this.setState(s => ({ orient: s.orient === 'h' ? 'v' : 'h' }));
+  onRandom = () => this.setState({ playerFleet: this.placeRandom(), placeIndex: 5, hoverIdx: null });
+  onReset = () => this.setState({ playerFleet: [], placeIndex: 0, hoverIdx: null });
+  onNewGame = () => this.setState({
+    phase: 'place', orient: 'h', placeIndex: 0, playerFleet: [], enemyFleet: [],
+    shotsOnEnemy: {}, shotsOnPlayer: {}, hoverIdx: null, hoverShip: null, dragging: false, turn: 'player', winner: null, message: '', log: [], aiQueue: [], smoking: {}, resultDismissed: false,
+  });
+
+  rotateShip(i) {
+    const s = this.state;
+    if (s.phase !== 'place') return;
+    const ship = s.playerFleet[i];
+    if (!ship) return;
+    const newOrient = ship.orient === 'h' ? 'v' : 'h';
+    let start = ship.start;
+    let cells = this.cellsFor(start, newOrient, ship.size);
+    if (!cells) {
+      const r = Math.floor(start / 10), c = start % 10;
+      if (newOrient === 'h') start = r * 10 + Math.max(0, Math.min(c, 10 - ship.size));
+      else start = Math.max(0, Math.min(r, 10 - ship.size)) * 10 + c;
+      cells = this.cellsFor(start, newOrient, ship.size);
+    }
+    if (!cells) return;
+    const others = s.playerFleet.filter((_, k) => k !== i);
+    if (!this.canPlace(cells, others)) return;
+    this.setState({ playerFleet: s.playerFleet.map((sh, k) => k === i ? { ...sh, orient: newOrient, start, cells } : sh) });
+  }
+
+  onShipPointerDown(e, si) {
+    if (this.state.phase !== 'place') return;
+    const ship = this.state.playerFleet[si];
+    if (!ship) return;
+    e.preventDefault();
+    const core = e.currentTarget.parentElement;
+    const rect = core.getBoundingClientRect();
+    const pitch = this.dims().pitch;
+    const col = Math.floor((e.clientX - rect.left) / pitch);
+    const row = Math.floor((e.clientY - rect.top) / pitch);
+    const grabbed = ship.cells.indexOf(row * 10 + col);
+    this._drag = { si, orient: ship.orient, size: ship.size, rect, pitch, grabOffset: grabbed < 0 ? 0 : grabbed, startX: e.clientX, startY: e.clientY, moved: false };
+    this._onMove = (ev) => this.onDragMove(ev);
+    this._onUp = (ev) => this.onDragUp(ev);
+    window.addEventListener('pointermove', this._onMove);
+    window.addEventListener('pointerup', this._onUp);
+    window.addEventListener('pointercancel', this._onUp);
+  }
+  onDragMove(ev) {
+    const d = this._drag;
+    if (!d) return;
+    if (!d.moved && Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) < 6) return;
+    d.moved = true;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const col = clamp(Math.floor((ev.clientX - d.rect.left) / d.pitch), 0, 9);
+    const row = clamp(Math.floor((ev.clientY - d.rect.top) / d.pitch), 0, 9);
+    let sc = col, sr = row;
+    if (d.orient === 'h') sc = col - d.grabOffset; else sr = row - d.grabOffset;
+    sc = clamp(sc, 0, d.orient === 'h' ? 10 - d.size : 9);
+    sr = clamp(sr, 0, d.orient === 'v' ? 10 - d.size : 9);
+    const start = sr * 10 + sc;
+    const cells = this.cellsFor(start, d.orient, d.size);
+    const others = this.state.playerFleet.filter((_, k) => k !== d.si);
+    const valid = !!cells && this.canPlace(cells, others);
+    this.setState({ dragging: true, dragShip: d.si, dragStart: start, dragCells: cells, dragValid: valid });
+  }
+  onDragUp() {
+    window.removeEventListener('pointermove', this._onMove);
+    window.removeEventListener('pointerup', this._onUp);
+    window.removeEventListener('pointercancel', this._onUp);
+    const d = this._drag;
+    this._drag = null;
+    if (!d) return;
+    if (!d.moved) {
+      this.setState({ dragging: false, dragShip: null, dragCells: null, dragValid: false, dragStart: null });
+      this.rotateShip(d.si);
+      return;
+    }
+    const st = this.state;
+    if (st.dragCells && st.dragValid) {
+      this.setState({
+        playerFleet: st.playerFleet.map((sh, k) => k === d.si ? { ...sh, start: st.dragStart, cells: st.dragCells } : sh),
+        dragging: false, dragShip: null, dragCells: null, dragValid: false, dragStart: null, hoverShip: null,
+      });
+    } else {
+      this.setState({ dragging: false, dragShip: null, dragCells: null, dragValid: false, dragStart: null });
+    }
+  }
+
+  handlePlaceClick(idx) {
+    const s = this.state;
+    if (s.phase !== 'place' || s.placeIndex >= 5) return;
+    const def = this.fleet()[s.placeIndex];
+    const cells = this.cellsFor(idx, s.orient, def.size);
+    if (!cells || !this.canPlace(cells)) return;
+    this.setState({ playerFleet: [...s.playerFleet, { ...def, orient: s.orient, start: idx, cells }], placeIndex: s.placeIndex + 1, hoverIdx: null });
+  }
+
+  onStart = () => {
+    if (this.state.placeIndex < 5) return;
+    this.setState({
+      phase: 'battle', turn: 'player', enemyFleet: this.placeRandom(),
+      shotsOnEnemy: {}, shotsOnPlayer: {}, hoverIdx: null, winner: null, aiQueue: [], resultDismissed: false,
+      message: 'Battle stations — fire at enemy waters.',
+      log: [{ t: 'info', text: 'Engagement started. Weapons free.' }],
+    });
+  };
+
+  playerFire(idx) {
+    const s = this.state;
+    if (s.phase !== 'battle' || s.turn !== 'player' || (idx in s.shotsOnEnemy)) return;
+    const ship = s.enemyFleet.find(sh => sh.cells.includes(idx));
+    const shots = { ...s.shotsOnEnemy, [idx]: ship ? 'hit' : 'miss' };
+    const log = [...s.log];
+    if (ship) {
+      const sunk = ship.cells.every(c => shots[c] === 'hit');
+      if (sunk) { log.unshift({ t: 'sunk', text: 'You sank the enemy ' + ship.name + '.' }); this.startSmoke('e' + s.enemyFleet.indexOf(ship)); }
+      else log.unshift({ t: 'hit', text: 'Direct hit on an enemy vessel.' });
+    } else { log.unshift({ t: 'miss', text: 'Your salvo splashed into open water.' }); }
+    const won = s.enemyFleet.every(sh => sh.cells.every(c => shots[c] === 'hit'));
+    if (won) { this.setState({ shotsOnEnemy: shots, log, phase: 'over', winner: 'player' }); return; }
+    this.setState({ shotsOnEnemy: shots, log, turn: 'enemy', hoverIdx: null, message: 'Enemy is returning fire…' });
+    setTimeout(() => this.aiFire(), 760);
+  }
+
+  aiFire() {
+    const s = this.state;
+    if (s.phase !== 'battle') return;
+    const tried = s.shotsOnPlayer;
+    const smart = ((this.props && this.props.difficulty) || 'Admiral') === 'Admiral';
+    let target = null;
+    if (smart) { const q = s.aiQueue.filter(i => !(i in tried)); if (q.length) target = q[0]; }
+    if (target == null) {
+      const pool = [];
+      for (let i = 0; i < 100; i++) {
+        if (i in tried) continue;
+        if (smart && ((Math.floor(i / 10) + (i % 10)) % 2 !== 0)) continue;
+        pool.push(i);
+      }
+      const fallback = smart && pool.length === 0 ? [...Array(100).keys()].filter(i => !(i in tried)) : pool;
+      target = fallback[Math.floor(Math.random() * fallback.length)];
+    }
+    const ship = s.playerFleet.find(sh => sh.cells.includes(target));
+    const shots = { ...s.shotsOnPlayer, [target]: ship ? 'hit' : 'miss' };
+    const log = [...s.log];
+    let queue = s.aiQueue.filter(i => i !== target && !(i in shots));
+    if (ship) {
+      const sunk = ship.cells.every(c => shots[c] === 'hit');
+      if (sunk) { log.unshift({ t: 'sunk', text: 'The enemy sank your ' + ship.name + '.' }); queue = queue.filter(i => !ship.cells.includes(i)); this.startSmoke('p' + s.playerFleet.indexOf(ship)); }
+      else {
+        log.unshift({ t: 'hit', text: 'Enemy fire struck your ' + ship.name + '.' });
+        const r = Math.floor(target / 10), c = target % 10, nb = [];
+        if (r > 0) nb.push(target - 10);
+        if (r < 9) nb.push(target + 10);
+        if (c > 0) nb.push(target - 1);
+        if (c < 9) nb.push(target + 1);
+        nb.forEach(n => { if (!(n in shots) && !queue.includes(n)) queue.unshift(n); });
+      }
+    } else { log.unshift({ t: 'miss', text: 'Enemy salvo missed.' }); }
+    const lost = s.playerFleet.every(sh => sh.cells.every(c => shots[c] === 'hit'));
+    if (lost) { this.setState({ shotsOnPlayer: shots, log, aiQueue: queue, phase: 'over', winner: 'enemy' }); return; }
+    this.setState({ shotsOnPlayer: shots, log, aiQueue: queue, turn: 'player', message: 'Your move — fire at enemy waters.' });
+  }
+
+  icon(key, color) {
+    const h = React.createElement;
+    const p = (d) => h('path', { d, fill: color });
+    const rect = (x, y, w, ht) => h('rect', { x, y, width: w, height: ht, fill: color, rx: 0.8 });
+    let parts;
+    switch (key) {
+      case 'carrier':    parts = [p('M4 12 L104 12 L118 15 L104 18 L4 18 Z'), rect(60, 6, 9, 6), rect(22, 10.2, 56, 1.4)]; break;
+      case 'battleship': parts = [p('M4 19 L98 19 L116 15 L98 11 L4 11 Z'), rect(50, 5, 10, 6), p('M22 11 L34 11 L31 7 L25 7 Z'), p('M66 11 L78 11 L75 7 L69 7 Z')]; break;
+      case 'cruiser':    parts = [p('M6 18 L96 18 L114 15 L96 12 L6 12 Z'), p('M28 12 L40 12 L37 8 L31 8 Z'), rect(57, 3, 2, 9)]; break;
+      case 'submarine':  parts = [p('M6 13 Q6 10 14 10 L104 10 Q116 12 118 15 Q116 18 104 20 L14 20 Q6 20 6 17 Z'), rect(52, 4, 14, 7), rect(58, 1, 1.5, 4)]; break;
+      case 'destroyer':  parts = [p('M12 18 L90 18 L108 15 L90 12 L12 12 Z'), rect(46, 8, 8, 4), rect(60, 6.5, 1.5, 6)]; break;
+      default:           parts = [p('M4 12 L110 12 L118 15 L110 18 L4 18 Z')];
+    }
+    return h('svg', { viewBox: '0 0 122 24', width: '52', height: '14', style: { display: 'block', flexShrink: 0 } }, parts);
+  }
+
+  pips(size, hits) {
+    const h = React.createElement;
+    return h('div', { style: { display: 'flex', gap: '3px', marginTop: '5px' } },
+      Array.from({ length: size }, (_, k) => h('div', { key: k, style: { width: '8px', height: '8px', borderRadius: '2px', background: k < hits ? '#eb445a' : 'rgba(143,174,255,0.32)' } })));
+  }
+
+  chip(text, kind) {
+    const h = React.createElement, acc = this.acc();
+    const map = {
+      pending: ['rgba(255,255,255,0.05)', 'rgba(230,235,255,0.45)'],
+      placing: ['rgba(255,196,9,0.16)', '#ffc409'],
+      ready:   ['rgba(45,211,111,0.14)', '#2dd36f'],
+      active:  ['rgba(123,156,255,0.14)', acc],
+      sunk:    ['rgba(235,68,90,0.2)', '#ff6b7a'],
+    };
+    const [bg, fg] = map[kind] || map.pending;
+    return h('div', { style: { marginLeft: 'auto', padding: '3px 9px', borderRadius: '6px', fontSize: '9.5px', fontWeight: 600, letterSpacing: '.5px', background: bg, color: fg, fontFamily: this.mono, textTransform: 'uppercase', whiteSpace: 'nowrap' } }, text);
+  }
+
+  rosterCard(def, hits, status, kind, highlight) {
+    const h = React.createElement, sunk = kind === 'sunk';
+    return h('div', {
+      key: def.name,
+      style: {
+        display: 'flex', alignItems: 'center', gap: '11px', padding: '8px 11px', borderRadius: '10px',
+        background: highlight ? 'rgba(123,156,255,0.12)' : sunk ? 'rgba(235,68,90,0.06)' : 'rgba(255,255,255,0.02)',
+        border: '1px solid ' + (highlight ? 'rgba(143,174,255,0.4)' : sunk ? 'rgba(235,68,90,0.22)' : 'rgba(255,255,255,0.05)'),
+        opacity: kind === 'pending' ? 0.5 : 1, transition: 'all .2s',
+      },
+    },
+      this.icon(def.key, sunk ? '#ff6b7a' : 'rgba(205,214,255,0.85)'),
+      h('div', { style: { minWidth: 0 } },
+        h('div', { style: { fontSize: '13px', fontWeight: 600, color: sunk ? 'rgba(255,180,190,0.9)' : 'rgba(240,243,255,0.92)' } }, def.name),
+        this.pips(def.size, hits)),
+      this.chip(status, kind));
+  }
+
+  buildRoster(side) {
+    const h = React.createElement, s = this.state, F = this.fleet();
+    let rows;
+    if (side === 'player') {
+      rows = F.map((def, i) => {
+        const ship = s.playerFleet[i];
+        if (s.phase === 'place') {
+          if (i < s.placeIndex) return this.rosterCard(def, 0, 'Ready', 'ready', false);
+          if (i === s.placeIndex) return this.rosterCard(def, 0, 'Placing', 'placing', true);
+          return this.rosterCard(def, 0, 'Standby', 'pending', false);
+        }
+        const hits = ship ? ship.cells.filter(c => s.shotsOnPlayer[c] === 'hit').length : 0;
+        const sunk = ship && ship.cells.every(c => s.shotsOnPlayer[c] === 'hit');
+        if (sunk) return this.rosterCard(def, def.size, 'Sunk', 'sunk', false);
+        return this.rosterCard(def, hits, hits > 0 ? hits + '/' + def.size : 'Afloat', 'active', false);
+      });
+    } else {
+      rows = F.map((def, i) => {
+        const ship = s.enemyFleet[i];
+        if (!ship) return this.rosterCard(def, 0, 'Hidden', 'pending', false);
+        const hits = ship.cells.filter(c => s.shotsOnEnemy[c] === 'hit').length;
+        const sunk = ship.cells.every(c => s.shotsOnEnemy[c] === 'hit');
+        if (sunk) return this.rosterCard(def, def.size, 'Sunk', 'sunk', false);
+        return this.rosterCard(def, hits, hits > 0 ? hits + '/' + def.size : 'Active', 'active', false);
+      });
+    }
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } }, rows);
+  }
+
+  // ---- fire effects ----
+  flameEl(size, tall) {
+    const h = React.createElement;
+    const w = size, ht = tall ? Math.round(size * 2.1) : Math.round(size * 1.3);
+    return h('div', { style: { position: 'relative', width: w + 'px', height: ht + 'px', transformOrigin: '50% 100%', animation: 'flameFlicker .5s ease-in-out infinite' } },
+      h('svg', { viewBox: '0 0 24 30', width: w, height: ht, style: { display: 'block', filter: 'drop-shadow(0 0 ' + Math.round(size * 0.35) + 'px rgba(235,120,40,0.85))' } },
+        h('path', { d: 'M12 0 C8 7 5 10 5 16 a7 7 0 0 0 14 0 C19 10 16 8 12 0 Z', fill: '#eb5a2a' }),
+        h('path', { d: 'M12 6 C9.6 11 8 12.6 8 16.4 a4 4.4 0 0 0 8 0 C16 12.6 14.2 11 12 6 Z', fill: '#ffb226' }),
+        h('path', { d: 'M12 12 C10.8 14.5 10 15.4 10 17.2 a2 2.3 0 0 0 4 0 C14 15.4 13.1 14.5 12 12 Z', fill: '#ffe680' })));
+  }
+  explosionEl(size) {
+    const h = React.createElement;
+    return h('div', { style: { position: 'absolute', left: '50%', top: '50%', width: size + 'px', height: size + 'px', marginLeft: -(size / 2) + 'px', marginTop: -(size / 2) + 'px', borderRadius: '50%', background: 'radial-gradient(circle, #fff6c0 0%, #ffca22 24%, #eb445a 54%, rgba(235,68,90,0) 72%)', boxShadow: '0 0 ' + Math.round(size * 0.5) + 'px rgba(235,90,42,0.6)', animation: 'explosionBurst .55s ease-out forwards', pointerEvents: 'none' } });
+  }
+  emberEl(size) {
+    const h = React.createElement;
+    return h('div', { style: { position: 'relative', width: size + 'px', height: size + 'px', borderRadius: '50%', background: 'radial-gradient(circle, #3a2a20 0%, #241a14 52%, rgba(20,14,10,0) 74%)', display: 'flex', alignItems: 'center', justifyContent: 'center' } },
+      h('div', { style: { width: Math.round(size * 0.36) + 'px', height: Math.round(size * 0.36) + 'px', borderRadius: '50%', background: 'radial-gradient(circle, #ffb04a, #eb5a2a)', boxShadow: '0 0 5px 1px rgba(235,120,40,0.7)', animation: 'emberGlow 1.6s ease-in-out infinite' } }));
+  }
+
+  // ---- rising smoke column over a wreck ----
+  buildSmoke(cell) {
+    const h = React.createElement;
+    const base = Math.max(12, Math.round(cell * 0.66));
+    const anims = ['smokeRise', 'smokeRiseL', 'smokeRiseR'];
+    const dur = 2.6;
+    const puffs = [0, 1, 2].map(i => {
+      const sz = Math.round(base * (0.95 + i * 0.28));
+      return h('div', {
+        key: 'p' + i,
+        style: {
+          position: 'absolute', left: '50%', bottom: Math.round(i * cell * 0.42) + 'px',
+          width: sz + 'px', height: sz + 'px', borderRadius: '50%',
+          background: 'radial-gradient(circle at 50% 58%, rgba(168,170,182,0.95), rgba(120,122,134,0.6) 55%, rgba(90,92,104,0) 74%)',
+          filter: 'blur(1.5px)', transform: 'translate(-50%,0)',
+          animation: `${anims[i]} ${dur.toFixed(2)}s ease-out ${(i * (dur / 3)).toFixed(2)}s infinite`,
+          willChange: 'transform, opacity',
+        },
+      });
+    });
+    return h('div', { key: 'smoke', style: { position: 'absolute', left: '50%', bottom: '48%', transform: 'translateX(-50%)', width: base + 'px', height: '1px', zIndex: 9, pointerEvents: 'none' } }, puffs);
+  }
+
+  // ---- top-down warship silhouette (drawn bow-to-right in an L×S box) ----
+  shipTopSVG(key, L, S, wrecked) {
+    const h = React.createElement;
+    const cy = S / 2;
+    const pal = wrecked
+      ? { hull: '#2c2723', stroke: 'rgba(150,74,48,0.65)', struct: '#3a322c', barrel: 'rgba(0,0,0,0.55)', mark: 'rgba(150,80,50,0.4)' }
+      : { hull: '#3d4d78', stroke: 'rgba(143,174,255,0.6)', struct: '#6274a8', barrel: 'rgba(8,12,22,0.6)', mark: 'rgba(205,214,255,0.4)' };
+    if (key === 'submarine') { pal.hull = wrecked ? '#282320' : '#33406a'; }
+    const parts = [];
+    let k = 0;
+    const push = (el) => parts.push(el);
+    const rrect = (x, y, w, ht, fill, rx) => h('rect', { key: 'e' + (k++), x, y, width: w, height: ht, rx: rx == null ? Math.min(w, ht) * 0.3 : rx, fill });
+    const circ = (x, y, r, fill) => h('circle', { key: 'e' + (k++), cx: x, cy: y, r, fill });
+    const turret = (x, dir, r) => {
+      push(h('rect', { key: 'e' + (k++), x: dir > 0 ? x : x - r * 1.8, y: cy - r * 0.62, width: r * 1.8, height: r * 0.32, fill: pal.barrel }));
+      push(h('rect', { key: 'e' + (k++), x: dir > 0 ? x : x - r * 1.8, y: cy + r * 0.3, width: r * 1.8, height: r * 0.32, fill: pal.barrel }));
+      push(circ(x, cy, r, pal.struct));
+    };
+    // hull
+    let ty, by, hull;
+    if (key === 'carrier') {
+      ty = S * 0.1; by = S * 0.9;
+      hull = `M ${L * 0.03} ${ty} L ${L * 0.8} ${ty} Q ${L * 0.97} ${S * 0.14} ${L - 0.5} ${cy} Q ${L * 0.97} ${S * 0.86} ${L * 0.8} ${by} L ${L * 0.03} ${by} Q ${L * 0.006} ${by} ${L * 0.006} ${S * 0.78} L ${L * 0.006} ${S * 0.22} Q ${L * 0.006} ${ty} ${L * 0.03} ${ty} Z`;
+    } else if (key === 'submarine') {
+      ty = S * 0.28; by = S - ty;
+      hull = `M ${L * 0.5} ${ty} L ${L * 0.84} ${ty} Q ${L - 0.5} ${ty} ${L - 0.5} ${cy} Q ${L - 0.5} ${by} ${L * 0.84} ${by} L ${L * 0.16} ${by} Q ${0.5} ${by} ${0.5} ${cy} Q ${0.5} ${ty} ${L * 0.16} ${ty} Z`;
+    } else {
+      ty = key === 'destroyer' ? S * 0.24 : key === 'cruiser' ? S * 0.2 : S * 0.16;
+      by = S - ty;
+      hull = `M ${L * 0.05} ${ty} L ${L * 0.62} ${ty} Q ${L * 0.85} ${ty} ${L - 0.5} ${cy} Q ${L * 0.85} ${by} ${L * 0.62} ${by} L ${L * 0.05} ${by} Q ${0.5} ${by} ${0.5} ${S * 0.6} L ${0.5} ${S * 0.4} Q ${0.5} ${ty} ${L * 0.05} ${ty} Z`;
+    }
+    push(h('path', { key: 'e' + (k++), d: hull, fill: pal.hull, stroke: pal.stroke, strokeWidth: Math.max(0.6, S * 0.03) }));
+
+    if (!wrecked) {
+      if (key === 'battleship') {
+        turret(L * 0.2, 1, S * 0.2); turret(L * 0.34, 1, S * 0.2);
+        push(rrect(L * 0.46, cy - S * 0.24, L * 0.12, S * 0.48, pal.struct, S * 0.08));
+        push(circ(L * 0.64, cy, S * 0.11, pal.struct));
+        turret(L * 0.82, -1, S * 0.2);
+      } else if (key === 'cruiser') {
+        turret(L * 0.24, 1, S * 0.19);
+        push(rrect(L * 0.44, cy - S * 0.2, L * 0.12, S * 0.4, pal.struct, S * 0.07));
+        push(circ(L * 0.62, cy, S * 0.09, pal.struct));
+        turret(L * 0.8, -1, S * 0.18);
+      } else if (key === 'destroyer') {
+        turret(L * 0.3, 1, S * 0.17);
+        push(rrect(L * 0.5, cy - S * 0.16, L * 0.14, S * 0.32, pal.struct, S * 0.06));
+        push(rrect(L * 0.72, cy - S * 0.1, L * 0.05, S * 0.2, pal.struct, S * 0.04));
+      } else if (key === 'submarine') {
+        push(rrect(L * 0.4, cy - S * 0.2, L * 0.16, S * 0.4, pal.struct, S * 0.1));
+        push(h('line', { key: 'e' + (k++), x1: L * 0.48, y1: cy, x2: L * 0.6, y2: cy, stroke: pal.mark, strokeWidth: Math.max(0.6, S * 0.04) }));
+      } else if (key === 'carrier') {
+        push(h('line', { key: 'e' + (k++), x1: L * 0.06, y1: cy, x2: L * 0.94, y2: cy, stroke: pal.mark, strokeWidth: Math.max(0.7, S * 0.045), strokeDasharray: `${S * 0.18} ${S * 0.14}` }));
+        push(rrect(L * 0.56, cy - S * 0.44, L * 0.06, S * 0.22, pal.struct, S * 0.03));
+        push(rrect(L * 0.2, cy - S * 0.4, L * 0.02, S * 0.06, pal.mark, 0));
+        push(rrect(L * 0.2, cy + S * 0.34, L * 0.02, S * 0.06, pal.mark, 0));
+      }
+    } else {
+      // wreckage: charred gashes + smouldering rim
+      push(h('path', { key: 'e' + (k++), d: `M ${L * 0.3} ${cy - S * 0.28} L ${L * 0.42} ${cy - S * 0.05} L ${L * 0.34} ${cy + S * 0.2} L ${L * 0.24} ${cy - S * 0.02} Z`, fill: 'rgba(0,0,0,0.55)' }));
+      push(h('path', { key: 'e' + (k++), d: `M ${L * 0.58} ${cy + S * 0.26} L ${L * 0.68} ${cy - S * 0.02} L ${L * 0.6} ${cy - S * 0.24} L ${L * 0.52} ${cy + S * 0.04} Z`, fill: 'rgba(0,0,0,0.5)' }));
+      push(h('line', { key: 'e' + (k++), x1: L * 0.14, y1: cy - S * 0.05, x2: L * 0.9, y2: cy + S * 0.08, stroke: 'rgba(90,40,25,0.7)', strokeWidth: Math.max(0.6, S * 0.03) }));
+      push(circ(L * 0.5, cy, S * 0.06, 'rgba(235,90,42,0.5)'));
+    }
+    return parts;
+  }
+
+  buildBoard(side) {
+    const h = React.createElement, s = this.state, acc = this.acc();
+    const { cell, gap } = this.dims();
+    const isEnemy = side === 'enemy';
+    const shots = isEnemy ? s.shotsOnEnemy : s.shotsOnPlayer;
+    const fleet = isEnemy ? s.enemyFleet : s.playerFleet;
+    const reveal = isEnemy && !!(this.props && this.props.revealEnemy);
+    const sunkCells = new Set();
+    fleet.forEach(sh => { if (sh.cells.every(c => shots[c] === 'hit')) sh.cells.forEach(c => sunkCells.add(c)); });
+    const missSz = Math.max(8, Math.round(cell * 0.32));
+    const hitSz = Math.max(18, Math.round(cell * 0.62));
+    const retSz = Math.max(16, Math.round(cell * 0.55));
+
+    let preview = null, previewValid = false;
+    if (!isEnemy && s.phase === 'place' && s.hoverIdx != null && s.placeIndex < 5) {
+      const def = this.fleet()[s.placeIndex];
+      const cells = this.cellsFor(s.hoverIdx, s.orient, def.size);
+      if (cells) { preview = new Set(cells); previewValid = this.canPlace(cells); }
+      else { preview = new Set([s.hoverIdx]); previewValid = false; }
+    }
+    const canAim = isEnemy && s.phase === 'battle' && s.turn === 'player';
+
+    const children = [];
+
+    // ---- sonar scope: rings + crosshair + sweep (enemy grid, ambient, behind cells) ----
+    const radarOn = !(this.props && this.props.radar === false);
+    if (isEnemy && radarOn && (s.phase === 'battle' || s.phase === 'over')) {
+      const coreSize = cell * 10 + gap * 9;
+      children.push(h('svg', { key: 'rings', viewBox: '0 0 100 100', width: coreSize, height: coreSize, style: { position: 'absolute', left: 0, top: 0, zIndex: 0, pointerEvents: 'none' } },
+        h('circle', { cx: 50, cy: 50, r: 47, fill: 'none', stroke: acc + '22', strokeWidth: 0.4 }),
+        h('circle', { cx: 50, cy: 50, r: 33, fill: 'none', stroke: acc + '1e', strokeWidth: 0.4 }),
+        h('circle', { cx: 50, cy: 50, r: 18, fill: 'none', stroke: acc + '1e', strokeWidth: 0.4 }),
+        h('circle', { cx: 50, cy: 50, r: 2, fill: acc + '30' }),
+        h('line', { x1: 50, y1: 3, x2: 50, y2: 97, stroke: acc + '18', strokeWidth: 0.4 }),
+        h('line', { x1: 3, y1: 50, x2: 97, y2: 50, stroke: acc + '18', strokeWidth: 0.4 })));
+      if (s.phase === 'battle') {
+        children.push(h('div', {
+          key: 'sweep',
+          style: {
+            position: 'absolute', left: 0, top: 0, width: coreSize + 'px', height: coreSize + 'px',
+            borderRadius: '50%', zIndex: 0, pointerEvents: 'none', overflow: 'hidden',
+            opacity: s.turn === 'enemy' ? 1 : 0.35, transition: 'opacity .4s ease',
+            background: `conic-gradient(from 0deg, ${acc}3a, ${acc}12 34deg, ${acc}00 62deg, ${acc}00 360deg)`,
+            animation: 'radarSweep 5s linear infinite',
+          },
+        }));
+      }
+    }
+
+    for (let i = 0; i < 100; i++) {
+      const shot = shots[i];
+      let bg = 'rgba(123,156,255,0.055)';
+      let border = '1px solid rgba(123,156,255,0.09)';
+      let marker = null;
+      if (preview && preview.has(i)) {
+        bg = previewValid ? 'rgba(45,211,111,0.2)' : 'rgba(235,68,90,0.18)';
+        border = '1px solid ' + (previewValid ? 'rgba(45,211,111,0.65)' : 'rgba(235,68,90,0.65)');
+      }
+      if (shot === 'miss') {
+        bg = 'rgba(255,255,255,0.02)';
+        marker = h('div', { style: { width: missSz + 'px', height: missSz + 'px', borderRadius: '50%', background: 'rgba(143,174,255,0.4)', boxShadow: '0 0 0 3px rgba(143,174,255,0.12)', animation: 'splashIn .45s ease-out' } });
+      } else if (shot === 'hit') {
+        if (sunkCells.has(i)) {
+          // part of a sunk ship — smouldering scorch (the column flame carries the fire)
+          bg = 'rgba(40,25,18,0.35)';
+          marker = this.emberEl(Math.max(12, Math.round(cell * 0.5)));
+        } else {
+          // active hit — explosion settling into a burning flame
+          bg = 'rgba(235,68,90,0.08)';
+          marker = h('div', { style: { position: 'relative', width: Math.round(cell * 0.8) + 'px', height: Math.round(cell * 0.8) + 'px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' } },
+            this.explosionEl(Math.round(cell * 0.62)),
+            this.flameEl(Math.max(11, Math.round(cell * 0.4)), false));
+        }
+      }
+      if (canAim && !shot && s.hoverIdx === i) {
+        bg = 'rgba(123,156,255,0.14)';
+        border = '1px solid ' + acc;
+        marker = h('div', { style: { width: retSz + 'px', height: retSz + 'px', borderRadius: '50%', border: '1.5px solid ' + acc, boxShadow: '0 0 8px ' + acc, animation: 'reticlePulse 1.2s ease-in-out infinite' } });
+      }
+      const clickable = (isEnemy && canAim && !shot) || (!isEnemy && s.phase === 'place');
+      children.push(h('button', {
+        key: 'c' + i,
+        onMouseEnter: () => { if ((isEnemy && canAim) || (!isEnemy && s.phase === 'place')) this.setHover(i); },
+        onMouseLeave: () => this.setHover(null),
+        onClick: isEnemy ? () => this.playerFire(i) : () => this.handlePlaceClick(i),
+        style: {
+          gridColumn: (i % 10) + 1, gridRow: Math.floor(i / 10) + 1,
+          width: cell + 'px', height: cell + 'px', boxSizing: 'border-box', borderRadius: '7px',
+          background: bg, border, padding: 0, outline: 'none',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: clickable ? 'crosshair' : 'default', position: 'relative',
+          zIndex: marker ? 3 : 1, transition: 'background .14s, border-color .14s', fontFamily: 'inherit',
+        },
+      }, marker));
+    }
+
+    fleet.forEach((ship, si) => {
+      const sunk = ship.cells.every(c => shots[c] === 'hit');
+      if (isEnemy && !sunk && !reveal) return;
+      const interactive = !isEnemy && s.phase === 'place';
+      const isDragged = interactive && s.dragging && s.dragShip === si && s.dragCells;
+      const posStart = isDragged ? s.dragStart : ship.start;
+      const r = Math.floor(posStart / 10), c = posStart % 10, horiz = ship.orient === 'h';
+      const hovered = interactive && !s.dragging && s.hoverShip === si;
+      const L = ship.size * cell + (ship.size - 1) * gap, S = cell;
+      const parts = this.shipTopSVG(ship.key, L, S, sunk);
+      const svg = horiz
+        ? h('svg', { key: 'svg', viewBox: `0 0 ${L} ${S}`, width: '100%', height: '100%', preserveAspectRatio: 'none', style: { display: 'block' } }, parts)
+        : h('svg', { key: 'svg', viewBox: `0 0 ${S} ${L}`, width: '100%', height: '100%', preserveAspectRatio: 'none', style: { display: 'block' } }, h('g', { transform: `translate(${S} 0) rotate(90)` }, parts));
+      let glow = 'none';
+      if (isDragged) { const ok = s.dragValid; glow = '0 0 0 1.5px ' + (ok ? 'rgba(45,211,111,0.85)' : 'rgba(235,68,90,0.85)') + ', 0 0 18px ' + (ok ? 'rgba(45,211,111,0.5)' : 'rgba(235,68,90,0.5)'); }
+      else if (hovered) { glow = '0 0 0 1.5px ' + acc + ', 0 0 16px ' + acc + '99'; }
+      const overlayChildren = [svg];
+      if (sunk) {
+        const smokeKey = (isEnemy ? 'e' : 'p') + si;
+        if (s.smoking[smokeKey]) {
+          overlayChildren.push(this.buildSmoke(cell));
+          overlayChildren.push(h('div', { key: 'basefire', style: { position: 'absolute', left: '50%', bottom: '46%', transform: 'translateX(-50%)', zIndex: 8, pointerEvents: 'none' } }, this.flameEl(Math.max(12, Math.round(cell * 0.5)), false)));
+        }
+      }
+      children.push(h('div', {
+        key: 's' + si,
+        onPointerDown: interactive ? (e) => this.onShipPointerDown(e, si) : undefined,
+        onMouseEnter: interactive ? () => { if (!s.dragging && s.hoverShip !== si) this.setState({ hoverShip: si }); } : undefined,
+        onMouseLeave: interactive ? () => { if (s.hoverShip === si) this.setState({ hoverShip: null }); } : undefined,
+        title: interactive ? 'Drag to move · tap to rotate' : undefined,
+        style: {
+          position: 'relative',
+          gridColumn: horiz ? `${c + 1} / span ${ship.size}` : `${c + 1}`,
+          gridRow: horiz ? `${r + 1}` : `${r + 1} / span ${ship.size}`,
+          zIndex: sunk ? 5 : isDragged ? 6 : hovered ? 4 : 2,
+          pointerEvents: interactive ? 'auto' : 'none',
+          cursor: interactive ? (isDragged ? 'grabbing' : 'grab') : 'default',
+          touchAction: interactive ? 'none' : 'auto',
+          borderRadius: '9px', boxShadow: glow,
+          overflow: sunk ? 'visible' : 'hidden',
+          opacity: isDragged ? 0.9 : 1,
+          filter: isDragged ? 'drop-shadow(0 8px 16px rgba(0,0,0,0.45))' : 'none',
+          animation: sunk ? 'sinkSettle .6s ease-out' : isDragged ? 'none' : 'deployIn .35s ease-out',
+          transition: isDragged ? 'none' : 'box-shadow .15s',
+        },
+      }, overlayChildren));
+    });
+
+    const labelColor = 'rgba(205,214,255,0.35)';
+    const fs = Math.max(9, Math.round(cell * 0.32));
+    const nums = h('div', { style: { display: 'flex', gap: gap + 'px', paddingLeft: '22px', marginBottom: gap + 'px' } },
+      Array.from({ length: 10 }, (_, n) => h('div', { key: n, style: { width: cell + 'px', textAlign: 'center', fontSize: fs + 'px', color: labelColor, fontFamily: this.mono } }, String(n + 1))));
+    const letters = h('div', { style: { display: 'flex', flexDirection: 'column', gap: gap + 'px', width: '18px', marginRight: '4px' } },
+      Array.from({ length: 10 }, (_, n) => h('div', { key: n, style: { height: cell + 'px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: fs + 'px', color: labelColor, fontFamily: this.mono } }, 'ABCDEFGHIJ'[n])));
+    const core = h('div', { style: { position: 'relative', display: 'grid', gridTemplateColumns: `repeat(10, ${cell}px)`, gridAutoRows: `${cell}px`, gap: gap + 'px' } }, children);
+    return h('div', {}, nums, h('div', { style: { display: 'flex' } }, letters, core));
+  }
+
+  buildLog() {
+    const h = React.createElement;
+    const dotColor = { hit: '#ffc409', miss: 'rgba(143,174,255,0.5)', sunk: '#ff6b7a', info: this.acc() };
+    const entries = this.state.log.slice(0, 6);
+    if (!entries.length) return h('div', { style: { fontSize: '12px', color: 'rgba(220,226,245,0.4)', fontFamily: this.mono } }, 'Awaiting deployment…');
+    return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '7px' } },
+      entries.map((e, k) => h('div', { key: k, style: { display: 'flex', alignItems: 'center', gap: '9px', fontSize: '12px', color: 'rgba(230,235,255,0.78)', fontFamily: this.mono, opacity: 1 - k * 0.12 } },
+        h('div', { style: { width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0, background: dotColor[e.t] || dotColor.info } }), e.text)));
+  }
+
+  statusInfo() {
+    const s = this.state, F = this.fleet(), acc = this.acc();
+    if (s.phase === 'place') return { title: 'DEPLOY YOUR FLEET', sub: s.placeIndex < 5 ? ('Position your ' + F[s.placeIndex].name + ' · tap grid to place · drag to move · tap ship to rotate') : 'Fleet ready — tap Engage.', color: '#f5f7ff' };
+    if (s.phase === 'battle') return { title: s.turn === 'player' ? 'YOUR MOVE' : 'ENEMY FIRING', sub: s.message, color: s.turn === 'player' ? acc : '#ffc409' };
+    return { title: s.winner === 'player' ? 'VICTORY' : 'DEFEAT', sub: s.winner === 'player' ? 'Enemy fleet sent to the depths.' : 'Your fleet has been destroyed.', color: s.winner === 'player' ? '#2dd36f' : '#ff6b7a' };
+  }
+
+  medalSVG(won) {
+    const h = React.createElement;
+    const gold = won;
+    const c1 = gold ? '#ffd76b' : '#8a9099';
+    const c2 = gold ? '#e0a327' : '#565c66';
+    const c3 = gold ? '#b8791a' : '#3a3f47';
+    const star = gold ? '#fff4d0' : '#c2c7d0';
+    return h('div', { style: { position: 'relative', width: '120px', height: '148px' } },
+      // ribbons
+      h('svg', { viewBox: '0 0 120 148', width: 120, height: 148, style: { position: 'absolute', inset: 0 } },
+        h('path', { d: 'M40 8 L60 78 L44 74 L34 92 L24 20 Z', fill: won ? '#c33646' : '#4a4f58' }),
+        h('path', { d: 'M80 8 L60 78 L76 74 L86 92 L96 20 Z', fill: won ? '#e0455a' : '#5a6069' }),
+        h('circle', { cx: 60, cy: 96, r: 42, fill: c3 }),
+        h('circle', { cx: 60, cy: 96, r: 42, fill: 'none', stroke: 'rgba(0,0,0,0.25)', strokeWidth: 2 })),
+      // medal disc
+      h('div', { style: { position: 'absolute', left: '18px', top: '54px', width: '84px', height: '84px', borderRadius: '50%', background: `radial-gradient(circle at 38% 32%, ${c1}, ${c2} 62%, ${c3})`, boxShadow: `inset 0 2px 6px rgba(255,255,255,0.4), inset 0 -6px 10px rgba(0,0,0,0.35), 0 6px 18px rgba(0,0,0,0.45)`, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' } },
+        h('svg', { viewBox: '0 0 24 24', width: 46, height: 46, style: { filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.3))' } },
+          won
+            ? h('path', { d: 'M12 2.5l2.9 6 6.6.8-4.9 4.5 1.3 6.5L12 17.1 6.1 20.3l1.3-6.5L2.5 9.3l6.6-.8z', fill: star })
+            : h('path', { d: 'M12 2.5l2.9 6 6.6.8-4.9 4.5 1.3 6.5L12 17.1 6.1 20.3l1.3-6.5L2.5 9.3l6.6-.8z', fill: star, opacity: 0.55, transform: 'rotate(8 12 12)' })),
+        // shine sweep
+        won ? h('div', { style: { position: 'absolute', top: 0, left: 0, width: '40%', height: '100%', background: 'linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.75) 50%, rgba(255,255,255,0) 100%)', animation: 'medalShine 2.6s ease-in-out 0.4s infinite' } }) : null));
+  }
+
+  buildResultModal() {
+    const h = React.createElement, s = this.state, acc = this.acc(), dm = this.dims();
+    const won = s.winner === 'player';
+    const shotsFired = Object.keys(s.shotsOnEnemy).length;
+    const hits = Object.values(s.shotsOnEnemy).filter(v => v === 'hit').length;
+    const accuracy = shotsFired ? Math.round((hits / shotsFired) * 100) : 0;
+    const survivors = s.playerFleet.filter(sh => !sh.cells.every(c => s.shotsOnPlayer[c] === 'hit')).length;
+    const enemySunk = s.enemyFleet.filter(sh => sh.cells.every(c => s.shotsOnEnemy[c] === 'hit')).length;
+    const titleColor = won ? '#ffd76b' : '#ff6b7a';
+
+    const rank = won
+      ? (survivors >= 4 ? 'Fleet Admiral' : survivors >= 2 ? 'Commodore' : 'Battle-Scarred Victor')
+      : 'Lost at Sea';
+    const citation = won
+      ? `Enemy armada sent to the depths with ${survivors} of your 5 ships still afloat.`
+      : 'Your fleet has been destroyed. The waters fall silent.';
+
+    const stat = (label, val, color) => h('div', { style: { flex: 1, textAlign: 'center' } },
+      h('div', { style: { fontFamily: this.mono, fontSize: '22px', fontWeight: 700, color: color || '#f5f7ff' } }, val),
+      h('div', { style: { fontFamily: this.mono, fontSize: '9.5px', letterSpacing: '1.5px', color: 'rgba(220,226,245,0.5)', marginTop: '3px', textTransform: 'uppercase' } }, label));
+
+    const btn = (label, onClick, primary) => h('button', { onClick, style: { padding: '12px 22px', borderRadius: '11px', fontFamily: 'inherit', fontSize: '14px', fontWeight: 600, letterSpacing: '.3px', cursor: 'pointer', border: '1px solid ' + (primary ? 'rgba(143,174,255,0.55)' : 'rgba(143,174,255,0.22)'), background: primary ? 'linear-gradient(135deg,#41537e,#2c3e70)' : 'rgba(255,255,255,0.05)', color: primary ? '#fff' : '#cdd6ff', boxShadow: primary ? '0 6px 20px rgba(44,62,112,0.55)' : 'none' } }, label);
+
+    const card = h('div', { style: { width: 'min(420px, 90%)', background: 'linear-gradient(180deg,#1c2030,#141821)', border: '1px solid ' + (won ? 'rgba(255,201,34,0.3)' : 'rgba(255,107,122,0.3)'), borderRadius: '22px', padding: '28px 26px 24px', textAlign: 'center', boxShadow: '0 30px 80px rgba(0,0,0,0.6)', animation: 'cardRise .45s cubic-bezier(.2,.9,.3,1.2) both' } },
+      h('div', { style: { fontFamily: this.mono, fontSize: '10px', letterSpacing: '4px', color: 'rgba(143,174,255,0.6)', marginBottom: '4px' } }, won ? 'WAR CONCLUDED' : 'WAR CONCLUDED'),
+      h('div', { style: { display: 'flex', justifyContent: 'center', margin: '6px 0 2px', animation: 'medalPop .6s cubic-bezier(.2,.9,.3,1.3) both' } }, this.medalSVG(won)),
+      h('div', { style: { fontSize: '34px', fontWeight: 700, letterSpacing: '6px', color: titleColor, marginTop: '6px' } }, won ? 'VICTORY' : 'DEFEAT'),
+      h('div', { style: { fontFamily: this.mono, fontSize: '12px', letterSpacing: '2px', color: won ? '#ffd76b' : '#ff8a97', marginTop: '6px' } }, rank.toUpperCase()),
+      h('div', { style: { fontSize: '13px', color: 'rgba(220,226,245,0.65)', lineHeight: 1.5, margin: '10px auto 0', maxWidth: '320px' } }, citation),
+      h('div', { style: { display: 'flex', gap: '8px', margin: '20px 0 22px', padding: '14px 8px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px' } },
+        stat('Shots', shotsFired), stat('Accuracy', accuracy + '%', acc), stat('Ships Sunk', enemySunk + '/5'), stat('Survivors', survivors + '/5', won ? '#2dd36f' : '#ff8a97')),
+      h('div', { style: { display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' } },
+        btn('New battle', this.onNewGame, true),
+        btn('Review board', this.dismissResult),
+        btn('Leave', this.onExitGame)));
+
+    return h('div', { key: 'result', onClick: (e) => { if (e.target === e.currentTarget) this.dismissResult(); }, style: { position: 'absolute', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', background: 'rgba(6,9,14,0.72)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', animation: 'resultFade .3s ease-out' } }, card);
+  }
+
+  dismissResult = () => this.setState({ resultDismissed: true });
+  showResult = () => this.setState({ resultDismissed: false });
+
+  buildGameOverlay() {
+    const h = React.createElement, s = this.state, acc = this.acc(), g = s.game || {}, dm = this.dims();
+    const si = this.statusInfo();
+    const enemyAfloat = s.enemyFleet.length ? s.enemyFleet.filter(sh => !sh.cells.every(c => s.shotsOnEnemy[c] === 'hit')).length : 5;
+    const playerAfloat = s.playerFleet.filter(sh => !sh.cells.every(c => s.shotsOnPlayer[c] === 'hit')).length;
+    const srcLabel = g.source === 'wall' ? 'WALL' : g.source === 'group' ? 'GROUP' : '1:1';
+
+    const chevron = h('svg', { viewBox: '0 0 24 24', width: 22, height: 22, fill: 'none', stroke: '#e6ebff', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, h('path', { d: 'M6 9l6 6 6-6' }));
+    const header = h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 } },
+      h('button', { onClick: this.onExitGame, title: 'Exit fullscreen', style: { width: '40px', height: '40px', borderRadius: '12px', border: '1px solid rgba(143,174,255,0.2)', background: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 } }, chevron),
+      h('div', { style: { minWidth: 0, flex: 1 } },
+        h('div', { style: { fontSize: '15px', fontWeight: 700, letterSpacing: '2px', color: '#f5f7ff' } }, 'ARMADA'),
+        h('div', { style: { fontSize: '12px', color: 'rgba(220,226,245,0.55)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, g.subtitle || '')),
+      h('div', { style: { fontFamily: this.mono, fontSize: '11px', color: 'rgba(143,174,255,0.7)', border: '1px solid rgba(143,174,255,0.2)', padding: '4px 9px', borderRadius: '8px', flexShrink: 0 } }, srcLabel));
+
+    const status = h('div', { style: { textAlign: 'center', padding: '14px 16px 4px' } },
+      h('div', { style: { fontSize: '18px', fontWeight: 700, letterSpacing: '2px', color: si.color } }, si.title),
+      h('div', { style: { fontSize: '12px', color: 'rgba(220,226,245,0.6)', marginTop: '3px' } }, si.sub));
+
+    const panelHead = (label, color, count) => h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', padding: '0 2px' } },
+      h('div', { style: { fontFamily: this.mono, fontSize: '11px', letterSpacing: '2px', color, fontWeight: 600 } }, label),
+      count ? h('div', { style: { fontFamily: this.mono, fontSize: '10px', color: 'rgba(220,226,245,0.45)' } }, count) : null);
+    const panel = (label, color, count, node) => h('div', { style: { background: '#1c2030', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', padding: (dm.twoCol ? '16px' : '12px') } }, panelHead(label, color, count), node);
+
+    const boardEls = [];
+    if (s.phase !== 'place') boardEls.push(h('div', { key: 'e' }, panel('ENEMY WATERS', '#ff6b7a', enemyAfloat + ' / 5', this.buildBoard('enemy'))));
+    boardEls.push(h('div', { key: 'p' }, panel('YOUR FLEET', '#8faeff', s.phase === 'place' ? s.placeIndex + ' / 5' : playerAfloat + ' / 5', this.buildBoard('player'))));
+    const boards = h('div', { style: { display: 'flex', flexDirection: dm.twoCol ? 'row' : 'column', gap: dm.twoCol ? '20px' : '16px', justifyContent: 'center', alignItems: dm.twoCol ? 'flex-start' : 'center' } }, boardEls);
+
+    const mkBtn = (label, onClick, primary) => h('button', { onClick, style: { padding: '11px 20px', borderRadius: '10px', fontFamily: 'inherit', fontSize: '13px', fontWeight: 600, letterSpacing: '.5px', cursor: 'pointer', border: '1px solid ' + (primary ? 'rgba(143,174,255,0.5)' : 'rgba(143,174,255,0.25)'), background: primary ? 'linear-gradient(135deg,#41537e,#2c3e70)' : 'rgba(255,255,255,0.04)', color: primary ? '#fff' : '#cdd6ff', boxShadow: primary ? '0 4px 16px rgba(44,62,112,0.5)' : 'none' } }, label);
+    let controls = [];
+    if (s.phase === 'place') { controls = [mkBtn('Auto-deploy', this.onRandom), mkBtn('Clear', this.onReset)]; if (s.placeIndex >= 5) controls.push(mkBtn('Engage ▸', this.onStart, true)); }
+    else if (s.phase === 'over') { controls = [mkBtn('New battle', this.onNewGame, true), mkBtn('View result', this.showResult), mkBtn('Leave', this.onExitGame)]; }
+    const controlsRow = h('div', { style: { display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap', marginTop: '20px' } }, controls);
+
+    const rosters = h('div', { style: { display: 'flex', flexDirection: dm.twoCol ? 'row' : 'column', gap: dm.twoCol ? '20px' : '14px', justifyContent: 'center', marginTop: '22px' } },
+      (s.phase !== 'place') ? h('div', { style: { flex: dm.twoCol ? '0 1 300px' : 'none' } }, panel('ENEMY FLEET', 'rgba(255,107,122,0.75)', '', this.buildRoster('enemy'))) : null,
+      h('div', { style: { flex: dm.twoCol ? '0 1 300px' : 'none' } }, panel('YOUR FLEET', 'rgba(143,174,255,0.75)', '', this.buildRoster('player'))));
+
+    const log = h('div', { style: { maxWidth: '560px', margin: '22px auto 0', background: '#1c2030', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', padding: '14px 16px' } },
+      h('div', { style: { fontFamily: this.mono, fontSize: '10px', letterSpacing: '2px', color: 'rgba(220,226,245,0.4)', fontWeight: 600, marginBottom: '10px' } }, 'BATTLE LOG'), this.buildLog());
+
+    const body = h('div', { style: { flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: dm.twoCol ? '8px 20px 40px' : '6px 12px 36px' } }, status, boards, controlsRow, rosters, log);
+
+    const overlayKids = [header, body];
+    if (s.phase === 'over' && !s.resultDismissed) overlayKids.push(this.buildResultModal());
+    return h('div', { style: { position: 'absolute', inset: 0, zIndex: 50, background: 'radial-gradient(900px 500px at 50% -8%, #1c2030 0%, #141821 48%, #0e1116 100%)', display: 'flex', flexDirection: 'column', animation: 'overlayIn .3s ease-out' } }, overlayKids);
+  }
+
+  renderVals() {
+    const s = this.state, d = this.device();
+    const acc = this.acc();
+    const on = (t) => s.tab === t ? acc : 'rgba(245,245,245,0.42)';
+    const toggleActive = ['#0e1116', 'linear-gradient(135deg,#41537e,#7b9cff)', 'rgba(143,174,255,0.5)'];
+    const toggleIdle = ['rgba(245,245,245,0.6)', 'rgba(255,255,255,0.04)', 'rgba(143,174,255,0.18)'];
+    const ph = s.device === 'phone' ? toggleActive : toggleIdle;
+    const tb = s.device === 'tablet' ? toggleActive : toggleIdle;
+    const tabTitle = { chats: 'Chats', walls: 'Walls', contacts: 'Contacts', calls: 'Calls', settings: 'Settings' }[s.tab];
+    const inConvo = s.tab === 'chats' && s.convo != null;
+
+    return {
+      // device
+      deviceW: d.w, deviceH: d.h,
+      boxRef: (el) => { this._boxEl = el; },
+      setPhone: () => this.setState({ device: 'phone' }),
+      setTablet: () => this.setState({ device: 'tablet' }),
+      phoneColor: ph[0], phoneBg: ph[1], phoneBorder: ph[2],
+      tabletColor: tb[0], tabletBg: tb[1], tabletBorder: tb[2],
+      // toolbar / views
+      tabTitle,
+      showTitleBar: !inConvo,
+      viewChatList: s.tab === 'chats' && s.convo == null,
+      viewMaya: s.tab === 'chats' && s.convo === 'maya',
+      viewCrew: s.tab === 'chats' && s.convo === 'crew',
+      viewWalls: s.tab === 'walls',
+      viewOther: s.tab === 'contacts' || s.tab === 'calls' || s.tab === 'settings',
+      // nav
+      navChats: () => this.setState({ tab: 'chats' }),
+      navWalls: () => this.setState({ tab: 'walls', convo: null }),
+      navContacts: () => this.setState({ tab: 'contacts', convo: null }),
+      navCalls: () => this.setState({ tab: 'calls', convo: null }),
+      navSettings: () => this.setState({ tab: 'settings', convo: null }),
+      openMaya: () => this.setState({ tab: 'chats', convo: 'maya' }),
+      openCrew: () => this.setState({ tab: 'chats', convo: 'crew' }),
+      back: () => this.setState({ convo: null }),
+      colChats: on('chats'), colWalls: on('walls'), colContacts: on('contacts'), colCalls: on('calls'), colSettings: on('settings'),
+      // launch
+      playDm: () => this.launch('chat', 'vs Maya Okonkwo'),
+      playGroup: () => this.launch('group', 'Weekend Crew · 4 players'),
+      playWall: () => this.launch('wall', 'Wall challenge · open to all'),
+      // game overlay
+      gameActive: s.game != null,
+      gameOverlay: s.game != null ? this.buildGameOverlay() : null,
+      onExitGame: this.onExitGame,
+    };
+  }
+}
+</script>
+</body>
+</html>
