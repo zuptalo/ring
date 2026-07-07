@@ -263,5 +263,5 @@ but the subject is the real lever.)
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/0008-chat-turn-based/plan.md`
+`specs/1038-armada-fullscreen-naval/plan.md`
 <!-- SPECKIT END -->

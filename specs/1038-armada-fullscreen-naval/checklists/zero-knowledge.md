@@ -20,8 +20,8 @@ and gate `/speckit-plan`.
 ## Commitment scheme quality
 
 - [x] CHK005 - Does the commitment bind the full game geometry (board size + fleet roster + placements + salt) so an Armada commitment can never validate as another game's — including old battleship's? [Coverage, Spec §FR-002]
-- [ ] CHK006 - Is the serialization CANONICAL in the contract (fixed class order Carrier→Destroyer, pinned field encoding, pinned salt size/encoding) so the same layout can't produce two commitments? [Clarity, Gap — gates plan/contract]
-- [ ] CHK007 - Does the contract reuse the app's existing hash primitive (no bespoke crypto) and state binding + hiding adequacy (random salt against the 10×10 five-ship layout space)? [Consistency, Gap — gates plan/contract]
+- [x] CHK006 - Is the serialization CANONICAL in the contract (fixed class order Carrier→Destroyer, pinned field encoding, pinned salt size/encoding) so the same layout can't produce two commitments? [Clarity, contract §Layout]
+- [x] CHK007 - Does the contract reuse the app's existing hash primitive (no bespoke crypto) and state binding + hiding adequacy (random salt against the 10×10 five-ship layout space)? [Consistency, contract §Layout, research §D2]
 
 ## Trust model & cheat handling
 
@@ -29,7 +29,7 @@ and gate `/speckit-plan`.
 - [x] CHK009 - Is the forced-reveal mechanism specified so a game cannot END unverified (loser's reveal rides the final answer; winner then reveals)? [Completeness, Spec §FR-002]
 - [x] CHK010 - Are divergent/illegal logs required to land on a labeled terminal (out-of-sync), never a silent hang — including under delayed/reordered delivery? [Coverage, Spec §FR-009, §Edge Cases]
 - [x] CHK011 - Is the anti-stall re-emit (a judged-but-unsent answer re-sent on next open) specified as a retransmission of the SAME judged result, introducing no new information channel? [Consistency, Spec §FR-009]
-- [ ] CHK012 - Does the contract enumerate ALL cheat classes with their outcome (bad salt, illegal layout, moved-ship layout, lied answer, tampered reveal), each mapped to a test? [Coverage, Spec §SC-002 — enumeration gates plan/contract]
+- [x] CHK012 - Does the contract enumerate ALL cheat classes with their outcome (bad salt, illegal layout, moved-ship layout, lied answer, tampered reveal), each mapped to a test? [Coverage, contract §Status & verification, research §D11]
 
 ## Wire & metadata surface
 
@@ -45,8 +45,9 @@ and gate `/speckit-plan`.
 ## Notes
 
 - Validation run 2026-07-07 (spec stage, pre-plan): 12 of 17 items PASS
-  against spec.md as written. CHK006, CHK007, CHK012 gate the plan phase (they
-  judge the protocol contract doc mirroring
-  `specs/0011-battleship-hidden-fleets/contracts/battleship-protocol.md`);
-  CHK017 gates task generation. Re-run this checklist after `/speckit-plan`
-  and `/speckit-tasks` and check the remaining boxes before implementation.
+  against spec.md as written. CHK006, CHK007, CHK012 gate the plan phase;
+  CHK017 gates task generation.
+- Re-validated 2026-07-07 after `/speckit-plan`: CHK006/007/012 now PASS
+  against `contracts/armada-protocol.md` + `research.md` (§D2, §D11). Only
+  CHK017 remains open — check it after `/speckit-tasks` confirms the
+  tests-first ordering.
