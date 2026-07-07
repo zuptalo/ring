@@ -120,6 +120,17 @@ func newFakePostStore() *fakePostStore {
 func (f *fakePostStore) PostAuthor(_ context.Context, postID string) (string, error) {
 	return f.posts[postID].Author, nil
 }
+func (f *fakePostStore) GameParticipants(_ context.Context, postID string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range f.eng[postID] {
+		if e.Kind == "game" && !seen[e.Actor] {
+			seen[e.Actor] = true
+			out = append(out, e.Actor)
+		}
+	}
+	return out, nil
+}
 func (f *fakePostStore) EngagementActor(_ context.Context, postID, engID string) (string, error) {
 	for _, e := range f.eng[postID] {
 		if e.ID == engID {
@@ -832,12 +843,12 @@ func TestEngagementPushesOwnerOnly(t *testing.T) {
 	}
 }
 
-// Spec 0009: game engagement (an accept or move on a game-challenge post) must
-// reach players and followers even when their app is closed — so unlike
-// reactions/comments (author-only, spec 1031), kind "game" fans the CONTENT-FREE
-// activity push to the whole audience except the actor, author included even
-// when the author is the actor's opponent. The payload stays sealed; each woken
-// device pulls, decrypts under K_post, and decides locally whether to alert.
+// Spec 1035 (amending 0009): game engagement pushes reach the PARTICIPANTS
+// only — the post author plus everyone who has previously written a game
+// engagement on the post — never the passive audience. A spectator's one
+// game-related push stays the challenge post itself; a Battleship game no
+// longer wakes every audience device per move. Routing uses only metadata the
+// server already holds (kind + actor); payloads stay sealed.
 func TestGameEngagementPushesAudience(t *testing.T) {
 	conn := newFakePostConn()
 	notif := &recordingNotifier{}
@@ -856,33 +867,45 @@ func TestGameEngagementPushesAudience(t *testing.T) {
 	notif.reset()
 
 	// Bob accepts the challenge (kind "game") → the kind is valid, stored
-	// opaquely, and the push fans to alice (author) AND carol (audience) — not bob.
+	// opaquely, and the push goes to alice (the author) ONLY — carol is a
+	// spectator and must not be woken (spec 1035).
 	acceptEng := `{"id":"77777777-7777-7777-7777-777777777777","kind":"game","payload":"SEALED"}`
 	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, acceptEng); rr.Code != http.StatusCreated {
 		t.Fatalf("game engagement status = %d; body=%s (kind must be accepted)", rr.Code, rr.Body.String())
 	}
-	if !notif.activityPushedTo(aliceID, postID) || !notif.activityPushedTo(carolID, postID) {
-		t.Errorf("game engagement must push the whole audience (alice + carol)")
+	if !notif.activityPushedTo(aliceID, postID) {
+		t.Errorf("game engagement must push the author (alice)")
+	}
+	if notif.activityPushedTo(carolID, postID) {
+		t.Errorf("game engagement must NOT push a passive spectator (carol), spec 1035")
 	}
 	if notif.activityPushedTo(bobID, postID) {
 		t.Errorf("game engagement must never push the actor (bob)")
 	}
-	if n := notif.activityPushCount(); n != 2 {
-		t.Errorf("game engagement fired %d activity pushes; want exactly 2", n)
+	if n := notif.activityPushCount(); n != 1 {
+		t.Errorf("game engagement fired %d activity pushes; want exactly 1 (the author)", n)
 	}
 	notif.reset()
 
 	// The AUTHOR moves (alice is player 0): unlike self-reactions, her game
-	// engagement still wakes the others — it is bob's turn now.
+	// engagement still wakes her OPPONENT — it is bob's turn now. Bob is a
+	// participant because he has a prior game engagement on the post; carol
+	// still is not.
 	moveEng := `{"id":"88888888-8888-8888-8888-888888888888","kind":"game","payload":"SEALED2"}`
 	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokA, moveEng); rr.Code != http.StatusCreated {
 		t.Fatalf("author game engagement status = %d; body=%s", rr.Code, rr.Body.String())
 	}
-	if !notif.activityPushedTo(bobID, postID) || !notif.activityPushedTo(carolID, postID) {
-		t.Errorf("the author's game engagement must push bob + carol")
+	if !notif.activityPushedTo(bobID, postID) {
+		t.Errorf("the author's game engagement must push her opponent (bob)")
+	}
+	if notif.activityPushedTo(carolID, postID) {
+		t.Errorf("a move must NOT push the spectator (carol), spec 1035")
 	}
 	if notif.activityPushedTo(aliceID, postID) {
 		t.Errorf("the author's own game engagement must not push the author")
+	}
+	if n := notif.activityPushCount(); n != 1 {
+		t.Errorf("move fired %d activity pushes; want exactly 1 (the opponent)", n)
 	}
 	notif.reset()
 
