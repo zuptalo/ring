@@ -63,7 +63,7 @@ Specs are grouped by category band; status moves
 | [1035](specs/1035-game-activity-notifies/spec.md) | Game Activity Notifies Players, Not the Whole Audience | 🟢 shipped |
 | [1036](specs/1036-wall-game-follows/spec.md) | Followers Get the Result Push; Group Chats Retire Games | 🟢 shipped |
 | [1037](specs/1037-zombie-push-subscriptions/spec.md) | Zombie Push Subscriptions Rotate Themselves | 🟢 shipped |
-| [1038](specs/1038-armada-fullscreen-naval/spec.md) | Armada — Fullscreen Naval Duel Replaces Battleship | 🟡 in-progress |
+| [1038](specs/1038-armada-fullscreen-naval/spec.md) | Armada — Fullscreen Naval Duel Replaces Battleship | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
