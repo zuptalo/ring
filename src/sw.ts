@@ -23,7 +23,7 @@ import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
-  anyClientVisible, quietNote,
+  anyClientVisible, quietNote, stampPushWake,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
@@ -656,6 +656,10 @@ async function pageWillNotify(clients: readonly Client[], timeoutMs: number): Pr
 self.addEventListener('push', (event) => {
   event.waitUntil(
     (async () => {
+      // (spec 1037) Every wake stamps its time FIRST — the page-side zombie
+      // detector treats "no wake since a stale message was sent" as the
+      // rotate-the-subscription signature.
+      await stampPushWake();
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       const { kind, post } = pushKind(event);
       if (kind === 'call') {

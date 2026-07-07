@@ -60,6 +60,7 @@ Specs are grouped by category band; status moves
 | [1032](specs/1032-store-messages-push/spec.md) | Messages store on push so the app opens warm | 🟢 shipped |
 | [1033](specs/1033-submarine-redesign-battleship/spec.md) | Submarine Redesign of the Battleship Card | 🟢 shipped |
 | [1034](specs/1034-every-push-wake/spec.md) | No Silent Pushes — Every Wake Shows a Notification Unless the App Is Visibly Open | 🟢 shipped |
+| [1037](specs/1037-zombie-push-subscriptions/spec.md) | Zombie Push Subscriptions Rotate Themselves | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

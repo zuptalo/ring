@@ -109,6 +109,17 @@ export interface PreviewResult {
 /** Read a settings-store value from the service worker (no keystore needed; settings
  *  are stored in the clear). Exported so the SW push handler can honor notification
  *  toggles like `notifications.wall.show`. */
+/** (spec 1037) Stamp the wall-clock of a push WAKE. The page compares this
+ *  against stale-drained messages: a long-queued message with NO wake after
+ *  its send time is the zombie-subscription signature that triggers rotation. */
+export async function stampPushWake(): Promise<void> {
+  try {
+    await put<Setting<number>>('settings', { key: 'push.lastWakeAt', value: Date.now() });
+  } catch {
+    /* best-effort */
+  }
+}
+
 export async function setting<T>(key: string, fallback: T): Promise<T> {
   const s = await get<Setting<T>>('settings', key);
   return s ? s.value : fallback;
