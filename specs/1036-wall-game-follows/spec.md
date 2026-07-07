@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-07
 
-**Status**: planned
+**Status**: in-review
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User: (1) with 1:1 and Wall games, group-chat games are redundant —

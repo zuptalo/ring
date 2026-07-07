@@ -67,6 +67,32 @@ async function startGame(
   return msgId;
 }
 
+test('games start from 1:1 chats only: the group attach sheet offers no Game (spec 1036)', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'RINGTSA1');
+  const b = await createAccount(ctxB, 'RINGTSA2');
+  const c = await createAccount(ctxC, 'RINGTSA3');
+  await pair(a, b);
+  await pair(a, c);
+
+  // 1:1 chat: the attach sheet offers Game.
+  const oneToOne = (await a.page.evaluate((id) => (window as any).__ringTest.chatWith(id), b.id)) as string;
+  await a.page.goto(`/chat/${oneToOne}`);
+  await a.page.locator('ion-footer ion-button').first().click();
+  await expect(a.page.locator('ion-action-sheet button', { hasText: 'Game' })).toBeVisible();
+  await a.page.locator('ion-action-sheet button', { hasText: 'Cancel' }).click();
+
+  // Group chat: no Game entry at all (existing group games still render; only
+  // the entry point is gone).
+  const group = (await a.page.evaluate((ids) => (window as any).__ringTest.createGroup('No Arcade', ids), [b.id, c.id])) as string;
+  await a.page.goto(`/chat/${group}`);
+  await a.page.locator('ion-footer ion-button').first().click();
+  await expect(a.page.locator('ion-action-sheet button', { hasText: 'Poll' })).toBeVisible();
+  await expect(a.page.locator('ion-action-sheet button', { hasText: 'Game' })).toHaveCount(0);
+});
+
 test('1:1 tic-tac-toe: play to a win, turn enforcement, one-game gate, no forward', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();

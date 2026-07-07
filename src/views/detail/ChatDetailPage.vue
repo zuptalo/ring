@@ -3867,17 +3867,20 @@ async function openAttach() {
       { text: 'Location', handler: () => void shareLocation() },
       { text: 'Contact', handler: () => void openContactPicker() },
       { text: 'Poll', handler: () => void openPollComposer() },
-      {
-        text: gameBlocked
-          ? 'Game (one game at a time)'
-          : chat.value?.isGroup
-            ? 'Game challenge'
-            : 'Game',
-        cssClass: gameBlocked ? 'attach-game-blocked' : undefined,
-        handler: gameBlocked
-          ? () => void appToast({ message: 'Finish the game in this chat first.', duration: 2200 })
-          : () => void openGamePicker(),
-      },
+      // Games live in 1:1 chats and on the Wall (spec 1036): group chats no
+      // longer offer starting one. Existing group games still render and play
+      // out — only the entry point is gone.
+      ...(chat.value?.isGroup
+        ? []
+        : [
+            {
+              text: gameBlocked ? 'Game (one game at a time)' : 'Game',
+              cssClass: gameBlocked ? 'attach-game-blocked' : undefined,
+              handler: gameBlocked
+                ? () => void appToast({ message: 'Finish the game in this chat first.', duration: 2200 })
+                : () => void openGamePicker(),
+            },
+          ]),
       { text: 'Cancel', role: 'cancel' },
     ],
   });

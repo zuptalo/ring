@@ -62,8 +62,8 @@ import {
   acceptWallChallenge,
   playWallGameMove,
   resignWallGame,
-  followGame,
-  unfollowGame,
+  followWallGame,
+  unfollowWallGame,
   followedGames,
   listContacts,
 } from '@/db/queries';
@@ -119,7 +119,8 @@ const themeName = computed(
 const onAccept = () => void acceptWallChallenge(props.postId);
 const onMove = (mv: unknown) => void playWallGameMove(props.postId, mv);
 const onResign = () => void resignWallGame(props.postId);
-const onFollow = () => void (followed.value ? unfollowGame(props.postId) : followGame(props.postId));
+const onFollow = () =>
+  void (followed.value ? unfollowWallGame(props.postId) : followWallGame(props.postId));
 // A Wall rematch is a fresh challenge POST — anyone may throw the next one.
 const onRematch = () => void router.push('/wall/compose');
 </script>

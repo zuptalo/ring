@@ -541,7 +541,7 @@ export const SETTINGS: Record<string, SettingNode> = {
           { type: 'toggle', title: 'Your turn', key: 'notifications.games.turn', default: true },
           { type: 'toggle', title: 'New challenges', key: 'notifications.games.challenges', default: true },
           { type: 'toggle', title: 'Followed games, moves', key: 'notifications.games.followMoves', default: true },
-          { type: 'toggle', title: 'Game results', key: 'notifications.games.followResults', default: true },
+          { type: 'toggle', title: 'Followed games, results', key: 'notifications.games.followResults', default: true },
           { type: 'toggle', title: 'Game sounds', key: 'notifications.gameSounds', default: true },
         ],
         footer:

@@ -398,6 +398,32 @@ func (s *Store) GameParticipants(ctx context.Context, postID string) ([]string, 
 	return out, rows.Err()
 }
 
+// GameFollowers returns the distinct actors holding a LIVE `follow` engagement
+// on the post (spec 1036) — a tombstone whose payload names the follow row
+// retracts it. These are the spectators who opted in to the result push.
+func (s *Store) GameFollowers(ctx context.Context, postID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT f.actor FROM post_engagement f
+		WHERE f.post_id=$1 AND f.kind='follow'
+		AND NOT EXISTS (
+			SELECT 1 FROM post_engagement t
+			WHERE t.post_id=$1 AND t.kind='tombstone' AND t.payload=f.id
+		)`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // PostAuthor returns a post's author id (or "" if the post is gone).
 func (s *Store) PostAuthor(ctx context.Context, postID string) (string, error) {
 	var author string
