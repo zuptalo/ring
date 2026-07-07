@@ -477,6 +477,33 @@ export function mergeIntoSummary(prev: ShownSummary | undefined, note: SwNote, n
  * whenever the coalesced content hasn't changed. The signature records what the user
  * last SAW per tag (body + cumulative count); an identical re-assert is skipped —
  * the same iOS-tolerated outcome class as the mute/badge-only paths. ---- */
+/* ---- spec 1034: the no-silent-pushes policy's pure halves. iOS revokes a push
+ * subscription whose service worker repeatedly consumes a wake without showing a
+ * notification (the "zombie": the push service keeps accepting sends, the device
+ * never wakes again — observed live on a dev iPhone). So EVERY wake must end
+ * visibly unless a Ring window is actually ON SCREEN. ---- */
+
+/** Does any window client license a silent outcome? Only a truly VISIBLE one —
+ *  a frozen/background PWA still appears in matchAll() (the norm on iOS) but
+ *  shows the user nothing, which is exactly the state that accrues strikes. */
+export function anyClientVisible(clients: readonly { visibilityState?: string }[]): boolean {
+  return clients.some((c) => c.visibilityState === 'visible');
+}
+
+/** The content-free notification shown when the rich path has nothing it may
+ *  display (muted / hidden / badge-only / nothing-new / removal-only activity):
+ *  no sender, no content — the same zero-knowledge class as the push payload —
+ *  and silent, so mute keeps its spirit (no buzz) while the OS still sees the
+ *  visible notification the Web Push contract demands. Self-replacing tag. */
+export function quietNote(kind: 'msg' | 'activity'): {
+  title: string;
+  options: { body: string; tag: string; silent: boolean; renotify: boolean };
+} {
+  return kind === 'msg'
+    ? { title: 'New message', options: { body: 'You have a new message.', tag: 'ring-incoming', silent: true, renotify: false } }
+    : { title: 'Ring', options: { body: 'New activity', tag: 'ring-incoming', silent: true, renotify: false } };
+}
+
 export interface ShownSig {
   body: string;
   count: number;

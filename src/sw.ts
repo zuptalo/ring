@@ -23,6 +23,7 @@ import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
+  anyClientVisible, quietNote,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
@@ -188,6 +189,28 @@ async function showNotes(notes: SwNote[]): Promise<void> {
   }
 }
 
+/** (spec 1034) Show the content-free QUIET generic — the terminal fallback that
+ *  keeps the Web Push userVisibleOnly contract when the rich path has nothing it
+ *  may display. Skipped only when a Ring window is truly on screen. iOS revokes
+ *  subscriptions that repeatedly consume a wake without showing anything (the
+ *  "zombie" — Apple keeps accepting sends with 201, the device never wakes
+ *  again; observed live), so silence is never an outcome while the app is away. */
+async function showQuietUnlessVisible(kind: 'msg' | 'activity'): Promise<void> {
+  try {
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (anyClientVisible(clients)) return; // user is looking at Ring — silence is honest here
+    const n = quietNote(kind);
+    await self.registration.showNotification(n.title, {
+      ...n.options,
+      icon: ICON,
+      badge: BADGE,
+      data: { url: kind === 'msg' ? '/tabs/chats' : '/' },
+    });
+  } catch (e) {
+    console.warn('[sw] quiet generic failed', e);
+  }
+}
+
 /** Close any lingering notifications with a given tag (used to clear the generic
  *  placeholder once a richer preview is ready, since different tags don't auto-replace). */
 async function closeByTag(tag: string): Promise<void> {
@@ -227,10 +250,10 @@ function serializeNotify<T>(fn: () => Promise<T>): Promise<T> {
  * resurrected; if there's no fresh summary, shows nothing (the mute/badge-only outcome). Also closes a
  * stranded generic placeholder, since a real per-chat notification supersedes it.
  */
-async function reassertFromSummary(): Promise<void> {
+async function reassertFromSummary(): Promise<boolean> {
   try {
     const list = await loadShownSummary(); // already TTL-filtered
-    if (!list.length) return; // nothing to re-assert → show nothing (mirrors the badge-only path)
+    if (!list.length) return false; // no fresh summary — the caller shows the quiet generic (spec 1034)
     const n = list.reduce((a, b) => (b.ts > a.ts ? b : a)); // freshest
     // (spec 2020) A re-assert that is VISUALLY IDENTICAL to what the user already
     // sees (same body + cumulative count on this tag) shows nothing at all: iOS
@@ -238,7 +261,11 @@ async function reassertFromSummary(): Promise<void> {
     // Notification Center entry, which read as "the same message notified twice"
     // in a burst. A CHANGED body/count still re-asserts silently below.
     const sigs = await loadShownSigs();
-    if (!shouldReassert(sigs[n.tag], n)) return;
+    // (spec 1034, amending spec 2020) An identical re-assert no longer SKIPS —
+    // skipping consumed the wake invisibly, which is subscription-fatal on iOS.
+    // The caller shows the quiet generic instead: silent, content-free, its own
+    // self-replacing tag — the rich per-chat banner still never repeats.
+    if (!shouldReassert(sigs[n.tag], n)) return false;
     const k = n.ids.length;
     await saveShownSig(n.tag, { body: n.body, count: k, ts: Date.now() });
     await self.registration.showNotification(k > 1 ? `${n.title} (${k})` : n.title, {
@@ -251,8 +278,10 @@ async function reassertFromSummary(): Promise<void> {
       data: { url: n.url },
     });
     await closeByTag(GENERIC_TAG); // a real per-chat notification supersedes any stranded placeholder
+    return true;
   } catch {
     /* ignore — re-assert is best-effort; the badge still updates */
+    return false;
   }
 }
 
@@ -445,6 +474,9 @@ async function tryAuthoritativeDrain(): Promise<boolean> {
       if (r.deferred > 0) return false; // preview flow handles the deferred remainder
       // Fully handled: applied rows are already in unreadCount(), nothing pending.
       await updateAppBadge(0);
+      // (spec 1034) Persisted + acked but produced no notes (every frame was for a
+      // muted/hidden/badge-only chat): the wake still needs a visible ending.
+      if (!r.notes.length) await showQuietUnlessVisible('msg');
       return true;
     });
   } catch (e) {
@@ -480,10 +512,12 @@ async function showMessageNotification(): Promise<void> {
   }
 
   let shownGeneric = false;
+  let shownAny = false; // spec 1034: track whether THIS wake produced anything visible
   if (result.notes.length) {
     await closeByTag(GENERIC_TAG); // clear any earlier generic before the rich note
     await showNotes(result.notes);
     await markShown(allIds(result.notes)); // only mark what we displayed
+    shownAny = true;
   } else if (timedOut || (!result.suppressed && !result.silenced && result.newUnshown)) {
     // Show the generic placeholder ONLY when there's a genuinely-new message we couldn't render: a
     // slow cold-start decrypt still in flight at the deadline (timedOut), a fetched-but-undecryptable
@@ -492,14 +526,20 @@ async function showMessageNotification(): Promise<void> {
     // and `silenced` (mute / web-push-off / badge-only, spec 1015 FR-022/FR-024) show no placeholder.
     await showGeneric(timedOut ? 'timeout' : result.reason);
     shownGeneric = true;
+    shownAny = true;
   } else if (isNothingNew(result)) {
     // (spec 2016/2017) Nothing genuinely new — the relay queue was empty (`no-frames`) or every frame
     // was already shown (a burst wake the first wake beat). A new generic here is pure noise. Re-assert
     // the ONE authoritative coalesced notification from the persisted summary silently (spec 2017), so
     // iOS sees a showNotification call (no own-summary gap) without a new alert; shows nothing only when
     // there's no fresh summary (the mute/badge-only outcome). The badge below still stays accurate.
-    await reassertFromSummary();
+    shownAny = await reassertFromSummary();
   }
+  // (spec 1034) Silence is not an outcome: muted / hidden / badge-only / web-push-
+  // off (`silenced`), the master-toggle race (`suppressed`), and a nothing-new
+  // wake with nothing to re-assert all still consumed a push — end them with the
+  // content-free quiet generic unless Ring is actually on screen.
+  if (!shownAny) await showQuietUnlessVisible('msg');
 
   // Settle the full preview (bounded) so its /relay/pending fetch lands (→ delivery)
   // even after a generic fallback, we learn the accurate backlog for the badge, and
@@ -516,11 +556,12 @@ async function showMessageNotification(): Promise<void> {
       await showNotes(full.notes); // …show the real sender + text…
       await markShown(allIds(full.notes)); // …and don't re-preview them next push
     } else if (shownGeneric && full.silenced) {
-      // A SLOW cold start showed the generic before the decrypt settled; the settled
-      // result says every pending message was per-chat silenced → drop the placeholder
-      // so badge-only / web-push-off / mute is honored even on a slow wake. The badge
-      // below still counts them (pending), since `silenced` never sets `suppressed`.
-      await closeByTag(GENERIC_TAG);
+      // A SLOW cold start showed the loud generic before the decrypt settled; the
+      // settled result says every pending message was per-chat silenced. Spec 1034:
+      // don't vanish it (a wake must stay visible) — downgrade it in place (same
+      // tag) to the QUIET generic, so mute/badge-only keeps its no-buzz spirit
+      // while the notification remains.
+      await showQuietUnlessVisible('msg');
     }
   } catch {
     /* ignore */
@@ -638,6 +679,10 @@ self.addEventListener('push', (event) => {
           // the conn path previously never touched the badge, so a friend request didn't count.
           const pendingIncoming = await showConnNotification();
           await updateAppBadge(pendingIncoming);
+        } else {
+          // (spec 1034) A client EXISTS but may be a frozen background PWA (the norm
+          // on iOS) that will never render the page-side alert — end visibly anyway.
+          await showQuietUnlessVisible('activity');
         }
         return;
       }
@@ -653,6 +698,10 @@ self.addEventListener('push', (event) => {
           // Name the author AND bump the app-icon badge (the post path previously did neither).
           const newCount = await showPostNotification();
           await updateAppBadge(newCount);
+        } else {
+          // (spec 1034) Toggle off, or a (possibly frozen) client exists: the wake
+          // still consumed a push — end it with the content-free quiet generic.
+          await showQuietUnlessVisible('activity');
         }
         return;
       }
@@ -665,10 +714,18 @@ self.addEventListener('push', (event) => {
         // names the actor from the public directory, and opens sealed reaction
         // payloads locally so a REMOVAL shows nothing at all.
         for (const client of clients) client.postMessage({ type: 'ring:posts' });
+        let shownActivity = false;
         if (!clients.length && (await setting('notifications.wall.activity', true))) {
           const notes = await previewPostActivity(post ?? '');
-          if (notes.length) await showConnNotes(notes);
+          if (notes.length) {
+            await showConnNotes(notes);
+            shownActivity = true;
+          }
         }
+        // (spec 1034) Toggle off, frozen client, or a removal that previews to zero
+        // notes: still a consumed push — end visibly (content-free; a removal shows
+        // the neutral "New activity", never who or what).
+        if (!shownActivity) await showQuietUnlessVisible('activity');
         return;
       }
       if (kind === 'version') {
@@ -678,7 +735,12 @@ self.addEventListener('push', (event) => {
         // the app is fully CLOSED — mirroring the post/conn pattern and keeping the
         // userVisibleOnly contract (exactly one visible notification when closed).
         for (const client of clients) client.postMessage({ type: 'ring:checkupdate' });
-        if (!clients.length) await showVersionNotification();
+        if (!clients.length) {
+          await showVersionNotification();
+        } else {
+          // (spec 1034) A frozen background client can't show the update toast.
+          await showQuietUnlessVisible('activity');
+        }
         return;
       }
       // Let a live, unlocked page own the notification (avoids a duplicate); the SW
