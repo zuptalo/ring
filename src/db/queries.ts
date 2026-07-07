@@ -3298,6 +3298,15 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
         body = `${await gameNameOf(session.players?.[status.winner])} won the game \u{1F3C6}`;
       }
     }
+  } else if (status.state !== 'ongoing') {
+    // A plain spectator (spec 1035): the FINAL RESULT only — no per-move noise,
+    // behind the same results switch.
+    if (await getSetting<boolean>('notifications.games.followResults', true)) {
+      if (status.state === 'draw') body = "It's a draw \u{1F91D}";
+      else if (status.state === 'won' || status.state === 'resigned') {
+        body = `${await gameNameOf(session.players?.[status.winner])} won the game \u{1F3C6}`;
+      }
+    }
   }
   for (const i of others) notifiedEngagementIds.add(i.id);
   if (!body) return;

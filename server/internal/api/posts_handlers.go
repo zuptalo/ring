@@ -328,18 +328,22 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 	// A failed author lookup skips the push rather than failing the write — the
 	// engagement is stored and the WS frames above already went out.
 	//
-	// EXCEPTION — kind "game" (spec 0009): a game riding a post must reach its
-	// players and followers while their app is CLOSED (a turn-based game whose
-	// player never learns it is their turn defeats the feature), so the same
-	// content-free push fans to the WHOLE audience plus the author, except the
-	// actor — including when the actor IS the author, whose move is the other
-	// player's turn. Each woken device pulls, decrypts under K_post, and decides
-	// locally (turn/follow settings) whether to show anything.
+	// EXCEPTION — kind "game" (spec 0009, narrowed by spec 1035): a game riding
+	// a post must reach its PLAYERS while their app is CLOSED (a turn-based game
+	// whose player never learns it is their turn defeats the feature) — but only
+	// its players. The participants are the post author plus everyone who has
+	// previously written a `game` engagement here (the accept and every move are
+	// all kind "game", and the CURRENT row is already stored, so the accepter is
+	// a participant from their own accept onward). The passive audience is never
+	// woken per move — their one game push stays the challenge post itself; a
+	// spectator device learns of results on its next ordinary wake or open.
+	// Routing uses only kind + actor, which the server already stores; each
+	// woken device still pulls, decrypts under K_post, and decides locally.
 	if h.Notifier != nil && !tombstone {
 		if req.Kind == "game" {
 			targets := map[string]bool{}
-			if aud, err := h.Posts.PostAudience(r.Context(), postID); err == nil {
-				for _, u := range aud {
+			if players, err := h.Posts.GameParticipants(r.Context(), postID); err == nil {
+				for _, u := range players {
 					targets[u] = true
 				}
 			}
