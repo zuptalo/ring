@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-07
 
-**Status**: in-review
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: Follow-up to specs 2022/1034 (the push-death incident). The one
