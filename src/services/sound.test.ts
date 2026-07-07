@@ -55,6 +55,12 @@ describe('claimCue — call-cue rate limiter (spec 0004 US5)', () => {
     }
   });
 
+  it('has an effect for every Armada foley cue incl. the victory march and defeat lament (spec 1038)', () => {
+    for (const name of ['ar-fire', 'ar-splash', 'ar-hit', 'ar-sunk', 'ar-sonar', 'ar-victory', 'ar-defeat']) {
+      expect(FX_NAMES).toContain(name);
+    }
+  });
+
   it('de-dups a rapid hold→swap→hold storm so cue-fatigue is bounded (spec 0005 T027)', () => {
     // Fumbling the swap button shouldn't machine-gun the same cue.
     expect(claimCue('swap', 10_000)).toBe(true);

@@ -1197,8 +1197,12 @@ export async function resignGame(chatId: string, messageId: string): Promise<voi
   const at = now();
   const seq = m.game.moves.length + 1;
   if ((await applyGameMove(m, me, { seq, action: 'resign', at })) !== 'applied') return;
-  // Conceding sounds the losing tone for the resigner (FR-026).
-  void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  // Conceding sounds the losing tone for the resigner (FR-026) — a game may
+  // name its own ending (Armada's struck-colours lament, spec 1038).
+  {
+    const st = deriveGameStatus(module, m.game);
+    void playGameCue((module.moveCue?.(undefined, st, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(st, me));
+  }
   await bumpOwnGamePreview(m, 'resign', at);
   const chat = await getChat(m.chatId);
   const signal: GameMoveSignal = { messageId, seq, action: 'resign', at };
@@ -3365,7 +3369,15 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
     isGameActive(post.id);
   if (watching) {
     for (const i of others) notifiedEngagementIds.add(i.id);
-    if (me !== null) void playGameCue(gameCueFor(status, me));
+    if (me !== null) {
+      // A watched game deserves its own foley, not the generic tick: load the
+      // freshest row's opened move payload so the module can name the cue
+      // (Armada's gun/splash/hit/sinking — chat games get this via
+      // handleGameMove; this is the wall twin).
+      const row = await get<PostEngagement>('postEngagement', latest.id);
+      const mv = row?.game?.t === 'move' ? (row.game as { move?: unknown }).move : undefined;
+      void playGameCue((module?.moveCue?.(mv, status, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(status, me));
+    }
     return;
   }
 
@@ -3890,7 +3902,8 @@ export async function resignWallGame(postId: string): Promise<void> {
   const after = await wallGameSession(postId);
   if (after) {
     const st = deriveGameStatus(module, after);
-    void playGameCue(gameCueFor(st, me));
+    // A game may name its own ending (Armada's struck-colours lament).
+    void playGameCue((module.moveCue?.(undefined, st, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(st, me));
     if (st.state !== 'ongoing') void announceWallGameOver(post, at);
   }
 }

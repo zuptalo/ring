@@ -485,7 +485,7 @@ const placeLabel = (cell: number): string =>
   `Place your ${nextClass.value?.name ?? 'ship'} at ${'ABCDEFGHIJ'[Math.floor(cell / 10)]}${(cell % 10) + 1}`;
 // The scope brightening is audible too: one sonar ping when the turn becomes yours.
 watch(canFire, (now, was) => {
-  if (now && !was) void playGameCue('bs-sonar');
+  if (now && !was) void playGameCue('ar-sonar');
 });
 
 // My fleet: authored preview while placing; the device-local secret in battle;

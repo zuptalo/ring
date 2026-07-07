@@ -26,6 +26,14 @@ export type GameCue =
   | 'bs-hit'
   | 'bs-sunk'
   | 'bs-sonar'
+  // Armada's naval foley + its own victory march / defeat lament (spec 1038).
+  | 'ar-fire'
+  | 'ar-splash'
+  | 'ar-hit'
+  | 'ar-sunk'
+  | 'ar-sonar'
+  | 'ar-victory'
+  | 'ar-defeat'
 
 /** The cue a game's new status earns for the player `me` — null for silence
  *  (out of sync is a failure state, not a moment; FR-026). */

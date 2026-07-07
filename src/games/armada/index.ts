@@ -8,17 +8,22 @@ import { locateOutline } from 'ionicons/icons'
 import type { GameModule } from '../types'
 import { applyMove, createInitialState, mayMove as armadaMayMove, status, turn, type ArmadaMove, type ArmadaState } from './logic'
 
-/** The foley a just-applied move deserves — armada reuses the naval FX layer
- *  battleship established (cue names are device-local, not wire): torpedo,
- *  splash, impact, or the groan of a sinking ship. Terminal moves fall back
- *  to the platform's win/lose fanfare; commits and reveals are silent
- *  bookkeeping. */
-function moveCue(move: unknown, st: { state: string }, _me: 0 | 1): string | null {
+/** The foley a just-applied move deserves — Armada's own layered naval set
+ *  (spec 1038; cue names are device-local, not wire): the deck gun, the
+ *  shell's splash, the armor hit, the full sinking sequence — and when a move
+ *  ENDS the war, the bugle victory march or the struck-colours lament instead
+ *  of the platform's generic fanfare. Commits and reveals are silent
+ *  bookkeeping (the final reveal is what lands the result cue). */
+function moveCue(move: unknown, st: { state: string; winner?: 0 | 1 }, me: 0 | 1): string | null {
+  // The ending owns its music regardless of HOW it ended — the final reveal,
+  // or a resignation (which carries no move at all).
+  if (st.state === 'won' || st.state === 'resigned') return st.winner === me ? 'ar-victory' : 'ar-defeat'
+  if (st.state === 'draw') return null // two cheaters share the generic shrug
   const m = move as ArmadaMove | null
   if (!m || typeof m !== 'object') return null
-  if (st.state !== 'ongoing') return null // the result fanfare owns the ending
-  if (m.t === 'shot') return 'bs-fire'
-  if (m.t === 'answer') return m.r === 'miss' ? 'bs-splash' : m.r === 'sunk' ? 'bs-sunk' : 'bs-hit'
+  if (st.state !== 'ongoing') return null
+  if (m.t === 'shot') return 'ar-fire'
+  if (m.t === 'answer') return m.r === 'miss' ? 'ar-splash' : m.r === 'sunk' ? 'ar-sunk' : 'ar-hit'
   return null
 }
 
