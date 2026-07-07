@@ -12,6 +12,7 @@ import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
+import { recordStaleDrain, STALE_MSG_MS } from '@/services/push';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { withInboundLock } from '@/services/cross-lock';
 import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
@@ -5470,6 +5471,12 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   if (payload.groupId) await ensureGroupChat(payload.groupId, from);
 
   const ts = payload.timestamp || now();
+  // (spec 1037) A message that sat queued past the staleness bar means a push
+  // SHOULD have woken this device while it was away — record the signature so
+  // the next subscription check can detect a zombie and rotate. Harmless for a
+  // merely-offline phone: its held pushes arrive on reconnect and stamp a
+  // fresh wake, which invalidates the marker.
+  if (now() - ts > STALE_MSG_MS) void recordStaleDrain(ts);
   const kind = (payload.kind as MessageKind) || 'text';
 
   // If the message carries media, download + decrypt the ciphertext and store

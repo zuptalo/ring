@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-04
 
-**Status**: in-progress
+**Status**: shipped
 
 **Input**: Bug report (iOS installed PWA): sending 1..10 quickly produced banners "2", then
 a count summary, then "10" — but Notification Center held ~10 entries including the same

@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-04
 
-**Status**: in-progress
+**Status**: shipped
 
 **Input**: Bug report (iOS installed PWA): with "Save to Photos" on, every incoming photo/video
 popped a Safari/QuickLook preview ("Open in…", Done, Refresh, Back, Share, compass) that broke
