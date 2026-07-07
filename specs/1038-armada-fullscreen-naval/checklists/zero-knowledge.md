@@ -40,7 +40,7 @@ and gate `/speckit-plan`.
 
 ## Traceability
 
-- [ ] CHK017 - Are the protocol-critical paths mapped to tests-first tasks (red protocol suite incl. every cheat class and the stall/convergence scenarios; e2e for secrecy + convergence + spectators)? [Traceability, Spec §SC-002/SC-003 — gates tasks]
+- [x] CHK017 - Are the protocol-critical paths mapped to tests-first tasks (red protocol suite incl. every cheat class and the stall/convergence scenarios; e2e for secrecy + convergence + spectators)? [Traceability, tasks T002/T003/T010/T022/T027 — all RED before GREEN]
 
 ## Notes
 
@@ -48,6 +48,8 @@ and gate `/speckit-plan`.
   against spec.md as written. CHK006, CHK007, CHK012 gate the plan phase;
   CHK017 gates task generation.
 - Re-validated 2026-07-07 after `/speckit-plan`: CHK006/007/012 now PASS
-  against `contracts/armada-protocol.md` + `research.md` (§D2, §D11). Only
-  CHK017 remains open — check it after `/speckit-tasks` confirms the
-  tests-first ordering.
+  against `contracts/armada-protocol.md` + `research.md` (§D2, §D11).
+- Re-validated 2026-07-07 after `/speckit-tasks`: CHK017 PASSES (tasks.md
+  orders every RED suite before its GREEN counterpart). All 17 items PASS —
+  the checklist is CLOSED for implementation; T035 re-confirms the empty
+  server diff at the end.
