@@ -6,6 +6,16 @@
       <ion-icon :icon="gameControllerOutline" aria-hidden="true" />
       Update Ring to play this game.
     </div>
+    <!-- Fullscreen-presentation games (spec 1038): the chat face is a compact
+         challenge card, never an inline board — the game lives in the overlay. -->
+    <game-challenge-card
+      v-else-if="module.presentation === 'fullscreen'"
+      :session="game"
+      :me="myPlayer"
+      :opponent-name="explicit ? seatName((1 - (myPlayer ?? 0)) as 0 | 1) : peerFirstName"
+      surface="chat"
+      @open="$emit('openfs')"
+    />
     <template v-else>
       <!-- Matchup header (FR-019/FR-023): who plays what, minimal words. In
            explicit-players sessions (spec 0009) seats render in play order;
@@ -133,6 +143,7 @@ import { IonIcon, IonButton, alertController } from '@ionic/vue';
 import { gameControllerOutline } from 'ionicons/icons';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import GameMark from '@/components/GameMark.vue';
+import GameChallengeCard from '@/components/GameChallengeCard.vue';
 import UserAvatar from '@/components/UserAvatar.vue';
 import MedallionSvg from '@/games/battleship/MedallionSvg.vue';
 import SubmarineSvg from '@/games/battleship/SubmarineSvg.vue';
@@ -168,6 +179,8 @@ const emit = defineEmits<{
   (e: 'rematch', gameType: string): void;
   /** Observer toggling their private follow of this game. */
   (e: 'follow'): void;
+  /** Fullscreen-presentation games (spec 1038): open the game overlay. */
+  (e: 'openfs'): void;
 }>();
 
 const module = computed(() => GAMES[props.game.gameType] ?? null);

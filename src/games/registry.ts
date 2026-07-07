@@ -14,9 +14,11 @@ import type { GameModule } from './types'
 import tictactoe from './tictactoe'
 import connect4 from './connect4'
 import battleship from './battleship'
+import armada from './armada'
 
 export const GAMES: Record<string, GameModule> = {
   [tictactoe.id]: tictactoe as GameModule,
   [connect4.id]: connect4 as GameModule,
   [battleship.id]: battleship as GameModule,
+  [armada.id]: armada as GameModule,
 }

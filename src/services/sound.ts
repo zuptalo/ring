@@ -65,8 +65,23 @@ export type ToneName =
   // sinking boat, and the sonar ping when the scope is yours.
   | FxName;
 
-/** Effect-layer cues (spec 1033): synthesized foley, not note recipes. */
-export type FxName = 'bs-fire' | 'bs-splash' | 'bs-hit' | 'bs-sunk' | 'bs-sonar';
+/** Effect-layer cues (spec 1033): synthesized foley, not note recipes.
+ *  The ar-* set (spec 1038) is Armada's richer naval foley — deck guns,
+ *  shell splashes, armor hits, the full sinking sequence, and the victory
+ *  march / defeat lament. Battleship keeps its original bs-* set untouched. */
+export type FxName =
+  | 'bs-fire'
+  | 'bs-splash'
+  | 'bs-hit'
+  | 'bs-sunk'
+  | 'bs-sonar'
+  | 'ar-fire'
+  | 'ar-splash'
+  | 'ar-hit'
+  | 'ar-sunk'
+  | 'ar-sonar'
+  | 'ar-victory'
+  | 'ar-defeat';
 
 interface Note {
   freq: number;
@@ -391,6 +406,123 @@ const FX: Record<string, (ac: AudioContext, t0: number) => void> = {
     oscSweep(ac, t0, 'sine', 1500, 1380, 1.1, 0.14, 0.008, 1.15);
     noiseSweep(ac, t0, 'bandpass', 1500, 1400, 0.8, 9, 0.02, 0.02, 0.8);
     oscSweep(ac, t0 + 0.55, 'sine', 1500, 1390, 0.7, 0.045, 0.008, 0.8);
+  },
+
+  /* ---- Armada (spec 1038): the full naval foley set. Same technique —
+     layered filtered noise + swept oscillators, scheduled like a tiny film
+     mix: transient → body → tail → detail events. All deterministic. ---- */
+
+  // Deck gun firing: the muzzle CRACK, the boom rolling out low, the gun
+  // carriage thump, and the shell whistling away downrange.
+  'ar-fire': (ac, t0) => {
+    noiseSweep(ac, t0, 'highpass', 3200, 2400, 0.03, 0.7, 0.5, 0.002, 0.05); // muzzle crack
+    noiseSweep(ac, t0, 'lowpass', 900, 80, 0.35, 0.8, 0.4, 0.006, 0.55); // the boom
+    oscSweep(ac, t0, 'sine', 72, 36, 0.28, 0.34, 0.006, 0.42); // carriage thump
+    noiseSweep(ac, t0 + 0.1, 'bandpass', 1900, 850, 0.5, 4, 0.05, 0.05, 0.6); // shell away
+  },
+  // Shell into open water: the entry PLOOSH, the body of water swallowing it,
+  // the spray sheet falling back, then droplet patter and a foam fizz.
+  'ar-splash': (ac, t0) => {
+    noiseSweep(ac, t0, 'lowpass', 1400, 300, 0.22, 0.8, 0.28, 0.004, 0.3); // ploosh
+    oscSweep(ac, t0, 'sine', 300, 95, 0.2, 0.2, 0.005, 0.26); // the bloop body
+    noiseSweep(ac, t0 + 0.05, 'highpass', 1100, 800, 0.35, 0.7, 0.1, 0.02, 0.45); // spray falls back
+    // Droplets pattering down, each a tiny falling blip.
+    oscSweep(ac, t0 + 0.32, 'sine', 700, 420, 0.05, 0.035, 0.004, 0.07);
+    oscSweep(ac, t0 + 0.44, 'sine', 520, 330, 0.05, 0.03, 0.004, 0.07);
+    oscSweep(ac, t0 + 0.53, 'sine', 620, 380, 0.05, 0.028, 0.004, 0.06);
+    oscSweep(ac, t0 + 0.66, 'sine', 430, 290, 0.05, 0.022, 0.004, 0.06);
+    oscSweep(ac, t0 + 0.78, 'sine', 540, 340, 0.04, 0.016, 0.004, 0.05);
+    noiseSweep(ac, t0 + 0.25, 'bandpass', 2400, 1700, 0.6, 3, 0.03, 0.05, 0.85); // foam fizz
+  },
+  // Armor-piercing hit: struck STEEL first (three inharmonic partials — a
+  // bell no one tuned), the crack, the blast body, the sub-bass punch, then
+  // fire crackling in the wound.
+  'ar-hit': (ac, t0) => {
+    oscSweep(ac, t0, 'triangle', 1244, 1170, 0.2, 0.14, 0.003, 0.24); // clang partial 1
+    oscSweep(ac, t0, 'triangle', 831, 790, 0.25, 0.1, 0.003, 0.3); // clang partial 2
+    oscSweep(ac, t0, 'triangle', 2093, 1900, 0.14, 0.07, 0.003, 0.17); // clang partial 3
+    noiseSweep(ac, t0, 'highpass', 2800, 2300, 0.05, 0.7, 0.4, 0.003, 0.06); // the crack
+    noiseSweep(ac, t0 + 0.01, 'lowpass', 2600, 140, 0.45, 0.8, 0.4, 0.008, 0.7); // blast body
+    oscSweep(ac, t0 + 0.01, 'sine', 85, 30, 0.4, 0.32, 0.008, 0.55); // sub punch
+    // Fire takes hold: irregular little crackles.
+    noiseSweep(ac, t0 + 0.5, 'bandpass', 1600, 1450, 0.04, 6, 0.03, 0.004, 0.05);
+    noiseSweep(ac, t0 + 0.62, 'bandpass', 1300, 1200, 0.04, 6, 0.026, 0.004, 0.05);
+    noiseSweep(ac, t0 + 0.78, 'bandpass', 1750, 1600, 0.04, 6, 0.022, 0.004, 0.05);
+    noiseSweep(ac, t0 + 0.9, 'bandpass', 1450, 1350, 0.04, 6, 0.016, 0.004, 0.05);
+  },
+  // The ship goes down: two detonations (the hit, then the MAGAZINE), hull
+  // steel groaning apart, the sea rushing over the deck, the last air
+  // bubbling up, and a deep farewell as she settles.
+  'ar-sunk': (ac, t0) => {
+    noiseSweep(ac, t0, 'lowpass', 2600, 200, 0.3, 0.8, 0.36, 0.006, 0.45); // first blast
+    oscSweep(ac, t0, 'sine', 90, 40, 0.25, 0.26, 0.006, 0.35);
+    noiseSweep(ac, t0 + 0.22, 'lowpass', 2000, 50, 0.8, 0.8, 0.5, 0.01, 1.3); // the magazine
+    oscSweep(ac, t0 + 0.22, 'sine', 60, 22, 0.7, 0.4, 0.01, 1.1);
+    oscSweep(ac, t0 + 0.35, 'sawtooth', 95, 30, 1.6, 0.09, 0.12, 1.9); // hull groan
+    oscSweep(ac, t0 + 0.6, 'sawtooth', 130, 45, 1.4, 0.05, 0.15, 1.8); // tearing steel
+    noiseSweep(ac, t0 + 0.9, 'lowpass', 700, 200, 1.0, 0.8, 0.12, 0.15, 1.9); // sea over the deck
+    oscSweep(ac, t0 + 1.4, 'sine', 55, 24, 1.2, 0.08, 0.1, 2.4); // she settles
+    // The last air escapes, bubble by bubble.
+    oscSweep(ac, t0 + 1.7, 'sine', 260, 520, 0.09, 0.045, 0.006, 0.12);
+    oscSweep(ac, t0 + 1.9, 'sine', 300, 610, 0.08, 0.04, 0.006, 0.11);
+    oscSweep(ac, t0 + 2.05, 'sine', 340, 700, 0.08, 0.034, 0.006, 0.1);
+    oscSweep(ac, t0 + 2.25, 'sine', 290, 560, 0.07, 0.026, 0.006, 0.09);
+    oscSweep(ac, t0 + 2.4, 'sine', 380, 760, 0.06, 0.02, 0.006, 0.08);
+    oscSweep(ac, t0 + 2.6, 'sine', 320, 620, 0.06, 0.014, 0.006, 0.08);
+  },
+  // Your scope brightens: a cleaner ping than the old set — the strike tone,
+  // its watery band tail, and two receding echoes off the seafloor.
+  'ar-sonar': (ac, t0) => {
+    oscSweep(ac, t0, 'sine', 1520, 1400, 1.0, 0.13, 0.006, 1.05);
+    noiseSweep(ac, t0, 'bandpass', 1520, 1420, 0.7, 10, 0.018, 0.015, 0.75);
+    oscSweep(ac, t0 + 0.5, 'sine', 1510, 1395, 0.6, 0.045, 0.008, 0.7);
+    oscSweep(ac, t0 + 1.0, 'sine', 1500, 1390, 0.4, 0.016, 0.01, 0.45);
+  },
+  // Victory: a bugle "charge!" over field drums — snare taps, bass-drum
+  // downbeats, the call climbing the major triad, and a cymbal shimmer on
+  // the final held note. Brass = triangle doubled by a quiet square an
+  // octave down (the square supplies the bite).
+  'ar-victory': (ac, t0) => {
+    const bugle = (at: number, f: number, dur: number, peak: number): void => {
+      oscSweep(ac, t0 + at, 'triangle', f, f * 0.995, dur, peak, 0.015, dur + 0.06);
+      oscSweep(ac, t0 + at, 'square', f / 2, (f / 2) * 0.995, dur, peak * 0.22, 0.015, dur + 0.06);
+    };
+    const snare = (at: number, peak: number): void =>
+      noiseSweep(ac, t0 + at, 'bandpass', 1800, 1500, 0.08, 1.2, peak, 0.003, 0.09);
+    const bass = (at: number): void => oscSweep(ac, t0 + at, 'sine', 85, 60, 0.1, 0.16, 0.004, 0.14);
+    bass(0);
+    snare(0, 0.1);
+    snare(0.3, 0.07);
+    bass(0.6);
+    snare(0.6, 0.1);
+    snare(0.9, 0.07);
+    // The call: c-c-c-F-A-C' … A-C' (the classic charge contour, in C).
+    bugle(0.0, 523.25, 0.13, 0.14);
+    bugle(0.18, 523.25, 0.13, 0.14);
+    bugle(0.36, 523.25, 0.13, 0.14);
+    bugle(0.54, 698.46, 0.28, 0.17);
+    bugle(0.9, 880.0, 0.28, 0.17);
+    bugle(1.26, 1046.5, 0.46, 0.2);
+    bugle(1.82, 880.0, 0.16, 0.15);
+    bugle(2.0, 1046.5, 0.6, 0.22);
+    bass(2.0);
+    noiseSweep(ac, t0 + 2.0, 'highpass', 5200, 3800, 0.8, 0.7, 0.05, 0.01, 1.0); // cymbal shimmer
+  },
+  // Defeat: colours struck. A slow minor lament, each tone sagging a
+  // half-breath flat as it fades, over a dark undertow, one distant boom,
+  // and the wash of an indifferent sea.
+  'ar-defeat': (ac, t0) => {
+    const toll = (at: number, f: number, dur: number, peak: number): void => {
+      oscSweep(ac, t0 + at, 'triangle', f, f * 0.965, dur, peak, 0.03, dur + 0.25);
+      oscSweep(ac, t0 + at, 'sine', f / 2, (f / 2) * 0.965, dur, peak * 0.5, 0.03, dur + 0.3);
+    };
+    toll(0.0, 523.25, 0.4, 0.14); // C5
+    toll(0.5, 440.0, 0.4, 0.13); // A4
+    toll(1.0, 349.23, 0.5, 0.13); // F4
+    toll(1.6, 293.66, 1.0, 0.15); // D4, held
+    oscSweep(ac, t0, 'sine', 60, 38, 2.2, 0.07, 0.2, 2.6); // the undertow
+    noiseSweep(ac, t0 + 0.2, 'lowpass', 500, 80, 0.9, 0.8, 0.1, 0.05, 1.2); // a distant boom
+    noiseSweep(ac, t0 + 0.8, 'bandpass', 620, 360, 1.4, 2, 0.035, 0.3, 2.0); // the sea, unmoved
   },
 };
 

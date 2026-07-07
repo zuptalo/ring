@@ -6,7 +6,19 @@
        session (wallGameSession replays the engagement rows), reactive via the
        idb bus — no state of its own. -->
   <div v-if="session" class="wgc">
-    <template v-if="phase === 'open'">
+    <!-- Fullscreen-presentation games (spec 1038): the post face is the
+         challenge card in EVERY phase — accepting or re-entering goes through
+         the app-global overlay, never an inline board. -->
+    <template v-if="module?.presentation === 'fullscreen'">
+      <game-challenge-card
+        :session="session"
+        :me="fsSeat"
+        :opponent-name="fsOpponentName"
+        surface="wall"
+        @open="onFsOpen"
+      />
+    </template>
+    <template v-else-if="phase === 'open'">
       <!-- One row: the pointing hero, then EVERYTHING else in the copy column
            (title, game, and the waiting line / accept button) so nothing floats
            off to the card edge on wide or narrow screens. -->
@@ -53,8 +65,10 @@ import { useRouter } from 'vue-router';
 import { IonButton } from '@ionic/vue';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import GameBubble from '@/components/GameBubble.vue';
+import GameChallengeCard from '@/components/GameChallengeCard.vue';
 import { GAMES } from '@/games/registry';
-import { challengePhase } from '@/games/challenge';
+import { challengePhase, playerIndexOf } from '@/games/challenge';
+import { openGame } from '@/composables/useGameOverlay';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import {
   wallGameSession,
@@ -123,6 +137,27 @@ const onFollow = () =>
   void (followed.value ? unfollowWallGame(props.postId) : followWallGame(props.postId));
 // A Wall rematch is a fresh challenge POST — anyone may throw the next one.
 const onRematch = () => void router.push('/wall/compose');
+
+/* ---- fullscreen presentation (spec 1038) ---- */
+const fsSeat = computed<0 | 1 | null>(() =>
+  session.value ? playerIndexOf(session.value, selfId.value) : null,
+);
+const fsOpponentName = computed(() => {
+  const s = session.value;
+  if (!s) return props.authorName;
+  const other = s.players?.find((id) => id !== selfId.value);
+  return (other && names.value[other]) || props.authorName;
+});
+/** Accept-and-deploy in one tap (spec US3): the seat race settles while the
+ *  acceptor authors their fleet; a lost race surfaces in the overlay. */
+async function onFsOpen(): Promise<void> {
+  const s = session.value;
+  if (!s) return;
+  if (challengePhase(s) === 'open' && !props.isOwn && fsSeat.value === null) {
+    await acceptWallChallenge(props.postId);
+  }
+  openGame({ surface: 'wall', postId: props.postId, gameType: s.gameType });
+}
 </script>
 
 <style scoped>

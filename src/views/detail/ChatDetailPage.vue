@@ -398,6 +398,7 @@
                 @move="(mv) => playGameMove(chatId, m.id, mv)"
                 @resign="resignGame(chatId, m.id)"
                 @rematch="(gt) => onGameRematch(gt)"
+                @openfs="openFullscreenGame(m.id, m.game.gameType)"
               />
               <!-- Open group challenge (spec 0009): announcement → board → withdrawn. -->
               <challenge-bubble
@@ -1183,6 +1184,7 @@ import GameBubble from '@/components/GameBubble.vue';
 import { GAMES } from '@/games/registry';
 import { deriveStatus as deriveGameStatus } from '@/games/session';
 import { challengePhase } from '@/games/challenge';
+import { openGame } from '@/composables/useGameOverlay';
 import ChallengeBubble from '@/components/ChallengeBubble.vue';
 import GamePicker from '@/components/GamePicker.vue';
 import PollComposer from '@/components/PollComposer.vue';
@@ -3931,9 +3933,22 @@ async function onGamePick(gameType: string, theme?: string): Promise<void> {
     return;
   }
   // Groups throw an open challenge (spec 0009); 1:1 starts the game directly.
-  if (chat.value?.isGroup) await sendGameChallenge(chatId, gameType, theme);
-  else await sendGame(chatId, gameType, theme);
+  if (chat.value?.isGroup) {
+    await sendGameChallenge(chatId, gameType, theme);
+  } else {
+    const messageId = await sendGame(chatId, gameType, theme);
+    // Fullscreen-presentation games (spec 1038): the starter lands straight in
+    // deployment — the chat only carries the challenge card.
+    if (GAMES[gameType]?.presentation === 'fullscreen') {
+      openGame({ surface: 'chat', chatId, messageId, gameType });
+    }
+  }
   void scrollToNewest();
+}
+
+/** A challenge card was tapped (spec 1038): into the fullscreen overlay. */
+function openFullscreenGame(messageId: string, gameType: string): void {
+  openGame({ surface: 'chat', chatId, messageId, gameType });
 }
 
 // Seat names for challenge bubbles (spec 0009): every contact by id, plus me.

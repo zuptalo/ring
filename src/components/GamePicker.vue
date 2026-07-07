@@ -56,8 +56,10 @@ const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: 'pick', gameType: string, theme: string): void; (e: 'close'): void }>();
 
 // Module icons/marks are bundled data, so listing them here ships only what
-// registered games actually use.
-const games = Object.values(GAMES);
+// registered games actually use. Retired games (spec 1038: battleship, whose
+// slot Armada took) stay registered — existing sessions render and finish —
+// but can no longer be STARTED, so the picker hides them.
+const games = Object.values(GAMES).filter((g) => !g.retired);
 const selected = ref<GameModule | null>(null);
 
 // With a single game there is nothing to choose — jump straight to its styles.

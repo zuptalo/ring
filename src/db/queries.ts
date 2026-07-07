@@ -24,6 +24,7 @@ import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive, pushWakeActive } from '@/services/notify';
+import { isGameActive } from '@/services/game-active';
 import { wallActivityAlert } from '@/services/wall-activity-policy';
 import { compressImage, compressVideo, achievedQuality } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
@@ -58,6 +59,7 @@ import {
   buildWallSession,
 } from '@/games/challenge';
 import type { GameSession } from '@/games/types';
+import { mostUrgentFirst, overlayGameEntry, type OngoingOverlayGame } from '@/games/overlay-games';
 import { gameCueFor, playGameCue } from '@/services/game-sounds';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
@@ -789,6 +791,50 @@ export async function hasOngoingGame(chatId: string): Promise<boolean> {
   );
 }
 
+/**
+ * The ongoing-games set behind the floating return button (spec 1038 FR-008):
+ * every fullscreen-presentation session where this user holds a seat and the
+ * game is enterable, most urgent first. Fully DERIVED (the pill and its badge
+ * survive reloads and self-clear at game end); the judging lives in the pure
+ * overlayGameEntry — this is just the store walk. A messages-store sweep is
+ * the established cost model here (failed-sends, expiry, and search do the
+ * same); fullscreen game rows are filtered out in one cheap field check.
+ */
+export async function ongoingOverlayGames(): Promise<OngoingOverlayGame[]> {
+  const out: OngoingOverlayGame[] = [];
+  const msgs = await getAll<Message>('messages');
+  for (const m of msgs) {
+    if (!m.game || m.deleted) continue;
+    if (GAMES[m.game.gameType]?.presentation !== 'fullscreen') continue;
+    const entry = overlayGameEntry(
+      GAMES[m.game.gameType],
+      m.game,
+      gameSelfIndex(m),
+      { surface: 'chat', chatId: m.chatId, messageId: m.id, gameType: m.game.gameType },
+      m.game.startedAt ?? m.timestamp,
+    );
+    if (entry) out.push(entry);
+  }
+  const posts = await getAll<Post>('posts');
+  const t = now();
+  for (const p of posts) {
+    if (!p.game) continue;
+    if (p.expiresAt && p.expiresAt <= t) continue;
+    if (GAMES[p.game.gameType]?.presentation !== 'fullscreen') continue;
+    const session = await wallGameSession(p.id);
+    if (!session) continue;
+    const entry = overlayGameEntry(
+      GAMES[p.game.gameType],
+      session,
+      playerIndexOf(session, getSelfUserId() ?? ''),
+      { surface: 'wall', postId: p.id, gameType: p.game.gameType },
+      p.createdAt,
+    );
+    if (entry) out.push(entry);
+  }
+  return mostUrgentFirst(out);
+}
+
 /** Start a game in a 1:1 chat (the bubble is instantly playable, like a poll).
  *  Returns the new bubble's message id — it doubles as the game session id.
  *  `theme` is the starter's visual pick (FR-022); an id the module doesn't
@@ -1151,8 +1197,12 @@ export async function resignGame(chatId: string, messageId: string): Promise<voi
   const at = now();
   const seq = m.game.moves.length + 1;
   if ((await applyGameMove(m, me, { seq, action: 'resign', at })) !== 'applied') return;
-  // Conceding sounds the losing tone for the resigner (FR-026).
-  void playGameCue(gameCueFor(deriveGameStatus(module, m.game), me));
+  // Conceding sounds the losing tone for the resigner (FR-026) — a game may
+  // name its own ending (Armada's struck-colours lament, spec 1038).
+  {
+    const st = deriveGameStatus(module, m.game);
+    void playGameCue((module.moveCue?.(undefined, st, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(st, me));
+  }
   await bumpOwnGamePreview(m, 'resign', at);
   const chat = await getChat(m.chatId);
   const signal: GameMoveSignal = { messageId, seq, action: 'resign', at };
@@ -1202,8 +1252,11 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   const me = gameSelfIndex(message);
   const status = deriveGameStatus(GAMES[message.game.gameType] ?? null, message.game);
 
-  // Their move sounds only while this chat is on screen (FR-026) — players only.
-  if (me !== null && isChatActive(message.chatId)) {
+  // Their move sounds while this chat is on screen (FR-026) — or while THIS
+  // game's fullscreen overlay is (spec 1038: the overlay is the chat-open
+  // equivalent for a game). Players only.
+  const inOverlay = isGameActive(message.id);
+  if (me !== null && (isChatActive(message.chatId) || inOverlay)) {
     const gmod = GAMES[message.game.gameType] ?? null;
     void playGameCue(
       (gmod?.moveCue?.(signal.move, status, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(status, me),
@@ -1256,6 +1309,9 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
         ? await getSetting<boolean>('notifications.games.followMoves', true)
         : await getSetting<boolean>('notifications.games.followResults', true);
   }
+  // Spec 1038 FR-007: the player is WATCHING this game fullscreen — the board
+  // (and the cue above) already delivered the news; no banner for its own moves.
+  if (inOverlay) return;
   if (!notify) return;
   await notifyIncoming({
     kind: 'message',
@@ -3304,12 +3360,24 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
   // notification path covers everyone who is NOT looking.
   const path = typeof window !== 'undefined' ? window.location.pathname : '';
   const watching =
-    typeof document !== 'undefined' &&
-    document.visibilityState === 'visible' &&
-    (path === '/tabs/wall' || path === `/wall/post/${post.id}`);
+    (typeof document !== 'undefined' &&
+      document.visibilityState === 'visible' &&
+      (path === '/tabs/wall' || path === `/wall/post/${post.id}`)) ||
+    // The fullscreen overlay is a watching surface too (spec 1038 FR-007):
+    // this game's own activity never toasts over its own board — the player
+    // sees the move land live. Other games and chats still banner.
+    isGameActive(post.id);
   if (watching) {
     for (const i of others) notifiedEngagementIds.add(i.id);
-    if (me !== null) void playGameCue(gameCueFor(status, me));
+    if (me !== null) {
+      // A watched game deserves its own foley, not the generic tick: load the
+      // freshest row's opened move payload so the module can name the cue
+      // (Armada's gun/splash/hit/sinking — chat games get this via
+      // handleGameMove; this is the wall twin).
+      const row = await get<PostEngagement>('postEngagement', latest.id);
+      const mv = row?.game?.t === 'move' ? (row.game as { move?: unknown }).move : undefined;
+      void playGameCue((module?.moveCue?.(mv, status, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(status, me));
+    }
     return;
   }
 
@@ -3834,7 +3902,8 @@ export async function resignWallGame(postId: string): Promise<void> {
   const after = await wallGameSession(postId);
   if (after) {
     const st = deriveGameStatus(module, after);
-    void playGameCue(gameCueFor(st, me));
+    // A game may name its own ending (Armada's struck-colours lament).
+    void playGameCue((module.moveCue?.(undefined, st, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(st, me));
     if (st.state !== 'ongoing') void announceWallGameOver(post, at);
   }
 }
