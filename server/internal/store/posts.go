@@ -376,6 +376,28 @@ type PostEngagementRow struct {
 	CreatedMs int64
 }
 
+// GameParticipants returns the distinct actors of the post's `game`
+// engagements — together with the author, these are a challenge's players
+// (spec 1035): the accepter's accept and every subsequent move are all kind
+// "game", so anyone who ever wrote one holds a seat (or raced for it). Uses
+// only metadata the server already stores; payloads stay sealed.
+func (s *Store) GameParticipants(ctx context.Context, postID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT actor FROM post_engagement WHERE post_id=$1 AND kind='game'`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // PostAuthor returns a post's author id (or "" if the post is gone).
 func (s *Store) PostAuthor(ctx context.Context, postID string) (string, error) {
 	var author string
