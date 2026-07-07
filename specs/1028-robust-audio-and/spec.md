@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-02
 
-**Status**: in-review
+**Status**: shipped
 <!-- The four deferred items (kind upgrade on merge, join cue, group-invite merge,
      churn robustness) are completed by spec 1030 (feat/1030-finish-call-kind);
      both specs ship with that branch's PR into develop. -->
