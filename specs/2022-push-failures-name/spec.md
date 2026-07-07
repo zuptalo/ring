@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-07
 
-**Status**: in-review
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: Live incident on the dev server (2026-07-05 → 07-06): one iPhone's
