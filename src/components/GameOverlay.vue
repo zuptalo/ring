@@ -171,8 +171,8 @@ watch(showGate, (locked) => {
   flex-direction: column;
   overflow: hidden; /* nothing inside may widen or pan the overlay itself */
   overscroll-behavior: none;
-  background: radial-gradient(900px 500px at 50% -8%, #1c2030 0%, #141821 48%, #0e1116 100%);
-  color: #f5f7ff;
+  background: radial-gradient(900px 500px at 50% -8%, #18221c 0%, #111814 48%, #0b0f0d 100%);
+  color: #e9f5ee;
   animation: go-in 0.3s ease-out;
 }
 .go-header {
@@ -184,14 +184,14 @@ watch(showGate, (locked) => {
   flex-shrink: 0;
 }
 .go-exit {
-  --color: #e6ebff;
+  --color: #e6f4ec;
   --border-radius: 12px;
   --padding-start: 0;
   --padding-end: 0;
   width: 40px;
   height: 40px;
   margin: 0;
-  border: 1px solid rgba(143, 174, 255, 0.2);
+  border: 1px solid rgba(110, 231, 183, 0.22);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
   flex-shrink: 0;
@@ -207,7 +207,7 @@ watch(showGate, (locked) => {
 }
 .go-subtitle {
   font-size: 12px;
-  color: rgba(220, 226, 245, 0.55);
+  color: rgba(220, 240, 230, 0.55);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -215,8 +215,8 @@ watch(showGate, (locked) => {
 .go-pill {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  color: rgba(143, 174, 255, 0.7);
-  border: 1px solid rgba(143, 174, 255, 0.2);
+  color: rgba(110, 231, 183, 0.7);
+  border: 1px solid rgba(110, 231, 183, 0.22);
   padding: 4px 9px;
   border-radius: 8px;
   flex-shrink: 0;

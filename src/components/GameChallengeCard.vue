@@ -150,9 +150,9 @@ const buttonLabel = computed<string | null>(() => {
   margin: 0 auto;
   border-radius: 16px;
   padding: 14px;
-  background: linear-gradient(160deg, #1b2440, #141a2b);
-  border: 1px solid rgba(143, 174, 255, 0.25);
-  color: #f5f7ff;
+  background: linear-gradient(160deg, #1a2b21, #111a15);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #e9f5ee;
 }
 .gcc-top {
   display: flex;
@@ -164,15 +164,15 @@ const buttonLabel = computed<string | null>(() => {
   height: 46px;
   flex-shrink: 0;
   border-radius: 12px;
-  background: linear-gradient(135deg, #41537e, #2c3e70);
-  border: 1px solid rgba(143, 174, 255, 0.35);
+  background: linear-gradient(135deg, #14b686, #0b7d5b);
+  border: 1px solid rgba(110, 231, 183, 0.4);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .gcc-glyph ion-icon {
   font-size: 24px;
-  color: #dce2f5;
+  color: #d9f2e6;
 }
 .gcc-titles {
   min-width: 0;
@@ -188,7 +188,7 @@ const buttonLabel = computed<string | null>(() => {
 }
 .gcc-sub {
   font-size: 12px;
-  color: rgba(220, 226, 245, 0.6);
+  color: rgba(220, 240, 230, 0.62);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -200,8 +200,8 @@ const buttonLabel = computed<string | null>(() => {
   margin-top: 12px;
   padding: 11px;
   border-radius: 10px;
-  border: 1px solid rgba(143, 174, 255, 0.5);
-  background: linear-gradient(135deg, #41537e, #2c3e70);
+  border: 1px solid rgba(110, 231, 183, 0.5);
+  background: linear-gradient(135deg, #14b686, #0b7d5b);
   color: #fff;
   font-family: inherit;
   font-size: 14px;
@@ -209,7 +209,7 @@ const buttonLabel = computed<string | null>(() => {
   cursor: pointer;
 }
 .gcc-btn.urgent {
-  border-color: rgba(123, 156, 255, 0.9);
-  box-shadow: 0 0 14px rgba(123, 156, 255, 0.35);
+  border-color: rgba(52, 211, 153, 0.9);
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.35);
 }
 </style>

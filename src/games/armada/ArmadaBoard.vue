@@ -32,12 +32,12 @@
             <div class="ar-core">
               <!-- radar scope: rings + crosshair behind the cells -->
               <svg class="ar-rings" viewBox="0 0 100 100" aria-hidden="true">
-                <circle cx="50" cy="50" r="47" fill="none" stroke="rgba(123,156,255,0.13)" stroke-width="0.4" />
-                <circle cx="50" cy="50" r="33" fill="none" stroke="rgba(123,156,255,0.12)" stroke-width="0.4" />
-                <circle cx="50" cy="50" r="18" fill="none" stroke="rgba(123,156,255,0.12)" stroke-width="0.4" />
-                <circle cx="50" cy="50" r="2" fill="rgba(123,156,255,0.19)" />
-                <line x1="50" y1="3" x2="50" y2="97" stroke="rgba(123,156,255,0.09)" stroke-width="0.4" />
-                <line x1="3" y1="50" x2="97" y2="50" stroke="rgba(123,156,255,0.09)" stroke-width="0.4" />
+                <circle cx="50" cy="50" r="47" fill="none" stroke="rgba(16,185,129,0.13)" stroke-width="0.4" />
+                <circle cx="50" cy="50" r="33" fill="none" stroke="rgba(16,185,129,0.12)" stroke-width="0.4" />
+                <circle cx="50" cy="50" r="18" fill="none" stroke="rgba(16,185,129,0.12)" stroke-width="0.4" />
+                <circle cx="50" cy="50" r="2" fill="rgba(16,185,129,0.19)" />
+                <line x1="50" y1="3" x2="50" y2="97" stroke="rgba(16,185,129,0.09)" stroke-width="0.4" />
+                <line x1="3" y1="50" x2="97" y2="50" stroke="rgba(16,185,129,0.09)" stroke-width="0.4" />
               </svg>
               <div v-if="!gameOver" class="ar-sweep" :style="{ opacity: canFire ? 0.35 : 1 }" aria-hidden="true" />
               <div class="ar-grid">
@@ -706,10 +706,10 @@ const statusSub = computed(() => {
   return armadaTurn(props.state) === me.value ? 'Fire at enemy waters.' : 'Enemy salvo incoming…';
 });
 const statusColor = computed(() => {
-  if (gameOver.value) return iWon.value ? '#2dd36f' : '#ff6b7a';
+  if (gameOver.value) return iWon.value ? '#10b981' : '#ff6b7a';
   if (face.value === 'battle' && armadaTurn(props.state) !== me.value) return '#ffc409';
-  if (face.value === 'battle') return '#7b9cff';
-  return '#f5f7ff';
+  if (face.value === 'battle') return '#10b981';
+  return '#e9f5ee';
 });
 
 /* ---- result ceremony ---- */
@@ -748,7 +748,7 @@ const citation = computed(() => {
   width: 100%;
   max-width: 1120px;
   margin: 0 auto;
-  color: #f5f7ff;
+  color: #e9f5ee;
 }
 
 /* status */
@@ -763,13 +763,13 @@ const citation = computed(() => {
 }
 .ar-status-sub {
   font-size: 12px;
-  color: rgba(220, 226, 245, 0.6);
+  color: rgba(220, 240, 230, 0.6);
   margin-top: 3px;
 }
 
 /* panels */
 .ar-panel {
-  background: #1c2030;
+  background: #181f1b;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
   padding: 12px;
@@ -791,12 +791,12 @@ const citation = computed(() => {
   font-weight: 600;
 }
 .ar-panel-label.enemy { color: #ff6b7a; }
-.ar-panel-label.mine { color: #8faeff; }
-.ar-panel-label.dim { color: rgba(220, 226, 245, 0.4); font-size: 10px; }
+.ar-panel-label.mine { color: #6ee7b7; }
+.ar-panel-label.dim { color: rgba(220, 240, 230, 0.4); font-size: 10px; }
 .ar-panel-count {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10px;
-  color: rgba(220, 226, 245, 0.45);
+  color: rgba(220, 240, 230, 0.45);
 }
 
 /* boards */
@@ -831,7 +831,7 @@ const citation = computed(() => {
 .ar-letters span {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10px;
-  color: rgba(205, 214, 255, 0.35);
+  color: rgba(190, 227, 210, 0.38);
   text-align: center;
 }
 .ar-rowwrap {
@@ -866,7 +866,7 @@ const citation = computed(() => {
   border-radius: 50%;
   overflow: hidden;
   transition: opacity 0.4s ease;
-  background: conic-gradient(from 0deg, rgba(123, 156, 255, 0.23), rgba(123, 156, 255, 0.07) 34deg, rgba(123, 156, 255, 0) 62deg, rgba(123, 156, 255, 0) 360deg);
+  background: conic-gradient(from 0deg, rgba(16, 185, 129, 0.23), rgba(16, 185, 129, 0.07) 34deg, rgba(16, 185, 129, 0) 62deg, rgba(16, 185, 129, 0) 360deg);
   animation: ar-radar 5s linear infinite;
 }
 .ar-grid {
@@ -881,8 +881,8 @@ const citation = computed(() => {
   min-width: 0;
   box-sizing: border-box;
   border-radius: 7px;
-  background: rgba(123, 156, 255, 0.055);
-  border: 1px solid rgba(123, 156, 255, 0.09);
+  background: rgba(28, 92, 140, 0.12);
+  border: 1px solid rgba(28, 92, 140, 0.16);
   padding: 0;
   display: flex;
   align-items: center;
@@ -891,7 +891,7 @@ const citation = computed(() => {
   cursor: default;
 }
 .ar-cell.aimable { cursor: crosshair; }
-.ar-cell.prev-ok { background: rgba(45, 211, 111, 0.2); border-color: rgba(45, 211, 111, 0.65); }
+.ar-cell.prev-ok { background: rgba(16, 185, 129, 0.22); border-color: rgba(16, 185, 129, 0.65); }
 .ar-cell.prev-bad { background: rgba(235, 68, 90, 0.18); border-color: rgba(235, 68, 90, 0.65); }
 .ar-cell.water-miss { background: rgba(255, 255, 255, 0.02); }
 .ar-cell.burning { background: rgba(235, 68, 90, 0.08); }
@@ -901,8 +901,8 @@ const citation = computed(() => {
   width: 55%;
   height: 55%;
   border-radius: 50%;
-  border: 1.5px solid #7b9cff;
-  box-shadow: 0 0 8px #7b9cff;
+  border: 1.5px solid var(--ion-color-primary);
+  box-shadow: 0 0 8px rgba(var(--ion-color-primary-rgb), 0.8);
   animation: ar-reticle 1.2s ease-in-out infinite;
 }
 
@@ -928,7 +928,7 @@ const citation = computed(() => {
   z-index: 6;
   opacity: 0.9;
   filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.45));
-  box-shadow: 0 0 0 1.5px rgba(45, 211, 111, 0.85), 0 0 18px rgba(45, 211, 111, 0.5);
+  box-shadow: 0 0 0 1.5px rgba(16, 185, 129, 0.85), 0 0 18px rgba(16, 185, 129, 0.5);
 }
 .ar-ship.dragging.invalid {
   box-shadow: 0 0 0 1.5px rgba(235, 68, 90, 0.85), 0 0 18px rgba(235, 68, 90, 0.5);
@@ -943,15 +943,15 @@ const citation = computed(() => {
   width: 55%;
   height: 55%;
   border-radius: 50%;
-  border: 1.5px dashed rgba(123, 156, 255, 0.8);
+  border: 1.5px dashed rgba(var(--ion-color-primary-rgb), 0.8);
   animation: ar-reticle 1.2s ease-in-out infinite;
 }
 .ar-miss {
   width: 32%;
   height: 32%;
   border-radius: 50%;
-  background: rgba(143, 174, 255, 0.4);
-  box-shadow: 0 0 0 3px rgba(143, 174, 255, 0.12);
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.14);
   animation: ar-splash 0.45s ease-out;
 }
 .ar-hit {
@@ -1064,19 +1064,19 @@ const citation = computed(() => {
   font-weight: 600;
   letter-spacing: 0.5px;
   cursor: pointer;
-  border: 1px solid rgba(143, 174, 255, 0.25);
+  border: 1px solid rgba(110, 231, 183, 0.25);
   background: rgba(255, 255, 255, 0.04);
-  color: #cdd6ff;
+  color: #c9ead9;
 }
 .ar-btn:disabled {
   opacity: 0.45;
   cursor: default;
 }
 .ar-btn.primary {
-  border-color: rgba(143, 174, 255, 0.5);
-  background: linear-gradient(135deg, #41537e, #2c3e70);
+  border-color: rgba(110, 231, 183, 0.5);
+  background: linear-gradient(135deg, #14b686, #0b7d5b);
   color: #fff;
-  box-shadow: 0 4px 16px rgba(44, 62, 112, 0.5);
+  box-shadow: 0 4px 16px rgba(11, 125, 91, 0.45);
 }
 
 /* rosters */
@@ -1110,8 +1110,8 @@ const citation = computed(() => {
   transition: all 0.2s;
 }
 .ar-rrow.placing {
-  background: rgba(123, 156, 255, 0.12);
-  border-color: rgba(143, 174, 255, 0.4);
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(255, 255, 255, 0.5);
 }
 .ar-rrow.sunk {
   background: rgba(235, 68, 90, 0.06);
@@ -1129,7 +1129,7 @@ const citation = computed(() => {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: rgba(240, 243, 255, 0.92);
+  color: rgba(238, 248, 242, 0.92);
 }
 .ar-rrow.sunk .ar-rname {
   color: rgba(255, 180, 190, 0.9);
@@ -1143,7 +1143,7 @@ const citation = computed(() => {
   width: 8px;
   height: 8px;
   border-radius: 2px;
-  background: rgba(143, 174, 255, 0.32);
+  background: rgba(110, 231, 183, 0.3);
 }
 .ar-pips i.hit {
   background: #eb445a;
@@ -1159,11 +1159,11 @@ const citation = computed(() => {
   text-transform: uppercase;
   white-space: nowrap;
   background: rgba(255, 255, 255, 0.05);
-  color: rgba(230, 235, 255, 0.45);
+  color: rgba(230, 245, 238, 0.45);
 }
 .ar-chip.placing { background: rgba(255, 196, 9, 0.16); color: #ffc409; }
-.ar-chip.ready { background: rgba(45, 211, 111, 0.14); color: #2dd36f; }
-.ar-chip.active { background: rgba(123, 156, 255, 0.14); color: #7b9cff; }
+.ar-chip.ready { background: rgba(16, 185, 129, 0.14); color: #10b981; }
+.ar-chip.active { background: rgba(16, 185, 129, 0.14); color: #10b981; }
 .ar-chip.sunk { background: rgba(235, 68, 90, 0.2); color: #ff6b7a; }
 
 /* battle log */
@@ -1177,10 +1177,10 @@ const citation = computed(() => {
 .ar-log-row {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  color: rgba(230, 235, 255, 0.78);
+  color: rgba(230, 245, 238, 0.78);
 }
 .ar-log-empty {
-  color: rgba(220, 226, 245, 0.4);
+  color: rgba(220, 240, 230, 0.4);
 }
 .ar-log-row {
   display: flex;
@@ -1195,9 +1195,9 @@ const citation = computed(() => {
   flex-shrink: 0;
 }
 .ar-log-row .dot-hit { background: #ffc409; }
-.ar-log-row .dot-miss { background: rgba(143, 174, 255, 0.5); }
+.ar-log-row .dot-miss { background: rgba(110, 231, 183, 0.5); }
 .ar-log-row .dot-sunk { background: #ff6b7a; }
-.ar-log-row .dot-info { background: #7b9cff; }
+.ar-log-row .dot-info { background: #10b981; }
 
 /* result ceremony */
 .ar-result {
@@ -1215,7 +1215,7 @@ const citation = computed(() => {
 }
 .ar-result-card {
   width: min(420px, 90%);
-  background: linear-gradient(180deg, #1c2030, #141821);
+  background: linear-gradient(180deg, #18211c, #101713);
   border: 1px solid rgba(255, 107, 122, 0.3);
   border-radius: 22px;
   padding: 28px 26px 24px;
@@ -1230,7 +1230,7 @@ const citation = computed(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10px;
   letter-spacing: 4px;
-  color: rgba(143, 174, 255, 0.6);
+  color: rgba(110, 231, 183, 0.6);
   margin-bottom: 4px;
 }
 .ar-medal {
@@ -1257,7 +1257,7 @@ const citation = computed(() => {
 .ar-rank.won { color: #ffd76b; }
 .ar-citation {
   font-size: 13px;
-  color: rgba(220, 226, 245, 0.65);
+  color: rgba(220, 240, 230, 0.65);
   line-height: 1.5;
   margin: 10px auto 0;
   max-width: 320px;
@@ -1280,17 +1280,17 @@ const citation = computed(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 22px;
   font-weight: 700;
-  color: #f5f7ff;
+  color: #e9f5ee;
 }
-.ar-stat b.acc { color: #7b9cff; }
-.ar-stat b.good { color: #2dd36f; }
+.ar-stat b.acc { color: #10b981; }
+.ar-stat b.good { color: #10b981; }
 .ar-stat b.bad { color: #ff8a97; }
 .ar-stat span {
   display: block;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 9.5px;
   letter-spacing: 1.5px;
-  color: rgba(220, 226, 245, 0.5);
+  color: rgba(220, 240, 230, 0.5);
   margin-top: 3px;
   text-transform: uppercase;
 }

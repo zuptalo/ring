@@ -99,8 +99,8 @@ function onUp(): void {
   gap: 8px;
   padding: 8px 14px 8px 9px;
   border-radius: 28px;
-  background: linear-gradient(135deg, #41537e, #2c3e70);
-  border: 1px solid rgba(143, 174, 255, 0.5);
+  background: linear-gradient(135deg, #14b686, #0b7d5b);
+  border: 1px solid rgba(110, 231, 183, 0.5);
   color: #fff;
   font-size: 13px;
   font-weight: 600;

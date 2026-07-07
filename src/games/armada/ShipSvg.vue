@@ -53,7 +53,7 @@
         </template>
         <!-- insignia: the class letter on a small disc at hull center -->
         <template v-if="insignia">
-          <circle :cx="L * 0.5" :cy="cy" :r="S * 0.16" fill="rgba(10,14,26,0.55)" :stroke="pal.stroke" :stroke-width="Math.max(0.5, S * 0.02)" />
+          <circle :cx="L * 0.5" :cy="cy" :r="S * 0.16" fill="rgba(8,16,12,0.55)" :stroke="pal.stroke" :stroke-width="Math.max(0.5, S * 0.02)" />
           <text :x="L * 0.5" :y="cy + S * 0.055" text-anchor="middle" :font-size="S * 0.19" font-weight="700" :fill="pal.mark" font-family="ui-monospace, monospace">{{ letter }}</text>
         </template>
       </template>
@@ -96,8 +96,8 @@ const letter = computed(() => (props.shipKey?.[0] ?? '?').toUpperCase());
 const pal = computed(() => {
   const p = props.wrecked
     ? { hull: '#2c2723', stroke: 'rgba(150,74,48,0.65)', struct: '#3a322c', barrel: 'rgba(0,0,0,0.55)', mark: 'rgba(150,80,50,0.4)' }
-    : { hull: '#3d4d78', stroke: 'rgba(143,174,255,0.6)', struct: '#6274a8', barrel: 'rgba(8,12,22,0.6)', mark: 'rgba(205,214,255,0.4)' };
-  if (props.shipKey === 'submarine') p.hull = props.wrecked ? '#282320' : '#33406a';
+    : { hull: '#40514a', stroke: 'rgba(110,231,183,0.55)', struct: '#6b8377', barrel: 'rgba(8,16,12,0.6)', mark: 'rgba(190,227,210,0.45)' };
+  if (props.shipKey === 'submarine') p.hull = props.wrecked ? '#282320' : '#37463f';
   return p;
 });
 
