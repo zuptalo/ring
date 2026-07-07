@@ -54,19 +54,22 @@ type CardState =
   | 'out-of-sync'
   | 'update';
 
+const phase = computed(() => (props.session.challenge ? challengePhase(props.session) : null));
+
 const cardState = computed<CardState>(() => {
   if (!module.value) return 'update';
-  if (props.session.challenge && challengePhase(props.session) === 'cancelled') return 'cancelled';
+  if (phase.value === 'cancelled') return 'cancelled';
   const st = status.value;
   if (st.state === 'out-of-sync') return 'out-of-sync';
   if (st.state !== 'ongoing') return 'finished';
-  if (props.session.challenge && challengePhase(props.session) === 'open') return 'challenged';
-  if (props.session.moves.length === 0) return 'challenged';
-  // Deployment: fewer than two commits in the log means fleets are still forming.
+  // Only a genuinely OPEN challenge (or an untouched 1:1 invitation) reads as
+  // "challenged" — an accepted challenge with no moves yet is DEPLOYMENT.
+  if (phase.value === 'open') return 'challenged';
+  if (!props.session.challenge && props.session.moves.length === 0) return 'challenged';
   if (props.session.moves.length < 2) {
     if (props.me === null) return 'their-turn';
     const mine = props.session.moves.some((m) => m.player === props.me);
-    return mine ? 'awaiting-fleet' : props.me !== null && myTurn.value ? 'your-move' : 'challenged';
+    return mine ? 'awaiting-fleet' : 'your-move';
   }
   return myTurn.value ? 'your-move' : 'their-turn';
 });
@@ -114,12 +117,12 @@ const subtitle = computed(() => {
 });
 
 const buttonLabel = computed<string | null>(() => {
-  // Spectators stay on the card — EXCEPT on an open wall challenge, where any
+  // Spectators stay on the card — EXCEPT on an OPEN wall challenge, where any
   // non-host viewer is a potential acceptor (no seat exists yet by design).
   // The HOST of a still-open wall challenge has nothing to enter either:
   // deployment starts once a rival takes the seat.
-  const openWallSeat = props.surface === 'wall' && cardState.value === 'challenged' && props.me !== 0;
-  if (props.surface === 'wall' && cardState.value === 'challenged' && props.me === 0) return null;
+  const openWallSeat = props.surface === 'wall' && phase.value === 'open' && props.me !== 0;
+  if (props.surface === 'wall' && phase.value === 'open' && props.me === 0) return null;
   if (props.me === null && !openWallSeat) return null;
   switch (cardState.value) {
     case 'update':

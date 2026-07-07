@@ -50,7 +50,7 @@ verification, stall-proof by duty officer
 phone viewport; kill the defender's app between shot and answer, reopen
 without entering the chat — the answer still goes out (quickstart.md checks)
 
-- [ ] T010 (#879) [US1] RED: author `e2e/games-armada.spec.ts` (failing) — start armada in a 1:1, both cards render (no inline board), open overlay, deploy both sides, exchange fire to a win, medal shows on both, reveal verifies (SC-001); include the duty re-emit scenario: defender's page closed at shot time, reopened on the chats tab → answer arrives (SC-003)
+- [x] T010 (#879) [US1] RED: author `e2e/games-armada.spec.ts` (failing) — start armada in a 1:1, both cards render (no inline board), open overlay, deploy both sides, exchange fire to a win, medal shows on both, reveal verifies (SC-001); include the duty re-emit scenario: defender's page closed at shot time, reopened on the chats tab → answer arrives (SC-003)
 - [x] T011 (#880) [P] [US1] Implement `src/games/armada/ShipSvg.vue` — parametric top-down silhouettes for the 5 classes + wreck variants + insignia badge (port `shipTopSVG` from `design/Armada.dc.html`; `preserveAspectRatio:none`, rotates for vertical)
 - [x] T012 (#881) [P] [US1] Implement `src/games/armada/MedalSvg.vue` — gold win / iron loss medal with ribbon, star, shine sweep (port `medalSVG`)
 - [x] T013 (#882) [US1] Implement `ArmadaBoard.vue` deployment face in `src/games/armada/ArmadaBoard.vue` — 10×10 labeled grid (handoff cell-size clamp, two-column ≥760px container), tap-to-place in fixed class order, drag with 6px threshold (pointer events, `touch-action:none`), tap-to-rotate with inward nudge, green/red placement preview, Auto-deploy / Clear / Engage controls, fleet roster with Ready/Placing/Standby chips; Engage → `setFleetSecret('armada', …)` then emit `{t:'commit'}`
@@ -61,7 +61,7 @@ without entering the chat — the answer still goes out (quickstart.md checks)
 - [x] T018 (#887) [US1] Implement `src/components/GameChallengeCard.vue` — handoff card (≤320px, navy gradient, glyph, context subtitle, one full-width button) with states challenged / awaiting-fleet / your-move / their-turn / finished (mini medal + View result) / out-of-sync / cancelled, copy always naming who's owed (data-model.md CardState; UI copy voice: warm, plain, "you", no em-dashes/semicolons)
 - [x] T019 (#888) [US1] Wire the chat surface: `src/components/GameBubble.vue` renders `GameChallengeCard` instead of the board when `GAMES[gameType]?.presentation === 'fullscreen'`; card tap → `openGame({surface:'chat',…})`; `src/views/detail/ChatDetailPage.vue` opens the overlay for the sender right after `sendGame('armada')`; confirm `hasOngoingGame` gate covers armada (it's a known type — assert in the T008 test if not)
 - [x] T020 (#889) [US1] Implement `src/composables/useGameDuty.ts` started from `src/App.vue` — for each `useOngoingGames()` entry where a fleet secret exists, compute `owedMove()` and emit via `playGameMove`/`playWallGameMove` with an in-flight guard; runs on app start, live-query change, and overlay open (FR-009)
-- [ ] T021 (#890) [US1] GREEN: make `e2e/games-armada.spec.ts` (T010) pass end-to-end against the dev stack
+- [x] T021 (#890) [US1] GREEN: make `e2e/games-armada.spec.ts` (T010) pass end-to-end against the dev stack
 
 **Checkpoint**: US1 fully playable; SC-001/002/003/006 verifiable
 
@@ -80,7 +80,7 @@ badge; reload the app → pill still there; finish the game → pill gone
 - [x] T023 (#892) [US2] Implement `setActiveGame(key|null)` / `isGameActive(key)` in `src/services/notify.ts` (mirror of `setActiveChat`); `useGameOverlay` sets/clears on open/minimize/close; add the suppression checks in `src/db/queries.ts` (`notifyWallGameActivity` + the chat gamemove notification path) — T022 green; sound cues unaffected
 - [x] T024 (#893) [US2] Overlay self-minimizes on route change in `src/composables/useGameOverlay.ts` (watch `router.currentRoute`; banner taps already `router.push` in `src/components/NotificationBanners.vue`) — banners render above the overlay by existing z-order, verify no CSS/stacking regression with the overlay open
 - [x] T025 (#894) [US2] Implement `src/components/FloatingGameButton.vue` mounted in `src/App.vue` — visible when `useOngoingGames()` non-empty AND overlay closed; drag/clamp per `src/components/MinimizedCall.vue` with a different default dock so they never collide; `ion-badge` = count of `awaitingMe`; ×N hint when >1 ongoing; tap → most urgent (awaiting-me first, then newest activity) → `openGame`
-- [ ] T026 (#895) [US2] RED→GREEN: extend `e2e/games-armada.spec.ts` — banner-over-game tap lands in the other chat with the game minimized (SC-004); pill appears ≤1s after minimize, badge correct across a reload, gone ≤1s after the game ends (SC-005); own-game move while overlay open shows NO banner
+- [x] T026 (#895) [US2] RED→GREEN: extend `e2e/games-armada.spec.ts` — banner-over-game tap lands in the other chat with the game minimized (SC-004); pill appears ≤1s after minimize, badge correct across a reload, gone ≤1s after the game ends (SC-005); own-game move while overlay open shows NO banner
 
 **Checkpoint**: MVP complete — fullscreen play is safe to ship
 
@@ -91,7 +91,7 @@ badge; reload the app → pill still there; finish the game → pill gone
 **Goal**: wall posts carry the armada challenge card; accept → fullscreen
 deployment; seat-race loser handled in-overlay; spectators stay on the card
 
-- [ ] T027 (#896) [US3] RED: extend `e2e/games-armada.spec.ts` (or `e2e/games.spec.ts` wall section) — wall challenge: post from A, near-simultaneous accepts from B+C, exactly one seat, loser sees seat-taken, spectator sees card-only with status (SC-007 wall leg)
+- [x] T027 (#896) [US3] RED: extend `e2e/games-armada.spec.ts` (or `e2e/games.spec.ts` wall section) — wall challenge: post from A, near-simultaneous accepts from B+C, exactly one seat, loser sees seat-taken, spectator sees card-only with status (SC-007 wall leg)
 - [x] T028 (#897) [US3] Wire the wall surface: `src/components/WallGameCard.vue` renders `GameChallengeCard` for `presentation:'fullscreen'` modules (open/accepted/finished states incl. player names/avatars); Accept → `acceptWallChallenge` then `openGame({surface:'wall',…})` immediately; overlay session via the wall live query; moves via `playWallGameMove`; ensure the wall compose game option offers armada
 - [x] T029 (#898) [US3] Seat-race loss handling in `src/components/GameOverlay.vue` + `useGameOverlay.ts` — when the derived session locks seats to someone else mid-deployment: show the seat-taken notice, discard the uncommitted preview fleet, close; also handle carrying post/message deleted mid-game (overlay closes with notice, `clearFleetSecret`) — T027 green
 
@@ -105,7 +105,7 @@ alerts untouched)
 **Goal**: picker offers armada not battleship; legacy sessions play out
 inline; rematch maps forward
 
-- [ ] T030 (#899) [US4] RED: extend `e2e/games.spec.ts` — picker lists armada and NOT battleship; a pre-seeded battleship session still renders its inline board and accepts a move; rematch from a finished battleship produces an armada card (SC-007)
+- [x] T030 (#899) [US4] RED: extend `e2e/games.spec.ts` — picker lists armada and NOT battleship; a pre-seeded battleship session still renders its inline board and accepts a move; rematch from a finished battleship produces an armada card (SC-007)
 - [x] T031 (#900) [US4] Mark `src/games/battleship/index.ts` with `retired: true, successor: 'armada'` (ONLY these fields — logic/board/secret stay byte-identical); filter retired modules in `src/components/GamePicker.vue`
 - [x] T032 (#901) [US4] Rematch successor mapping: `onGameRematch` in `src/views/detail/ChatDetailPage.vue` resolves `GAMES[gt]?.successor ?? gt`; same resolution in the wall rematch path in `src/components/WallGameCard.vue` — T030 green
 
@@ -115,10 +115,10 @@ inline; rematch maps forward
 
 ## Phase 7: Polish & Cross-Cutting
 
-- [ ] T033 (#902) [P] Author `drive/scenarios/armada.mjs` and capture deploy / battle / medal / card / pill screenshots to `.tmp/drive/` for the design-fidelity review against `design/README.md` tokens
-- [ ] T034 (#903) [P] A11y pass per constitution X/XI: labels + focus states on exit/fire/rotate/pill controls, board colors via `--ring-*`/`--ion-color-*` tokens, overlay chrome is stock Ionic (`ion-button`/`ion-icon`/`ion-badge`)
-- [ ] T035 (#904) Re-validate `specs/1038-armada-fullscreen-naval/checklists/zero-knowledge.md` CHK017 (tests-first mapping now real) and tick it; confirm server diff is EMPTY (`git diff develop -- server/` shows nothing)
-- [ ] T036 (#905) Full gates: `npm run test:unit` (coverage floors), `npm run build`, `cd server && go build ./... && go vet ./... && go test ./...`, `npm run test:e2e` — all green; flip spec `Status` to in-progress→in-review as the work moves and run `make roadmap`
+- [x] T033 (#902) [P] Author `drive/scenarios/armada.mjs` and capture deploy / battle / medal / card / pill screenshots to `.tmp/drive/` for the design-fidelity review against `design/README.md` tokens
+- [x] T034 (#903) [P] A11y pass per constitution X/XI: labels + focus states on exit/fire/rotate/pill controls, board colors via `--ring-*`/`--ion-color-*` tokens, overlay chrome is stock Ionic (`ion-button`/`ion-icon`/`ion-badge`)
+- [x] T035 (#904) Re-validate `specs/1038-armada-fullscreen-naval/checklists/zero-knowledge.md` CHK017 (tests-first mapping now real) and tick it; confirm server diff is EMPTY (`git diff develop -- server/` shows nothing)
+- [x] T036 (#905) Full gates: `npm run test:unit` (coverage floors), `npm run build`, `cd server && go build ./... && go vet ./... && go test ./...`, `npm run test:e2e` — all green; flip spec `Status` to in-progress→in-review as the work moves and run `make roadmap`
 
 ---
 

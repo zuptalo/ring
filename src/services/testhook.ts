@@ -60,6 +60,7 @@ import {
   followGame as dbFollowGame,
   unfollowGame as dbUnfollowGame,
   wallGameSession as dbWallGameSession,
+  ongoingOverlayGames as dbOngoingOverlayGames,
   wallGamePlayerMeta as dbWallGamePlayerMeta,
   acceptWallChallenge as dbAcceptWallChallenge,
   playWallGameMove as dbPlayWallGameMove,
@@ -73,6 +74,7 @@ import {
   type ChatNotifyPrefs,
   sweepExpiredMessages as dbSweepExpired,
   getChat as dbGetChat,
+  getChatNotifyPrefs as dbGetChatNotifyPrefs,
   deleteChat as dbDeleteChat,
   getContact as dbGetContact,
   startDirectChat as dbStartDirectChat,
@@ -150,7 +152,8 @@ import {
   listConnections as apiListConnections,
 } from '@/services/api';
 import { runInviteSync } from '@/services/invites';
-import { notifyBanners, showActionBanner, isChatActive as notifyIsChatActive } from '@/services/notify';
+import { notifyBanners, showActionBanner, notifyIncoming, settleMsLeft, isChatActive as notifyIsChatActive } from '@/services/notify';
+import { isUnlockedNow } from '@/services/crypto/identity';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { recordCues, recordedCues } from '@/services/sound';
 import { syncContactEdges } from '@/services/directory';
@@ -170,10 +173,18 @@ import type { ActivityKind, ActivityState } from '@/services/transport';
 import { setSecret } from '@/db/secrets';
 import { get, getAll, put, bulkPut } from '@/db/idb';
 import { GAMES } from '@/games/registry';
-import { deriveStatus as deriveGameStatus } from '@/games/session';
-import { challengePhase, resolveOpponent } from '@/games/challenge';
+import { deriveStatus as deriveGameStatus, localMoveAllowed as gameLocalMoveAllowed, replayState as gameReplayState } from '@/games/session';
+import { challengePhase, resolveOpponent, playerIndexOf as playerIndexOfChallenge } from '@/games/challenge';
 import { commitment as bsCommitment, judgeShot as bsJudge, type Layout as BsLayout } from '@/games/battleship/logic';
 import { setFleetSecret as bsSetSecret } from '@/games/battleship/secret';
+import { commitment as arCommitment, judgeShot as arJudge, type Layout as ArLayout } from '@/games/armada/logic';
+import {
+  setFleetSecret as nsSetFleetSecret,
+  getFleetSecret as nsGetFleetSecret,
+  setStagedCommit as nsSetStagedCommit,
+  getStagedCommit as nsGetStagedCommit,
+} from '@/games/fleet-secret';
+import { owedMove as dutyOwedMove } from '@/games/duty';
 import { initialsAvatar, emojiAvatar, emojiOfAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
 import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
@@ -626,12 +637,93 @@ export function installTestHook(): void {
     },
     /** The truthful answer for a shot against a layout (test-side honesty). */
     battleshipJudge: (layout: BsLayout, cell: number, hits: number[]) => bsJudge(layout, cell, hits),
+    /** Armada (spec 1038): the Engage flow with a KNOWN layout — store the
+     *  device-local secret, then either play the commit (slot open) or STAGE
+     *  it for the duty officer (sequential wire commits). Works for chat
+     *  bubbles and wall posts (pass the carrying id via `postId`). */
+    armadaCommit: async (arg: { chatId?: string; messageId?: string; postId?: string; layout: ArLayout; salt: string }) => {
+      const h = arCommitment(arg.layout, arg.salt);
+      await nsSetFleetSecret('armada', h, { layout: arg.layout, salt: arg.salt });
+      if (arg.postId) {
+        const sess = await dbWallGameSession(arg.postId);
+        const me = sess ? playerIndexOfChallenge(sess, getSelfUserId() ?? '') : null;
+        if (sess && me !== null && gameLocalMoveAllowed(GAMES[sess.gameType] ?? null, sess, me)) {
+          await dbPlayWallGameMove(arg.postId, { t: 'commit', h });
+        } else {
+          await nsSetStagedCommit('armada', arg.postId, { h });
+        }
+        return h;
+      }
+      const m = arg.messageId ? await dbGetMessage(arg.messageId) : undefined;
+      const me = m ? ((m.outgoing ? 0 : 1) as 0 | 1) : null;
+      const allowed = m?.game ? gameLocalMoveAllowed(GAMES[m.game.gameType] ?? null, m.game, me as 0 | 1) : null;
+      if (!m?.game || !arg.chatId || !arg.messageId) return h;
+      if (allowed) {
+        await dbPlayGameMove(arg.chatId, arg.messageId, { t: 'commit', h });
+      } else {
+        await nsSetStagedCommit('armada', arg.messageId, { h });
+      }
+      return h;
+    },
+    /** The truthful armada answer for a shot (test-side honesty). */
+    armadaJudge: (layout: ArLayout, cell: number, hits: number[]) => arJudge(layout, cell, hits),
+    /** The floating pill's derived data (spec 1038 FR-008). */
+    ongoingGames: () => dbOngoingOverlayGames(),
+    /** What the duty officer would do for one chat game right now — the
+     *  stall-diagnosis probe (spec 1038 FR-009). */
+    dutyProbe: async (messageId: string) => {
+      const m = await dbGetMessage(messageId);
+      if (!m?.game) return { error: 'no-game' };
+      const me = (m.outgoing ? 0 : 1) as 0 | 1;
+      const state = gameReplayState(GAMES[m.game.gameType]!, m.game) as {
+        commits: [string | null, string | null];
+      };
+      const staged = await nsGetStagedCommit('armada', messageId);
+      const secretHash = state.commits[me] ?? staged?.h ?? null;
+      const secret = secretHash ? await nsGetFleetSecret('armada', secretHash) : null;
+      // Raw sweep of every armada.* settings row — distinguishes "never
+      // written" from "deleted since" when a staged commit goes missing.
+      const armadaRows = (await getAll<{ key: string }>('settings'))
+        .map((r) => r.key)
+        .filter((k) => typeof k === 'string' && k.startsWith('armada.'));
+      return {
+        me,
+        moves: m.game.moves.length,
+        commits: [!!state.commits[0], !!state.commits[1]],
+        staged: !!staged,
+        secret: !!secret,
+        owed: dutyOwedMove(state as never, me, secret, staged)?.t ?? null,
+        allowed: gameLocalMoveAllowed(GAMES[m.game.gameType] ?? null, m.game, me),
+        armadaRows,
+      };
+    },
+    /** The game picker's offering (retired modules excluded, spec 1038 FR-010). */
+    pickerGames: () => Object.values(GAMES).filter((g) => !g.retired).map((g) => g.id),
     /** The RAW stored session — the secrecy probe (spec 0011 SC-002) scans it. */
     gameSessionRaw: async (messageId: string) => (await dbGetMessage(messageId))?.game ?? null,
     /** The one-game-per-chat gate's source of truth (FR-001a). */
     hasOngoingGame: (chatId: string) => dbHasOngoingGame(chatId),
     /** Whether the notify layer considers this chat actively viewed (gates game cues). */
     isChatActive: (chatId: string) => notifyIsChatActive(chatId),
+    /** Drive the REAL in-app notification path for a synthetic message and
+     *  report whether a banner was presented — plus the policy inputs, so a
+     *  suppressed banner names its reason instead of timing out silently. */
+    probeNotify: async (chatId: string, body = 'probe') => {
+      const presented = await notifyIncoming({ kind: 'message', chatId, name: 'Probe', body });
+      return {
+        presented,
+        visible: typeof document !== 'undefined' ? document.visibilityState : 'no-doc',
+        show: await getSetting('notifications.message.show', true),
+        inappStyle: await getSetting('notifications.inapp.style', 'banners'),
+        inappEnabled: await getSetting('notifications.inapp.enabled', true),
+        activeChat: notifyIsChatActive(chatId),
+        chatPrefs: await dbGetChatNotifyPrefs(chatId),
+        mutedUntil: (await dbGetChat(chatId))?.mutedUntil ?? null,
+        unlocked: isUnlockedNow(),
+        settleMsLeft: settleMsLeft(),
+        banners: notifyBanners.value.length,
+      };
+    },
     /** Pick an emoji profile picture (spec 0008 FR-027) — the same path the UI uses. */
     setEmojiAvatar: async (emoji: string): Promise<void> => {
       await setSecret('profileAvatar', emojiAvatar(emoji));

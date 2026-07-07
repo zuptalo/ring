@@ -72,14 +72,18 @@ export function openGame(target: ActiveGame): void {
 }
 
 /** Leave the game view but keep the session "current" (banner taps, back).
- *  The floating pill (derived from stored state) is the way back in. */
-export function minimizeGame(): void {
+ *  The floating pill (derived from stored state) is the way back in.
+ *  `fromNavigation`: the router already moved ON TOP of our pushed history
+ *  entry — consuming it with history.back() would UNDO that navigation, so
+ *  the buried entry is left behind (one extra back press later, harmless). */
+export function minimizeGame(fromNavigation = false): void {
   if (!overlayOpen.value) return
   overlayOpen.value = false
   overlayGame.value = null
   setActiveGame(null)
   exitFullscreen()
-  disarmHistory()
+  if (fromNavigation) historyArmed = false
+  else disarmHistory()
 }
 
 /** Exit deliberately (chevron / Leave): back on the untouched launch surface. */
@@ -127,7 +131,7 @@ export function useGameOverlay(): void {
   watch(
     () => router.currentRoute.value.fullPath,
     () => {
-      if (overlayOpen.value) minimizeGame()
+      if (overlayOpen.value) minimizeGame(true)
     },
   )
 }

@@ -109,19 +109,29 @@ async function sweepFinished(current: Set<string>): Promise<void> {
 }
 
 let running = false
+let dirty = false
 async function pass(): Promise<void> {
-  if (running) return
+  // A trigger landing MID-pass must not be dropped — the pass may have read
+  // the state from before that write (e.g. the opponent's commit arriving
+  // while we were attending the pre-commit state). Mark dirty and loop.
+  if (running) {
+    dirty = true
+    return
+  }
   running = true
   try {
-    const games = await ongoingOverlayGames()
-    const current = new Set<string>()
-    for (const g of games) {
-      const key = refKey(g.ref)
-      current.add(key)
-      seenOngoing.set(key, g.ref)
-      await attend(g.ref)
-    }
-    await sweepFinished(current)
+    do {
+      dirty = false
+      const games = await ongoingOverlayGames()
+      const current = new Set<string>()
+      for (const g of games) {
+        const key = refKey(g.ref)
+        current.add(key)
+        seenOngoing.set(key, g.ref)
+        await attend(g.ref)
+      }
+      await sweepFinished(current)
+    } while (dirty)
   } catch {
     /* a failed pass retries on the next store change */
   } finally {

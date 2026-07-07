@@ -286,6 +286,10 @@ let settledUntil = 0;
 export function deferNotificationsFor(ms: number): void {
   settledUntil = Date.now() + ms;
 }
+/** How much of the settle window remains (0 = not settling) — test/diagnostic. */
+export function settleMsLeft(): number {
+  return Math.max(0, settledUntil - Date.now());
+}
 
 /* ---- push-wake window + banner-presented hand-off (spec 2010 US2/US3) ---- */
 
