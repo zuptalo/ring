@@ -85,4 +85,4 @@ Specs are grouped by category band; status moves
 | [2019](specs/2019-typing-works-again/spec.md) | Typing works again after sending pasted media, and captions reach every attachment | 🟡 in-progress |
 | [2020](specs/2020-fast-message-bursts/spec.md) | Fast message bursts stop showing duplicate notifications | 🟡 in-progress |
 | [2021](specs/2021-remove-save-to-photos/spec.md) | Remove the "Save to Photos" chat setting | 🟡 in-progress |
-| [2022](specs/2022-push-failures-name/spec.md) | Bug: Push failures hide their reason, and dead subscriptions are retried forever | 🔵 in-review |
+| [2022](specs/2022-push-failures-name/spec.md) | Bug: Push failures hide their reason, and dead subscriptions are retried forever | 🟢 shipped |
