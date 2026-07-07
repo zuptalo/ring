@@ -62,6 +62,7 @@ Specs are grouped by category band; status moves
 | [1034](specs/1034-every-push-wake/spec.md) | No Silent Pushes — Every Wake Shows a Notification Unless the App Is Visibly Open | 🟢 shipped |
 | [1035](specs/1035-game-activity-notifies/spec.md) | Game Activity Notifies Players, Not the Whole Audience | 🔵 in-review |
 | [1036](specs/1036-wall-game-follows/spec.md) | Followers Get the Result Push; Group Chats Retire Games | 🔵 in-review |
+| [1037](specs/1037-zombie-push-subscriptions/spec.md) | Zombie Push Subscriptions Rotate Themselves | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

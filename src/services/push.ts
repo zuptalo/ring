@@ -10,7 +10,8 @@
  * handles the prompt); these functions are safe no-ops otherwise.
  */
 import { fetchServerConfig, subscribePush, unsubscribePushServer } from './api';
-import { get } from '@/db/idb';
+import { get, put, remove } from '@/db/idb';
+import type { Setting } from '@/db/types';
 
 function urlBase64ToUint8Array(base64: string): Uint8Array {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4);
@@ -29,6 +30,71 @@ function pushReady(): boolean {
     Notification.permission === 'granted'
   );
 }
+
+/* ---- spec 1037: zombie-subscription self-healing. A push service can accept
+ * sends (201) for a subscription the DEVICE no longer honors (observed live:
+ * iOS revoked it after the old silent-wake bug, but the browser still returns
+ * the object, so re-registering just re-registers the corpse). The signature
+ * is detectable on-device: a message that sat queued a long time drained
+ * normally, and no push wake ever happened after it was SENT. On that
+ * signature, rotate: unsubscribe + fresh subscribe = a new endpoint. A merely
+ * offline phone never matches — its held pushes arrive on reconnect and stamp
+ * a fresh wake first. ---- */
+
+const STALE_MSG_MS = 10 * 60 * 1000; // queued this long = should have woken us
+const ROTATE_GRACE_MS = 60 * 1000; // let a racing held-push wake land first
+const ROTATE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000; // thrash cap
+
+export interface StaleMarker {
+  at: number; // the stale message's SEND time
+  recordedAt: number; // when the drain observed it
+}
+
+/** The pure rotation decision (unit-tested). */
+export function shouldRotateForStaleness(args: {
+  stale: StaleMarker | null;
+  lastWakeAt: number;
+  lastRotateAt: number;
+  now: number;
+}): boolean {
+  const { stale, lastWakeAt, lastRotateAt, now } = args;
+  if (!stale) return false;
+  if (now - stale.recordedAt < ROTATE_GRACE_MS) return false;
+  if (lastWakeAt >= stale.at) return false; // a wake since it was sent → not a zombie
+  return now - lastRotateAt >= ROTATE_MIN_INTERVAL_MS;
+}
+
+/** Record that the drain received a message queued past the staleness bar —
+ *  called by the receive path (db/queries); read + consumed here. Keeps the
+ *  NEWEST stale send-time (the strongest evidence). */
+export async function recordStaleDrain(sentAt: number): Promise<void> {
+  const prev = await get<Setting<StaleMarker>>('settings', STALE_KEY);
+  if (prev?.value && prev.value.at >= sentAt) return;
+  await put<Setting<StaleMarker>>('settings', { key: STALE_KEY, value: { at: sentAt, recordedAt: Date.now() } });
+}
+
+const STALE_KEY = 'push.staleMsg';
+const WAKE_KEY = 'push.lastWakeAt';
+const ROTATED_KEY = 'push.lastRotateAt';
+
+/** Evaluate the zombie signature; when it holds, clear the marker + stamp the
+ *  rotation and tell the caller to mint a fresh subscription. */
+async function consumeRotationDecision(): Promise<boolean> {
+  try {
+    const stale = (await get<Setting<StaleMarker>>('settings', STALE_KEY))?.value ?? null;
+    if (!stale) return false;
+    const lastWakeAt = (await get<Setting<number>>('settings', WAKE_KEY))?.value ?? 0;
+    const lastRotateAt = (await get<Setting<number>>('settings', ROTATED_KEY))?.value ?? 0;
+    if (!shouldRotateForStaleness({ stale, lastWakeAt, lastRotateAt, now: Date.now() })) return false;
+    await remove('settings', STALE_KEY);
+    await put<Setting<number>>('settings', { key: ROTATED_KEY, value: Date.now() });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export { STALE_MSG_MS };
 
 /** Whether an existing subscription was created with the given VAPID key. If not,
  *  the server's key rotated (or differs across envs) and pushes to it would
@@ -61,6 +127,18 @@ export async function ensurePushSubscription(): Promise<boolean> {
     const key = urlBase64ToUint8Array(vapidPublicKey);
     let sub = await reg.pushManager.getSubscription();
     if (sub && !subMatchesKey(sub, key)) {
+      try {
+        await sub.unsubscribe();
+      } catch {
+        /* ignore, we resubscribe below regardless */
+      }
+      sub = null;
+    }
+    // (spec 1037) The zombie signature: long-queued messages drained with no
+    // push wake since they were sent. Rotate to a fresh endpoint — the browser
+    // object is not trustworthy evidence that the push service still delivers.
+    if (sub && (await consumeRotationDecision())) {
+      console.warn('[push] stale-drain signature — rotating the subscription');
       try {
         await sub.unsubscribe();
       } catch {
