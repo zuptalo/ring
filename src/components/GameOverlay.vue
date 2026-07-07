@@ -40,9 +40,11 @@
         :can-move="canMove"
         :last-move="null"
         :session-key="sessionKey"
+        :session-status="sessionStatus"
         @move="onMove"
         @leave="closeGame()"
         @rematch="onRematch"
+        @resign="onResign"
       />
       <div v-else class="go-gone">
         <p>This game needs a newer version of Ring.</p>
@@ -54,17 +56,17 @@
 
 <script setup lang="ts">
 import { computed, watch } from 'vue';
-import { IonButton, IonIcon } from '@ionic/vue';
+import { IonButton, IonIcon, alertController } from '@ionic/vue';
 import { chevronDownOutline, volumeHighOutline, volumeMuteOutline } from 'ionicons/icons';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
-import { replayState, localMoveAllowed } from '@/games/session';
+import { replayState, localMoveAllowed, deriveStatus } from '@/games/session';
 import { playerIndexOf, challengePhase } from '@/games/challenge';
 import type { GameSession } from '@/games/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { overlayGame, overlayOpen, closeGame, gameSessionKey } from '@/composables/useGameOverlay';
 import { useKeyGuard } from '@/composables/useKeyGuard';
-import { getChat, getMessage, getSetting, setSetting, wallGameSession, playGameMove, playWallGameMove, sendGame } from '@/db/queries';
+import { getChat, getMessage, getSetting, setSetting, wallGameSession, playGameMove, playWallGameMove, resignGame, resignWallGame, sendGame } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { openGame } from '@/composables/useGameOverlay';
 
@@ -137,6 +139,11 @@ const canMove = computed(() =>
     ? localMoveAllowed(module.value, session.value, me.value)
     : false,
 );
+// Session-level verdict for the board (resignation/out-of-sync are invisible
+// to the replayed protocol state).
+const sessionStatus = computed(() =>
+  module.value && session.value ? deriveStatus(module.value, session.value) : null,
+);
 
 function onMove(move: unknown): void {
   const g = overlayGame.value;
@@ -174,6 +181,36 @@ const soundsSetting = useLiveQuery<boolean>(
 const soundsOn = computed(() => soundsSetting.value);
 function toggleSounds(): void {
   void setSetting('notifications.gameSounds', !soundsOn.value);
+}
+
+// Surrender (the board's control): a deliberate, confirmed end — the win goes
+// to the opponent. A game nobody has really started (no commits yet) reads as
+// a WITHDRAWN challenge instead: the resigner's overlay simply closes and the
+// card carries the "withdrawn" line.
+async function onResign(): Promise<void> {
+  const g = overlayGame.value;
+  const s = session.value;
+  if (!g || !s) return;
+  const untouched = s.moves.length === 0;
+  const alert = await alertController.create({
+    header: untouched ? 'Withdraw this challenge?' : 'Surrender this battle?',
+    message: untouched ? 'The game ends before it begins.' : 'Your opponent takes the win.',
+    buttons: [
+      { text: 'Keep playing', role: 'cancel' },
+      {
+        text: untouched ? 'Withdraw' : 'Surrender',
+        role: 'destructive',
+        handler: () => {
+          void (async () => {
+            if (g.surface === 'chat') await resignGame(g.chatId, g.messageId);
+            else await resignWallGame(g.postId);
+            if (untouched) closeGame(); // nothing to ceremonize — the card says withdrawn
+          })();
+        },
+      },
+    ],
+  });
+  await alert.present();
 }
 
 // The key gate (app lock) sits at a LOWER z-index than this overlay — locking

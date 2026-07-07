@@ -61,6 +61,9 @@ const cardState = computed<CardState>(() => {
   if (phase.value === 'cancelled') return 'cancelled';
   const st = status.value;
   if (st.state === 'out-of-sync') return 'out-of-sync';
+  // A resignation before anything happened is a WITHDRAWN challenge, not a
+  // victory — nobody deployed, nobody won anything worth a medal.
+  if (st.state === 'resigned' && props.session.moves.length === 0) return 'cancelled';
   if (st.state !== 'ongoing') return 'finished';
   // Only a genuinely OPEN challenge (or an untouched 1:1 invitation) reads as
   // "challenged" — an accepted challenge with no moves yet is DEPLOYMENT.
@@ -101,6 +104,7 @@ const subtitle = computed(() => {
       if (st.state === 'draw') return "It's a draw";
       const won = medalWon.value;
       if (props.me === null) return 'Battle decided';
+      if (st.state === 'resigned') return won ? 'They surrendered. Victory is yours' : 'You surrendered';
       return won ? 'Victory at sea' : 'Your fleet was lost';
     }
     case 'challenged':

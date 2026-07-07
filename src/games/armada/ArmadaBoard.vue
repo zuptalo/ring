@@ -145,11 +145,17 @@
       <button type="button" class="ar-btn" @click.stop="autoDeploy">Auto-deploy</button>
       <button type="button" class="ar-btn" :disabled="!placed.length" @click.stop="clearFleet">Clear</button>
       <button v-if="placed.length >= 5" type="button" class="ar-btn primary" @click.stop="engage">Engage ▸</button>
+      <button type="button" class="ar-btn danger" @click.stop="$emit('resign')">Surrender</button>
     </div>
     <div v-else-if="gameOver" class="ar-controls">
       <button type="button" class="ar-btn primary" @click.stop="$emit('rematch')">New battle</button>
       <button v-if="resultDismissed" type="button" class="ar-btn" @click.stop="resultDismissed = false">View result</button>
       <button type="button" class="ar-btn" @click.stop="$emit('leave')">Leave</button>
+    </div>
+    <div v-else class="ar-controls">
+      <!-- waiting/battle: the game can always be ENDED, not just abandoned —
+           an unfinished game holds the chat's one-game gate and the pill. -->
+      <button type="button" class="ar-btn danger" @click.stop="$emit('resign')">Surrender</button>
     </div>
 
     <!-- rosters -->
@@ -236,6 +242,7 @@ import {
   type Ship,
 } from './logic';
 import { getFleetSecret, setFleetSecret, setStagedCommit } from '../fleet-secret';
+import type { GameSessionStatus } from '../types';
 import { playGameCue } from '@/services/game-sounds';
 
 const props = defineProps<{
@@ -248,8 +255,16 @@ const props = defineProps<{
   /** The carrying message/post id — keys the staged-commit record. Passed by
    *  the GameOverlay host (armada never renders inline). */
   sessionKey?: string;
+  /** The SESSION-level verdict (resignation/out-of-sync live there, invisible
+   *  to the protocol state). Passed by the overlay host. */
+  sessionStatus?: GameSessionStatus | null;
 }>();
-const emit = defineEmits<{ (e: 'move', move: ArmadaMove): void; (e: 'leave'): void; (e: 'rematch'): void }>();
+const emit = defineEmits<{
+  (e: 'move', move: ArmadaMove): void;
+  (e: 'leave'): void;
+  (e: 'rematch'): void;
+  (e: 'resign'): void;
+}>();
 
 /* ---- responsive layout: two-column at ≥760px container (handoff) ---- */
 const wrap = ref<HTMLElement>();
@@ -267,8 +282,13 @@ onBeforeUnmount(() => ro?.disconnect());
 const me = computed(() => props.myPlayer);
 const iCommitted = computed(() => props.state.commits[me.value] !== null);
 const bothCommitted = computed(() => props.state.commits[0] !== null && props.state.commits[1] !== null);
+const resigned = computed(() =>
+  props.sessionStatus?.state === 'resigned' ? props.sessionStatus : null,
+);
 const gameOver = computed(
-  () => props.state.finalBy !== null && props.state.reveals[0] !== null && props.state.reveals[1] !== null,
+  () =>
+    resigned.value !== null ||
+    (props.state.finalBy !== null && props.state.reveals[0] !== null && props.state.reveals[1] !== null),
 );
 const staged = ref(false); // Engage pressed while the wire slot wasn't open yet
 const face = computed<'place' | 'waiting' | 'battle'>(() => {
@@ -686,22 +706,31 @@ const logEntries = computed<{ t: 'hit' | 'miss' | 'sunk' | 'info'; text: string 
 
 /* ---- status block ---- */
 const verdict = computed(() => armadaStatus(props.state));
-const iWon = computed(() => verdict.value.state === 'won' && verdict.value.winner === me.value);
+const iWon = computed(() => {
+  if (resigned.value) return resigned.value.winner === me.value;
+  return verdict.value.state === 'won' && verdict.value.winner === me.value;
+});
 const statusTitle = computed(() => {
+  if (gameOver.value) {
+    if (resigned.value) return iWon.value ? 'VICTORY' : 'SURRENDERED';
+    return verdict.value.state === 'draw' ? 'DISHONORED SEAS' : iWon.value ? 'VICTORY' : 'DEFEAT';
+  }
   if (face.value === 'place') return 'DEPLOY YOUR FLEET';
   if (face.value === 'waiting') return 'AWAITING THEIR FLEET';
-  if (gameOver.value) return verdict.value.state === 'draw' ? 'DISHONORED SEAS' : iWon.value ? 'VICTORY' : 'DEFEAT';
   if (props.state.finalBy !== null) return 'VERIFYING';
   return armadaTurn(props.state) === me.value ? 'YOUR MOVE' : 'ENEMY FIRING';
 });
 const statusSub = computed(() => {
+  if (gameOver.value) {
+    if (resigned.value) return iWon.value ? 'The enemy struck their colours.' : 'You struck your colours.';
+    return verdict.value.state === 'draw' ? 'Both fleets broke the rules of war.' : iWon.value ? 'Enemy fleet sent to the depths.' : 'Your fleet has been destroyed.';
+  }
   if (face.value === 'place') {
     return nextClass.value
       ? `Position your ${nextClass.value.name} · tap the grid to place · drag to move · tap a ship to rotate`
       : 'Fleet ready. Tap Engage.';
   }
   if (face.value === 'waiting') return 'Your armada is locked in. The other admiral is still deploying.';
-  if (gameOver.value) return verdict.value.state === 'draw' ? 'Both fleets broke the rules of war.' : iWon.value ? 'Enemy fleet sent to the depths.' : 'Your fleet has been destroyed.';
   if (props.state.finalBy !== null) return 'Exchanging fleet records for verification…';
   return armadaTurn(props.state) === me.value ? 'Fire at enemy waters.' : 'Enemy salvo incoming…';
 });
@@ -714,9 +743,10 @@ const statusColor = computed(() => {
 
 /* ---- result ceremony ---- */
 const resultDismissed = ref(false);
-const verdictTitle = computed(() =>
-  verdict.value.state === 'draw' ? 'DRAW' : iWon.value ? 'VICTORY' : 'DEFEAT',
-);
+const verdictTitle = computed(() => {
+  if (resigned.value) return iWon.value ? 'VICTORY' : 'SURRENDERED';
+  return verdict.value.state === 'draw' ? 'DRAW' : iWon.value ? 'VICTORY' : 'DEFEAT';
+});
 const stats = computed(() => {
   const mine = props.state.shots[me.value];
   const shots = mine.length;
@@ -729,12 +759,18 @@ const stats = computed(() => {
   };
 });
 const rank = computed(() => {
+  if (resigned.value) return iWon.value ? 'Victor by Concession' : 'Struck Colours';
   if (verdict.value.state === 'draw') return 'Court-Martialed';
   if (!iWon.value) return 'Lost at Sea';
   const s = stats.value.survivors;
   return s >= 4 ? 'Fleet Admiral' : s >= 2 ? 'Commodore' : 'Battle-Scarred Victor';
 });
 const citation = computed(() => {
+  if (resigned.value) {
+    return iWon.value
+      ? 'The enemy struck their colours. The seas are yours without another shot.'
+      : 'You struck your colours. The battle ends on your word.';
+  }
   if (verdict.value.state === 'draw') return 'Both fleets were caught falsifying their records. The sea keeps the verdict.';
   if (iWon.value) return `Enemy armada sent to the depths with ${stats.value.survivors} of your 5 ships still afloat.`;
   return 'Your fleet has been destroyed. The waters fall silent.';
@@ -1086,6 +1122,10 @@ const citation = computed(() => {
   background: linear-gradient(135deg, #14b686, #0b7d5b);
   color: #fff;
   box-shadow: 0 4px 16px rgba(11, 125, 91, 0.45);
+}
+.ar-btn.danger {
+  border-color: rgba(235, 68, 90, 0.35);
+  color: #ff8a97;
 }
 
 /* rosters */
