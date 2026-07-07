@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-04
 
-**Status**: in-progress
+**Status**: shipped
 
 **Input**: Bug report (iOS installed PWA): "after pasting an image the composer still works and
 I can type captions — but after I press SEND, I can't type in the composer anymore until I
