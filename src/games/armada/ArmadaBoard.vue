@@ -866,6 +866,15 @@ const citation = computed(() => {
   border-radius: 50%;
   overflow: hidden;
   transition: opacity 0.4s ease;
+}
+/* The ROTATING box is the clipped pseudo-element, not .ar-sweep itself: a
+   rotated square's bounding box pokes past the board and (transforms count
+   toward scroll overflow) let iPhones pan the whole game sideways. */
+.ar-sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
   background: conic-gradient(from 0deg, rgba(16, 185, 129, 0.23), rgba(16, 185, 129, 0.07) 34deg, rgba(16, 185, 129, 0) 62deg, rgba(16, 185, 129, 0) 360deg);
   animation: ar-radar 5s linear infinite;
 }

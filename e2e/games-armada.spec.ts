@@ -190,7 +190,12 @@ test('the fullscreen flow: card into overlay, a toast over the game leads away, 
   const noXScroll = () =>
     a.page.evaluate(() => {
       const body = document.querySelector('.go-body')!;
-      return { sw: body.scrollWidth, cw: body.clientWidth };
+      const limit = body.getBoundingClientRect().right;
+      const offenders = [...body.querySelectorAll('*')]
+        .filter((el) => el.getBoundingClientRect().right > limit + 1)
+        .slice(0, 5)
+        .map((el) => `${el.tagName}.${(el as HTMLElement).className}@${Math.round(el.getBoundingClientRect().right)}`);
+      return { sw: body.scrollWidth, cw: body.clientWidth, offenders };
     });
   let x = await noXScroll();
   expect(x.sw, JSON.stringify(x)).toBeLessThanOrEqual(x.cw + 1);

@@ -13,6 +13,17 @@
         <div class="go-title">{{ title }}</div>
         <div class="go-subtitle">{{ subtitle }}</div>
       </div>
+      <!-- Mute toggles the SAME switch as Settings → Notifications → Game
+           sounds (the one gate every cue already respects), so it stays in
+           sync with the settings screen in both directions. -->
+      <ion-button
+        fill="clear"
+        class="go-mute"
+        :aria-label="soundsOn ? 'Mute game sounds' : 'Unmute game sounds'"
+        @click="toggleSounds"
+      >
+        <ion-icon slot="icon-only" :icon="soundsOn ? volumeHighOutline : volumeMuteOutline" />
+      </ion-button>
       <span class="go-pill">{{ overlayGame.surface === 'wall' ? 'WALL' : '1:1' }}</span>
     </header>
 
@@ -44,7 +55,7 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { IonButton, IonIcon } from '@ionic/vue';
-import { chevronDownOutline } from 'ionicons/icons';
+import { chevronDownOutline, volumeHighOutline, volumeMuteOutline } from 'ionicons/icons';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
 import { replayState, localMoveAllowed } from '@/games/session';
@@ -53,7 +64,7 @@ import type { GameSession } from '@/games/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { overlayGame, overlayOpen, closeGame, gameSessionKey } from '@/composables/useGameOverlay';
 import { useKeyGuard } from '@/composables/useKeyGuard';
-import { getChat, getMessage, wallGameSession, playGameMove, playWallGameMove, sendGame } from '@/db/queries';
+import { getChat, getMessage, getSetting, setSetting, wallGameSession, playGameMove, playWallGameMove, sendGame } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { openGame } from '@/composables/useGameOverlay';
 
@@ -153,6 +164,18 @@ async function onRematch(): Promise<void> {
   }
 }
 
+// Game-sounds mute (the header toggle) — live-bound to the settings row so a
+// change made on the settings screen shows here too.
+const soundsSetting = useLiveQuery<boolean>(
+  () => getSetting('notifications.gameSounds', true),
+  ['settings'],
+  true,
+);
+const soundsOn = computed(() => soundsSetting.value);
+function toggleSounds(): void {
+  void setSetting('notifications.gameSounds', !soundsOn.value);
+}
+
 // The key gate (app lock) sits at a LOWER z-index than this overlay — locking
 // must therefore close the game view (the session is untouched; the pill
 // brings the player back after unlock).
@@ -199,6 +222,19 @@ watch(showGate, (locked) => {
 .go-title-block {
   min-width: 0;
   flex: 1;
+}
+.go-mute {
+  --color: #e6f4ec;
+  --border-radius: 12px;
+  --padding-start: 0;
+  --padding-end: 0;
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  border: 1px solid rgba(110, 231, 183, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
 }
 .go-title {
   font-size: 15px;
