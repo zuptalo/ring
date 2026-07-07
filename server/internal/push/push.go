@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -167,7 +168,7 @@ func NewSender(vapidPublic, vapidPrivate, subject string) *Sender {
 
 // attempt makes a single delivery and reports the HTTP status, any Retry-After
 // hint, and a transport error (status 0).
-func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p pushParams) (status int, retryAfter time.Duration, err error) {
+func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p pushParams) (status int, retryAfter time.Duration, body []byte, err error) {
 	// webpush-go prepends "mailto:" to any non-https subscriber, so pass the bare
 	// address (a leading "mailto:" would yield "mailto:mailto:…", which Apple
 	// rejects as BadJwtToken). An https URL is left untouched.
@@ -193,13 +194,20 @@ func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p push
 		Topic:           topic,
 	})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	defer resp.Body.Close()
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
 		retryAfter = parseRetryAfter(ra)
 	}
-	return resp.StatusCode, retryAfter, nil
+	// On a rejection, the push service names its reason in the body (Apple:
+	// {"reason":"BadJwtToken"} etc). Capture it (bounded) so failures are
+	// diagnosable from the log and prunable by reason (spec 2022). The body is
+	// the SERVICE's own error JSON — never user data.
+	if resp.StatusCode >= 300 {
+		body, _ = io.ReadAll(io.LimitReader(resp.Body, 512))
+	}
+	return resp.StatusCode, retryAfter, body, nil
 }
 
 // msgDebounceWindow folds a fast burst of messages to one recipient into at most a
@@ -341,14 +349,19 @@ func recoverLog(where string) {
 func (n *Notifier) deliver(ctx context.Context, sub store.PushSubscription, p pushParams) {
 	backoff := 500 * time.Millisecond
 	for attempt := 0; ; attempt++ {
-		status, retryAfter, err := n.sender.attempt(ctx, sub, p)
+		status, retryAfter, body, err := n.sender.attempt(ctx, sub, p)
 		switch {
 		case err == nil && status < 300:
 			slog.Info("push: delivered", "endpoint", endpointHost(sub.Endpoint))
 			return
-		case status == http.StatusNotFound || status == http.StatusGone:
-			// Subscription is dead - stop trying to use it. Log a failed prune so a
-			// dead endpoint that keeps failing every send is at least visible.
+		case shouldPrune(status, body):
+			// Subscription is dead — stop trying to use it. In practice Apple
+			// reports dead subscriptions with 400/403 reasons too, not just
+			// 404/410 (spec 2022, found live: one iPhone got 123 straight 400s
+			// across two days and was silently push-dead the whole time). The
+			// client re-registers on every app foreground, so a pruned device
+			// heals itself the next time the app opens.
+			slog.Info("push: pruning dead subscription", "status", status, "reason", string(body), "endpoint", endpointHost(sub.Endpoint))
 			if err := n.store.DeleteSubscriptionByEndpoint(ctx, sub.Endpoint); err != nil {
 				slog.Warn("push: prune dead subscription failed", "err", err, "endpoint", endpointHost(sub.Endpoint))
 			}
@@ -369,12 +382,47 @@ func (n *Notifier) deliver(ctx context.Context, sub store.PushSubscription, p pu
 			if err != nil {
 				slog.Warn("push: send failed", "err", err, "endpoint", endpointHost(sub.Endpoint))
 			} else {
-				// e.g. Apple 403 BadJwtToken if the VAPID subject isn't a mailto:.
-				slog.Warn("push: non-success status", "status", status, "endpoint", endpointHost(sub.Endpoint))
+				// The body is the push service's own reason (e.g. Apple's
+				// BadJwtToken) — logged verbatim so a failure names itself.
+				slog.Warn("push: non-success status", "status", status, "body", string(body), "endpoint", endpointHost(sub.Endpoint))
 			}
 			return
 		}
 	}
+}
+
+// deadReasons are the push-service body reasons that mean THIS SUBSCRIPTION is
+// dead or invalidated at the service — safe and correct to prune. Reasons that
+// mean OUR REQUEST was malformed (BadWebPushTopic, BadWebPushTtl, BadJwtToken,
+// PayloadTooLarge, rate limits, …) must NEVER prune: that failure is ours, and
+// pruning on it would silently unsubscribe every healthy device.
+var deadReasons = map[string]bool{
+	"unregistered":           true,
+	"baddevicetoken":         true,
+	"devicetokennotfortopic": true,
+	"expiredtoken":           true,
+	"gone":                   true,
+	"invalidsubscription":    true,
+	"subscriptionexpired":    true,
+}
+
+// shouldPrune is the pure prune decision (unit-tested): 404/410 always prune;
+// 400/403 prune only when the response body names a dead-subscription reason;
+// everything else keeps the subscription.
+func shouldPrune(status int, body []byte) bool {
+	if status == http.StatusNotFound || status == http.StatusGone {
+		return true
+	}
+	if status != http.StatusBadRequest && status != http.StatusForbidden {
+		return false
+	}
+	var parsed struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil || parsed.Reason == "" {
+		return false
+	}
+	return deadReasons[strings.ToLower(parsed.Reason)]
 }
 
 // retryable reports whether a failed attempt is worth retrying: any transport
