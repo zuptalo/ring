@@ -254,8 +254,8 @@ rematch starts Armada.
   design handoff: ~320px card, glyph, title, context subtitle, one full-width
   action button) instead of a playable board. Card states: challenged /
   awaiting their fleet / your move / their turn / finished (mini medal +
-  "View result ▸") / out-of-sync. The card always names who the game is
-  waiting on. A seated player can open the overlay from any state (watching
+  "View result ▸") / cancelled (a withdrawn wall challenge) / out-of-sync.
+  The card always names who the game is waiting on. A seated player can open the overlay from any state (watching
   their own board while the opponent aims is normal play); non-players never
   get an overlay entry — the card itself is the spectator view.
 - **FR-006 (fullscreen overlay)**: the game opens in an app-global overlay
@@ -346,7 +346,7 @@ rematch starts Armada.
   lands the user in that chat with the game minimized (verified in e2e).
 - **SC-005**: The floating button appears within one second of leaving an
   ongoing game, shows the correct awaiting-me count across app reloads, and
-  is gone within one second of the game ending on either device.
+  is gone within one second of the terminal state reaching the device.
 - **SC-006**: A sunk ship's smoke stops consuming animation work after its
   window (~6.5s); sinking all five ships leaves zero continuously-animating
   smoke layers (perf guard from the handoff).
