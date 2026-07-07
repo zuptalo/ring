@@ -1151,16 +1151,11 @@ export function classifyWallGameActivity(args: {
       if (!prefs.followResults) return quiet;
       body = "It's a draw 🤝";
     }
-  } else if (status.state !== 'ongoing') {
-    // A plain spectator (spec 1035): the FINAL RESULT only, behind the results
-    // switch — mirrors the in-app rule so page and SW tell the same story.
-    if (!prefs.followResults) return quiet;
-    if (status.state === 'draw') body = "It's a draw 🤝";
-    else if (status.state === 'won' || status.state === 'resigned') {
-      body = `${nameOf(session.players?.[status.winner])} won the game 🏆`;
-    }
   } else {
-    return quiet; // a quiet observer mid-game — ledger the keys, say nothing
+    // (spec 1036, reverting 1035) A spectator who never followed stays quiet —
+    // mid-game AND at the result. Following is the opt-in; followers are woken
+    // by the 'gameover' push and land in the followed branch above.
+    return quiet;
   }
   if (!body) return quiet;
   return { keys, note: { title: mover, body } };

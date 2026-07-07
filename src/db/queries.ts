@@ -988,6 +988,49 @@ export async function unfollowGame(gameId: string): Promise<void> {
   await setSetting('games.follows', f);
 }
 
+/* ---- wall-game follows are ALSO server-visible (spec 1036, amending 0009
+ * FR-006): a follower can only receive the end-of-game push if the server can
+ * route to them, so following a wall challenge writes a content-free `follow`
+ * engagement (payload sealed like every engagement — the server learns only
+ * "this user follows this post", the same class as reacting to it), and
+ * unfollowing tombstones it. The local ledger stays the UI's source of truth
+ * and the whole thing degrades to local-only against an older server. ---- */
+
+const FOLLOW_ENG_KEY = 'games.followEngIds';
+
+export async function followWallGame(postId: string): Promise<void> {
+  await followGame(postId);
+  try {
+    const post = await getPost(postId);
+    if (!post?.postKey) return;
+    const engId = uid();
+    await apiSubmitEngagement(postId, {
+      id: engId,
+      kind: 'follow',
+      payload: sealPostEngagement(post.postKey, { t: 'follow', at: now() }),
+    });
+    const ids = (await getSetting<Record<string, string>>(FOLLOW_ENG_KEY, {})) ?? {};
+    ids[postId] = engId;
+    await setSetting(FOLLOW_ENG_KEY, ids);
+  } catch {
+    /* older server or offline — the local follow still works in-app */
+  }
+}
+
+export async function unfollowWallGame(postId: string): Promise<void> {
+  await unfollowGame(postId);
+  try {
+    const ids = (await getSetting<Record<string, string>>(FOLLOW_ENG_KEY, {})) ?? {};
+    const engId = ids[postId];
+    if (!engId) return;
+    await apiSubmitEngagement(postId, { id: uid(), kind: 'tombstone', target: engId });
+    delete ids[postId];
+    await setSetting(FOLLOW_ENG_KEY, ids);
+  } catch {
+    /* best-effort — worst case one extra results push */
+  }
+}
+
 /** A player who left group `chatId` resigns all their ongoing games there —
  *  applied locally by every remaining member from the roster card's `at`
  *  (identical inputs ⇒ identical outcome, no wire signal; spec 0009 D6). */
@@ -3299,16 +3342,10 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
         body = `${await gameNameOf(session.players?.[status.winner])} won the game \u{1F3C6}`;
       }
     }
-  } else if (status.state !== 'ongoing') {
-    // A plain spectator (spec 1035): the FINAL RESULT only — no per-move noise,
-    // behind the same results switch.
-    if (await getSetting<boolean>('notifications.games.followResults', true)) {
-      if (status.state === 'draw') body = "It's a draw \u{1F91D}";
-      else if (status.state === 'won' || status.state === 'resigned') {
-        body = `${await gameNameOf(session.players?.[status.winner])} won the game \u{1F3C6}`;
-      }
-    }
   }
+  // (spec 1036, reverting 1035's spectator-result note) A plain spectator who
+  // never opted in stays quiet even at the result — following IS the opt-in,
+  // and followers now get the end-of-game push (kind 'gameover') to carry it.
   for (const i of others) notifiedEngagementIds.add(i.id);
   if (!body) return;
   const c = await getContact(latest.actor);
@@ -3753,6 +3790,24 @@ export async function playWallGameMove(postId: string, move: unknown): Promise<v
   if (after) {
     const st = deriveGameStatus(module, after);
     void playGameCue((module.moveCue?.(move, st, me) as Parameters<typeof playGameCue>[0] | null) ?? gameCueFor(st, me));
+    if (st.state !== 'ongoing') void announceWallGameOver(post, at);
+  }
+}
+
+/** The move that ENDS a wall game also announces it (spec 1036): one sealed,
+ *  content-free `gameover` engagement, which is the only push that reaches the
+ *  game's followers. Best-effort — losing it costs only that push, never game
+ *  correctness (every device still derives the result from the moves). */
+async function announceWallGameOver(post: Post, at: number): Promise<void> {
+  try {
+    if (!post.postKey) return;
+    await apiSubmitEngagement(post.id, {
+      id: uid(),
+      kind: 'gameover',
+      payload: sealPostEngagement(post.postKey, { t: 'gameover', at }),
+    });
+  } catch {
+    /* older server or offline */
   }
 }
 
@@ -3777,7 +3832,11 @@ export async function resignWallGame(postId: string): Promise<void> {
   const at = now();
   await submitWallGame(post, { t: 'move', seq: session.moves.length + 1, action: 'resign', at });
   const after = await wallGameSession(postId);
-  if (after) void playGameCue(gameCueFor(deriveGameStatus(module, after), me));
+  if (after) {
+    const st = deriveGameStatus(module, after);
+    void playGameCue(gameCueFor(st, me));
+    if (st.state !== 'ongoing') void announceWallGameOver(post, at);
+  }
 }
 
 /** Add an audience-visible comment to a post (sealed under K_post; fanned out). */

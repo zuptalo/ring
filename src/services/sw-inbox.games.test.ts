@@ -231,7 +231,7 @@ describe('classifyWallGameActivity — wall games on push wake (spec 0009 US3)',
     expect(loud?.note?.body).toBe('Alice made a move 🎲');
   });
 
-  it('a plain spectator hears the FINAL RESULT (spec 1035), behind the results switch', () => {
+  it('a plain spectator stays QUIET even at the result; a FOLLOWER hears it (spec 1036)', () => {
     // bob (P1, accepter) beats alice (P0, author): 0,3,1,4,2 wins for... play a
     // straight top-row win by the AUTHOR to keep the seats simple.
     const rows = [
@@ -242,19 +242,20 @@ describe('classifyWallGameActivity — wall games on push wake (spec 0009 US3)',
       row('e5', 'bob', { t: 'move', seq: 4, action: 'move', move: { cell: 4 }, at: 5 }),
       row('e6', 'alice', { t: 'move', seq: 5, action: 'move', move: { cell: 2 }, at: 6 }),
     ];
+    // Not followed → quiet at the result too (following IS the opt-in; the
+    // 'gameover' push only ever reaches followers).
     const r = classifyWallGameActivity({
       post: gpost, self: 'me', rows, seen: new Set(['e1', 'e2', 'e3', 'e4', 'e5']), prefs, followed: false, openGame, names,
     });
-    expect(r?.note?.body).toBe('Alice won the game 🏆');
-    // Mid-game the same spectator stays quiet (only the result speaks).
-    const mid = classifyWallGameActivity({
-      post: gpost, self: 'me', rows: rows.slice(0, 3), seen: new Set(['e1', 'e2']), prefs, followed: false, openGame, names,
+    expect(r?.note).toBeNull();
+    // Followed → the result note, behind its switch.
+    const loud = classifyWallGameActivity({
+      post: gpost, self: 'me', rows, seen: new Set(['e1', 'e2', 'e3', 'e4', 'e5']), prefs, followed: true, openGame, names,
     });
-    expect(mid?.note).toBeNull();
-    // The results switch silences it.
+    expect(loud?.note?.body).toBe('Alice won the game 🏆');
     const off = classifyWallGameActivity({
       post: gpost, self: 'me', rows, seen: new Set(['e1', 'e2', 'e3', 'e4', 'e5']),
-      prefs: { ...prefs, followResults: false }, followed: false, openGame, names,
+      prefs: { ...prefs, followResults: false }, followed: true, openGame, names,
     });
     expect(off?.note).toBeNull();
   });

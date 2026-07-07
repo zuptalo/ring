@@ -219,12 +219,18 @@ type engagementReq struct {
 	Target  string `json:"target,omitempty"` // tombstone: the engagement id being removed
 }
 
+// "follow" (spec 1036): a content-free opt-in to a challenge post's outcome —
+// the server learns only that this user wants the result push (the same
+// visibility class as reacting). Removed by tombstone. Never pushes anyone.
+// "gameover" (spec 1036): the final mover's device announcing the game ended,
+// so the result push can fan to participants + followers without the server
+// ever reading a move. Payloads for both stay sealed under K_post.
 // "game" (spec 0009): an accept or move on a game-challenge post. The payload
 // stays sealed under K_post like every other kind — the server learns only that
 // a post has game-type engagement, the same class of metadata as its existing
 // reaction-vs-comment distinction.
 func validEngagementKind(k string) bool {
-	return k == "reaction" || k == "comment" || k == "tombstone" || k == "game"
+	return k == "reaction" || k == "comment" || k == "tombstone" || k == "game" || k == "follow" || k == "gameover"
 }
 
 // submitEngagement (POST /v1/posts/{id}/engagement) records one opaque engagement item
@@ -340,7 +346,10 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 	// Routing uses only kind + actor, which the server already stores; each
 	// woken device still pulls, decrypts under K_post, and decides locally.
 	if h.Notifier != nil && !tombstone {
-		if req.Kind == "game" {
+		switch req.Kind {
+		case "game", "gameover":
+			// Participants always; on GAMEOVER also the followers (spec 1036) —
+			// the one end-of-game wake an opted-in spectator asked for.
 			targets := map[string]bool{}
 			if players, err := h.Posts.GameParticipants(r.Context(), postID); err == nil {
 				for _, u := range players {
@@ -350,14 +359,25 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 			if author, err := h.Posts.PostAuthor(r.Context(), postID); err == nil && author != "" {
 				targets[author] = true
 			}
+			if req.Kind == "gameover" {
+				if followers, err := h.Posts.GameFollowers(r.Context(), postID); err == nil {
+					for _, u := range followers {
+						targets[u] = true
+					}
+				}
+			}
 			for u := range targets {
 				if u == uid {
 					continue
 				}
 				h.Notifier.NotifyPostActivity(r.Context(), u, postID)
 			}
-		} else if author, err := h.Posts.PostAuthor(r.Context(), postID); err == nil && author != "" && author != uid {
-			h.Notifier.NotifyPostActivity(r.Context(), author, postID)
+		case "follow":
+			// An opt-in is bookkeeping, not activity — nobody is woken for it.
+		default:
+			if author, err := h.Posts.PostAuthor(r.Context(), postID); err == nil && author != "" && author != uid {
+				h.Notifier.NotifyPostActivity(r.Context(), author, postID)
+			}
 		}
 	}
 	httpx.JSON(w, http.StatusCreated, map[string]any{"id": req.ID})

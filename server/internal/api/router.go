@@ -127,6 +127,7 @@ type PostStore interface {
 	CanSeePost(ctx context.Context, postID, user string) (bool, error)
 	PostAudience(ctx context.Context, postID string) ([]string, error)
 	GameParticipants(ctx context.Context, postID string) ([]string, error)
+	GameFollowers(ctx context.Context, postID string) ([]string, error)
 	PostAuthor(ctx context.Context, postID string) (string, error)
 	SubmitEngagement(ctx context.Context, postID, id, actor, kind, payload string) error
 	EngagementActor(ctx context.Context, postID, engID string) (string, error)

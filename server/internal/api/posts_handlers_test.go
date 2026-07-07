@@ -131,6 +131,23 @@ func (f *fakePostStore) GameParticipants(_ context.Context, postID string) ([]st
 	}
 	return out, nil
 }
+func (f *fakePostStore) GameFollowers(_ context.Context, postID string) ([]string, error) {
+	dead := map[string]bool{}
+	for _, e := range f.eng[postID] {
+		if e.Kind == "tombstone" {
+			dead[e.Payload] = true
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range f.eng[postID] {
+		if e.Kind == "follow" && !dead[e.ID] && !seen[e.Actor] {
+			seen[e.Actor] = true
+			out = append(out, e.Actor)
+		}
+	}
+	return out, nil
+}
 func (f *fakePostStore) EngagementActor(_ context.Context, postID, engID string) (string, error) {
 	for _, e := range f.eng[postID] {
 		if e.ID == engID {
@@ -855,7 +872,7 @@ func TestGameEngagementPushesAudience(t *testing.T) {
 	srv := newPostTestServerN(conn, newFakePostStore(), notif)
 	tokA, aliceID, _ := registerNamed(t, srv, "alice") // challenge post author (player 0)
 	tokB, bobID, _ := registerNamed(t, srv, "bob")     // first accepter (player 1)
-	_, carolID, _ := registerNamed(t, srv, "carol")    // audience observer
+	tokC, carolID, _ := registerNamed(t, srv, "carol") // audience observer
 	conn.befriend(aliceID, bobID)
 	conn.befriend(aliceID, carolID)
 
@@ -909,6 +926,60 @@ func TestGameEngagementPushesAudience(t *testing.T) {
 	}
 	notif.reset()
 
+	// Spec 1036: carol FOLLOWS the challenge (content-free opt-in). A follow
+	// pushes NOBODY — not even the author.
+	followEng := `{"id":"aaaaaaa1-1111-1111-1111-111111111111","kind":"follow","payload":"SEALED-F"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokC, followEng); rr.Code != http.StatusCreated {
+		t.Fatalf("follow engagement status = %d; body=%s (kind must be accepted)", rr.Code, rr.Body.String())
+	}
+	if n := notif.activityPushCount(); n != 0 {
+		t.Errorf("a follow fired %d pushes; want 0", n)
+	}
+	notif.reset()
+
+	// A move STILL doesn't push the follower — only the result does (spec 1036).
+	moveEng2 := `{"id":"aaaaaaa2-2222-2222-2222-222222222222","kind":"game","payload":"SEALED3"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, moveEng2); rr.Code != http.StatusCreated {
+		t.Fatalf("move status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if notif.activityPushedTo(carolID, postID) {
+		t.Errorf("a mid-game move must NOT push a follower (carol)")
+	}
+	notif.reset()
+
+	// GAME OVER (spec 1036): the final mover's device announces the end; the push
+	// fans to the other participant AND the followers — never the actor.
+	overEng := `{"id":"aaaaaaa3-3333-3333-3333-333333333333","kind":"gameover","payload":"SEALED-O"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokA, overEng); rr.Code != http.StatusCreated {
+		t.Fatalf("gameover status = %d; body=%s (kind must be accepted)", rr.Code, rr.Body.String())
+	}
+	if !notif.activityPushedTo(bobID, postID) || !notif.activityPushedTo(carolID, postID) {
+		t.Errorf("gameover must push the opponent (bob) AND the follower (carol)")
+	}
+	if notif.activityPushedTo(aliceID, postID) {
+		t.Errorf("gameover must not push the actor (alice)")
+	}
+	notif.reset()
+
+	// Carol UNFOLLOWS (tombstones her follow): a second gameover no longer
+	// reaches her.
+	unfollow := `{"id":"aaaaaaa4-4444-4444-4444-444444444444","kind":"tombstone","target":"aaaaaaa1-1111-1111-1111-111111111111"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokC, unfollow); rr.Code != http.StatusCreated {
+		t.Fatalf("unfollow status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	notif.reset()
+	overEng2 := `{"id":"aaaaaaa5-5555-5555-5555-555555555555","kind":"gameover","payload":"SEALED-O2"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokA, overEng2); rr.Code != http.StatusCreated {
+		t.Fatalf("gameover2 status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	if notif.activityPushedTo(carolID, postID) {
+		t.Errorf("an unfollowed (tombstoned) spectator must not be pushed on gameover")
+	}
+	if !notif.activityPushedTo(bobID, postID) {
+		t.Errorf("gameover must still push the opponent after an unrelated unfollow")
+	}
+	notif.reset()
+
 	// Reactions keep their spec-1031 author-only behavior — the game fan-out
 	// must not widen anything else.
 	react := `{"id":"99999999-9999-9999-9999-999999999999","kind":"reaction","payload":"SEALED"}`
@@ -930,16 +1001,21 @@ func TestGameEngagementPushesAudience(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &listedWrap); err != nil {
 		t.Fatalf("list decode: %v", err)
 	}
-	var games int
+	var games, follows, overs int
 	for _, e := range listedWrap.Items {
-		if e["kind"] == "game" {
+		switch e["kind"] {
+		case "game":
 			games++
-			if e["payload"] != "SEALED" && e["payload"] != "SEALED2" {
+			if e["payload"] != "SEALED" && e["payload"] != "SEALED2" && e["payload"] != "SEALED3" {
 				t.Errorf("game payload not stored opaquely: %v", e["payload"])
 			}
+		case "follow":
+			follows++
+		case "gameover":
+			overs++
 		}
 	}
-	if games != 2 {
-		t.Errorf("listed %d game engagements; want 2", games)
+	if games != 3 || follows != 1 || overs != 2 {
+		t.Errorf("listed games/follows/overs = %d/%d/%d; want 3/1/2", games, follows, overs)
 	}
 }
