@@ -61,11 +61,18 @@ FleetSecret = { layout: Layout, salt: string }   // salt: 32 bytes, b64url
 // settings store, key `${ns}.secret.${commitment}`, ns = 'armada'
 ```
 
-Lifecycle: created at Deploy (commit emit), read by the duty officer and the
-board, cleared when the session reaches any terminal, when the carrying
-message/post is deleted, and by the full local wipe (logout/app-lock). Never
-in `SYNCED_PREF_KEYS`; battleship's existing `battleship.secret.*` namespace
-is untouched and coexists.
+Lifecycle: created at Deploy (commit emit or stage), read by the duty officer
+and the board, cleared when the session reaches any terminal, when the
+carrying message/post is deleted, and by the full local wipe (logout/
+app-lock). Never in `SYNCED_PREF_KEYS`; battleship's existing
+`battleship.secret.*` namespace is untouched and coexists.
+
+**Staged commit** (device-local, sibling record): when a player Engages but
+their commit slot hasn't opened yet (commits are sequential on the wire —
+see contract §Moves), the commitment hash is staged at
+`armada.staged.<sessionKey>` = `{ h: string }`. The duty officer emits
+`{t:'commit', h}` when the slot opens and clears the record; also cleared
+with the secret's lifecycle events.
 
 ## Module contract additions (`src/games/types.ts`, additive)
 
@@ -116,14 +123,17 @@ then newest `lastActivityAt`).
 ## Duty resolution (`src/games/duty.ts`, pure)
 
 ```ts
-owedMove(state: ArmadaState, me: 0|1, secret: FleetSecret | null)
-  → { t: 'answer', r, reveal? } | { t: 'reveal', layout, salt } | null
+owedMove(state: ArmadaState, me: 0|1, secret: FleetSecret | null,
+         staged?: { h: string } | null)
+  → { t: 'commit', h } | { t: 'answer', r, reveal? }
+  | { t: 'reveal', layout, salt } | null
 ```
 
-Returns the answer for a pending enemy shot (with the reveal attached on the
-17th declared hit), or the winner's owed reveal, or null. Consumed by
-`useGameDuty` (app-level watcher) and nothing else; emission goes through the
-existing `playGameMove`/`playWallGameMove`, whose seq/dedup validation makes
+Returns the staged commit once its slot opens, the answer for a pending enemy
+shot (with the reveal attached on the 17th declared hit), or the winner's
+owed reveal — else null. Consumed by `useGameDuty` (app-level watcher) and
+nothing else; emission goes through the existing
+`playGameMove`/`playWallGameMove`, whose seq/dedup validation makes
 re-emission idempotent.
 
 ## Challenge card model (`GameChallengeCard.vue`, derived per render)

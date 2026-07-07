@@ -33,7 +33,7 @@ commitments can never verify here).
 
 | Phase | Move | By | Rules |
 |-------|------|----|-------|
-| placing | `{ t:'commit', h }` | each seat once, ANY order (parallel) | `h` = the commitment. A second commit from the same seat, or any other move type, is illegal. |
+| placing | `{ t:'commit', h }` | P0 then P1 (seq 1, 2) — SEQUENTIAL on the wire | `h` = the commitment. A second commit from the same seat, or any other move type, is illegal. Deployment still FEELS parallel: both players author their fleets simultaneously; P1's Engage STAGES the commit device-locally and the duty officer emits it the moment P0's commit lands. (Deliberate divergence from battleship-1033's parallel `mayMove` commits, whose seq race is a proven fork: two simultaneous seq-1 commits trip the engine's same-seq/different-content rule and kill the session as out-of-sync.) |
 | battle | `{ t:'shot', cell }` | alternating attacker, P0 first | `cell` 0–99, never previously shot by this attacker. Strict alternation: the turn ALWAYS passes after the answer, hit or miss. |
 | battle | `{ t:'answer', r }` | the defender, immediately after each shot | `r` ∈ miss/hit/sunk, judged against the defender's SECRET layout by their device. The FINAL answer (the 17th declared hit cell) MUST instead be `{ t:'answer', r:'sunk', reveal:{ layout, salt } }` — a final answer without the reveal is illegal. |
 | verify | `{ t:'reveal', layout, salt }` | the WINNER, as the single legal next move | emitted automatically by the winner's device (duty officer). |
@@ -45,10 +45,10 @@ out-of-sync terminal.
 
 ## Duty & re-emission (anti-stall, FR-009)
 
-The defender's answer and the winner's reveal are OWED moves: any device
-holding the seat's fleet secret MUST emit the owed move whenever it observes
-the state (app open, live update, overlay open) — not only while a board is
-rendered. Because the engine drops duplicate seqs, re-emission after an app
+The defender's answer, the winner's reveal, and a STAGED commit whose slot has
+opened are OWED moves: any device holding the seat's fleet secret MUST emit
+the owed move whenever it observes the state (app open, live update, overlay
+open) — not only while a board is rendered. Because the engine drops duplicate seqs, re-emission after an app
 kill between judging and sending is idempotent and REQUIRED. A device without
 the secret (a second own-device) owes nothing and stays silent.
 

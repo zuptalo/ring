@@ -44,16 +44,24 @@ hit) answer must carry the loser's reveal, exactly as 0011's 12th.
 (rejected: index in the fixed class order already names the class; shorter
 canonical form, nothing user-identifying in the hash preimage).
 
-## D3 — Strict alternation + the parallel-placement gate carry over
+## D3 — Strict alternation; commits sequential on the wire, parallel in the UI
 
-**Decision**: port `turn()`/`mayMove()` semantics unchanged: commits are
-parallel (each side owes exactly its own commit, any order), battle is strict
-alternation with the defender's answer interleaved (`pending`), verify phase
-waits on the winner's reveal.
+**Decision**: battle is strict alternation with the defender's answer
+interleaved (`pending`), verify phase waits on the winner's reveal — ported
+unchanged. Deployment commits, however, are SEQUENTIAL on the wire (P0 seq 1,
+then P1 seq 2): `mayMove` during placing gates on the slot, and the second
+player's Engage STAGES the commit device-locally (a `{h}` record next to the
+fleet secret); the duty officer emits it the moment the first commit lands.
 
-**Rationale**: verified in `battleship/logic.ts:171-200`; matches the
-handoff's deliberate no-bonus-shot rule and the user's confirmation. Zero new
-turn logic = zero new divergence surface.
+**Rationale (implementation-time discovery)**: battleship-1033's parallel
+`mayMove` commits carry a latent session-killing race — two simultaneous
+seq-1 commits trip `applySignal`'s same-seq/different-content rule
+(`session.ts:113-121`) and both devices land on out-of-sync. Verified against
+`playGameMove` (seq = moves.length + 1 at send time) + `handleGameMove`
+(applies the peer's seq as sent). Sequential-wire + staged-UI keeps the
+user-visible parallel deployment while making the race structurally
+impossible, with zero engine changes. This likely explains the user-reported
+broken-game experiences alongside the mount-dependent answer bug (D4).
 
 ## D4 — The stall fix: a mount-independent duty officer (FR-009)
 

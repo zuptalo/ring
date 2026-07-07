@@ -76,9 +76,12 @@ exchange verifies honest play and both devices derive the identical result.
 1. **Given** a 1:1 chat, **When** Maya starts Armada, **Then** both sides see
    the challenge card (not a playable board) and tapping its button opens the
    fullscreen game; Maya lands directly in deployment.
-2. **Given** both players have deployed (in either order, independently),
-   **When** the second commitment arrives, **Then** battle begins and only the
-   player whose turn it is can fire; fired cells cannot be fired again.
+2. **Given** both players have deployed (authored in either order,
+   independently — the second commitment is staged on-device and sent
+   automatically the moment the first one lands, so simultaneous deploys can
+   never corrupt the game), **When** both commitments are in, **Then** battle
+   begins and only the player whose turn it is can fire; fired cells cannot
+   be fired again.
 3. **Given** a shot lands, **Then** the shooter's board marks hit/miss/sunk
    exactly as the defender's device judged it, the turn passes, and the
    matching sound cue plays on both devices.
@@ -282,9 +285,13 @@ rematch starts Armada.
   awaiting the user's move. Tap opens the most urgent session (awaiting-me
   first, then most recent activity); multiple ongoing games show a count
   hint. It must not collide with the minimized-call widget.
-- **FR-009 (anti-stall)**: a defender's judged-but-unsent answer MUST be
-  re-emitted when the app (or the game) is next opened, so closing the app
-  mid-judgement cannot strand both players waiting. The overlay's status line
+- **FR-009 (anti-stall)**: a defender's judged-but-unsent answer — and a
+  staged deployment commit whose slot has opened — MUST be re-emitted when
+  the app (or the game) is next opened, so closing the app mid-judgement
+  cannot strand both players waiting. Deployment commits are SEQUENTIAL on
+  the wire (first seat, then second) precisely because simultaneous
+  same-sequence commits are a proven session-killing race in the shipped
+  battleship; the staging rule keeps deployment feeling parallel. The overlay's status line
   and the card always name who owes the next action. Divergent logs land on
   the labeled out-of-sync terminal. Rapid alternating fire with delayed or
   reordered delivery must converge to identical state on both devices with no

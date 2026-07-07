@@ -46,6 +46,19 @@ export interface GameModule<S = unknown, M = unknown> {
    *  applied move deserves (e.g. Battleship's splash vs impact); null/absent
    *  falls back to the platform's generic status cues. */
   moveCue?: (move: unknown, status: GameSessionStatus, me: 0 | 1) => string | null
+  /** Optional presentation mode (spec 1038): 'fullscreen' games render as a
+   *  compact challenge card in the chat/wall and their board lives in the
+   *  app-global game overlay instead. Absent = the classic inline bubble.
+   *  Purely a rendering concern — the wire and the engine never see it. */
+  presentation?: 'fullscreen'
+  /** Retired games (spec 1038) are hidden from the picker but keep rendering
+   *  and replaying existing sessions forever — the id contract stays honored;
+   *  only NEW games of this type can no longer start. */
+  retired?: true
+  /** Rematch redirect for retired games (spec 1038): a rematch on a finished
+   *  session of this game starts the successor id instead (e.g. battleship's
+   *  rematch starts armada). Absent = rematch keeps the same id. */
+  successor?: string
   themes: GameTheme[]
 }
 
