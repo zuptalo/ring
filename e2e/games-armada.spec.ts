@@ -156,7 +156,12 @@ test('the stall fix: a defender offline at shot time answers on reconnect, board
 });
 
 test('the fullscreen flow: card into overlay, a toast over the game leads away, the pill leads back', async ({ browser }) => {
-  const ctxs = [await browser.newContext(), await browser.newContext(), await browser.newContext()];
+  const ctxs = [
+    // A plays on a PHONE-sized viewport: SC-001 forbids horizontal scrolling.
+    await browser.newContext({ viewport: { width: 390, height: 844 } }),
+    await browser.newContext(),
+    await browser.newContext(),
+  ];
   const a = await createAccount(ctxs[0], 'RINGAR5');
   const b = await createAccount(ctxs[1], 'RINGAR6');
   const c = await createAccount(ctxs[2], 'RINGAR7');
@@ -179,6 +184,16 @@ test('the fullscreen flow: card into overlay, a toast over the game leads away, 
   await a.page.locator('.gcc-btn').click();
   await expect(a.page.locator('.game-overlay')).toBeVisible();
   await expect(a.page.locator('.armada')).toBeVisible(); // deployment face, hosted by the overlay
+
+  // No horizontal scrolling on a phone — deployment face (SC-001; the iPhone
+  // sideways-pan bug: absolutely-positioned effect layers widened the body).
+  const noXScroll = () =>
+    a.page.evaluate(() => {
+      const body = document.querySelector('.go-body')!;
+      return { sw: body.scrollWidth, cw: body.clientWidth };
+    });
+  let x = await noXScroll();
+  expect(x.sw, JSON.stringify(x)).toBeLessThanOrEqual(x.cw + 1);
 
   // A message from a THIRD chat toasts over the game...
   const cChatWithA = (await c.page.evaluate((id) => (window as any).__ringTest.chatWith(id), a.id)) as string;
@@ -228,6 +243,10 @@ test('the fullscreen flow: card into overlay, a toast over the game leads away, 
   await commit(a, { chatId: aChat, messageId: mid, layout: L0, salt: 'c2FsdDA' });
   await expect.poll(async () => (await gameInfo(a, mid))?.moves, { timeout: 30_000 }).toBe(2);
   expect(await a.page.locator('.nb-stack .nb').count()).toBe(0);
+
+  // Battle face (two boards + radar + rosters) must not scroll sideways either.
+  x = await noXScroll();
+  expect(x.sw, JSON.stringify(x)).toBeLessThanOrEqual(x.cw + 1);
 
   // The game ends by resignation while minimized → the pill clears itself.
   await a.page.locator('.go-exit').click();

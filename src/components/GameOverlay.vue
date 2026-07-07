@@ -169,6 +169,8 @@ watch(showGate, (locked) => {
   z-index: 16000; /* above MinimizedCall (15000), below NotificationBanners (19000) */
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* nothing inside may widen or pan the overlay itself */
+  overscroll-behavior: none;
   background: radial-gradient(900px 500px at 50% -8%, #1c2030 0%, #141821 48%, #0e1116 100%);
   color: #f5f7ff;
   animation: go-in 0.3s ease-out;
@@ -221,7 +223,16 @@ watch(showGate, (locked) => {
 }
 .go-body {
   flex: 1;
+  /* Vertical scroll ONLY. The board's effect layers (smoke columns, radar,
+     drag shadows) are absolutely positioned and can poke past the right edge;
+     without the x-clamp iOS lets the whole game pan sideways. touch-action
+     pan-y kills the horizontal gesture at the source (ship dragging still
+     works — the ships opt out with their own touch-action: none), and
+     overscroll-behavior stops the rubber-band from chaining to the page. */
+  overflow-x: hidden;
   overflow-y: auto;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   padding: 6px 12px calc(env(safe-area-inset-bottom, 0px) + 36px);
 }
