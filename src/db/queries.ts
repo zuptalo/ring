@@ -58,6 +58,7 @@ import {
   buildWallSession,
 } from '@/games/challenge';
 import type { GameSession } from '@/games/types';
+import { mostUrgentFirst, overlayGameEntry, type OngoingOverlayGame } from '@/games/overlay-games';
 import { gameCueFor, playGameCue } from '@/services/game-sounds';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
@@ -787,6 +788,50 @@ export async function hasOngoingGame(chatId: string): Promise<boolean> {
       challengePhase(m.game) !== 'cancelled' &&
       deriveGameStatus(GAMES[m.game.gameType], m.game).state === 'ongoing',
   );
+}
+
+/**
+ * The ongoing-games set behind the floating return button (spec 1038 FR-008):
+ * every fullscreen-presentation session where this user holds a seat and the
+ * game is enterable, most urgent first. Fully DERIVED (the pill and its badge
+ * survive reloads and self-clear at game end); the judging lives in the pure
+ * overlayGameEntry — this is just the store walk. A messages-store sweep is
+ * the established cost model here (failed-sends, expiry, and search do the
+ * same); fullscreen game rows are filtered out in one cheap field check.
+ */
+export async function ongoingOverlayGames(): Promise<OngoingOverlayGame[]> {
+  const out: OngoingOverlayGame[] = [];
+  const msgs = await getAll<Message>('messages');
+  for (const m of msgs) {
+    if (!m.game || m.deleted) continue;
+    if (GAMES[m.game.gameType]?.presentation !== 'fullscreen') continue;
+    const entry = overlayGameEntry(
+      GAMES[m.game.gameType],
+      m.game,
+      gameSelfIndex(m),
+      { surface: 'chat', chatId: m.chatId, messageId: m.id, gameType: m.game.gameType },
+      m.game.startedAt ?? m.timestamp,
+    );
+    if (entry) out.push(entry);
+  }
+  const posts = await getAll<Post>('posts');
+  const t = now();
+  for (const p of posts) {
+    if (!p.game) continue;
+    if (p.expiresAt && p.expiresAt <= t) continue;
+    if (GAMES[p.game.gameType]?.presentation !== 'fullscreen') continue;
+    const session = await wallGameSession(p.id);
+    if (!session) continue;
+    const entry = overlayGameEntry(
+      GAMES[p.game.gameType],
+      session,
+      playerIndexOf(session, getSelfUserId() ?? ''),
+      { surface: 'wall', postId: p.id, gameType: p.game.gameType },
+      p.createdAt,
+    );
+    if (entry) out.push(entry);
+  }
+  return mostUrgentFirst(out);
 }
 
 /** Start a game in a 1:1 chat (the bubble is instantly playable, like a poll).
