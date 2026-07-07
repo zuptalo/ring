@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-07
 
-**Status**: planned
+**Status**: in-review
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User directive after a live incident: "We should have 0 push
