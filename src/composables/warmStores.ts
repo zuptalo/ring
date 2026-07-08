@@ -22,7 +22,6 @@ import { subscribe } from '@/db/idb';
 import { getSecret } from '@/db/secrets';
 import { isUnlocked } from '@/services/crypto/identity';
 import { getSelfUsername } from '@/services/auth';
-import { capitalizeFirst } from '@/utils/text';
 import { listChats, listCallGroups, listContacts, type CallGroup } from '@/db/queries';
 import type { Chat, Contact } from '@/db/types';
 
@@ -30,7 +29,7 @@ const DEFAULT_ABOUT = 'Hey there! I am using Ring.';
 /** Cold/fallback display name: the immutable @username, then "You". Mirrors
  *  `useSelfProfile`'s fallback so a locked or empty profile still shows a name. */
 function fallbackName(): string {
-  return capitalizeFirst(getSelfUsername() ?? 'You');
+  return getSelfUsername() ?? 'You';
 }
 
 // --- Own profile (singleton refs; the computed avatar is composed in useSelfProfile) ---
