@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -21,6 +22,40 @@ func (h *Handlers) devMintInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]string{"code": code})
+}
+
+// devPushTest fires a MESSAGE-tickle Web Push at every subscription of the given
+// user, through the exact production sender (same TTL/topic/urgency/sealing) —
+// the definitive device-side probe when "pushes accepted upstream but nothing
+// shows on the phone" needs isolating (Ring pipeline vs the OS notification
+// leg). Dev/test only. Body: {"userId": "<uuid>", "ttl": <optional int>}.
+//
+// Passing "ttl" (e.g. 0) sends via NotifyDebug — a caller-chosen TTL with NO
+// collapse topic ("deliver now or discard" at ttl:0) — to rule the message TTL
+// and collapse settings in or out: if an online device shows nothing even for a
+// ttl:0 push, TTL is not the cause and the loss is on the device.
+func (h *Handlers) devPushTest(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		UserID string `json:"userId"`
+		TTL    *int   `json:"ttl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&b); err != nil || b.UserID == "" {
+		httpx.Error(w, http.StatusBadRequest, "userId required")
+		return
+	}
+	if b.TTL != nil {
+		if dbg, ok := h.Notifier.(interface {
+			NotifyDebug(ctx context.Context, userID string, ttl int)
+		}); ok {
+			dbg.NotifyDebug(r.Context(), b.UserID, *b.TTL)
+		} else {
+			httpx.Error(w, http.StatusNotImplemented, "notifier has no debug send")
+			return
+		}
+	} else {
+		h.Notifier.Notify(r.Context(), b.UserID)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // devCallConfig sets the call tunables (participant caps + ring/recovery cadence) at runtime

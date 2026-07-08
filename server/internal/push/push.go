@@ -308,6 +308,15 @@ func (n *Notifier) SendVersion(ctx context.Context, sub store.PushSubscription) 
 	n.deliver(sctx, sub, versionParams())
 }
 
+// NotifyDebug (dev/diagnostic only) sends a MESSAGE tickle with a caller-chosen
+// TTL and NO collapse topic — the purest "deliver now or discard" probe. A ttl
+// of 0 tells the push service to deliver immediately or drop it, so if an ONLINE
+// device still shows nothing the loss is squarely on the device, not our TTL or
+// collapse settings. Not wired into any production path.
+func (n *Notifier) NotifyDebug(ctx context.Context, userID string, ttl int) {
+	n.notify(ctx, userID, pushParams{payload: tickleMsg, ttl: ttl, urgency: webpush.UrgencyHigh, topic: ""})
+}
+
 func (n *Notifier) notify(ctx context.Context, userID string, p pushParams) {
 	// Notify/NotifyCall are documented as "safe to call in a goroutine"; honor that
 	// literally - a panic in push delivery must never escape and crash the process.
