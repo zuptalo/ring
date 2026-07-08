@@ -16,6 +16,12 @@
     <div class="ar-status">
       <div class="ar-status-title" :style="{ color: statusColor }">{{ statusTitle }}</div>
       <div class="ar-status-sub">{{ statusSub }}</div>
+      <!-- Live opponent presence: are they at the board right now? Self-clears
+           ~6s after they leave / background (spec game-presence). -->
+      <div class="ar-presence" :class="{ on: opponentInGame }">
+        <span class="ar-presence-dot" aria-hidden="true" />
+        {{ opponentInGame ? 'Opponent in the game' : 'Opponent away' }}
+      </div>
     </div>
 
     <div class="ar-boards">
@@ -142,8 +148,10 @@
 
     <!-- controls -->
     <div v-if="face === 'place'" class="ar-controls">
-      <button type="button" class="ar-btn" @click.stop="autoDeploy">Auto-deploy</button>
-      <button type="button" class="ar-btn" :disabled="!placed.length" @click.stop="clearFleet">Clear</button>
+      <!-- Shuffle drops a fresh random fleet (tap again for another) — it doubles
+           as "start over", so there's no separate Clear. Then rotate/move any
+           ship to taste, and Engage. -->
+      <button type="button" class="ar-btn" @click.stop="autoDeploy">Shuffle</button>
       <button v-if="placed.length >= 5" type="button" class="ar-btn primary" @click.stop="engage">Engage ▸</button>
       <button type="button" class="ar-btn danger" @click.stop="$emit('resign')">Surrender</button>
     </div>
@@ -258,6 +266,11 @@ const props = defineProps<{
   /** The SESSION-level verdict (resignation/out-of-sync live there, invisible
    *  to the protocol state). Passed by the overlay host. */
   sessionStatus?: GameSessionStatus | null;
+  /** Passed by the overlay; unused here but declared so it doesn't fall through
+   *  as a stray attribute. */
+  opponentName?: string;
+  /** True while the opposing admiral has this game's board open right now. */
+  opponentInGame?: boolean;
 }>();
 const emit = defineEmits<{
   (e: 'move', move: ArmadaMove): void;
@@ -347,7 +360,9 @@ const previewCells = computed<{ cells: Set<number>; valid: boolean } | null>(() 
 function placeAt(idx: number): void {
   if (face.value !== 'place' || !nextClass.value) return;
   const size = nextClass.value.size;
-  // Try the current orientation, then the other — a tap should just work.
+  // Tap to drop the next ship; drop it then TAP it to rotate or DRAG it to move
+  // (both work mid-deployment now). Try horizontal then vertical so a tap near
+  // an edge still lands.
   for (const dir of [orient.value, orient.value === 'h' ? 'v' : 'h'] as const) {
     const cells = cellsForAt(idx, dir, size);
     if (!cells) continue;
@@ -360,10 +375,6 @@ function placeAt(idx: number): void {
 }
 function autoDeploy(): void {
   placed.value = randomLayout();
-  hoverIdx.value = null;
-}
-function clearFleet(): void {
-  placed.value = [];
   hoverIdx.value = null;
 }
 
@@ -389,8 +400,17 @@ const clampShip = (s: Ship): Ship => ({
   r: Math.max(0, Math.min(s.dir === 'v' ? 10 - s.len : 9, s.r)),
   c: Math.max(0, Math.min(s.dir === 'h' ? 10 - s.len : 9, s.c)),
 });
-const candidateLegal = (idx: number, moved: Ship): boolean =>
-  layoutLegal(placed.value.map((s, i) => (i === idx ? moved : s)));
+// Per-ship legality DURING deployment: the moved/rotated ship must sit fully on
+// the board and not overlap any OTHER placed ship. We deliberately do NOT use
+// the full-fleet layoutLegal here — it requires all 5 ships present, which would
+// (and did) BLOCK rotating or moving a ship until the whole fleet was down. This
+// is the deploy-time limit being lifted: you can rotate/move each ship as you go.
+const candidateLegal = (idx: number, moved: Ship): boolean => {
+  const cells = cellsForAt(moved.r * 10 + moved.c, moved.dir, moved.len);
+  if (!cells) return false; // off-board
+  const others = occupied(idx); // every placed ship's cells except the one moving
+  return cells.every((c) => !others.has(c));
+};
 function onShipDown(i: number, ev: PointerEvent): void {
   (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
   const cell = gridCell(ev);
@@ -735,10 +755,10 @@ const statusSub = computed(() => {
   return armadaTurn(props.state) === me.value ? 'Fire at enemy waters.' : 'Enemy salvo incoming…';
 });
 const statusColor = computed(() => {
-  if (gameOver.value) return iWon.value ? '#10b981' : '#ff6b7a';
-  if (face.value === 'battle' && armadaTurn(props.state) !== me.value) return '#ffc409';
-  if (face.value === 'battle') return '#10b981';
-  return '#e9f5ee';
+  if (gameOver.value) return iWon.value ? 'var(--g-accent)' : 'var(--g-danger)';
+  if (face.value === 'battle' && armadaTurn(props.state) !== me.value) return 'var(--g-warn)';
+  if (face.value === 'battle') return 'var(--g-accent)';
+  return 'var(--g-text)';
 });
 
 /* ---- result ceremony ---- */
@@ -799,8 +819,35 @@ const citation = computed(() => {
 }
 .ar-status-sub {
   font-size: 12px;
-  color: rgba(220, 240, 230, 0.6);
+  color: var(--g-text-dim);
   margin-top: 3px;
+}
+/* Live opponent presence chip: a filled emerald dot + "in the game" when the
+   other admiral is at the board, a hollow grey dot + "away" when they're not. */
+.ar-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--g-text-faint);
+}
+.ar-presence.on {
+  color: var(--g-accent-soft);
+}
+.ar-presence-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--g-text-faint);
+  background: transparent;
+}
+.ar-presence.on .ar-presence-dot {
+  border-color: var(--g-accent-bright);
+  background: var(--g-accent-bright);
+  box-shadow: 0 0 8px rgba(47, 210, 127, 0.6);
 }
 
 /* panels */
@@ -1102,30 +1149,31 @@ const citation = computed(() => {
   margin-top: 20px;
 }
 .ar-btn {
-  padding: 11px 20px;
-  border-radius: 10px;
+  padding: 12px 20px;
+  border-radius: var(--g-pill);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   cursor: pointer;
-  border: 1px solid rgba(110, 231, 183, 0.25);
-  background: rgba(255, 255, 255, 0.04);
-  color: #c9ead9;
+  border: 1px solid var(--g-border-accent);
+  background: var(--g-surface);
+  color: var(--g-text);
 }
 .ar-btn:disabled {
   opacity: 0.45;
   cursor: default;
 }
 .ar-btn.primary {
-  border-color: rgba(110, 231, 183, 0.5);
-  background: linear-gradient(135deg, #14b686, #0b7d5b);
-  color: #fff;
-  box-shadow: 0 4px 16px rgba(11, 125, 91, 0.45);
+  border: none;
+  background: var(--g-accent);
+  color: var(--g-on-accent);
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgba(16, 185, 129, 0.32);
 }
 .ar-btn.danger {
-  border-color: rgba(235, 68, 90, 0.35);
-  color: #ff8a97;
+  border-color: var(--g-danger-border);
+  color: var(--g-danger);
 }
 
 /* rosters */
@@ -1364,4 +1412,41 @@ const citation = computed(() => {
 @keyframes ar-fade { 0% { opacity: 0; } 100% { opacity: 1; } }
 @keyframes ar-rise { 0% { transform: translateY(28px) scale(0.96); opacity: 0; } 100% { transform: translateY(0) scale(1); opacity: 1; } }
 @keyframes ar-medal { 0% { transform: scale(0.3) rotate(-14deg); opacity: 0; } 55% { transform: scale(1.12) rotate(4deg); opacity: 1; } 100% { transform: scale(1) rotate(0); } }
+
+/* ---- LIGHT THEME (spec: neutral game surface on both themes) ----
+   Armada's board is a dark radar scope by default (the rules above); in LIGHT
+   mode the whole surface flips to a bright naval-chart palette so it belongs on
+   a light device — the way the chess board reads on both. These override the
+   dark look ONLY under the app's light theme (:root without .ion-palette-dark). */
+:root:not(.ion-palette-dark) .armada .ar-panel {
+  background: #edf3f0;
+  border-color: rgba(16, 40, 28, 0.1);
+}
+:root:not(.ion-palette-dark) .armada .ar-cell {
+  background: rgba(28, 120, 140, 0.12);
+  border-color: rgba(28, 120, 140, 0.32);
+}
+:root:not(.ion-palette-dark) .armada .ar-cell.water-miss { background: rgba(16, 40, 28, 0.05); }
+:root:not(.ion-palette-dark) .armada .ar-cell.scorched { background: rgba(120, 60, 30, 0.16); }
+:root:not(.ion-palette-dark) .armada .ar-rrow {
+  background: rgba(16, 40, 28, 0.03);
+  border-color: rgba(16, 40, 28, 0.08);
+}
+:root:not(.ion-palette-dark) .armada .ar-rrow.placing { border-color: rgba(16, 120, 90, 0.45); }
+:root:not(.ion-palette-dark) .armada .ar-rname { color: rgba(16, 40, 28, 0.92); }
+:root:not(.ion-palette-dark) .armada .ar-rrow.sunk .ar-rname { color: #b3384a; }
+:root:not(.ion-palette-dark) .armada .ar-panel-label.mine { color: #0a7d59; }
+:root:not(.ion-palette-dark) .armada .ar-panel-label.enemy { color: #c5384a; }
+:root:not(.ion-palette-dark) .armada .ar-panel-label.dim,
+:root:not(.ion-palette-dark) .armada .ar-panel-count,
+:root:not(.ion-palette-dark) .armada .ar-nums span,
+:root:not(.ion-palette-dark) .armada .ar-letters span { color: rgba(16, 40, 28, 0.5); }
+:root:not(.ion-palette-dark) .armada .ar-chip { background: rgba(16, 40, 28, 0.06); color: rgba(16, 40, 28, 0.5); }
+:root:not(.ion-palette-dark) .armada .ar-chip.ready,
+:root:not(.ion-palette-dark) .armada .ar-chip.active { color: #0a7d59; }
+:root:not(.ion-palette-dark) .armada .ar-chip.placing { color: #9a6a00; }
+:root:not(.ion-palette-dark) .armada .ar-chip.sunk { color: #c5384a; }
+:root:not(.ion-palette-dark) .armada .ar-pips i { background: rgba(16, 120, 90, 0.3); }
+:root:not(.ion-palette-dark) .armada .ar-log-row,
+:root:not(.ion-palette-dark) .armada .ar-log-empty { color: rgba(16, 40, 28, 0.72); }
 </style>

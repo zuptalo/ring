@@ -16,6 +16,10 @@ const connect4: GameModule<C4State, C4Move> = {
   applyMove,
   turn,
   status,
+  // Retired for now: the catalog is focused on the two fullscreen games
+  // (chess, armada). Hidden from the picker; existing sessions still replay and
+  // render forever (the id contract is honored) — only NEW games can't start.
+  retired: true,
   // Visual themes (0008 FR-022 pattern). 'classic' is the canonical red-vs-
   // yellow disc look (geometric emoji — static by nature) on the blue frame;
   // the others pair ANIMATED marks from docs/ANIMATED-EMOJI.md so the

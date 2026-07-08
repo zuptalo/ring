@@ -145,12 +145,12 @@ import { computed, ref, onMounted, onUnmounted } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
   IonContent, IonTextarea, IonList, IonListHeader, IonItem, IonSegment, IonSegmentButton,
-  IonLabel, IonIcon, IonSpinner, alertController,
+  IonLabel, IonIcon, IonSpinner, alertController, onIonViewWillEnter,
 } from '@ionic/vue';
 import { useRouter, useRoute } from 'vue-router';
 import { imageOutline, closeOutline, micOutline, playCircle } from 'ionicons/icons';
 import { vEnterSend } from '@/directives/enter-send';
-import { enqueuePendingPost, getPendingPost, deletePendingPost, createPost, type PostLifetime } from '@/db/queries';
+import { enqueuePendingPost, getPendingPost, deletePendingPost, createPost, listCloseFriends, type PostLifetime } from '@/db/queries';
 import GamePicker from '@/components/GamePicker.vue';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import { GAMES } from '@/games/registry';
@@ -222,9 +222,41 @@ function previewVoice(m: PostMedia): void {
 function onInput(e: CustomEvent): void {
   body.value = (e.detail as { value?: string | null }).value ?? '';
 }
-function onAudience(e: CustomEvent): void {
-  audience.value = ((e.detail as { value?: string }).value as 'friends' | 'close') ?? 'friends';
+// Set when we bounced the user to Settings → Close friends because they chose
+// that audience with an EMPTY list. On return, their intent is honored: if they
+// actually picked people, the audience lands on Close friends; if they backed
+// out without picking anyone, it stays on All friends.
+let closeIntent = false;
+
+async function onAudience(e: CustomEvent): Promise<void> {
+  const picked = ((e.detail as { value?: string }).value as 'friends' | 'close') ?? 'friends';
+  // "Close friends" with an EMPTY list can't address anyone — instead of a dead
+  // choice, take the user to Settings → Privacy → Close friends to define it
+  // (the segment snaps back to All friends; their draft stays, they can return).
+  if (picked === 'close') {
+    const close = await listCloseFriends().catch(() => []);
+    if (!close.length) {
+      audience.value = 'friends';
+      closeIntent = true;
+      await appToast({ message: 'Pick your close friends first.', duration: 2200 });
+      void router.push('/settings/close-friends');
+      return;
+    }
+  }
+  audience.value = picked;
 }
+
+// Returning from the Close friends page (Ionic keeps this view mounted, so a
+// back-nav re-enters it): complete the interrupted choice.
+onIonViewWillEnter(() => {
+  if (!closeIntent) return;
+  closeIntent = false;
+  void listCloseFriends()
+    .then((close) => {
+      if (close.length) audience.value = 'close';
+    })
+    .catch(() => {});
+});
 function onLifetime(e: CustomEvent): void {
   lifetime.value = ((e.detail as { value?: string }).value as PostLifetime) ?? '72h';
 }

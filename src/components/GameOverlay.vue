@@ -41,6 +41,10 @@
         :last-move="null"
         :session-key="sessionKey"
         :session-status="sessionStatus"
+        :opponent-name="opponentName"
+        :opponent-avatar="opponentAvatar"
+        :self-avatar="selfAvatar"
+        :opponent-in-game="opponentInGame"
         @move="onMove"
         @leave="closeGame()"
         @rematch="onRematch"
@@ -55,25 +59,37 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue';
+import { computed, watch, onUnmounted } from 'vue';
 import { IonButton, IonIcon, alertController } from '@ionic/vue';
 import { chevronDownOutline, volumeHighOutline, volumeMuteOutline } from 'ionicons/icons';
 import { GAMES } from '@/games/registry';
 import { GAME_BOARDS } from '@/games/boards';
 import { replayState, localMoveAllowed, deriveStatus } from '@/games/session';
+import { hasActivity } from '@/composables/useTyping';
+import { startGamePresence, stopGamePresence } from '@/services/game-presence';
 import { playerIndexOf, challengePhase } from '@/games/challenge';
 import type { GameSession } from '@/games/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { overlayGame, overlayOpen, closeGame, gameSessionKey } from '@/composables/useGameOverlay';
 import { useKeyGuard } from '@/composables/useKeyGuard';
-import { getChat, getMessage, getSetting, setSetting, wallGameSession, playGameMove, playWallGameMove, resignGame, resignWallGame, sendGame } from '@/db/queries';
+import { getChat, getMessage, getSetting, setSetting, wallGameSession, playGameMove, playWallGameMove, resignGame, resignWallGame, sendGame, findOngoingGame } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
+import { appToast } from '@/services/toast';
 import { openGame } from '@/composables/useGameOverlay';
+import { useSelfProfile } from '@/composables/useSelfProfile';
 
 interface Loaded {
   session: GameSession | null;
   me: 0 | 1 | null;
   subtitle: string;
+  /** Opponent display name for boards that show it (chess panels). 1:1 chat
+   *  only; absent on wall/group where no single peer name is at hand. */
+  opponentName?: string;
+  /** Opponent avatar (data-URL) for boards that show faces. 1:1 chat only. */
+  opponentAvatar?: string;
+  /** Opponent userId — the peer we exchange in-game presence with. Absent for
+   *  spectators or an unseated challenge (nobody to be present against). */
+  opponentId?: string;
   gone: boolean;
   goneReason: string;
 }
@@ -96,10 +112,25 @@ const loaded = useLiveQuery<Loaded>(
       const me = m.game.players
         ? playerIndexOf(m.game, getSelfUserId() ?? '')
         : ((m.outgoing ? 0 : 1) as 0 | 1);
+      // Flavor tag from the game's own card copy ("Naval duel" / "Chess match"),
+      // falling back to its display name.
+      const mod = GAMES[g.gameType];
+      const tag = mod?.card?.tagline ?? mod?.displayName ?? 'Game';
+      // The peer we track presence with: the other seat in an explicit-players
+      // (challenge) session, else the 1:1 chat's single peer.
+      const opponentId =
+        m.game.players
+          ? me !== null && m.game.players.length === 2
+            ? m.game.players[1 - me]
+            : undefined
+          : chat?.participantIds?.[0];
       return {
         session: m.game,
         me,
-        subtitle: chat?.name ? `Naval duel · vs ${chat.name}` : 'Naval duel',
+        subtitle: chat?.name ? `${tag} · vs ${chat.name}` : tag,
+        opponentName: chat?.name,
+        opponentAvatar: chat?.avatar,
+        opponentId,
         gone: false,
         goneReason: '',
       };
@@ -113,7 +144,8 @@ const loaded = useLiveQuery<Loaded>(
     if (seated && me === null) {
       return { ...EMPTY, gone: true, goneReason: 'Someone else took the seat first. Next battle is yours.' };
     }
-    return { session, me, subtitle: 'Open challenge · from the Wall', gone: false, goneReason: '' };
+    const opponentId = me !== null && session.players?.length === 2 ? session.players[1 - me] : undefined;
+    return { session, me, subtitle: 'Open challenge · from the Wall', opponentId, gone: false, goneReason: '' };
   },
   ['messages', 'posts', 'postEngagement', 'chats'],
   EMPTY,
@@ -125,11 +157,35 @@ const me = computed(() => loaded.value.me);
 const gone = computed(() => loaded.value.gone);
 const goneReason = computed(() => loaded.value.goneReason);
 const subtitle = computed(() => loaded.value.subtitle);
+const opponentName = computed(() => loaded.value.opponentName);
+const opponentAvatar = computed(() => loaded.value.opponentAvatar);
+const opponentId = computed(() => loaded.value.opponentId);
+// The local user's own avatar (data-URL) for the "you" seat on the board.
+const { avatar: selfAvatar } = useSelfProfile();
 
 const module = computed(() => (overlayGame.value ? GAMES[overlayGame.value.gameType] ?? null : null));
 const boardComponent = computed(() => (overlayGame.value ? GAME_BOARDS[overlayGame.value.gameType] ?? null : null));
 const title = computed(() => (module.value?.displayName ?? 'Game').toUpperCase());
 const sessionKey = computed(() => (overlayGame.value ? gameSessionKey(overlayGame.value) : ''));
+
+// "In this game right now": is the opponent currently viewing THIS session's
+// board? Reactive read of the ephemeral activity store, keyed by session key —
+// self-clears ~6s after their last heartbeat (they left / backgrounded).
+const opponentInGame = computed(() =>
+  !!opponentId.value && !!sessionKey.value && hasActivity(sessionKey.value, opponentId.value, 'in-game'),
+);
+
+// Announce our own presence to the opponent while the board is actually open
+// (minimizing to the pill or closing stops it — the honest "I'm here" signal).
+watch(
+  [overlayOpen, sessionKey, opponentId],
+  ([open, key, opp]) => {
+    if (open && key && opp) startGamePresence(key, opp);
+    else stopGamePresence();
+  },
+  { immediate: true },
+);
+onUnmounted(stopGamePresence);
 
 const boardState = computed(() =>
   module.value && session.value ? replayState(module.value, session.value) : module.value?.createInitialState(),
@@ -152,14 +208,23 @@ function onMove(move: unknown): void {
   else void playWallGameMove(g.postId, move);
 }
 
-// Rematch from the medal ceremony: in a chat, start the successor game right
-// here (the finished session freed the one-game-per-chat gate); on the wall a
-// rematch is a fresh post — return to the surface to throw it.
+// Rematch from the medal ceremony. One game at a time in a 1:1 chat: if a game
+// is already ongoing (the peer rematched first, or a stray double-tap), JOIN it
+// instead of spawning a second — a rematch race must never leave two live games
+// in the chat. Otherwise start the successor here (the finished session freed
+// the gate). On the wall a rematch is a fresh post — return to throw it.
 async function onRematch(): Promise<void> {
   const g = overlayGame.value;
   if (!g) return;
   if (g.surface !== 'chat') {
     closeGame();
+    return;
+  }
+  const existing = await findOngoingGame(g.chatId);
+  if (existing) {
+    // A new game is already waiting (ours or theirs) — go straight into it.
+    openGame({ surface: 'chat', chatId: g.chatId, messageId: existing.messageId, gameType: existing.gameType });
+    void appToast({ message: 'A new game is already waiting — jump in!', duration: 2000 });
     return;
   }
   const gt = GAMES[g.gameType]?.successor ?? g.gameType;
@@ -231,29 +296,79 @@ watch(showGate, (locked) => {
   flex-direction: column;
   overflow: hidden; /* nothing inside may widen or pan the overlay itself */
   overscroll-behavior: none;
-  background: radial-gradient(900px 500px at 50% -8%, #18221c 0%, #111814 48%, #0b0f0d 100%);
-  color: #e9f5ee;
   animation: go-in 0.3s ease-out;
+
+  /* Shared "game UI kit" tokens (spec: unified fullscreen-game theme). Defined
+     here on the overlay and INHERITED by both boards — CSS custom properties
+     pierce scoped-style boundaries — so chess and Armada draw their buttons,
+     surfaces, text, and accents from one source of truth.
+
+     The surface FOLLOWS THE APP THEME: light values by default, dark values
+     under :root.ion-palette-dark below. The game BOARDS themselves (chess
+     squares, Armada's radar) keep their own fixed palette — a board is its own
+     object — but everything AROUND them (chrome, buttons, panels, text) flips
+     with the system light/dark theme like the rest of the app. */
+  --g-text: #10241b;
+  --g-text-dim: rgba(16, 36, 27, 0.64);
+  --g-text-faint: rgba(16, 36, 27, 0.45);
+  --g-surface: rgba(16, 120, 90, 0.07);
+  --g-surface-strong: rgba(16, 120, 90, 0.12);
+  --g-panel: #ffffff; /* opaque panel/card fill */
+  --g-border: rgba(16, 36, 27, 0.12);
+  --g-border-accent: rgba(16, 185, 129, 0.32);
+  --g-accent: #10b981; /* Ring emerald — the one brand color */
+  --g-accent-bright: #10b981;
+  --g-accent-soft: #0a7d59; /* legible emerald for text on a LIGHT surface */
+  --g-on-accent: #ffffff;
+  --g-danger: #d33a4a;
+  --g-danger-border: rgba(211, 58, 74, 0.4);
+  --g-warn: #b07d00; /* dark amber, legible on a light surface */
+  --g-radius: 16px;
+  --g-radius-sm: 12px;
+  --g-pill: 999px;
+  --g-shadow-card: 0 22px 55px rgba(16, 40, 28, 0.22);
+
+  /* Light emerald wash — mirrors the app's own --app-bg-gradient personality. */
+  background: linear-gradient(165deg, rgba(16, 185, 129, 0.14), rgba(16, 185, 129, 0.03) 70%), #ffffff;
+  color: var(--g-text);
+}
+:root.ion-palette-dark .game-overlay {
+  --g-text: #e9f5ee;
+  --g-text-dim: rgba(223, 240, 232, 0.62);
+  --g-text-faint: rgba(223, 240, 232, 0.42);
+  --g-surface: rgba(255, 255, 255, 0.05);
+  --g-surface-strong: rgba(255, 255, 255, 0.08);
+  --g-panel: #161d19;
+  --g-border: rgba(255, 255, 255, 0.1);
+  --g-border-accent: rgba(110, 231, 183, 0.24);
+  --g-accent-bright: #2fd27f;
+  --g-accent-soft: #57e0a0;
+  --g-on-accent: #04120c;
+  --g-danger: #ff8a97;
+  --g-danger-border: rgba(235, 68, 90, 0.4);
+  --g-warn: #ffc409;
+  --g-shadow-card: 0 24px 60px rgba(0, 0, 0, 0.5);
+  background: radial-gradient(900px 500px at 50% -8%, #18221c 0%, #111814 48%, #0b0f0d 100%);
 }
 .go-header {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--g-border);
   flex-shrink: 0;
 }
 .go-exit {
-  --color: #e6f4ec;
+  --color: var(--g-text);
   --border-radius: 12px;
   --padding-start: 0;
   --padding-end: 0;
   width: 40px;
   height: 40px;
   margin: 0;
-  border: 1px solid rgba(110, 231, 183, 0.22);
+  border: 1px solid var(--g-border-accent);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--g-surface);
   flex-shrink: 0;
 }
 .go-title-block {
@@ -261,16 +376,16 @@ watch(showGate, (locked) => {
   flex: 1;
 }
 .go-mute {
-  --color: #e6f4ec;
+  --color: var(--g-text);
   --border-radius: 12px;
   --padding-start: 0;
   --padding-end: 0;
   width: 40px;
   height: 40px;
   margin: 0;
-  border: 1px solid rgba(110, 231, 183, 0.22);
+  border: 1px solid var(--g-border-accent);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--g-surface);
   flex-shrink: 0;
 }
 .go-title {
@@ -280,18 +395,22 @@ watch(showGate, (locked) => {
 }
 .go-subtitle {
   font-size: 12px;
-  color: rgba(220, 240, 230, 0.55);
+  color: var(--g-text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .go-pill {
+  height: 40px; /* match the exit/mute buttons beside it */
+  display: flex;
+  align-items: center;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  color: rgba(110, 231, 183, 0.7);
-  border: 1px solid rgba(110, 231, 183, 0.22);
-  padding: 4px 9px;
-  border-radius: 8px;
+  color: var(--g-accent-soft);
+  border: 1px solid var(--g-border-accent);
+  background: var(--g-surface);
+  padding: 0 12px;
+  border-radius: 12px;
   flex-shrink: 0;
 }
 .go-body {

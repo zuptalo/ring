@@ -43,6 +43,25 @@ const armada: GameModule<ArmadaState, ArmadaMove> = {
   mayMove: (state, player) => armadaMayMove(state as ArmadaState, player),
   // The whole point of spec 1038: played fullscreen, carded in the chat.
   presentation: 'fullscreen',
+  // The challenge-card + overlay copy, in Armada's naval voice. (These strings
+  // shipped inline in GameChallengeCard for spec 1038; they moved here verbatim
+  // when the card was generalized for a second fullscreen game — Armada reads
+  // exactly as before.)
+  card: {
+    tagline: 'Naval duel',
+    emoji: '🎯', // calling shots to sink the enemy fleet — the targeting core, at a glance
+    parallelOpening: true, // both admirals deploy fleets before the first shot
+    deployLine: 'Your fleet awaits deployment',
+    awaitingOpening: (name) => `Awaiting ${name}'s fleet`,
+    reviewOpeningBtn: 'Review fleet ▸',
+    win: 'Victory at sea',
+    loss: 'Your fleet was lost',
+    resignWin: 'They surrendered. Victory is yours',
+    resignLoss: 'You surrendered',
+    spectateFinished: 'Battle decided',
+    theirTurn: (name) => `${name} is aiming…`,
+    spectateOngoing: 'Battle under way',
+  },
   // ONE look — the handoff's warship design IS Armada's identity.
   themes: [{ id: 'classic', name: 'Armada' }],
 }

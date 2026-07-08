@@ -11,10 +11,12 @@ import TicTacToeBoard from './tictactoe/TicTacToeBoard.vue'
 import ConnectFourBoard from './connect4/ConnectFourBoard.vue'
 import BattleshipBoard from './battleship/BattleshipBoard.vue'
 import ArmadaBoard from './armada/ArmadaBoard.vue'
+import ChessBoard from './chess/ChessBoard.vue'
 
 export const GAME_BOARDS: Record<string, Component> = {
   tictactoe: TicTacToeBoard,
   connect4: ConnectFourBoard,
   battleship: BattleshipBoard,
   armada: ArmadaBoard,
+  chess: ChessBoard,
 }

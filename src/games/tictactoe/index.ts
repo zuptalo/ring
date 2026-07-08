@@ -23,6 +23,10 @@ const tictactoe: GameModule<TicTacToeState, TicTacToeMove> = {
   applyMove,
   turn,
   status,
+  // Retired for now: the catalog is focused on the two fullscreen games
+  // (chess, armada). Hidden from the picker; existing sessions still replay and
+  // render forever (the id contract is honored) — only NEW games can't start.
+  retired: true,
   // Visual themes (FR-022). Ids are frozen once shipped. Marks are pairs from
   // the ANIMATED emoji set (docs/ANIMATED-EMOJI.md) so the last-move pulse
   // plays; 'classic' has no marks and renders the color-coded SVG X/O.
