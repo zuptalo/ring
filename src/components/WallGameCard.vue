@@ -6,10 +6,34 @@
        session (wallGameSession replays the engagement rows), reactive via the
        idb bus — no state of its own. -->
   <div v-if="session" class="wgc">
-    <!-- Fullscreen-presentation games (spec 1038): the post face is the
-         challenge card in EVERY phase — accepting or re-entering goes through
-         the app-global overlay, never an inline board. -->
-    <template v-if="module?.presentation === 'fullscreen'">
+    <!-- An OPEN challenge — for EVERY game, fullscreen or not — leads with the
+         animated call-to-arms: the pointing hero calls out a rival, then the
+         copy column (title, game, and the waiting line / accept button) so
+         nothing floats off to the card edge on wide or narrow screens. -->
+    <template v-if="phase === 'open'">
+      <div class="wgc-announce">
+        <animated-emoji emoji="🫵" large class="wgc-point" />
+        <div class="wgc-copy">
+          <span class="wgc-title">{{ isOwn ? 'You threw down a challenge' : `${authorName} throws down a challenge` }}</span>
+          <span class="wgc-game">
+            <animated-emoji :emoji="module?.card?.emoji ?? '🎲'" />
+            {{ module?.displayName ?? 'a game' }}
+            <template v-if="themeName"> · {{ themeName }}</template>
+          </span>
+          <span v-if="isOwn" class="wgc-waiting">Waiting for a challenger…</span>
+          <div v-else class="wgc-actions">
+            <ion-button size="small" shape="round" @click.stop="onAcceptChallenge">
+              <animated-emoji emoji="💪" />&nbsp;I'm in
+            </ion-button>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- Accepted / in-progress / finished. Fullscreen games (spec 1038) show the
+         compact state card (entering goes through the app-global overlay);
+         classic inline games render their board. -->
+    <template v-else-if="module?.presentation === 'fullscreen'">
       <game-challenge-card
         :session="session"
         :me="fsSeat"
@@ -17,28 +41,6 @@
         surface="wall"
         @open="onFsOpen"
       />
-    </template>
-    <template v-else-if="phase === 'open'">
-      <!-- One row: the pointing hero, then EVERYTHING else in the copy column
-           (title, game, and the waiting line / accept button) so nothing floats
-           off to the card edge on wide or narrow screens. -->
-      <div class="wgc-announce">
-        <animated-emoji emoji="🫵" large class="wgc-point" />
-        <div class="wgc-copy">
-          <span class="wgc-title">{{ isOwn ? 'You threw down a challenge' : `${authorName} throws down a challenge` }}</span>
-          <span class="wgc-game">
-            <animated-emoji emoji="🎲" />
-            {{ module?.displayName ?? 'a game' }}
-            <template v-if="themeName"> · {{ themeName }}</template>
-          </span>
-          <span v-if="isOwn" class="wgc-waiting">Waiting for a challenger…</span>
-          <div v-else class="wgc-actions">
-            <ion-button size="small" shape="round" @click.stop="onAccept">
-              <animated-emoji emoji="💪" />&nbsp;I'm in
-            </ion-button>
-          </div>
-        </div>
-      </div>
     </template>
 
     <template v-else>
@@ -131,6 +133,13 @@ const themeName = computed(
 );
 
 const onAccept = () => void acceptWallChallenge(props.postId);
+// "I'm in" from the call-to-arms: a fullscreen game accepts AND drops the new
+// rival straight into deployment (via the overlay); a classic game accepts and
+// the board renders inline.
+function onAcceptChallenge(): void {
+  if (module.value?.presentation === 'fullscreen') void onFsOpen();
+  else onAccept();
+}
 const onMove = (mv: unknown) => void playWallGameMove(props.postId, mv);
 const onResign = () => void resignWallGame(props.postId);
 const onFollow = () =>
@@ -165,13 +174,19 @@ async function onFsOpen(): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 6px 0 2px;
+  /* Same horizontal inset as the post body (.body margin 14px) — the game card
+     is post CONTENT, it must not run flush to the card edges. */
+  margin: 6px 14px 2px;
 }
 .wgc-announce {
   display: flex;
   align-items: center;
   gap: 12px;
   font-size: 28px; /* scales the large (2.6em) pointing hero */
+  /* Shrink to content + left-align (like the post body) so on a wide iPad the
+     hero + copy stay grouped instead of clustering with a huge empty right. */
+  width: fit-content;
+  max-width: 100%;
 }
 .wgc-copy {
   display: flex;

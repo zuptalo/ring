@@ -149,7 +149,7 @@
         <div
           v-else
           class="bubble-row"
-          :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id), 'game-row': (m.kind === 'game' || m.kind === 'gamechallenge') && !m.deleted }"
+          :class="{ out: m.outgoing, 'sel-mode': selecting, 'sel-on': isSelected(m.id), 'game-row': isInlineGameRow(m) }"
           v-memo="[
             m.updatedAt,
             mediaInfo[m.mediaId!]?.posterUrl,
@@ -235,7 +235,7 @@
                 role="button"
                 :style="{ color: userColorBright(m.senderId, colorMembers) }"
                 @click.stop="openSenderProfile(m.senderId)"
-                >{{ m.senderName }}</span
+                >{{ senderName(m.senderId, m.senderName) }}</span
               >
 
               <!-- Fixed-square media frames (image + non-note video) render their 240px
@@ -2181,6 +2181,14 @@ function senderAvatar(senderId: string): string {
   return contactsMap.value.get(senderId)?.avatar ?? '';
 }
 
+// A group sender's display NAME, resolved LIVE from the contact record — the
+// single source of truth for names — so renaming a contact updates their name on
+// past messages too (it already did for the avatar). Falls back to the message's
+// stored snapshot for a sender who is no longer a contact (left/removed).
+function senderName(senderId: string, fallback: string): string {
+  return contactsMap.value.get(senderId)?.name || fallback;
+}
+
 // Whether render-item i begins a new run from its sender, i.e. the previous
 // message was from someone else (or was outgoing). The avatar + colored name show
 // only on a run's first bubble; continuation bubbles get a spacer for alignment.
@@ -3923,6 +3931,16 @@ async function onPollCreate(poll: { question: string; options: string[]; multi: 
 /* ---- in-chat games (spec 0008) ---- */
 
 const gamePickerOpen = ref(false);
+// Which game messages still get the full-width NEUTRAL card row (spec 1033:
+// "a game belongs to both players")? Only the legacy INLINE games, whose board
+// lives in the bubble. Fullscreen games (chess, armada) show just a compact
+// challenge card — that renders as a normal SIDED bubble, so it's obvious who
+// threw the challenge, like any other message.
+function isInlineGameRow(m: Message): boolean {
+  if ((m.kind !== 'game' && m.kind !== 'gamechallenge') || m.deleted || !m.game) return false;
+  return GAMES[m.game.gameType]?.presentation !== 'fullscreen';
+}
+
 const openGamePicker = () => (gamePickerOpen.value = true);
 
 async function onGamePick(gameType: string, theme?: string): Promise<void> {
@@ -4883,9 +4901,11 @@ function cancelRecording() {
 .bubble.out {
   background: var(--app-bubble-out);
 }
-/* Game cards (spec 1033): a game is a SHARED surface, not one side's message —
-   full message-column width and a neutral card either direction (the
-   submarine-handoff shell: 18px radius, 14px padding, soft double shadow). */
+/* LEGACY inline game cards (spec 1033): when the BOARD lives in the bubble
+   (tic-tac-toe/connect4/battleship replays) the game is a SHARED surface, not
+   one side's message — full message-column width and a neutral card either
+   direction. Fullscreen games (chess, armada) do NOT get this class: their
+   compact challenge card rides a normal sided bubble (see isInlineGameRow). */
 .bubble-row.game-row .bubble-col {
   max-width: 100%;
   width: 100%;

@@ -193,6 +193,17 @@ export function useWall() {
       const reactions = [...rmap.entries()].map(([emoji, g]) => ({ emoji, ...g }));
       const myEmojis = reactionRows.filter((r) => r.actor === selfId).map((r) => r.emoji!);
 
+      // Audience members aren't necessarily each other's contacts (the audience
+      // is the AUTHOR's friend list) — resolve names/avatars through the sealed
+      // self-declared meta too: the comment's own (new rows), or the game
+      // payloads (host/accept) for players on a challenge post. Contacts win.
+      const gameMeta = new Map<string, { name?: string; avatar?: string }>();
+      if (p.game?.hostName || p.game?.hostAvatar) gameMeta.set(p.author, { name: p.game.hostName, avatar: p.game.hostAvatar });
+      for (const e of es) {
+        if (e.type === 'game' && e.game?.t === 'accept' && (e.game.name || e.game.avatar)) {
+          gameMeta.set(e.actor, { name: e.game.name, avatar: e.game.avatar });
+        }
+      }
       const avatarOf = (id: string) => (id === selfId ? self.avatar.value : byId.get(id)?.avatar ?? '');
       const comments = es
         .filter((e) => e.type === 'comment' && !e.deleted)
@@ -200,8 +211,11 @@ export function useWall() {
         .map((cm) => ({
           id: cm.id,
           actor: cm.actor,
-          authorName: nameOf(cm.actor),
-          authorAvatar: avatarOf(cm.actor),
+          authorName:
+            cm.actor === selfId
+              ? 'You'
+              : byId.get(cm.actor)?.name ?? cm.actorName ?? gameMeta.get(cm.actor)?.name ?? 'Someone',
+          authorAvatar: avatarOf(cm.actor) || cm.actorAvatar || gameMeta.get(cm.actor)?.avatar || '',
           text: cm.text ?? '',
           at: cm.at,
         }));

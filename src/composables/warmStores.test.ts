@@ -113,7 +113,7 @@ describe('warmStores', () => {
     clearWarm();
 
     // No decrypted residue: everything back to cold initial values.
-    expect(profileName.value).toBe('Alice'); // fallback from @username
+    expect(profileName.value).toBe('alice'); // fallback from @username, shown AS-IS (no capitalization)
     expect(profileAbout.value).toBe('Hey there! I am using Ring.');
     expect(profileAvatarRaw.value).toBe('');
     expect(profileWarmed.value).toBe(false);

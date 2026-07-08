@@ -219,8 +219,13 @@
               </div>
             </div>
             <!-- A game-challenge post (spec 0009): the post IS the board; the card
-                 derives everything live and replaces the fallback body copy. -->
-            <wall-game-card v-if="p.game" :post-id="p.id" :author-name="p.authorName" :is-own="!!p.isOwn" />
+                 derives everything live. The author's own MESSAGE still shows
+                 above it — but the auto placeholder body (for pre-0009 clients)
+                 is suppressed here since the live card supersedes it. -->
+            <template v-if="p.game">
+              <p v-if="p.body && p.body !== challengeFallbackBody(p.game.gameType)" class="body"><EmojiText :text="p.body" /></p>
+              <wall-game-card :post-id="p.id" :author-name="p.authorName" :is-own="!!p.isOwn" />
+            </template>
             <p v-else-if="p.body" class="body"><EmojiText :text="p.body" /></p>
 
             <!-- Reactions: pills + a quick-react button opening the shared picker. -->
@@ -332,6 +337,7 @@ import {
   listFriends, listCloseFriends, syncPosts,
   MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
   markWallSeen, setWallMuteUntil, isWallTempMuted, setWallUserMuted, setWallUserHidden,
+  challengeFallbackBody,
 } from '@/db/queries';
 import { timeLeft, ago } from '@/utils/post-time';
 

@@ -253,8 +253,11 @@ export interface PostRevokeFrame {
 
 /* ---- ephemeral activity indicators (spec 1009): typing / recording ---- */
 
-/** What a peer is doing in a conversation right now (sealed on the wire). */
-export type ActivityKind = 'typing' | 'recording-audio' | 'recording-video';
+/** What a peer is doing in a conversation right now (sealed on the wire).
+ *  `in-game` (spec: game presence) rides the SAME ephemeral machinery but is
+ *  scoped by a game's session key rather than a chat id, so it means "this peer
+ *  has this game's board open right now" and self-expires when they leave. */
+export type ActivityKind = 'typing' | 'recording-audio' | 'recording-video' | 'in-game';
 
 /** Whether the activity just started/continues (`active`) or ended (`stopped`). */
 export type ActivityState = 'active' | 'stopped';

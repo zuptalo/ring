@@ -51,6 +51,12 @@ export interface GameModule<S = unknown, M = unknown> {
    *  app-global game overlay instead. Absent = the classic inline bubble.
    *  Purely a rendering concern — the wire and the engine never see it. */
   presentation?: 'fullscreen'
+  /** Copy for the fullscreen challenge card + overlay subtitle. Only meaningful
+   *  for `presentation: 'fullscreen'` games; absent ⇒ neutral generic phrasing.
+   *  Lifts what used to be hardcoded naval copy in GameChallengeCard into the
+   *  module, so every fullscreen game reads in its own voice (spec 1038 shipped
+   *  Armada's copy inline; generalized here for the second fullscreen game). */
+  card?: GameCardText
   /** Retired games (spec 1038) are hidden from the picker but keep rendering
    *  and replaying existing sessions forever — the id contract stays honored;
    *  only NEW games of this type can no longer start. */
@@ -76,6 +82,45 @@ export interface GameTheme {
   marks?: [string, string]
   /** Soft board tint as an "r, g, b" triplet for rgba() (absent = default). */
   accent?: string
+}
+
+/**
+ * Per-game copy for the fullscreen challenge card and overlay subtitle. Every
+ * field is optional; GameChallengeCard falls back to game-neutral phrasing, so
+ * a fullscreen game only overrides the lines it wants in its own voice.
+ */
+export interface GameCardText {
+  /** Flavor tag for the challenge subtitle and overlay ("Naval duel"). Absent ⇒ displayName. */
+  tagline?: string
+  /** A meaningful emoji for the game, shown beside the name on a wall challenge
+   *  so a rival grasps what the game IS at a glance (e.g. 🎯 for Armada, ♟ for
+   *  chess) — not a generic die. Prefer the animated set (docs/ANIMATED-EMOJI.md). */
+  emoji?: string
+  /** A parallel both-players opening (Armada's fleet deployment): the first two
+   *  moves are placements made in any order, not strict turns, so the card reads
+   *  them as "setup" rather than "your move / their move". Absent/false ⇒ the
+   *  game alternates strictly from move 1 (chess, and most games). */
+  parallelOpening?: boolean
+  /** Parallel-opening only: line shown while I still owe my setup ("Your fleet awaits deployment"). */
+  deployLine?: string
+  /** Parallel-opening only: line shown once I've set up and await theirs ("Awaiting X's fleet"). */
+  awaitingOpening?: (name: string) => string
+  /** Parallel-opening only: the button while awaiting the opponent's setup ("Review fleet ▸"). */
+  reviewOpeningBtn?: string
+  /** Finished, I won on the board ("Victory at sea"). */
+  win?: string
+  /** Finished, I lost on the board ("Your fleet was lost"). */
+  loss?: string
+  /** Finished by the opponent's resignation, my win. */
+  resignWin?: string
+  /** Finished by my resignation. */
+  resignLoss?: string
+  /** Finished, seen by a spectator ("Battle decided"). */
+  spectateFinished?: string
+  /** Ongoing, the opponent is thinking ("X is aiming…"). */
+  theirTurn?: (name: string) => string
+  /** Ongoing, seen by a spectator ("Battle under way"). */
+  spectateOngoing?: string
 }
 
 /** One accepted move in a session's append-only log. */

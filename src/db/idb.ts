@@ -115,13 +115,33 @@ export function migrateMessageToV7(
   return { ...row, seenReportedAt: row.timestamp };
 }
 
-export function openDB(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = (event) => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains('contacts'))
+// iOS 16.x WebKit has a long-standing bug where `indexedDB.open()` in a
+// SERVICE-WORKER context can hang forever — no success, error, OR blocked event
+// ever fires (it works on iOS 17+). A push handler that awaits any IDB call then
+// stalls until the platform kills the event, showing nothing and getting the
+// subscription penalized. The fix is the documented workaround: bound each open
+// with a timeout and retry — a warmed-up second attempt typically succeeds where
+// the cold first one hung. If every attempt fails, fail FAST (and briefly cache
+// that) so callers fall back to a generic notification promptly instead of
+// piling up multi-second retries. The main app (iOS 17+, desktop) opens on the
+// first try in <100ms, so none of this timing is ever exercised there.
+// GENEROUS on purpose: the iOS-16 SW open bug is an INFINITE hang (no event ever
+// fires), so any finite timeout catches it — while a healthy but COLD service
+// worker (first open after wake, libsodium/WASM warming alongside) can legitimately
+// take a second or two. A tight timeout here wrongly failed those cold-but-valid
+// opens on iOS 17+ too, surfacing as `locked`/generic notifications until the SW
+// warmed. 5s never trips a healthy open yet still bounds a true hang.
+const OPEN_TIMEOUT_MS = 5000;
+const OPEN_ATTEMPTS = 2;
+const OPEN_RETRY_DELAY_MS = 200;
+const OPEN_COOLDOWN_MS = 8000; // after all attempts fail, fail fast for this long
+let openCooldownUntil = 0;
+
+/** Apply the schema migrations for a versionchange upgrade. Extracted so the
+ *  timeout-guarded open can reuse it verbatim across retries. */
+function runUpgrade(req: IDBOpenDBRequest, event: IDBVersionChangeEvent): void {
+  const db = req.result;
+  if (!db.objectStoreNames.contains('contacts'))
         db.createObjectStore('contacts', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('chats'))
         db.createObjectStore('chats', { keyPath: 'id' });
@@ -205,9 +225,41 @@ export function openDB(): Promise<IDBDatabase> {
           };
         }
       }
-    };
+}
+
+/** One open attempt, bounded by a timeout — a hung `indexedDB.open()` (iOS 16 SW)
+ *  rejects at the deadline so {@link openDB} can retry a fresh request. */
+function openOnce(timeoutMs: number): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('indexedDB.open timed out'));
+    }, timeoutMs);
+    let req: IDBOpenDBRequest;
+    try {
+      req = indexedDB.open(DB_NAME, DB_VERSION);
+    } catch (err) {
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+    req.onupgradeneeded = (event) => runUpgrade(req, event);
     req.onsuccess = () => {
       const db = req.result;
+      if (settled) {
+        // We already timed out and moved to a retry — drop this late connection
+        // so it can't leak or block the attempt that wins.
+        try {
+          db.close();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
       // If another connection (another tab, or a "clear site data") needs to
       // upgrade/delete the DB, close ours so it can proceed and drop the cached
       // handle so the next operation reopens a fresh connection.
@@ -223,18 +275,93 @@ export function openDB(): Promise<IDBDatabase> {
       resolve(db);
     };
     req.onerror = () => {
-      dbPromise = null; // allow a later retry instead of caching the failure
-      reject(req.error);
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(req.error ?? new Error('indexedDB.open failed'));
     };
+  });
+}
+
+export function openDB(): Promise<IDBDatabase> {
+  if (dbPromise) return dbPromise;
+  if (Date.now() < openCooldownUntil) {
+    // A recent open exhausted its retries (IDB wedged — e.g. an iOS 16 SW): fail
+    // fast so the caller falls back promptly instead of stalling on more retries.
+    return Promise.reject(new Error('indexedDB unavailable'));
+  }
+  dbPromise = (async () => {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < OPEN_ATTEMPTS; attempt += 1) {
+      try {
+        return await openOnce(OPEN_TIMEOUT_MS);
+      } catch (err) {
+        lastErr = err;
+        if (attempt < OPEN_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, OPEN_RETRY_DELAY_MS));
+        }
+      }
+    }
+    throw lastErr ?? new Error('indexedDB.open failed');
+  })().catch((err) => {
+    dbPromise = null; // allow a later retry instead of caching the failure
+    openCooldownUntil = Date.now() + OPEN_COOLDOWN_MS;
+    throw err;
   });
   return dbPromise;
 }
 
-function promisify<T>(req: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+// A request/transaction that never fires a completion event — the iOS-16 SW
+// hang's second form, AFTER a successful open. Bound every op so a true hang
+// becomes a recoverable rejection instead of stalling a push handler forever.
+// GENEROUS (8s): the hang is INFINITE, so a large timeout still catches it,
+// while a healthy op — even a cold read racing libsodium warm-up — completes far
+// under it. A tight value here wrongly failed cold-but-valid reads on iOS 17+,
+// which is what turned real content into `locked`/generic notifications.
+const IDB_OP_TIMEOUT_MS = 8000;
+
+function withOpTimeout<T>(p: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`indexedDB ${label} timed out`)), IDB_OP_TIMEOUT_MS);
   });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+function promisify<T>(req: IDBRequest<T>): Promise<T> {
+  return withOpTimeout(
+    new Promise<T>((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }),
+    'request',
+  );
+}
+
+// 1 = no retry. With the generous op timeout above, a healthy read always
+// completes on the first try, and a retry mostly re-hits the same wedged iOS-16
+// connection anyway (the open-level retry is the one that helps there) — so a
+// second attempt only doubled the worst-case stall for no real gain. Kept as a
+// wrapper so a retry can be re-enabled by bumping this if ever warranted.
+const READ_ATTEMPTS = 1;
+
+/** Re-run a READ on a timeout (the iOS-16 SW transaction hang) with a fresh
+ *  transaction. Reads are idempotent, so a retry is always safe and often
+ *  succeeds once the connection has warmed — the transaction-level sibling of
+ *  the open-level retry. A real (non-timeout) error propagates immediately. This
+ *  is what lets the SW read its keystore/chats to build a RICH notification on a
+ *  flaky old device instead of falling back to a content-free generic. */
+async function readRetry<T>(attempt: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < READ_ATTEMPTS; i += 1) {
+    try {
+      return await attempt();
+    } catch (err) {
+      lastErr = err;
+      if (!(err instanceof Error && err.message.includes('timed out'))) throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('indexedDB read failed');
 }
 
 async function store(
@@ -265,7 +392,7 @@ async function hasStore(name: StoreName): Promise<boolean> {
 
 export async function getAll<T>(name: StoreName): Promise<T[]> {
   if (!(await hasStore(name))) return [];
-  return promisify((await store(name, 'readonly')).getAll() as IDBRequest<T[]>);
+  return readRetry(async () => promisify((await store(name, 'readonly')).getAll() as IDBRequest<T[]>));
 }
 
 export async function get<T>(
@@ -273,8 +400,8 @@ export async function get<T>(
   key: IDBValidKey,
 ): Promise<T | undefined> {
   if (!(await hasStore(name))) return undefined;
-  return promisify(
-    (await store(name, 'readonly')).get(key) as IDBRequest<T | undefined>,
+  return readRetry(async () =>
+    promisify((await store(name, 'readonly')).get(key) as IDBRequest<T | undefined>),
   );
 }
 
@@ -284,8 +411,10 @@ export async function getByIndex<T>(
   key: IDBValidKey,
 ): Promise<T[]> {
   if (!(await hasStore(name))) return [];
-  const os = await store(name, 'readonly');
-  return promisify(os.index(index).getAll(key) as IDBRequest<T[]>);
+  return readRetry(async () => {
+    const os = await store(name, 'readonly');
+    return promisify(os.index(index).getAll(key) as IDBRequest<T[]>);
+  });
 }
 
 export async function count(name: StoreName): Promise<number> {
@@ -328,13 +457,13 @@ export async function update<T>(
     });
   let wrote: boolean;
   try {
-    wrote = await run(await openDB());
+    wrote = await withOpTimeout(run(await openDB()), 'update');
   } catch (e) {
     // Cached connection was closing (storage cleared / other-tab upgrade); drop it
     // and reopen once, like store(), so this doesn't fail until a reload.
     if (e instanceof DOMException && e.name === 'InvalidStateError') {
       dbPromise = null;
-      wrote = await run(await openDB());
+      wrote = await withOpTimeout(run(await openDB()), 'update');
     } else {
       throw e;
     }
@@ -401,13 +530,13 @@ export async function transact(names: StoreName[], fn: (tx: Tx) => void | Promis
     });
   let touched: Set<StoreName>;
   try {
-    touched = await run(await openDB());
+    touched = await withOpTimeout(run(await openDB()), 'transact');
   } catch (e) {
     // Cached connection was closing (storage cleared / other-tab upgrade); drop it
     // and reopen once, like store()/update(), so this doesn't fail until a reload.
     if (e instanceof DOMException && e.name === 'InvalidStateError') {
       dbPromise = null;
-      touched = await run(await openDB());
+      touched = await withOpTimeout(run(await openDB()), 'transact');
     } else {
       throw e;
     }

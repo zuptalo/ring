@@ -6,7 +6,7 @@
   <ion-list v-if="view !== 'hidden'" :inset="true">
     <!-- Granted: on/off toggle. -->
     <ion-item v-if="view === 'on'" lines="none">
-      <ion-toggle :checked="enabled" :disabled="busy" @ion-change="onToggle($event.detail.checked)">
+      <ion-toggle :key="toggleKey" :checked="enabled" :disabled="busy" @ion-change="onToggle($event.detail.checked)">
         <ion-label class="ion-text-wrap">
           Push notifications
           <p>
@@ -49,9 +49,23 @@ import { requestPushPermission } from '@/services/notifications';
 import { applyPushPreference } from '@/services/push';
 import { getSetting, setSetting } from '@/db/queries';
 import { useLiveQuery } from '@/composables/useLiveQuery';
+import { isTransportOnline } from '@/composables/useSync';
+import { appToast } from '@/services/toast';
 
 const permission = ref(pushPermission());
 const busy = ref(false);
+// Bumped to re-mount the toggle when an OFFLINE flip is refused, so the switch
+// snaps back instead of showing a state the server never received.
+const toggleKey = ref(0);
+
+/** Flipping push notifications changes the SERVER's subscription — refuse the
+ *  change while offline rather than persist a lie (the user must never believe
+ *  something happened unless it actually did). */
+function requireOnline(): boolean {
+  if (isTransportOnline()) return true;
+  void appToast({ message: "You're offline. Connect to change push notifications.", duration: 2400 });
+  return false;
+}
 
 // Master push preference (reactive; the toggle reflects it).
 const enabled = useLiveQuery(() => getSetting<boolean>('notifications.push', true), ['settings'], true);
@@ -109,6 +123,10 @@ const ui = computed(() => {
 
 async function onToggle(checked: boolean): Promise<void> {
   if (busy.value) return;
+  if (!requireOnline()) {
+    toggleKey.value += 1; // snap the switch back — nothing was changed
+    return;
+  }
   busy.value = true;
   try {
     await setSetting('notifications.push', checked);
@@ -133,6 +151,7 @@ async function onAction(): Promise<void> {
       if (res !== 'granted') return;
     }
     if (pushPermission() === 'granted') {
+      if (!requireOnline()) return;
       await setSetting('notifications.push', true);
       await applyPushPreference(true);
     }

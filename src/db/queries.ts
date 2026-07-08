@@ -8,11 +8,10 @@ import { enqueue, removeOutboxByFrameId } from './outbox';
 import { recordTombstone, isTombstoned, clearTombstone, clearHiddenPeerBlock } from './tombstones';
 import { callLogPreview } from './calllog';
 import { uid } from '@/utils/uid';
-import { capitalizeFirst } from '@/utils/text';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
-import { recordStaleDrain, STALE_MSG_MS } from '@/services/push';
+import { recordStaleDrain, recordMissedWakeDrain, STALE_MSG_MS } from '@/services/push';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { withInboundLock } from '@/services/cross-lock';
 import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
@@ -777,9 +776,22 @@ export async function sendContact(chatId: string, contact: SharedContact, replyT
  * would deadlock the gate until that bubble expires.
  */
 export async function hasOngoingGame(chatId: string): Promise<boolean> {
+  return (await findOngoingGame(chatId)) !== null;
+}
+
+/**
+ * The chat's single ongoing game, newest first, or null — the one-game-per-chat
+ * invariant made addressable. Used to JOIN an existing game instead of spawning
+ * a duplicate on a rematch race (both players hitting "Rematch" at once): if a
+ * new game already exists, we open it rather than create a second one.
+ */
+export async function findOngoingGame(
+  chatId: string,
+): Promise<{ messageId: string; gameType: string } | null> {
   const msgs = await getByIndex<Message>('messages', 'chatId', chatId);
-  return msgs.some(
-    (m) =>
+  msgs.sort((a, b) => b.timestamp - a.timestamp); // newest game wins the join
+  for (const m of msgs) {
+    if (
       m.game &&
       !m.deleted &&
       GAMES[m.game.gameType] &&
@@ -787,8 +799,12 @@ export async function hasOngoingGame(chatId: string): Promise<boolean> {
       // over; an OPEN challenge deliberately counts — it holds the gate until
       // someone takes it or the creator cancels (spec 0009).
       challengePhase(m.game) !== 'cancelled' &&
-      deriveGameStatus(GAMES[m.game.gameType], m.game).state === 'ongoing',
-  );
+      deriveGameStatus(GAMES[m.game.gameType], m.game).state === 'ongoing'
+    ) {
+      return { messageId: m.id, gameType: m.game.gameType };
+    }
+  }
+  return null;
 }
 
 /**
@@ -1274,20 +1290,24 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
           ? 'You'
           : name
       : '';
+  // In a 1:1 chat the row/notification title IS the mover, so leading the line
+  // with their name repeats it ("iPad iPad made a move"). Prefix the mover name
+  // only in a GROUP chat, where the title is the group — not the mover.
+  const by = chat.isGroup ? `${name} ` : '';
   const text =
     status.state === 'won'
       ? winnerName === 'You'
         ? 'You won the game! 🏆'
-        : `${winnerName} won the game 🏆`
+        : `${by}won the game 🏆`
       : status.state === 'draw'
         ? "It's a draw 🤝"
         : status.state === 'resigned'
           ? winnerName === 'You'
-            ? `${name} gave up. You win! 🏆`
-            : `${name} gave up. ${winnerName} wins 🏆`
+            ? `${by}gave up. You win! 🏆`
+            : `${by}gave up. ${winnerName} wins 🏆`
           : me !== null && status.state === 'ongoing' && status.turn === me
-            ? `${name} made a move, your turn 😏`
-            : `${name} made a move 🎲`;
+            ? `${by}made a move, your turn 😏`
+            : `${by}made a move 🎲`;
   chat.lastMessage = text;
   chat.lastKind = 'game';
   chat.lastMessageTime = signal.at;
@@ -2817,6 +2837,15 @@ export interface PostMediaInput {
   quality?: 'sd' | 'hd';
 }
 
+/** The auto placeholder body a game-challenge post carries for pre-0009 clients
+ *  ("🎮 Chess challenge — update Ring to play"). One source of truth so the
+ *  renderer can tell it apart from a real user message and NOT show it over the
+ *  live challenge card. */
+export function challengeFallbackBody(gameType: string): string {
+  const gname = GAMES[gameType]?.displayName ?? 'game';
+  return `\u{1F3AE} ${gname} challenge — update Ring to play`;
+}
+
 /**
  * Create a Wall post: seal the payload under a fresh per-post key, wrap that key to
  * each audience member, upload the opaque blob, register the post server-side, then
@@ -2845,11 +2874,11 @@ export async function createPost(opts: {
   if (!self) throw new Error('not signed in');
   let body = opts.body?.trim() || undefined;
   // A challenge post carries fallback copy so pre-0009 audiences see a harmless
-  // text post instead of a blank one (contracts/wall-game-engagement.md).
-  if (opts.game && !body) {
-    const gname = GAMES[opts.game.gameType]?.displayName ?? 'game';
-    body = `\u{1F3AE} ${gname} challenge \u2014 update Ring to play`;
-  }
+  // text post instead of a blank one (contracts/wall-game-engagement.md). A
+  // game post's own message (if any) takes precedence; the fallback fills in
+  // only when there's no message. New clients render the card and, to avoid
+  // showing this placeholder over it, detect it via challengeFallbackBody.
+  if (opts.game && !body) body = challengeFallbackBody(opts.game.gameType);
   if (!body && !opts.media) throw new Error('Nothing to post.');
   const friends = opts.audience === 'close' ? await listCloseFriends() : await listFriends();
   if (!friends.length) throw new Error('No audience — add friends first.');
@@ -3386,15 +3415,16 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
     // A player: someone accepted my challenge, my turn, or the result.
     if (challengePhase(session) === 'accepted' && session.players?.length && session.moves.length === 0 && me === 0) {
       if (await getSetting<boolean>('notifications.games.challenges', true)) {
-        body = `${mover} accepted your challenge \u{1F4AA} Your move!`;
+        body = 'accepted your challenge \u{1F4AA} Your move!';
       }
     } else if (status.state === 'ongoing') {
       if (status.turn === me && (await getSetting<boolean>('notifications.games.turn', true))) {
-        body = `${mover} made a move, your turn \u{1F60F}`;
+        body = 'made a move, your turn \u{1F60F}';
       }
-    } else if (status.state === 'won' || status.state === 'resigned') {
-      const winnerId = session.players?.[status.winner];
-      body = winnerId === self ? 'You won the game! \u{1F3C6}' : `${await gameNameOf(winnerId)} won the game \u{1F3C6}`;
+    } else if (status.state === 'won') {
+      body = 'won the game \u{1F3C6}'; // the mover's move just won it
+    } else if (status.state === 'resigned') {
+      body = session.players?.[status.winner] === self ? 'gave up. You win! \u{1F3C6}' : 'gave up \u{1F3F3}\uFE0F';
     } else if (status.state === 'draw') {
       body = "It's a draw \u{1F91D}";
     }
@@ -3402,13 +3432,12 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
     // A follower: moves and results, each behind its own switch.
     if (status.state === 'ongoing') {
       if (await getSetting<boolean>('notifications.games.followMoves', true)) {
-        body = `${mover} made a move \u{1F3B2}`;
+        body = 'made a move \u{1F3B2}';
       }
     } else if (await getSetting<boolean>('notifications.games.followResults', true)) {
       if (status.state === 'draw') body = "It's a draw \u{1F91D}";
-      else if (status.state === 'won' || status.state === 'resigned') {
-        body = `${await gameNameOf(session.players?.[status.winner])} won the game \u{1F3C6}`;
-      }
+      else if (status.state === 'won') body = 'won the game \u{1F3C6}';
+      else if (status.state === 'resigned') body = 'gave up \u{1F3F3}\uFE0F';
     }
   }
   // (spec 1036, reverting 1035's spectator-result note) A plain spectator who
@@ -3645,6 +3674,12 @@ export async function reactToPost(
 interface CommentData {
   text: string;
   at: number;
+  /** The commenter's OWN display info, sealed under K_post (same pattern as a
+   *  game accept): the audience are the AUTHOR's friends, not necessarily the
+   *  commenter's, so a fellow audience member can't resolve them from contacts
+   *  — without this they render as "Someone". Contacts override at render. */
+  name?: string;
+  avatar?: string;
 }
 
 /** One engagement item syncEngagement newly applied — enough for the caller to
@@ -3699,7 +3734,8 @@ export async function syncEngagement(postId: string): Promise<FreshEngagement[]>
         }
         latestActivity = Math.max(latestActivity, data.at);
         await put<PostEngagement>('postEngagement', {
-          id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at, updatedAt: now(),
+          id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at,
+          actorName: data.name, actorAvatar: data.avatar, updatedAt: now(),
         });
         applied.push({ id: it.id, type: 'comment', actor: it.actor, at: data.at });
       } else if (it.kind === 'game') {
@@ -3920,11 +3956,15 @@ export async function commentOnPost(postId: string, text: string): Promise<void>
     id: engId, postId, type: 'comment', actor: self, text: body, at, updatedAt: at,
   });
   await bumpPostActivity(postId, at);
+  // Ride our display info sealed with the comment (see CommentData) so audience
+  // members who aren't our contacts still see who spoke. Best-effort.
+  const name = (await getSecret('profileName', '')).trim() || undefined;
+  const avatar = (await downscaleAvatar(await getSecret('profileAvatar', ''), 96).catch(() => '')) || undefined;
   try {
     await apiSubmitEngagement(postId, {
       id: engId,
       kind: 'comment',
-      payload: sealPostEngagement(post.postKey, { text: body, at } satisfies CommentData),
+      payload: sealPostEngagement(post.postKey, { text: body, at, name, avatar } satisfies CommentData),
     });
   } catch {
     /* offline — local stands; a later sync reconciles */
@@ -4178,8 +4218,8 @@ export async function seedProfileName(): Promise<void> {
   const username = getSelfUsername();
   if (!username) return;
   const current = (await getSecret('profileName', '')).trim();
-  // Seed with the username, first letter capitalized for display (e.g. "ada" → "Ada").
-  if (!current || current === 'You') await setSecret('profileName', capitalizeFirst(username));
+  // Seed with the username exactly as registered — no forced capitalization.
+  if (!current || current === 'You') await setSecret('profileName', username);
 }
 
 /** This device's own contact card (name + a downscaled avatar). */
@@ -5134,13 +5174,21 @@ export async function hydrateContactFromDirectory(id: string): Promise<void> {
   }
   if (!u) return;
   const name = (u.displayName || u.username || '').trim();
-  if (name) c.name = name;
   c.username = u.username;
-  if (u.avatar) c.avatar = u.avatar;
   if (typeof u.about === 'string') c.about = u.about;
+  // Track the peer's PUBLISHED profile (for change-detection + adopt), but NEVER
+  // overwrite a LOCAL OVERRIDE: the contact the user configured is the single
+  // source of truth for name + avatar, so a directory hydrate must not clobber
+  // it (it only applies when the user hasn't set their own name/photo).
+  if (name) c.remoteName = name;
+  if (u.avatar) c.remoteAvatar = u.avatar;
+  if (!c.localProfile) {
+    if (name) c.name = name;
+    if (u.avatar) c.avatar = u.avatar;
+  }
   c.updatedAt = now();
   await put('contacts', c);
-  // Mirror onto the 1:1 chat snapshot (name/avatar), like updateContactProfile.
+  // Mirror the (override-preserving) name/avatar onto the 1:1 chat snapshot.
   const chats = await getAll<Chat>('chats');
   const chat = chats.find(
     (ch) => !ch.isGroup && ch.participantIds.length === 1 && ch.participantIds[0] === id,
@@ -5605,6 +5653,10 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   // merely-offline phone: its held pushes arrive on reconnect and stamp a
   // fresh wake, which invalidates the marker.
   if (now() - ts > STALE_MSG_MS) void recordStaleDrain(ts);
+  // The WEAK signature too (iOS 16.x zombies dodge the 10-min bar on a
+  // frequently-checked phone): every drained message that should have woken us
+  // counts toward a streak; three no-wake sessions rotate the subscription.
+  void recordMissedWakeDrain(ts);
   const kind = (payload.kind as MessageKind) || 'text';
 
   // If the message carries media, download + decrypt the ciphertext and store

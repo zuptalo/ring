@@ -517,6 +517,11 @@ export interface PostEngagement {
   actor: string; // userId (profile resolved from contacts/directory)
   emoji?: string; // reaction
   text?: string; // comment (decrypted)
+  // A comment's sealed self-declared display info (same pattern as a game
+  // accept): lets audience members who aren't the commenter's contacts still
+  // name them. Contacts, being fresher/user-controlled, override at render.
+  actorName?: string;
+  actorAvatar?: string;
   at: number; // actor timestamp; LWW for reaction/view, ordering for comment
   deleted?: boolean; // comment tombstone
   // A game accept/move on a challenge post (spec 0009), the OPENED sealed payload.

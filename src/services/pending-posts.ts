@@ -122,13 +122,21 @@ function friendlyError(err: unknown): string {
   if (/quota|storage|exceeded|QuotaExceeded/i.test(msg) || (err as { name?: string })?.name === 'QuotaExceededError') {
     return 'Not enough storage. Free up space and try again.';
   }
-  if (/network|fetch|offline|timeout|Failed to fetch/i.test(msg)) {
+  // "Load failed" is Safari/WebKit's fetch network-failure message (Chromium
+  // says "Failed to fetch") — without it an iOS connection drop mid-upload
+  // showed the generic "Upload failed" instead of the connection hint.
+  if (/network|fetch|offline|timeout|Failed to fetch|Load failed/i.test(msg)) {
     return "Couldn't reach the server. Check your connection and try again.";
   }
   if (/stalled/i.test(msg)) {
     return 'Upload stalled. Tap Retry to try again.';
   }
-  return 'Upload failed. Tap Retry to try again.';
+  // Unrecognized failure: KEEP the underlying reason visible. A bare "Upload
+  // failed" hides exactly the detail needed to fix a device-specific breakage
+  // (e.g. an iOS-only encode/clone error) — the failed card is the only
+  // console we have on a phone.
+  const detail = msg.length > 120 ? `${msg.slice(0, 117)}…` : msg;
+  return detail ? `Upload failed: ${detail} — tap Retry.` : 'Upload failed. Tap Retry to try again.';
 }
 
 /** Re-arm a failed post for another drain pass (user tapped Retry). Resets the attempt budget so a

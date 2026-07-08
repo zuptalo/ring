@@ -62,10 +62,15 @@
         </div>
         <audio v-else-if="mediaUrl && post.kind === 'voice'" class="vaudio" :src="mediaUrl" controls />
 
-        <wall-game-card v-if="post.game" :post-id="post.id" :author-name="authorName" :is-own="!!post.outgoing" />
-        <!-- The game's story in numbers (spec 0009) — the post page doubles as
-             the wall game's "info" screen, like Message info does in chats. -->
-        <wall-game-stats v-if="post.game" :post-id="post.id" />
+        <template v-if="post.game">
+          <!-- The author's own message shows above the card; the auto placeholder
+               body (pre-0009 fallback) is suppressed since the card supersedes it. -->
+          <p v-if="post.body && post.body !== challengeFallbackBody(post.game.gameType)" class="body"><EmojiText :text="post.body" big /></p>
+          <wall-game-card :post-id="post.id" :author-name="authorName" :is-own="!!post.outgoing" />
+          <!-- The game's story in numbers (spec 0009) — the post page doubles as
+               the wall game's "info" screen, like Message info does in chats. -->
+          <wall-game-stats :post-id="post.id" />
+        </template>
         <p v-else-if="post.body" class="body"><EmojiText :text="post.body" big /></p>
 
         <p v-if="post.expiresAt" class="expiry" :title="when(post.expiresAt)">
@@ -178,7 +183,7 @@ import { vEnterSend } from '@/directives/enter-send';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
-  getPost, getContact, getMedia, deletePost,
+  getPost, getContact, getMedia, deletePost, challengeFallbackBody,
   listPostReactions, reactToPost, syncEngagement, listContacts,
   listPostComments, commentOnPost, deleteComment, recordPostView, listPostViews,
   MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
@@ -279,13 +284,26 @@ function openPicker(ev: Event): void {
   });
 }
 
+// Audience members aren't necessarily each other's contacts (the audience is
+// the AUTHOR's friend list) — fall back to the sealed self-declared meta the
+// engagement rows carry: a comment's own actorName/actorAvatar, or the game
+// payloads (host/accept) for a challenge post. Contacts stay the source of
+// truth and override.
+const rowMeta = (actorId: string): { name?: string; avatar?: string } => {
+  for (const e of comments.value) {
+    if (e.actor === actorId && (e.actorName || e.actorAvatar)) return { name: e.actorName, avatar: e.actorAvatar };
+  }
+  const g = post.value?.game;
+  if (g && post.value?.author === actorId && (g.hostName || g.hostAvatar)) return { name: g.hostName, avatar: g.hostAvatar };
+  return {};
+};
 const nameOf = (actorId: string): string => {
   if (actorId === selfId) return 'You';
-  return contacts.value.find((c) => c.id === actorId)?.name ?? 'Someone';
+  return contacts.value.find((c) => c.id === actorId)?.name ?? rowMeta(actorId).name ?? 'Someone';
 };
 const avatarOf = (actorId: string): string => {
   if (actorId === selfId) return self.avatar.value;
-  return contacts.value.find((c) => c.id === actorId)?.avatar ?? '';
+  return contacts.value.find((c) => c.id === actorId)?.avatar || rowMeta(actorId).avatar || '';
 };
 
 // Comments thread.

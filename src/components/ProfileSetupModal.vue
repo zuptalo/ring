@@ -88,7 +88,6 @@ import { getSelfUsername } from '@/services/auth';
 import { initialsAvatar, emojiAvatar } from '@/db/avatars';
 import { publishOwnProfile } from '@/services/directory';
 import { pickImageFile, fileToDataUrl } from '@/utils/pick-image';
-import { capitalizeFirst } from '@/utils/text';
 
 // `mandatory` (onboarding): hide the close button so the only way out is finishing,
 // the profile is required before the new user reaches the rest of onboarding.
@@ -107,11 +106,10 @@ const canFinish = computed(() => !!photo.value && name.value.trim().length > 0);
 
 onMounted(async () => {
   const storedName = (await getSecret('profileName', '')).trim();
-  // Prefill the name with the immutable username (first letter capitalized) when it's
-  // still the default, so the field arrives populated and the user only needs to
-  // confirm/edit + add a photo.
-  const seeded =
-    !storedName || storedName === 'You' ? capitalizeFirst(getSelfUsername() ?? '') : storedName;
+  // Prefill the name with the immutable username AS-IS (no forced capitalization —
+  // show it exactly as registered) when it's still the default, so the field
+  // arrives populated and the user only needs to confirm/edit + add a photo.
+  const seeded = !storedName || storedName === 'You' ? getSelfUsername() ?? '' : storedName;
   name.value = seeded;
   if (seeded && seeded !== storedName) await setSecret('profileName', seeded);
   about.value = await getSecret('profileAbout', DEFAULT_ABOUT);

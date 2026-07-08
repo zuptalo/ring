@@ -250,6 +250,10 @@ export function noteForPayload(
     if (gcontent === 'none') return { note: null, wasMessage: false, silenced: true };
     const gshowText = gcontent === 'full' && showPreview;
     const mover = known || 'Someone';
+    // 1:1 (and wall) notifications use the mover as the TITLE, so leading the
+    // body with their name repeats it; prefix the name only in a GROUP chat
+    // (title = group name). Keeps game lines from reading "iPad iPad made a move".
+    const bym = payload.groupId ? `${mover} ` : '';
     const nameOf = (uid: string | undefined): string =>
       !uid ? 'Someone' : uid === selfId ? 'You' : contacts.find((c) => c.id === uid)?.name ?? 'Someone';
 
@@ -260,7 +264,7 @@ export function noteForPayload(
         return { note: null, wasMessage: false };
       }
       if (!prefs.challenges) return { note: null, wasMessage: false, silenced: true };
-      gline = `${mover} accepted your challenge 💪 Your move!`;
+      gline = `${bym}accepted your challenge 💪 Your move!`;
     } else {
       const sig = payload.gameMove!;
       if (row?.game?.players) {
@@ -288,7 +292,7 @@ export function noteForPayload(
           if (st.state === 'ongoing') {
             if (st.turn !== myIdx) return { note: null, wasMessage: false };
             if (!prefs.turn) return { note: null, wasMessage: false, silenced: true };
-            gline = `${mover} made a move, your turn 😏`;
+            gline = `${bym}made a move, your turn 😏`;
           } else {
             gline = winnerLine();
           }
@@ -297,7 +301,7 @@ export function noteForPayload(
           if (follows[sig.messageId] === undefined) return { note: null, wasMessage: false };
           if (st.state === 'ongoing') {
             if (!prefs.followMoves) return { note: null, wasMessage: false, silenced: true };
-            gline = `${mover} made a move 🎲`;
+            gline = `${bym}made a move 🎲`;
           } else {
             if (!prefs.followResults) return { note: null, wasMessage: false, silenced: true };
             gline = winnerLine();
@@ -306,16 +310,16 @@ export function noteForPayload(
       } else {
         // 1:1 (spec 0008 T041): name the winner when the stored row lets the
         // engine derive it; a resign always crowns the recipient.
-        gline = `${mover} made a move, your turn 😏`;
+        gline = `${bym}made a move, your turn 😏`;
         if (sig.action === 'resign') {
-          gline = `${mover} gave up. You win! 🏆`;
+          gline = `${bym}gave up. You win! 🏆`;
         } else if (row?.game) {
           const gmodule = GAMES[row.game.gameType] ?? null;
           const gme = row.outgoing ? 0 : 1;
           const r = applyGameSignal(gmodule, row.game, sig, (1 - gme) as 0 | 1);
           if (r.outcome === 'applied') {
             const st = deriveGameStatus(gmodule, r.session);
-            if (st.state === 'won') gline = st.winner === gme ? 'You won the game! 🏆' : `${mover} won the game 🏆`;
+            if (st.state === 'won') gline = st.winner === gme ? 'You won the game! 🏆' : `${bym}won the game 🏆`;
             else if (st.state === 'draw') gline = "It's a draw 🤝";
           }
         }
@@ -1120,33 +1124,37 @@ export function classifyWallGameActivity(args: {
   const me = playerIndexOf(session, self);
   const latest = fresh.sort((x, y) => x.at - y.at)[fresh.length - 1];
   const mover = names.get(latest.actor) ?? 'Someone';
-  const nameOf = (uid: string | undefined): string =>
-    !uid ? 'Someone' : uid === self ? 'You' : names.get(uid) ?? 'Someone';
   const keys = fresh.map((f) => f.id);
   const quiet = { keys, note: null };
 
+  // The note's TITLE is the mover, so the body is NAME-FREE (leading with the
+  // name here would repeat it — "iPad iPad made a move").
   let body: string | null = null;
   if (me !== null) {
     if (challengePhase(session) === 'accepted' && session.moves.length === 0 && me === 0) {
       if (!prefs.challenges) return quiet;
-      body = `${mover} accepted your challenge 💪 Your move!`;
+      body = 'accepted your challenge 💪 Your move!';
     } else if (status.state === 'ongoing') {
       if (status.turn !== me) return quiet; // my own side already knows; their move next
       if (!prefs.turn) return quiet;
-      body = `${mover} made a move, your turn 😏`;
-    } else if (status.state === 'won' || status.state === 'resigned') {
-      const winnerId = session.players?.[status.winner];
-      body = winnerId === self ? 'You won the game! 🏆' : `${nameOf(winnerId)} won the game 🏆`;
+      body = 'made a move, your turn 😏';
+    } else if (status.state === 'won') {
+      body = 'won the game 🏆';
+    } else if (status.state === 'resigned') {
+      body = session.players?.[status.winner] === self ? 'gave up. You win! 🏆' : 'gave up 🏳️';
     } else if (status.state === 'draw') {
       body = "It's a draw 🤝";
     }
   } else if (followed) {
     if (status.state === 'ongoing') {
       if (!prefs.followMoves) return quiet;
-      body = `${mover} made a move 🎲`;
-    } else if (status.state === 'won' || status.state === 'resigned') {
+      body = 'made a move 🎲';
+    } else if (status.state === 'won') {
       if (!prefs.followResults) return quiet;
-      body = `${nameOf(session.players?.[status.winner])} won the game 🏆`;
+      body = 'won the game 🏆';
+    } else if (status.state === 'resigned') {
+      if (!prefs.followResults) return quiet;
+      body = 'gave up 🏳️';
     } else if (status.state === 'draw') {
       if (!prefs.followResults) return quiet;
       body = "It's a draw 🤝";
