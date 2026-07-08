@@ -15,11 +15,16 @@ export default defineConfig({
   workers: 1,
   timeout: 90_000,
   expect: { timeout: 20_000 },
-  // CI runs WebRTC across multiple browser contexts on shared runners, which can
-  // jitter; retry there to absorb the occasional ICE/timing flake. No retries
-  // locally so a real failure surfaces immediately. forbidOnly stops a stray
-  // test.only from silently shrinking the CI suite.
-  retries: process.env.CI ? 2 : 0,
+  // CI runs 200+ tests — many with multiple browser contexts and WebRTC — on a
+  // 2-core shared runner, so under load a DIFFERENT timing-sensitive test can
+  // exhaust its attempts on any given run (observed: a distinct spec fails all
+  // retries each run, yet passes locally and on the next run). Retries are the
+  // suite's flake-absorption mechanism; 3 (4 attempts) meaningfully lowers the
+  // odds a random load-flake fails every attempt, without masking a real break
+  // (a genuine failure still fails all 4 — as the games-armada regression did).
+  // No retries locally so a real failure surfaces immediately. forbidOnly stops
+  // a stray test.only from silently shrinking the CI suite.
+  retries: process.env.CI ? 3 : 0,
   forbidOnly: !!process.env.CI,
   reporter: [['list']],
   globalSetup: './e2e/global-setup.ts',
