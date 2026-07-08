@@ -181,7 +181,7 @@ test('the fullscreen flow: card into overlay, a toast over the game leads away, 
   // the notifications-inapp suite uses.
   await a.page.waitForTimeout(3500);
   expect(await a.page.locator('.armada').count()).toBe(0); // no inline board, ever
-  await a.page.locator('.gcc-btn').click();
+  await a.page.locator('.gcc.enterable').click(); // the whole card is the enter affordance now
   await expect(a.page.locator('.game-overlay')).toBeVisible();
   await expect(a.page.locator('.armada')).toBeVisible(); // deployment face, hosted by the overlay
 
@@ -305,7 +305,7 @@ test('a wall challenge: accept lands in deployment, the race seats exactly one, 
   const loser = seated === b.id ? c : b;
   await loser.page.goto(`/wall/post/${pid}`);
   await expect(loser.page.locator('.gcc')).toBeVisible({ timeout: 15_000 });
-  expect(await loser.page.locator('.gcc-btn').count()).toBe(0);
+  expect(await loser.page.locator('.gcc.enterable').count()).toBe(0); // a spectator's card is not enterable
   expect(await loser.page.locator('.armada').count()).toBe(0);
 
   for (const x of ctxs) await x.close();
