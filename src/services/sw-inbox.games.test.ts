@@ -19,13 +19,13 @@ describe('noteForPayload — game moves (spec 0008 US3/T041)', () => {
   it('an incoming move names the mover: "X made a move, your turn 😏"', () => {
     const { note } = noteForPayload(frame, move, [chat()], contacts, true, true);
     expect(note!.title).toBe('Peer One');
-    expect(note!.body).toBe('Peer One made a move, your turn 😏');
+    expect(note!.body).toBe('made a move, your turn 😏');
     expect(note!.url).toBe('/chat/chat-1');
   });
 
   it('a resign names the winner (you): the resigner always loses', () => {
     const { note } = noteForPayload(frame, resign, [chat()], contacts, true, true);
-    expect(note!.body).toBe('Peer One gave up. You win! 🏆');
+    expect(note!.body).toBe('gave up. You win! 🏆');
   });
 
   it('a game-ending move names the WINNER, derived from the stored session (web push)', () => {
@@ -48,7 +48,7 @@ describe('noteForPayload — game moves (spec 0008 US3/T041)', () => {
     const { note } = noteForPayload(frame, winning, [chat()], contacts, true, true, new Set(), '', {
       row: gameRow,
     });
-    expect(note!.body).toBe('Peer One won the game 🏆');
+    expect(note!.body).toBe('won the game 🏆');
   });
 
   it('muted chat → silenced, no notification (matches ordinary messages)', () => {
@@ -211,7 +211,7 @@ describe('classifyWallGameActivity — wall games on push wake (spec 0009 US3)',
     const r = classifyWallGameActivity({
       post: gpost, self: 'me', rows, seen: new Set(['e1']), prefs, followed: false, openGame, names,
     });
-    expect(r?.note?.body).toBe('Alice made a move, your turn 😏');
+    expect(r?.note?.body).toBe('made a move, your turn 😏');
     expect(r?.keys).toEqual(['e2']);
   });
 
@@ -228,7 +228,7 @@ describe('classifyWallGameActivity — wall games on push wake (spec 0009 US3)',
     const loud = classifyWallGameActivity({
       post: gpost, self: 'me', rows, seen: new Set(['e1']), prefs, followed: true, openGame, names,
     });
-    expect(loud?.note?.body).toBe('Alice made a move 🎲');
+    expect(loud?.note?.body).toBe('made a move 🎲');
   });
 
   it('a plain spectator stays QUIET even at the result; a FOLLOWER hears it (spec 1036)', () => {
@@ -252,7 +252,7 @@ describe('classifyWallGameActivity — wall games on push wake (spec 0009 US3)',
     const loud = classifyWallGameActivity({
       post: gpost, self: 'me', rows, seen: new Set(['e1', 'e2', 'e3', 'e4', 'e5']), prefs, followed: true, openGame, names,
     });
-    expect(loud?.note?.body).toBe('Alice won the game 🏆');
+    expect(loud?.note?.body).toBe('won the game 🏆');
     const off = classifyWallGameActivity({
       post: gpost, self: 'me', rows, seen: new Set(['e1', 'e2', 'e3', 'e4', 'e5']),
       prefs: { ...prefs, followResults: false }, followed: true, openGame, names,
@@ -266,7 +266,7 @@ describe('classifyWallGameActivity — wall games on push wake (spec 0009 US3)',
     const r = classifyWallGameActivity({
       post: own, self: 'me', rows, seen: new Set(), prefs, followed: false, openGame, names,
     });
-    expect(r?.note?.body).toBe('Bob accepted your challenge 💪 Your move!');
+    expect(r?.note?.body).toBe('accepted your challenge 💪 Your move!');
     const off = classifyWallGameActivity({
       post: own, self: 'me', rows, seen: new Set(),
       prefs: { ...prefs, challenges: false }, followed: false, openGame, names,
@@ -286,7 +286,7 @@ describe('classifyWallGameActivity — wall games on push wake (spec 0009 US3)',
     const r = classifyWallGameActivity({
       post: gpost, self: 'me', rows, seen: new Set(['e1', 'e2', 'e3', 'e4', 'e5']), prefs, followed: true, openGame, names,
     });
-    expect(r?.note?.body).toBe('Alice won the game 🏆');
+    expect(r?.note?.body).toBe('won the game 🏆');
     const nothing = classifyWallGameActivity({
       post: gpost, self: 'me', rows, seen: new Set(rows.map((x) => x.id)), prefs, followed: true, openGame, names,
     });

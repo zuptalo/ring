@@ -114,8 +114,16 @@ const GENERIC_TAG = 'ring-incoming';
 // stranded as a permanent generic because the settle window closed before it could
 // upgrade (spec 2010 root-cause b). 12000 > 8000 leaves headroom for the decrypt +
 // the closeByTag/showNotes upgrade after the fetch resolves.
-const GENERIC_AFTER_MS = 7000;
-const SETTLE_MAX_MS = 12000;
+const GENERIC_AFTER_MS = 6000;
+// The content-upgrade window: after the generic placeholder shows, keep waiting
+// this long for the decrypt to land and replace it with the real sender+text.
+// Balanced: long enough that a cold libsodium init + retried IDB reads on a slow
+// device can still deliver real content (GENERIC+SETTLE ≈ 10s of runway), but the
+// whole handler still finishes in ~13s worst case — comfortably under the 20s
+// guard, so a deferred burst can't stall a later wake past it (the "exceeded
+// deadline" we just eliminated). Getting a prompt notification always wins; this
+// only governs whether it carries content or a generic line.
+const SETTLE_MAX_MS = 4000;
 // Straggler catch-up after the first preview. In the background the page is
 // suspended, so a queued message only earns its 'delivered' receipt when the SW
 // fetches the pending queue (the server emits 'delivered' for every queued frame on
@@ -123,8 +131,11 @@ const SETTLE_MAX_MS = 12000;
 // collapsible push may not wake the SW again, so without this the burst's tail stays
 // 'sent' until the app is reopened. Keep re-fetching for a bounded window so the
 // whole burst earns receipts (and late messages get previewed) within one wake.
-const STRAGGLER_WINDOW_MS = 9000;
-const STRAGGLER_INTERVAL_MS = 4500;
+// Shortened (was 9s): the straggler holds the notify lock across its refetches,
+// so on a slow device it stalls the NEXT queued wake into the 20s guard. One
+// quick refetch catches the common case; anything later earns its own wake.
+const STRAGGLER_WINDOW_MS = 3000;
+const STRAGGLER_INTERVAL_MS = 2500;
 
 // (spec 2014) The dev deployment (ring-dev / localhost) surfaces the generic-fallback REASON in the
 // notification for on-device diagnosis; production (same build) never shows internal reason text.
@@ -653,13 +664,14 @@ async function pageWillNotify(clients: readonly Client[], timeoutMs: number): Pr
   return acked;
 }
 
-self.addEventListener('push', (event) => {
-  event.waitUntil(
-    (async () => {
+async function dispatchPush(event: PushEvent): Promise<void> {
       // (spec 1037) Every wake stamps its time FIRST — the page-side zombie
       // detector treats "no wake since a stale message was sent" as the
-      // rotate-the-subscription signature.
-      await stampPushWake();
+      // rotate-the-subscription signature. It's best-effort telemetry though, so
+      // never let it BLOCK the alert: on a wedged iOS-16 SW the IDB write can
+      // stall, and the notification must not wait on it (it completes in the
+      // background if the DB later frees up).
+      await Promise.race([stampPushWake(), new Promise((r) => setTimeout(r, 1500))]);
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       const { kind, post } = pushKind(event);
       if (kind === 'call') {
@@ -760,8 +772,66 @@ self.addEventListener('push', (event) => {
       // any deferred remainder — falls through to today's preview flow.
       if (await tryAuthoritativeDrain()) return;
       await showMessageNotification();
-    })(),
-  );
+}
+
+// The Web Push `userVisibleOnly` contract is unforgiving on iOS: a push event
+// that resolves WITHOUT a visible notification is a "silent push", and after a
+// few of them iOS REVOKES the subscription (browser still hands back the corpse
+// object, so it re-registers forever and delivery is dead — this is the exact
+// failure that mass-revoked subscriptions here). The handler above touches
+// IndexedDB throughout, and SW-context IndexedDB can HANG or throw on older iOS
+// (16.x) WebKit where it's fine on iOS 17+. So bound the handler and guarantee a
+// visible notification no matter what — a throw, or a hang past the deadline,
+// still ends with a generic (whose body carries the reason on the dev host, so a
+// broken device finally says WHY on-screen).
+const PUSH_DEADLINE_MS = 20000; // under iOS's ~30s SW-event budget, over our own straggler+settle window
+
+// Whether a notification was actually shown DURING the current push event — the
+// only correct gate for the fallback. (An earlier version checked
+// getNotifications(), but that also counts a STALE notification from a PRIOR
+// push still on screen, so when a later push failed with an old notification
+// visible, the fallback was wrongly suppressed → a SILENT push → the exact
+// subscription revocation this guard exists to prevent.) Wrapping the one
+// registration method that every show* path funnels through centralizes the
+// tracking without threading a flag through all of them. If the platform blocks
+// reassigning the native method, the flag simply never flips → the guard always
+// shows on failure, which is the safe direction (a rare double beats a silent).
+let lastNotificationAt = 0;
+try {
+  const rawShow = self.registration.showNotification.bind(self.registration);
+  self.registration.showNotification = ((title: string, options?: NotificationOptions) => {
+    lastNotificationAt = Date.now();
+    return rawShow(title, options);
+  }) as ServiceWorkerRegistration['showNotification'];
+} catch {
+  /* reassignment blocked — fallback stays maximally safe (always shows on failure) */
+}
+
+async function guardedPush(event: PushEvent): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    await Promise.race([
+      dispatchPush(event),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('push handler exceeded deadline')), PUSH_DEADLINE_MS),
+      ),
+    ]);
+  } catch (err) {
+    // Only skip the fallback if THIS event already produced a notification (a
+    // stale one from an earlier push must NOT suppress it — that's what caused
+    // the silent pushes). On any doubt, show: a double beats a revocation.
+    if (lastNotificationAt < startedAt) {
+      try {
+        await showGeneric(`fallback: ${String((err as Error)?.message ?? err)}`);
+      } catch {
+        /* the platform denied even the bare fallback — nothing more we can do */
+      }
+    }
+  }
+}
+
+self.addEventListener('push', (event) => {
+  event.waitUntil(guardedPush(event));
 });
 
 // Browser-initiated subscription rotation/expiry while the app is closed: re-

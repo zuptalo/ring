@@ -77,17 +77,95 @@ const STALE_KEY = 'push.staleMsg';
 const WAKE_KEY = 'push.lastWakeAt';
 const ROTATED_KEY = 'push.lastRotateAt';
 
-/** Evaluate the zombie signature; when it holds, clear the marker + stamp the
- *  rotation and tell the caller to mint a fresh subscription. */
+/* ---- One-time FORCED rotation (fleet heal). The silent-wake bug era left a
+ * fleet of subscriptions that iOS quietly revoked or blackholed; the browser
+ * still returns the corpse object, so devices re-register it forever and the
+ * evidence-based signatures below can take days to accumulate. Bumping this
+ * epoch forces every device to rotate to a fresh endpoint ONCE on its next
+ * open — a rotation is cheap (the new endpoint simply replaces the old row),
+ * so the cost of over-rotating healthy devices is nil. Bump when a bug is
+ * known to have poisoned subscriptions fleet-wide. ---- */
+// 1 = heal the 2026-07 silent-wake/zombie era. 2 = heal subscriptions revoked by
+// the guard-gate regression (a stale on-screen notification wrongly suppressed
+// the fallback → silent pushes) before that gate was fixed.
+const ROTATE_EPOCH = 2;
+const EPOCH_KEY = 'push.rotateEpoch';
+
+/* ---- The WEAK zombie signature (iOS 16.x flavor). The strong signature above
+ * needs one message queued ≥10 min — but a phone that's checked often drains
+ * its queue in minutes, so a subscription the push service still ACCEPTS while
+ * the device never SURFACES it can dodge that bar forever (observed live on an
+ * iPhone 8 / iOS 16.7: Apple 201s every send, no banner, no SW wake, and the
+ * server-side 400/403 pruning never fires because nothing errors). The weak
+ * evidence: a drained message old enough that its push should have landed and
+ * woken us (90s), with no wake since it was sent — once is normal (a blip, an
+ * offline sender's backlog), but a STREAK of ≥3 separate drain sessions with
+ * ZERO wakes in between is the frequently-checked-phone zombie. ---- */
+const MISSED_WAKE_MIN_MS = 90 * 1000; // sent this long ago → its push should have woken us by now
+const MISSED_WAKE_EPISODE_GAP_MS = 5 * 60 * 1000; // closer than this = the same drain session
+const MISSED_WAKE_STREAK = 3;
+
+export interface MissStreak {
+  count: number; // distinct should-have-woken drain sessions since the last wake
+  newestAt: number; // newest missed message's SEND time
+}
+const MISS_KEY = 'push.missedWakeStreak';
+
+/** The pure weak-signature decision (unit-tested). */
+export function shouldRotateForMissedWakes(args: {
+  streak: MissStreak | null;
+  lastWakeAt: number;
+  lastRotateAt: number;
+  now: number;
+}): boolean {
+  const { streak, lastWakeAt, lastRotateAt, now } = args;
+  if (!streak || streak.count < MISSED_WAKE_STREAK) return false;
+  if (lastWakeAt >= streak.newestAt) return false; // a wake since → push path is alive
+  return now - lastRotateAt >= ROTATE_MIN_INTERVAL_MS;
+}
+
+/** Record a drained message that should have produced a push wake but didn't.
+ *  Called by the receive path for every inbound; cheap early-outs make it a
+ *  no-op for live traffic (fresh ts) and for genuine push wakes (the wake stamp
+ *  lands first, invalidating the miss). One increment per drain session. */
+export async function recordMissedWakeDrain(sentAt: number): Promise<void> {
+  try {
+    if (Date.now() - sentAt < MISSED_WAKE_MIN_MS) return; // live delivery — nothing owed
+    const lastWakeAt = (await get<Setting<number>>('settings', WAKE_KEY))?.value ?? 0;
+    if (lastWakeAt >= sentAt) return; // we DID wake since it was sent
+    const prev = (await get<Setting<MissStreak>>('settings', MISS_KEY))?.value ?? null;
+    // Same drain session (a batch of queued messages arriving together): count once.
+    if (prev && lastWakeAt < prev.newestAt && sentAt - prev.newestAt < MISSED_WAKE_EPISODE_GAP_MS) return;
+    // A wake between episodes proves the push path works → the streak restarts.
+    const count = prev && lastWakeAt < prev.newestAt ? prev.count + 1 : 1;
+    await put<Setting<MissStreak>>('settings', {
+      key: MISS_KEY,
+      value: { count, newestAt: Math.max(sentAt, prev?.newestAt ?? 0) },
+    });
+  } catch {
+    /* best-effort evidence */
+  }
+}
+
+/** Evaluate BOTH zombie signatures (strong: one ≥10-min-stale drain; weak: a
+ *  streak of shorter should-have-woken drains); when either holds, clear the
+ *  evidence + stamp the rotation and tell the caller to mint a fresh
+ *  subscription. */
 async function consumeRotationDecision(): Promise<boolean> {
   try {
     const stale = (await get<Setting<StaleMarker>>('settings', STALE_KEY))?.value ?? null;
-    if (!stale) return false;
+    const streak = (await get<Setting<MissStreak>>('settings', MISS_KEY))?.value ?? null;
+    if (!stale && !streak) return false;
     const lastWakeAt = (await get<Setting<number>>('settings', WAKE_KEY))?.value ?? 0;
     const lastRotateAt = (await get<Setting<number>>('settings', ROTATED_KEY))?.value ?? 0;
-    if (!shouldRotateForStaleness({ stale, lastWakeAt, lastRotateAt, now: Date.now() })) return false;
+    const now = Date.now();
+    const rotate =
+      shouldRotateForStaleness({ stale, lastWakeAt, lastRotateAt, now }) ||
+      shouldRotateForMissedWakes({ streak, lastWakeAt, lastRotateAt, now });
+    if (!rotate) return false;
     await remove('settings', STALE_KEY);
-    await put<Setting<number>>('settings', { key: ROTATED_KEY, value: Date.now() });
+    await remove('settings', MISS_KEY);
+    await put<Setting<number>>('settings', { key: ROTATED_KEY, value: now });
     return true;
   } catch {
     return false;
@@ -134,6 +212,20 @@ export async function ensurePushSubscription(): Promise<boolean> {
       }
       sub = null;
     }
+    // One-time epoch rotation (fleet heal): a device below the current epoch
+    // rotates unconditionally — we KNOW its era of subscriptions was poisoned.
+    if (sub) {
+      const epoch = (await get<Setting<number>>('settings', EPOCH_KEY))?.value ?? 0;
+      if (epoch < ROTATE_EPOCH) {
+        console.warn('[push] rotate epoch bump — minting a fresh subscription');
+        try {
+          await sub.unsubscribe();
+        } catch {
+          /* ignore, we resubscribe below regardless */
+        }
+        sub = null;
+      }
+    }
     // (spec 1037) The zombie signature: long-queued messages drained with no
     // push wake since they were sent. Rotate to a fresh endpoint — the browser
     // object is not trustworthy evidence that the push service still delivers.
@@ -165,6 +257,10 @@ export async function ensurePushSubscription(): Promise<boolean> {
         installedVersion: __APP_VERSION__,
         tzOffsetMinutes: new Date().getTimezoneOffset(),
       });
+      // Stamp the epoch only once a subscription is REGISTERED — a failure
+      // anywhere above leaves the device below the epoch, so it retries the
+      // forced rotation on the next open.
+      await put<Setting<number>>('settings', { key: EPOCH_KEY, value: ROTATE_EPOCH });
       return true;
     }
     return false;

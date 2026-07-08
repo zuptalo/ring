@@ -37,3 +37,33 @@ describe('spec 1037: shouldRotateForStaleness', () => {
     expect(shouldRotateForStaleness({ ...base, lastRotateAt: NOW - 25 * H })).toBe(true);
   });
 });
+
+// The WEAK signature (iOS 16.x zombies on a frequently-checked phone): a
+// streak of ≥3 separate should-have-woken drain sessions with zero wakes
+// between rotates too, even though no single message sat queued 10 minutes.
+import { shouldRotateForMissedWakes } from './push';
+
+const weakBase = {
+  streak: { count: 3, newestAt: NOW - 10 * 60 * 1000 },
+  lastWakeAt: NOW - 2 * 24 * H, // no wake in two days
+  lastRotateAt: 0,
+  now: NOW,
+};
+
+describe('weak zombie signature: shouldRotateForMissedWakes', () => {
+  it('fires at a streak of 3 with no wake since the newest miss', () => {
+    expect(shouldRotateForMissedWakes(weakBase)).toBe(true);
+  });
+  it('no streak → never', () => {
+    expect(shouldRotateForMissedWakes({ ...weakBase, streak: null })).toBe(false);
+  });
+  it('a streak of 2 is not yet evidence', () => {
+    expect(shouldRotateForMissedWakes({ ...weakBase, streak: { ...weakBase.streak, count: 2 } })).toBe(false);
+  });
+  it('a wake AFTER the newest miss invalidates the streak (push path alive)', () => {
+    expect(shouldRotateForMissedWakes({ ...weakBase, lastWakeAt: weakBase.streak.newestAt + 1000 })).toBe(false);
+  });
+  it('rotated within 24h → capped', () => {
+    expect(shouldRotateForMissedWakes({ ...weakBase, lastRotateAt: NOW - 23 * H })).toBe(false);
+  });
+});
