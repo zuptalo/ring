@@ -114,16 +114,14 @@ const GENERIC_TAG = 'ring-incoming';
 // stranded as a permanent generic because the settle window closed before it could
 // upgrade (spec 2010 root-cause b). 12000 > 8000 leaves headroom for the decrypt +
 // the closeByTag/showNotes upgrade after the fetch resolves.
-const GENERIC_AFTER_MS = 6000;
+const GENERIC_AFTER_MS = 7000;
 // The content-upgrade window: after the generic placeholder shows, keep waiting
 // this long for the decrypt to land and replace it with the real sender+text.
-// Balanced: long enough that a cold libsodium init + retried IDB reads on a slow
-// device can still deliver real content (GENERIC+SETTLE ≈ 10s of runway), but the
-// whole handler still finishes in ~13s worst case — comfortably under the 20s
-// guard, so a deferred burst can't stall a later wake past it (the "exceeded
-// deadline" we just eliminated). Getting a prompt notification always wins; this
-// only governs whether it carries content or a generic line.
-const SETTLE_MAX_MS = 4000;
+// Restored to a full window (was briefly cut to 3–4s while chasing an iOS-16
+// lock-contention issue, which starved the cold decrypt on HEALTHY iOS 17
+// devices and turned real content into generics). A healthy handler resolves
+// well before this; it only ever waits the full time when the decrypt is slow.
+const SETTLE_MAX_MS = 12000;
 // Straggler catch-up after the first preview. In the background the page is
 // suspended, so a queued message only earns its 'delivered' receipt when the SW
 // fetches the pending queue (the server emits 'delivered' for every queued frame on
@@ -131,11 +129,13 @@ const SETTLE_MAX_MS = 4000;
 // collapsible push may not wake the SW again, so without this the burst's tail stays
 // 'sent' until the app is reopened. Keep re-fetching for a bounded window so the
 // whole burst earns receipts (and late messages get previewed) within one wake.
-// Shortened (was 9s): the straggler holds the notify lock across its refetches,
-// so on a slow device it stalls the NEXT queued wake into the 20s guard. One
-// quick refetch catches the common case; anything later earns its own wake.
-const STRAGGLER_WINDOW_MS = 3000;
-const STRAGGLER_INTERVAL_MS = 2500;
+// Restored to the full burst-catch window. It runs AFTER the notification is
+// already shown (so it never delays the alert) and on a healthy device the
+// handler is fast, so holding the SW briefly to catch a burst's late frames is
+// cheap — the shortened value was an iOS-16-only concession that isn't worth the
+// lost receipts on the healthy fleet.
+const STRAGGLER_WINDOW_MS = 9000;
+const STRAGGLER_INTERVAL_MS = 4500;
 
 // (spec 2014) The dev deployment (ring-dev / localhost) surfaces the generic-fallback REASON in the
 // notification for on-device diagnosis; production (same build) never shows internal reason text.

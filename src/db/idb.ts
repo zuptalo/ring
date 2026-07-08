@@ -125,8 +125,14 @@ export function migrateMessageToV7(
 // that) so callers fall back to a generic notification promptly instead of
 // piling up multi-second retries. The main app (iOS 17+, desktop) opens on the
 // first try in <100ms, so none of this timing is ever exercised there.
-const OPEN_TIMEOUT_MS = 1000; // a real open is <100ms; only a genuine hang reaches this
-const OPEN_ATTEMPTS = 3;
+// GENEROUS on purpose: the iOS-16 SW open bug is an INFINITE hang (no event ever
+// fires), so any finite timeout catches it — while a healthy but COLD service
+// worker (first open after wake, libsodium/WASM warming alongside) can legitimately
+// take a second or two. A tight timeout here wrongly failed those cold-but-valid
+// opens on iOS 17+ too, surfacing as `locked`/generic notifications until the SW
+// warmed. 5s never trips a healthy open yet still bounds a true hang.
+const OPEN_TIMEOUT_MS = 5000;
+const OPEN_ATTEMPTS = 2;
 const OPEN_RETRY_DELAY_MS = 200;
 const OPEN_COOLDOWN_MS = 8000; // after all attempts fail, fail fast for this long
 let openCooldownUntil = 0;
@@ -306,12 +312,13 @@ export function openDB(): Promise<IDBDatabase> {
 }
 
 // A request/transaction that never fires a completion event — the iOS-16 SW
-// hang's second form, AFTER a successful open (a push handler awaiting it then
-// stalls its whole budget and shows nothing). Bound every op: a real one
-// completes in well under a second, so this only trips on a genuine platform
-// hang, turning it into a recoverable rejection rather than an unbounded await.
-// Never exercised on a healthy device (iOS 17+, desktop).
-const IDB_OP_TIMEOUT_MS = 1500;
+// hang's second form, AFTER a successful open. Bound every op so a true hang
+// becomes a recoverable rejection instead of stalling a push handler forever.
+// GENEROUS (8s): the hang is INFINITE, so a large timeout still catches it,
+// while a healthy op — even a cold read racing libsodium warm-up — completes far
+// under it. A tight value here wrongly failed cold-but-valid reads on iOS 17+,
+// which is what turned real content into `locked`/generic notifications.
+const IDB_OP_TIMEOUT_MS = 8000;
 
 function withOpTimeout<T>(p: Promise<T>, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -331,7 +338,12 @@ function promisify<T>(req: IDBRequest<T>): Promise<T> {
   );
 }
 
-const READ_ATTEMPTS = 2; // one retry: a warmed-up second read usually clears an iOS-16 transaction hang
+// 1 = no retry. With the generous op timeout above, a healthy read always
+// completes on the first try, and a retry mostly re-hits the same wedged iOS-16
+// connection anyway (the open-level retry is the one that helps there) — so a
+// second attempt only doubled the worst-case stall for no real gain. Kept as a
+// wrapper so a retry can be re-enabled by bumping this if ever warranted.
+const READ_ATTEMPTS = 1;
 
 /** Re-run a READ on a timeout (the iOS-16 SW transaction hang) with a fresh
  *  transaction. Reads are idempotent, so a retry is always safe and often
