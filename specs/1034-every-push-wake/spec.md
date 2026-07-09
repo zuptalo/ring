@@ -58,6 +58,14 @@ visible notification), on the generic tag (self-replacing, never a pile).
   (the existing generic copy).
 - Other kinds: "Ring" / "New activity".
 
+> **Amended by [spec 2023](../2023-push-wakes-always/spec.md)**: the
+> visible-client license above is now platform-gated. Silence requires BOTH a
+> Chromium-engine browser (whose push service documents the focused-page
+> exemption) AND a window client that is focused AND visible; on WebKit —
+> whose push daemon counts a cumulative, never-reset three-strike silent-push
+> quota with NO on-screen exemption — plus Firefox and unknown engines, every
+> wake ends visibly, and a page-claimed wake is followed by the quiet generic.
+
 ## Requirements
 
 - **FR-002**: The seven paths above (minus #7) each terminate in: rich note,
