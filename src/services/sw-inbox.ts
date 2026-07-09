@@ -492,17 +492,54 @@ export function mergeIntoSummary(prev: ShownSummary | undefined, note: SwNote, n
  * whenever the coalesced content hasn't changed. The signature records what the user
  * last SAW per tag (body + cumulative count); an identical re-assert is skipped —
  * the same iOS-tolerated outcome class as the mute/badge-only paths. ---- */
-/* ---- spec 1034: the no-silent-pushes policy's pure halves. iOS revokes a push
- * subscription whose service worker repeatedly consumes a wake without showing a
- * notification (the "zombie": the push service keeps accepting sends, the device
- * never wakes again — observed live on a dev iPhone). So EVERY wake must end
- * visibly unless a Ring window is actually ON SCREEN. ---- */
+/* ---- spec 1034 + 2023: the no-silent-pushes policy's pure halves. iOS revokes a
+ * push subscription whose service worker repeatedly consumes a wake without
+ * showing a notification (the "zombie": the push service keeps accepting sends,
+ * the device never wakes again — observed live on a dev iPhone). WebKit's
+ * enforcement is unforgiving: webpushd counts every no-notification wake into a
+ * CUMULATIVE per-subscription strike counter (three strikes for the life of the
+ * subscription, no reset ever, and NO exemption for a page being on screen —
+ * verified in WebKit source). Chromium is the opposite: it documents that a
+ * focused page may skip the notification and never revokes. So a silent outcome
+ * must be licensed TWICE — by the platform (spec 2023) and by the client state
+ * (spec 1034) — and everywhere the platform is untrusted, every wake ends
+ * visibly, at worst with the content-free quiet note below. ---- */
 
-/** Does any window client license a silent outcome? Only a truly VISIBLE one —
- *  a frozen/background PWA still appears in matchAll() (the norm on iOS) but
- *  shows the user nothing, which is exactly the state that accrues strikes. */
-export function anyClientVisible(clients: readonly { visibilityState?: string }[]): boolean {
-  return clients.some((c) => c.visibilityState === 'visible');
+/** May this browser EVER end a push wake silently? Keyed on the browser ENGINE,
+ *  not the OS: the strike counter lives in Apple's push daemon, which only
+ *  WebKit-engine browsers use, while Chromium runs its own push service on every
+ *  OS it ships on (including macOS) with the documented "site open and focused"
+ *  exemption. iOS browser skins (CriOS/EdgiOS/FxiOS) are WebKit underneath, so
+ *  they gate as unsafe despite their Chromium-ish names. Anything unrecognized is
+ *  unsafe too — the costs are asymmetric: a false "unsafe" shows one extra silent
+ *  notification, a false "safe" can permanently kill the subscription. */
+export function platformTrustsSilence(ua: string): boolean {
+  if (/\b(?:CriOS|EdgiOS|FxiOS)\//.test(ua)) return false; // iOS skins carry Chromium-ish tokens but run WebKit
+  if (/\b(?:iPhone|iPad|iPod)\b/.test(ua)) return false; // every iOS browser is WebKit → webpushd
+  return /\b(?:Chrome|Chromium|HeadlessChrome|Edg)\/\d/.test(ua);
+}
+
+/** Does any window client's state license a silent outcome? Only one that is
+ *  BOTH focused AND visible: a frozen/background PWA still appears in matchAll()
+ *  with cached attribute snapshots (the norm on iOS) while showing the user
+ *  nothing — exactly the state that accrues strikes — and Chromium's documented
+ *  exemption wording is "open and focused", not merely visible. Missing fields
+ *  fail closed (an absent `focused` must never fall back to the old
+ *  visibility-only license). Client state alone is HALF the license — the
+ *  platform gate above is the other half (see mayEndWakeSilently). */
+export function anyClientVisible(clients: readonly { visibilityState?: string; focused?: boolean }[]): boolean {
+  return clients.some((c) => c.focused === true && c.visibilityState === 'visible');
+}
+
+/** The ONE license to end a push wake silently (spec 2023, amending 1034 FR-001):
+ *  the platform must tolerate silence AND a Ring window must be focused+visible.
+ *  On WebKit, Firefox, and unknown engines this is always false — every wake ends
+ *  visibly there, no matter what the client list claims. */
+export function mayEndWakeSilently(
+  ua: string,
+  clients: readonly { visibilityState?: string; focused?: boolean }[],
+): boolean {
+  return platformTrustsSilence(ua) && anyClientVisible(clients);
 }
 
 /** The content-free notification shown when the rich path has nothing it may
@@ -517,6 +554,45 @@ export function quietNote(kind: 'msg' | 'activity'): {
   return kind === 'msg'
     ? { title: 'New message', options: { body: 'You have a new message.', tag: 'ring-incoming', silent: true, renotify: false } }
     : { title: 'Ring', options: { body: 'New activity', tag: 'ring-incoming', silent: true, renotify: false } };
+}
+
+/** (spec 2023 FR-006) Wrap the platform's show call so `stamp` records it only
+ *  once the platform ACCEPTS it. The guarded last-resort fallback's whole job is
+ *  showing something when a wake's show FAILED — a stamp at call time records a
+ *  rejected (or hung) show as shown and suppresses that fallback, inverting its
+ *  "on any doubt, show" intent. The rejection still reaches the caller unchanged;
+ *  only the stamp is withheld. */
+export function stampedShow<A extends unknown[]>(
+  raw: (...args: A) => Promise<void>,
+  stamp: () => void,
+): (...args: A) => Promise<void> {
+  return (...args: A) => {
+    const p = raw(...args);
+    // Stamp on fulfillment only; the noop rejection handler keeps this DERIVED
+    // promise from surfacing an unhandled rejection — the caller still observes
+    // the original `p` reject.
+    p.then(stamp, () => {});
+    return p;
+  };
+}
+
+/** (spec 2023 FR-007) Run a batch of show attempts, tolerating individual
+ *  failures; the batch's visible outcome is how many the platform ACCEPTED.
+ *  Callers treat 0 as "this wake has not ended visibly" and fall through to
+ *  their quiet/fallback terminal instead of reporting a shown wake that never
+ *  was (the pre-2023 bug: per-note catches made an all-rejected batch count as
+ *  a visible ending, and the drain then acked frames nothing ever displayed). */
+export async function countAccepted(shows: ReadonlyArray<() => Promise<unknown>>): Promise<number> {
+  let accepted = 0;
+  for (const show of shows) {
+    try {
+      await show();
+      accepted++;
+    } catch {
+      /* one rejection must not kill the rest of the batch */
+    }
+  }
+  return accepted;
 }
 
 export interface ShownSig {

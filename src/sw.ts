@@ -23,7 +23,7 @@ import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
-  anyClientVisible, quietNote, stampPushWake,
+  mayEndWakeSilently, platformTrustsSilence, quietNote, stampPushWake, stampedShow, countAccepted,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
@@ -177,10 +177,13 @@ const titleWithCount = (n: SwNote): string => {
 /** Show the decrypted rich notes (one updating notification per conversation). Coalesces each note
  *  against the persisted per-chat summary first (spec 2017) so the title count is the cumulative
  *  backlog and overlapping burst wakes converge on ONE notification instead of a jumpy/duplicate pile.
- *  Callers run this inside the serialize lock so the summary read→write can't interleave. */
-async function showNotes(notes: SwNote[]): Promise<void> {
+ *  Callers run this inside the serialize lock so the summary read→write can't interleave.
+ *  Returns how many shows the platform ACCEPTED (spec 2023 FR-007): a wake whose every
+ *  show was rejected has NOT ended visibly — the caller must fall through to its
+ *  quiet/fallback terminal instead of counting this batch as a visible ending. */
+async function showNotes(notes: SwNote[]): Promise<number> {
   const coalesced = await coalesceForShow(notes, Date.now());
-  for (const n of coalesced) {
+  return countAccepted(coalesced.map((n) => async () => {
     try {
       await self.registration.showNotification(titleWithCount(n), {
         body: n.body,
@@ -191,35 +194,52 @@ async function showNotes(notes: SwNote[]): Promise<void> {
         // for "nothing new" uses reassertFromSummary below, which sets renotify:false)
         data: { url: n.url },
       });
-      // Record what the user SAW on this tag (spec 2020), so a later nothing-new
-      // wake can tell "identical re-assert" (skip) from "content changed" (show).
-      await saveShownSig(n.tag, { body: n.body, count: n.count ?? n.ids.length, ts: Date.now() });
     } catch (e) {
       console.warn('[sw] showNotification failed', e);
+      throw e; // rethrow so countAccepted doesn't count a rejected show
     }
-  }
+    // Record what the user SAW on this tag (spec 2020), so a later nothing-new
+    // wake can tell "identical re-assert" (skip) from "content changed" (show).
+    // Best-effort AFTER the accepted show: a sig bookkeeping failure must not
+    // make an on-screen notification count as not-shown.
+    try {
+      await saveShownSig(n.tag, { body: n.body, count: n.count ?? n.ids.length, ts: Date.now() });
+    } catch {
+      /* sig is bookkeeping only */
+    }
+  }));
 }
 
-/** (spec 1034) Show the content-free QUIET generic — the terminal fallback that
+/** (spec 1034/2023) The content-free QUIET generic — the terminal fallback that
  *  keeps the Web Push userVisibleOnly contract when the rich path has nothing it
- *  may display. Skipped only when a Ring window is truly on screen. iOS revokes
- *  subscriptions that repeatedly consume a wake without showing anything (the
- *  "zombie" — Apple keeps accepting sends with 201, the device never wakes
- *  again; observed live), so silence is never an outcome while the app is away. */
+ *  may display. Deliberately NO catch here (spec 2023 FR-005): when this is the
+ *  wake's only visible ending, a failure must reach guardedPush so the
+ *  last-resort generic runs — a swallowed failure here IS a silent push, and
+ *  guardedPush cannot see a failure that never propagates. The two call sites
+ *  where the wake is already visibly ended or re-routed (the settle downgrade of
+ *  an accepted loud generic; the authoritative-drain degrade) contain it locally
+ *  via their own existing catches. */
+async function showQuietNote(kind: 'msg' | 'activity'): Promise<void> {
+  const n = quietNote(kind);
+  await self.registration.showNotification(n.title, {
+    ...n.options,
+    icon: ICON,
+    badge: BADGE,
+    data: { url: kind === 'msg' ? '/tabs/chats' : '/' },
+  });
+}
+
+/** (spec 2023, amending 1034) Show the quiet generic unless silence is LICENSED,
+ *  which now takes the platform AND the client state: only a Chromium-engine
+ *  browser (whose push service documents the focused-page exemption and never
+ *  revokes) may skip, and only when a Ring window is focused AND visible. On
+ *  WebKit — where webpushd's cumulative three-strike counter has NO on-screen
+ *  exemption — plus Firefox and anything unrecognized, every wake ends visibly
+ *  no matter what the client list claims. */
 async function showQuietUnlessVisible(kind: 'msg' | 'activity'): Promise<void> {
-  try {
-    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    if (anyClientVisible(clients)) return; // user is looking at Ring — silence is honest here
-    const n = quietNote(kind);
-    await self.registration.showNotification(n.title, {
-      ...n.options,
-      icon: ICON,
-      badge: BADGE,
-      data: { url: kind === 'msg' ? '/tabs/chats' : '/' },
-    });
-  } catch (e) {
-    console.warn('[sw] quiet generic failed', e);
-  }
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  if (mayEndWakeSilently(self.navigator.userAgent, clients)) return; // licensed: trusted platform + focused & visible window
+  await showQuietNote(kind);
 }
 
 /** Close any lingering notifications with a given tag (used to clear the generic
@@ -391,9 +411,9 @@ async function showPostNotification(): Promise<number> {
   if (notes.length) {
     // notes carry "<author> · posted on their Wall" (or the urgent challenge
     // line when the SW could unseal a game post, spec 0009); reuse the
-    // conn-note renderer (same shape).
-    await showConnNotes(notes);
-    return newCount;
+    // conn-note renderer (same shape). Zero ACCEPTED shows (spec 2023 FR-007)
+    // falls through to the generic placeholder below.
+    if ((await showConnNotes(notes)) > 0) return newCount;
   }
   await self.registration.showNotification('Ring', {
     body: 'New activity on your Wall',
@@ -405,9 +425,11 @@ async function showPostNotification(): Promise<number> {
   return newCount;
 }
 
-/** Show the generic friend-request notifications (identity-safe; no decryption). */
-async function showConnNotes(notes: ConnNote[]): Promise<void> {
-  for (const n of notes) {
+/** Show the generic friend-request notifications (identity-safe; no decryption).
+ *  Returns the ACCEPTED show count (spec 2023 FR-007) — callers fall through to
+ *  their placeholder/quiet terminal when it is zero. */
+async function showConnNotes(notes: ConnNote[]): Promise<number> {
+  return countAccepted(notes.map((n) => async () => {
     try {
       await self.registration.showNotification(n.title, {
         body: n.body,
@@ -419,8 +441,9 @@ async function showConnNotes(notes: ConnNote[]): Promise<void> {
       });
     } catch (e) {
       console.warn('[sw] conn showNotification failed', e);
+      throw e; // rethrow so countAccepted doesn't count a rejected show
     }
-  }
+  }));
 }
 
 /**
@@ -441,9 +464,12 @@ async function showConnNotification(): Promise<number> {
     /* fall through to the placeholder below */
   }
   if (notes.length) {
-    await showConnNotes(notes);
+    const accepted = await showConnNotes(notes);
     await markConnShown(notes.flatMap((n) => n.keys));
-    return pendingIncoming;
+    // Zero ACCEPTED shows (spec 2023 FR-007) → the wake has not ended visibly;
+    // fall through to the generic placeholder below (the reconcile state stays
+    // marked — it is bookkeeping, not visibility).
+    if (accepted > 0) return pendingIncoming;
   }
   // Couldn't reconcile (offline / already-seen) but a tickle implies activity →
   // a single generic placeholder keeps the userVisibleOnly contract.
@@ -473,9 +499,10 @@ async function tryAuthoritativeDrain(): Promise<boolean> {
       const r = await drainPersistPending();
       if (r.mode === 'degrade') return false; // includes 'no-frames' — the preview
       // path owns the nothing-new / re-assert behavior (spec 2016/2017).
+      let accepted = 0;
       if (r.notes.length) {
         await closeByTag(GENERIC_TAG);
-        await showNotes(r.notes);
+        accepted = await showNotes(r.notes);
       }
       // Mark applied frames in the preview ledger too: if the ack below fails they
       // linger in the queue, and the preview path must not re-decrypt them (their
@@ -485,9 +512,14 @@ async function tryAuthoritativeDrain(): Promise<boolean> {
       if (r.deferred > 0) return false; // preview flow handles the deferred remainder
       // Fully handled: applied rows are already in unreadCount(), nothing pending.
       await updateAppBadge(0);
-      // (spec 1034) Persisted + acked but produced no notes (every frame was for a
-      // muted/hidden/badge-only chat): the wake still needs a visible ending.
-      if (!r.notes.length) await showQuietUnlessVisible('msg');
+      // (spec 1034/2023) Persisted + acked but nothing made it on screen — every
+      // frame was for a muted/hidden/badge-only chat, or every show was REJECTED
+      // (FR-007): either way the wake still needs a visible ending. The frames
+      // stay acked (they are durably committed locally); only the visibility is
+      // owed. A failure of the quiet note itself is contained by this function's
+      // catch, which degrades to the preview flow — whose own quiet terminal
+      // propagates (FR-005 carve-out).
+      if (!r.notes.length || accepted === 0) await showQuietUnlessVisible('msg');
       return true;
     });
   } catch (e) {
@@ -526,9 +558,11 @@ async function showMessageNotification(): Promise<void> {
   let shownAny = false; // spec 1034: track whether THIS wake produced anything visible
   if (result.notes.length) {
     await closeByTag(GENERIC_TAG); // clear any earlier generic before the rich note
-    await showNotes(result.notes);
+    const accepted = await showNotes(result.notes);
     await markShown(allIds(result.notes)); // only mark what we displayed
-    shownAny = true;
+    // (spec 2023 FR-007) an all-rejected batch is NOT a visible ending — leaving
+    // shownAny false routes this wake to the quiet terminal below.
+    shownAny = accepted > 0;
   } else if (timedOut || (!result.suppressed && !result.silenced && result.newUnshown)) {
     // Show the generic placeholder ONLY when there's a genuinely-new message we couldn't render: a
     // slow cold-start decrypt still in flight at the deadline (timedOut), a fetched-but-undecryptable
@@ -563,9 +597,14 @@ async function showMessageNotification(): Promise<void> {
     ]);
     pending = full.pending || pending;
     if (shownGeneric && full.notes.length) {
-      await closeByTag(GENERIC_TAG); // upgrade: drop the placeholder…
-      await showNotes(full.notes); // …show the real sender + text…
-      await markShown(allIds(full.notes)); // …and don't re-preview them next push
+      // Upgrade the placeholder to the real sender + text. Show FIRST, close the
+      // generic only once a rich note was actually ACCEPTED (spec 2023 FR-007):
+      // closing first and then failing every show would destroy the wake's only
+      // accepted visible ending. The brief rich+generic overlap is harmless —
+      // different tags, and the generic is closed the next instant.
+      const upgraded = await showNotes(full.notes);
+      if (upgraded > 0) await closeByTag(GENERIC_TAG);
+      await markShown(allIds(full.notes)); // don't re-preview them next push
     } else if (shownGeneric && full.silenced) {
       // A SLOW cold start showed the loud generic before the decrypt settled; the
       // settled result says every pending message was per-chat silenced. Spec 1034:
@@ -734,8 +773,8 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         if (!clients.length && (await setting('notifications.wall.activity', true))) {
           const notes = await previewPostActivity(post ?? '');
           if (notes.length) {
-            await showConnNotes(notes);
-            shownActivity = true;
+            // (spec 2023 FR-007) only ACCEPTED shows end the wake visibly.
+            shownActivity = (await showConnNotes(notes)) > 0;
           }
         }
         // (spec 1034) Toggle off, frozen client, or a removal that previews to zero
@@ -766,7 +805,19 @@ async function dispatchPush(event: PushEvent): Promise<void> {
       // 1200ms — comfortably above the page's own DRAIN_ACK_WINDOW so a page that will
       // show a banner reliably claims it, while a hidden/locked/frozen page (which
       // never acks) still falls through to the SW promptly enough.
-      if (clients.length && (await pageWillNotify(clients, 2200))) return;
+      if (clients.length && (await pageWillNotify(clients, 2200))) {
+        // (spec 2023 FR-003) The page owns the RICH alert, but an in-app banner is
+        // invisible to webpushd: on platforms where silence is unsafe, a claimed
+        // wake still counts a strike unless the SW shows something. And one claim
+        // arm shows nothing anywhere — a message for a locked hidden chat on a
+        // visible page (notify.ts, the spec-1027 FR-012 zero-trace claim) — so the
+        // quiet note is the wake's only visible ending there. Platform-gated ONLY
+        // (never visibility-gated): the Chromium claim outcome stays exactly as
+        // before, and the quiet note's content-free body keeps the hidden-chat
+        // trade bounded to what any message push already reveals.
+        if (!platformTrustsSilence(self.navigator.userAgent)) await showQuietNote('msg');
+        return;
+      }
       // Spec 1032: with sw.fullPersist on (and no page claiming the wake), persist
       // + ack eligible frames right now so the app opens warm. Any degrade — and
       // any deferred remainder — falls through to today's preview flow.
@@ -799,9 +850,11 @@ const PUSH_DEADLINE_MS = 20000; // under iOS's ~30s SW-event budget, over our ow
 let lastNotificationAt = 0;
 try {
   const rawShow = self.registration.showNotification.bind(self.registration);
-  self.registration.showNotification = ((title: string, options?: NotificationOptions) => {
+  // (spec 2023 FR-006) Stamp on FULFILLMENT, never at call time: a show the OS
+  // rejects (or hangs) was never shown, and stamping it early would suppress the
+  // guarded fallback below — the exact silent wake it exists to prevent.
+  self.registration.showNotification = stampedShow(rawShow, () => {
     lastNotificationAt = Date.now();
-    return rawShow(title, options);
   }) as ServiceWorkerRegistration['showNotification'];
 } catch {
   /* reassignment blocked — fallback stays maximally safe (always shows on failure) */
