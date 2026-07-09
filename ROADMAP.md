@@ -92,3 +92,4 @@ Specs are grouped by category band; status moves
 | [2021](specs/2021-remove-save-to-photos/spec.md) | Remove the "Save to Photos" chat setting | 🟢 shipped |
 | [2022](specs/2022-push-failures-name/spec.md) | Bug: Push failures hide their reason, and dead subscriptions are retried forever | 🟢 shipped |
 | [2023](specs/2023-push-wakes-always/spec.md) | Push Wakes Always End Visibly Where Silence Is Unsafe | 🔵 in-review |
+| [2024](specs/2024-tab-bar-labels/spec.md) | Tab Bar Labels Stay Visible After Switching Tabs | 🔵 in-review |
