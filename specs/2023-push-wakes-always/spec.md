@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-09
 
-**Status**: in-progress
+**Status**: in-review
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: Review of an externally-proposed fix to the spec-1034 visible-client
