@@ -347,6 +347,14 @@ correct from the first frame.
   - **Every path the platform does not force** — app in the foreground, or
     backgrounded but still connected without a push wake — MUST be fully silent
     (no banner, no sound); only the badge updates per preference.
+  - *Amended by [spec 2023](../2023-push-wakes-always/spec.md)*: when a push
+    wake IS involved and the foreground page claims it, the fully-silent
+    outcome above holds only on platforms where consuming a push silently is
+    documented-safe (Chromium engine). On silence-unsafe platforms (all of
+    WebKit, Firefox, unknown engines) the service worker follows the claim
+    with the content-free quiet note — the same generic any message produces,
+    revealing no chat, sender, or content — because the alternative is the
+    exact subscription revocation the push-woken bullet above guards against.
 - **FR-013**: A live incoming call from a hidden-chat peer MUST ring with full
   caller identity (name + avatar) and be answerable normally (the "knock-knock
   call"). Calls are never suppressed by hiding.

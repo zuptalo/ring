@@ -263,5 +263,5 @@ but the subject is the real lever.)
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/1038-armada-fullscreen-naval/plan.md`
+`specs/2023-push-wakes-always/plan.md`
 <!-- SPECKIT END -->
