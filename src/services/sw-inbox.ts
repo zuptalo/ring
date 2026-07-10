@@ -629,6 +629,31 @@ export async function saveShownSig(tag: string, sig: ShownSig): Promise<void> {
   await put<Setting<Record<string, ShownSig>>>('settings', { key: SHOWN_SIG_KEY, value: Object.fromEntries(entries) });
 }
 
+/** A backgrounded, push-subscribed recipient learns of a delivery over its live socket
+ *  (notify.ts) but does NOT show its own OS notification — the server also pushed it (it
+ *  marks a non-foregrounded recipient inactive) and the SW owns the single notification.
+ *  This seeds that note into the same shown-summary the SW's reassertFromSummary reads, so
+ *  the co-arriving push wake — which finds "nothing new" once the page has acked — re-asserts
+ *  THIS rich note (under its ring:<chatId> tag) instead of the content-free "New message"
+ *  generic. Without it the user got the recently-backgrounded DOUBLE. The shown-sig for the
+ *  tag is CLEARED (not written): the page showed no banner, so the SW's re-assert is the FIRST
+ *  visible show and must not be vetoed as an identical duplicate — which it otherwise would be
+ *  for back-to-back game moves that carry the same "made a move, your turn" text. */
+export async function recordPageShown(
+  note: { tag: string; title: string; body: string; url: string; id: string },
+  now: number,
+): Promise<void> {
+  const list = await loadShownSummary();
+  const prev = list.find((e) => e.tag === note.tag);
+  const merged = mergeIntoSummary(prev, { ...note, ids: [note.id] } as SwNote, now);
+  await saveShownSummary([...list.filter((e) => e.tag !== note.tag), merged]);
+  const sigs = await loadShownSigs();
+  if (sigs[note.tag]) {
+    delete sigs[note.tag];
+    await put<Setting<Record<string, ShownSig>>>('settings', { key: SHOWN_SIG_KEY, value: sigs });
+  }
+}
+
 /** (spec 2017) Merge each note into the persisted summary and return the notes to actually SHOW, with
  *  `count` set to the CUMULATIVE per-chat total (so a burst shows one monotonic count, not a bouncing
  *  per-pass slice). Persists the updated summary. Serialized by the caller. */
