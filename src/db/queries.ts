@@ -24,6 +24,7 @@ import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
 import { notifyIncoming, isChatActive, pushWakeActive } from '@/services/notify';
 import { isGameActive } from '@/services/game-active';
+import { openGame, overlayOpen } from '@/composables/useGameOverlay';
 import { wallActivityAlert } from '@/services/wall-activity-policy';
 import { compressImage, compressVideo, achievedQuality } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
@@ -3366,6 +3367,12 @@ export async function notifyPostActivity(postId: string, fresh: FreshEngagement[
   }
 }
 
+// Wall challenges whose author this device has already auto-entered on accept
+// (below). In-memory + one-shot so a burst of engagement syncs can't yank the
+// poster back into a board they deliberately left; it resets on reload, where
+// re-entering an un-played game they still owe a move in is the right call.
+const autoEnteredWallGames = new Set<string>();
+
 /** Alerts for fresh GAME engagement on a challenge post (spec 0009): the seated
  *  player hears their turn / the result; a follower hears moves and results;
  *  everyone else stays quiet — all behind the Settings → Notifications → Games
@@ -3382,6 +3389,29 @@ async function notifyWallGameActivity(post: Post, fresh: FreshEngagement[]): Pro
   const me = playerIndexOf(session, self);
   const latest = others.sort((x, y) => x.at - y.at)[others.length - 1];
   const mover = (await getContact(latest.actor))?.name ?? 'Someone';
+
+  // Author auto-enter (parity with a 1:1 challenge, spec 1038): the instant a
+  // rival accepts THIS device's own FULLSCREEN Wall challenge and the opening
+  // move / fleet deployment is owed to us (seat 0, no moves yet), drop straight
+  // into the board — exactly as starting a game in a 1:1 chat does
+  // (ChatDetailPage.onGamePick). On the Wall the author posts and moves on, so
+  // without this the rival who accepted is left staring at "the other admiral is
+  // still deploying" (chess: "opponent to move") until the poster happens to tap
+  // back in. Gated to a visible app — a background/SW-side sync has no board to
+  // open, and the push notification below carries the nudge there instead.
+  if (
+    me === 0 &&
+    session.moves.length === 0 &&
+    module?.presentation === 'fullscreen' &&
+    challengePhase(session) === 'accepted' &&
+    typeof document !== 'undefined' &&
+    document.visibilityState === 'visible' &&
+    !overlayOpen.value && // already deep in a board (this game's or another's) — don't yank; the toast nudges
+    !autoEnteredWallGames.has(post.id)
+  ) {
+    autoEnteredWallGames.add(post.id);
+    openGame({ surface: 'wall', postId: post.id, gameType: session.gameType });
+  }
 
   // WATCHING the game live — the Wall tab or this very post open, app visible —
   // means the board updates in front of them: no toast, just the move cue for

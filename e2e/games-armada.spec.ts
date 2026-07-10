@@ -300,6 +300,12 @@ test('a wall challenge: accept lands in deployment, the race seats exactly one, 
     await expect.poll(async () => (await synced(p))?.opponent, { timeout: 30_000 }).toBe(seated);
   }
 
+  // The AUTHOR is auto-entered into deployment the instant a rival accepts —
+  // parity with starting a game in a 1:1 chat, so the seated opponent isn't left
+  // waiting on a poster who never got pulled in (their page is visible and has
+  // been syncing engagement above, which is what fires the auto-enter).
+  await expect(a.page.locator('.armada')).toBeVisible({ timeout: 15_000 });
+
   // The post face is the challenge CARD on every device; the spectator gets
   // status only (no button once the seats are taken).
   const loser = seated === b.id ? c : b;
