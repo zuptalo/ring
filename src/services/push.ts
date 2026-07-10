@@ -304,6 +304,21 @@ export async function notifyLocal(title: string, body: string, url?: string, cha
   }
 }
 
+/** Does this device currently hold an active Web Push subscription? When true, the
+ *  server wakes the SW for a backgrounded delivery, so the PAGE must NOT also show
+ *  its own OS notification for that delivery — doing so is the recently-backgrounded
+ *  DOUBLE (rich from the page + the SW's generic). When false (no permission/endpoint),
+ *  the page's notifyLocal bridge is the ONLY background channel and must still fire. */
+export async function pushSubscriptionActive(): Promise<boolean> {
+  try {
+    if (!('serviceWorker' in navigator)) return false;
+    const reg = await navigator.serviceWorker.ready;
+    return (await reg.pushManager.getSubscription()) !== null;
+  } catch {
+    return false;
+  }
+}
+
 /* ---- preference-driven subscription ---- */
 
 async function settingBool(key: string, fallback: boolean): Promise<boolean> {

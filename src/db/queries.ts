@@ -1024,6 +1024,7 @@ async function handleGameAccept(from: string, signal: GameAcceptSignal): Promise
     await notifyIncoming({
       kind: 'message',
       chatId: message.chatId,
+      msgId: message.id,
       name,
       body: `${name} accepted your challenge 💪 Your move!`,
       pushWoken: pushWakeActive(),
@@ -1337,6 +1338,7 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   await notifyIncoming({
     kind: 'message',
     chatId: message.chatId,
+    msgId: message.id,
     name,
     body: text,
     pushWoken: pushWakeActive(),
@@ -5830,6 +5832,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   await notifyIncoming({
     kind: 'message',
     chatId: targetChatId,
+    msgId: message.id,
     name: chat?.isGroup ? chat.name : contact.name,
     // The notification spells out shared location / contact / poll (no icon to lean
     // on), unlike the terser `preview` used for the chats list above.

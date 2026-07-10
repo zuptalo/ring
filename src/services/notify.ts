@@ -22,7 +22,8 @@ import { personAddOutline } from 'ionicons/icons';
 import router from '@/router';
 import { getSetting, isChatMuted, getChat } from '@/db/queries';
 import { subscribe } from '@/db/idb';
-import { notifyLocal } from '@/services/push';
+import { notifyLocal, pushSubscriptionActive } from '@/services/push';
+import { recordPageShown } from '@/services/sw-inbox';
 import { inAppGloballyEnabled, getChatNotifyPrefs } from '@/services/notify-prefs';
 import { isUnlockedNow } from '@/services/crypto/identity';
 import { ensureHiddenLoaded, isRevealed } from '@/services/hidden-state';
@@ -85,6 +86,7 @@ const DEFAULT_SYSTEM_ICON = personAddOutline;
 export interface IncomingNotice {
   kind: IncomingKind;
   chatId?: string; // for messages → deep-link target
+  msgId?: string; // the message's id — lets a backgrounded-bridge note be re-asserted by the SW (spec: game-move double)
   name: string; // sender / requester display name (or the subject of a system notice)
   body: string; // preview text ("Hi!", "📷 Photo", "wants to connect", "joined Ring")
   avatar?: string; // optional; messages resolve the chat avatar if omitted
@@ -446,7 +448,23 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
         // Preview off hides WHO it's from too, not just the body. A mention is an opt-in
         // escalation and keeps naming the mentioner.
         const title = p.showPreview || isMention ? n.name : 'Ring';
-        void notifyLocal(title, text, targetUrl(n), n.chatId);
+        // A backgrounded recipient (this branch) is marked inactive to the server, so
+        // if we hold a push subscription the server ALREADY pushed this delivery and the
+        // SW owns the ONE OS notification. Showing our own here too is the recently-
+        // backgrounded DOUBLE the user hit (our rich note + the SW's generic on a
+        // different tag — iOS won't collapse them). So: with a live subscription, don't
+        // show anything ourselves; just seed the shown-summary so that push wake renders
+        // the note RICH (via reassertFromSummary) instead of the content-free generic.
+        // With NO subscription the SW is never woken, so the page bridge is the only
+        // background channel and must still fire.
+        if (n.chatId && n.msgId && (await pushSubscriptionActive())) {
+          await recordPageShown(
+            { tag: `ring:${n.chatId}`, title, body: text, url: targetUrl(n), id: n.msgId },
+            Date.now(),
+          );
+        } else {
+          void notifyLocal(title, text, targetUrl(n), n.chatId);
+        }
       }
       return false;
     }
