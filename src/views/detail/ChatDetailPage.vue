@@ -2347,6 +2347,17 @@ async function scrollToMessage(id: string, opts: { instant?: boolean; silent?: b
 // snaps back and does nothing.
 const SWIPE_MAX = 110; // how far the bubble can travel
 const SWIPE_TRIGGER = 70; // release past this fires the action
+// The native standalone-PWA back gesture (iOS swipes the browser history back
+// when the app runs full-screen; Ionic's own swipe-back is off — see main.ts)
+// owns the left of the screen, and iOS fires it from well INSIDE the edge, not
+// just the first few pixels — so a fixed screen-edge guard can't reliably tell a
+// back-swipe from a reply. Instead we make the LEFT PART OF EACH INCOMING BUBBLE
+// inert to the reply drag: a right-swipe that begins on the left of an incoming
+// bubble is almost always "go back", so it must not also arm a reply (which would
+// drop a stray draft as the page navigates away). Only the bubble's right portion
+// starts a reply. Outgoing bubbles hug the right edge, clear of the back-swipe
+// lane, so they stay fully swipeable.
+const REPLY_DEAD_ZONE_FRAC = 0.55; // left 55% of an incoming bubble ignores swipe-right
 const swipeId = ref<string | null>(null); // the message currently being dragged
 const swipeDx = ref(0); // its current x offset
 const swipeReleasing = ref(false); // animate the snap-back
@@ -2365,7 +2376,16 @@ function swipeStyle(id: string): Record<string, string> | undefined {
 function onSwipeStart(e: TouchEvent, m: Message): void {
   if (m.deleted || selecting.value) return;
   if (m.kind === 'game' || m.kind === 'gamechallenge') return; // boards aren't reply-swipeable
-  swipeStartX = e.touches[0].clientX;
+  const startX = e.touches[0].clientX;
+  // Incoming bubbles: the left part is inert to the reply drag — a right-swipe
+  // starting there is the OS back gesture, not a reply (see REPLY_DEAD_ZONE_FRAC).
+  // Measure against the bubble the touch actually landed on, so it scales with
+  // every bubble width and never depends on guessing iOS's back-swipe hot-zone.
+  if (!m.outgoing) {
+    const rect = (e.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+    if (rect && startX - rect.left < rect.width * REPLY_DEAD_ZONE_FRAC) return;
+  }
+  swipeStartX = startX;
   swipeStartY = e.touches[0].clientY;
   swipeDir = null;
   swipeTarget = m;
