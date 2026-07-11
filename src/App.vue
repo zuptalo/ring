@@ -64,6 +64,7 @@ import { useGameDuty } from '@/composables/useGameDuty';
 import { callState } from '@/composables/useCall';
 import { stopAudio } from '@/composables/useAudioPlayer';
 import { useSync, nudgeReconnect } from '@/composables/useSync';
+import { useNotificationNudge } from '@/composables/useNotificationNudge';
 import { useAppUpdate, checkForUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
 import { takePendingNav } from '@/services/pending-nav';
@@ -80,6 +81,11 @@ useSync();
 // duty officer that emits owed answers/reveals/staged commits app-wide.
 useGameOverlay();
 useGameDuty();
+
+// On a fresh open, ask for notification permission if it's still undecided (a reinstall
+// resets it and only a tap can re-grant it). Onboarding owns the first ask; this covers
+// later cold starts. See useNotificationNudge.
+useNotificationNudge();
 
 // Registers the service worker and prompts (with the version) when a new deploy is
 // ready, instead of silently reloading. See useAppUpdate + vite.config 'prompt'.
