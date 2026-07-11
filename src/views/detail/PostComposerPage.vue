@@ -159,6 +159,7 @@ import { hasRoomFor } from '@/services/storage-estimate';
 import { generateVideoPoster } from '@/utils/media-meta';
 import { playAudio, stopIfPlaying } from '@/composables/useAudioPlayer';
 import { appToast } from '@/services/toast';
+import { describeMediaError } from '@/services/media-errors';
 
 const router = useRouter();
 const route = useRoute();
@@ -473,10 +474,12 @@ async function startRecording(): Promise<void> {
       const s = Math.floor((Date.now() - recStart) / 1000);
       recElapsed.value = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     }, 250);
-  } catch {
+  } catch (err) {
     const a = await alertController.create({
       header: 'Microphone unavailable',
-      message: 'Allow microphone access to record a voice post.',
+      // Name the actual cause (blocked permission / no mic / in use) so the fix is clear —
+      // the flat "allow access" line was a dead-end when the OS had the permission off.
+      message: describeMediaError(err, 'microphone'),
       buttons: ['OK'],
     });
     await a.present();

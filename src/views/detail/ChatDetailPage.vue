@@ -1164,6 +1164,7 @@ import {
   backfillThumbTiers, getDraft, saveDraft, clearDraft, getDraftMedia, saveDraftMedia, clearDraftMedia,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
+import { describeMediaError } from '@/services/media-errors';
 import { hasRoomFor } from '@/services/storage-estimate';
 import { groupProgress } from '@/services/message-status';
 import { getSelfUserId, getSelfUsername } from '@/services/auth';
@@ -4363,8 +4364,11 @@ async function startRecording() {
     recTimer = window.setInterval(tickElapsed, 200);
     startSampler();
     startActivity('recording-audio'); // tell the peer we're recording a voice message (spec 1009)
-  } catch {
-    await appToast({ message: 'Microphone unavailable', duration: 1500 });
+  } catch (err) {
+    // Say WHY (permission blocked vs. no mic vs. in use) instead of a dead-end "unavailable",
+    // and give it long enough to read the fix — the usual cause on Android is the app's mic
+    // permission being off at the OS level, which only the user can turn back on.
+    await appToast({ message: describeMediaError(err, 'microphone'), duration: 4000 });
   }
 }
 
