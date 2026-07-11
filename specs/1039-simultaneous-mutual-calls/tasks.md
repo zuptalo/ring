@@ -29,9 +29,9 @@ story builds on.
 
 **⚠️ CRITICAL**: complete before any user story phase.
 
-- [ ] T001 Write FAILING decision-table unit tests in `src/services/call/glare.test.ts`: all four decision rows from data-model.md (no attempt → `none`; attempt + `selfId < from` → `ignore`; attempt + `selfId > from` + kinds match → `auto-accept`; kinds differ → `ring`), plus exclusions (group offer, different peer, already-answered attempt → `none`) and a symmetry property (for any id pair exactly one side ignores)
-- [ ] T002 Implement the pure decision module `src/services/call/glare.ts` (inputs: selfId, from, current attempt {peerUserId, kind, isGroup, answered}, offer kind → decision enum) making T001 green; pure function style matching `src/services/call/capacity.ts` et al.
-- [ ] T003 Add the outgoing-attempt token guard in `src/composables/useCall.ts` `startDirectCall`: capture the attempt's callId at entry and bail out after every `await` if the active attempt changed (yielded/torn down), so an abandoned attempt never mutates shared state (`setState('dialing')`, tones, navigation) — research R3
+- [X] T001 Write FAILING decision-table unit tests in `src/services/call/glare.test.ts`: all four decision rows from data-model.md (no attempt → `none`; attempt + `selfId < from` → `ignore`; attempt + `selfId > from` + kinds match → `auto-accept`; kinds differ → `ring`), plus exclusions (group offer, different peer, already-answered attempt → `none`) and a symmetry property (for any id pair exactly one side ignores)
+- [X] T002 Implement the pure decision module `src/services/call/glare.ts` (inputs: selfId, from, current attempt {peerUserId, kind, isGroup, answered}, offer kind → decision enum) making T001 green; pure function style matching `src/services/call/capacity.ts` et al.
+- [X] T003 Add the outgoing-attempt token guard in `src/composables/useCall.ts` `startDirectCall`: capture the attempt's callId at entry and bail out after every `await` if the active attempt changed (yielded/torn down), so an abandoned attempt never mutates shared state (`setState('dialing')`, tones, navigation) — research R3
 
 **Checkpoint**: `npx vitest run src/services/call/glare.test.ts` green; typecheck passes.
 
@@ -47,15 +47,15 @@ and video, 0ms and ~1s offsets) and both land connected with no incoming-call UI
 
 ### Tests for User Story 1 (write first, must FAIL)
 
-- [ ] T004 [P] [US1] Write FAILING e2e `e2e/mutual-call.spec.ts`: same-kind mutual attempts (audio at ~0ms offset, video at ~0ms, audio at ~1s offset) → both sides reach `connected`, neither side ever shows the incoming-call UI or plays the incoming ring, no manual accept, and each side's call history has exactly one answered entry (SC-001/003/005); drive via the `window.__ringTest` hook like the existing call e2e specs
+- [X] T004 [P] [US1] Write FAILING e2e `e2e/mutual-call.spec.ts`: same-kind mutual attempts (audio at ~0ms offset, video at ~0ms, audio at ~1s offset) → both sides reach `connected`, neither side ever shows the incoming-call UI or plays the incoming ring, no manual accept, and each side's call history has exactly one answered entry (SC-001/003/005); drive via the `window.__ringTest` hook like the existing call e2e specs
 
 ### Implementation for User Story 1
 
-- [ ] T005 [US1] Rework the glare gate in `src/composables/useCall.ts` `handleOffer`: replace the `callState !== 'idle'`-scoped check with the `glare.ts` decision keyed on the synchronously-set `callMeta` (covers the setup window, research R2); decision `ignore` (we win) drops the crossing offer before any record/UI is created
-- [ ] T006 [US1] Implement the yield path in `src/composables/useCall.ts`: on `auto-accept`, invalidate the attempt token (T003), send `call-cancel` for the abandoned callId (existing control frame, research R5), delete the abandoned outgoing call record via `deleteCalls` from `src/db/queries.ts` (research R6), stop/hand over local media per R4 (reuse the captured stream if it resolved; never a second concurrent getUserMedia)
-- [ ] T007 [US1] Implement the silent auto-accept in `src/composables/useCall.ts`: factor the 1:1 accept flow so the yield path can join the surviving offer with no `setState('incoming')`, no ring tone, and no incoming UI (FR-008), reusing the yielded stream when available and writing the normal incoming-answered record; ensure the glare branch runs before the per-chat-mute suppression (research R8)
-- [ ] T008 [US1] Guard against late redelivery in `src/composables/useCall.ts`: a crossing/yielded offer arriving after resolution (relay retention, spec 2012) is dropped — extend the existing duplicate/withdrawal guards to cover callIds cancelled by the yield path
-- [ ] T009 [US1] Verify US1: `npx vitest run` green, `npm run build` green, `npm run test:e2e -- mutual-call` US1 scenarios green
+- [X] T005 [US1] Rework the glare gate in `src/composables/useCall.ts` `handleOffer`: replace the `callState !== 'idle'`-scoped check with the `glare.ts` decision keyed on the synchronously-set `callMeta` (covers the setup window, research R2); decision `ignore` (we win) drops the crossing offer before any record/UI is created
+- [X] T006 [US1] Implement the yield path in `src/composables/useCall.ts`: on `auto-accept`, invalidate the attempt token (T003), send `call-cancel` for the abandoned callId (existing control frame, research R5), delete the abandoned outgoing call record via `deleteCalls` from `src/db/queries.ts` (research R6), stop/hand over local media per R4 (reuse the captured stream if it resolved; never a second concurrent getUserMedia)
+- [X] T007 [US1] Implement the silent auto-accept in `src/composables/useCall.ts`: factor the 1:1 accept flow so the yield path can join the surviving offer with no `setState('incoming')`, no ring tone, and no incoming UI (FR-008), reusing the yielded stream when available and writing the normal incoming-answered record; ensure the glare branch runs before the per-chat-mute suppression (research R8)
+- [X] T008 [US1] Guard against late redelivery in `src/composables/useCall.ts`: a crossing/yielded offer arriving after resolution (relay retention, spec 2012) is dropped — extend the existing duplicate/withdrawal guards to cover callIds cancelled by the yield path
+- [X] T009 [US1] Verify US1: `npx vitest run` green, `npm run build` green, `npm run test:e2e -- mutual-call` US1 scenarios green
 
 **Checkpoint**: MVP — mutual same-kind calls connect; ordinary calls unaffected.
 
@@ -71,11 +71,11 @@ single surviving call rings on the yielder showing its kind; decline ends cleanl
 
 ### Tests for User Story 2 (write first, must FAIL)
 
-- [ ] T010 [P] [US2] Extend `e2e/mutual-call.spec.ts` with FAILING mismatched-kind scenarios: audio-caller yields to video offer → normal incoming ring (kind shown), no local camera capture before accept (SC-004); and decline → both sides idle with no timeout (US2 acceptance 2)
+- [X] T010 [P] [US2] Extend `e2e/mutual-call.spec.ts` with FAILING mismatched-kind scenarios: audio-caller yields to video offer → normal incoming ring (kind shown), no local camera capture before accept (SC-004); and decline → both sides idle with no timeout (US2 acceptance 2)
 
 ### Implementation for User Story 2
 
-- [ ] T011 [US2] Route the `ring` decision in `src/composables/useCall.ts`: yield the own attempt (same cancel/record/token steps as T006, releasing any captured media since kinds differ) then fall through to the existing incoming-ring presentation of the surviving offer
+- [X] T011 [US2] Route the `ring` decision in `src/composables/useCall.ts`: yield the own attempt (same cancel/record/token steps as T006, releasing any captured media since kinds differ) then fall through to the existing incoming-ring presentation of the surviving offer
 
 **Checkpoint**: US1 + US2 behaviors verified together.
 
@@ -91,11 +91,11 @@ proceeds and can connect; C sees busy (or the call-waiting prompt per existing r
 
 ### Tests for User Story 3 (write first, must FAIL)
 
-- [ ] T012 [P] [US3] Extend `e2e/mutual-call.spec.ts` with FAILING scenarios: (a) C's offer lands during B's setup window → B's outgoing call to A still rings/connects, and C receives the busy/call-waiting outcome (FR-006); (b) a mutual attempt while one side is already in a connected call follows the existing busy/call-waiting rules, not glare resolution (spec edge case, FR-009)
+- [X] T012 [P] [US3] Extend `e2e/mutual-call.spec.ts` with FAILING scenarios: (a) C's offer lands during B's setup window → B's outgoing call to A still rings/connects, and C receives the busy/call-waiting outcome (FR-006); (b) a mutual attempt while one side is already in a connected call follows the existing busy/call-waiting rules, not glare resolution (spec edge case, FR-009)
 
 ### Implementation for User Story 3
 
-- [ ] T013 [US3] Gate non-glare incoming offers on `callMeta` (not just `callState`) in `src/composables/useCall.ts` `handleOffer`, routing a different-peer offer during the setup window to the existing busy/call-waiting flow instead of the normal-incoming path that clobbers `callMeta`
+- [X] T013 [US3] Gate non-glare incoming offers on `callMeta` (not just `callState`) in `src/composables/useCall.ts` `handleOffer`, routing a different-peer offer during the setup window to the existing busy/call-waiting flow instead of the normal-incoming path that clobbers `callMeta`
 
 **Checkpoint**: all three stories independently green.
 
@@ -104,7 +104,7 @@ proceeds and can connect; C sees busy (or the call-waiting prompt per existing r
 ## Phase 6: Polish & Cross-Cutting
 
 - [ ] T014 Run the full gates: `npm run build`, `npx vitest run` (coverage floors), `npm run test:e2e` (full suite — confirms no regression to busy, call-waiting spec 0005/2009, group calls, upgrade flow)
-- [ ] T015 Bump `**Status**:` in `specs/1039-simultaneous-mutual-calls/spec.md` to `in-progress` → `in-review` as appropriate and run `make roadmap` so the CI roadmap guard stays green
+- [X] T015 Bump `**Status**:` in `specs/1039-simultaneous-mutual-calls/spec.md` to `in-progress` → `in-review` as appropriate and run `make roadmap` so the CI roadmap guard stays green
 
 ---
 
