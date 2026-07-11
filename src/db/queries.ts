@@ -5,7 +5,7 @@
  */
 import { bulkPut, clearStore, get, getAll, getByIndex, put, remove } from './idb';
 import { enqueue, removeOutboxByFrameId } from './outbox';
-import { recordTombstone, isTombstoned, clearTombstone, clearHiddenPeerBlock } from './tombstones';
+import { recordTombstone, isTombstoned, hasTombstone, clearTombstone, clearHiddenPeerBlock } from './tombstones';
 import { callLogPreview } from './calllog';
 import { uid } from '@/utils/uid';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
@@ -5233,6 +5233,41 @@ export async function hydrateContactFromDirectory(id: string): Promise<void> {
   }
 }
 
+/** Heal group members that render as a raw id ("88155153" / a "?" disc). Every
+ *  group participant should resolve to a real name / @username / photo from the
+ *  directory, but two paths leave one unresolved: a participant added via the
+ *  accept or ensureGroupChat paths has no contact row at all (so the connect-time
+ *  refreshContactProfiles, which only walks EXISTING contacts, skips them), and a
+ *  member whose one-shot first-frame hydrate ran before they'd published a profile
+ *  never retries. This connect-time sweep gives every group participant a contact
+ *  and (re)pulls their directory profile, so an existing broken group self-heals
+ *  without waiting for a roster change. Best-effort; respects deletion tombstones
+ *  so a member the user deleted is never resurrected. */
+export async function hydrateGroupMembers(): Promise<void> {
+  const self = getSelfUserId();
+  if (!self) return;
+  let chats;
+  try {
+    chats = await getAll<Chat>('chats');
+  } catch {
+    return;
+  }
+  const ids = new Set<string>();
+  for (const ch of chats) {
+    if (!ch.isGroup) continue;
+    for (const id of ch.participantIds) if (id && id !== self) ids.add(id);
+  }
+  for (const id of ids) {
+    const c = await getContact(id);
+    // Already resolved (has an @username and a real name, not the raw id-slice
+    // fallback) → nothing to do. Skips the network round-trip for known members.
+    if (c && c.username && c.name && c.name !== id.slice(0, 8)) continue;
+    if (await hasTombstone('contacts', id)) continue; // never resurrect a deleted contact
+    if (!c) await addContactWithId(id, '');
+    await hydrateContactFromDirectory(id);
+  }
+}
+
 // Messages that arrive while the keystore is locked are stashed here (still
 // encrypted) under `pendingIncoming:<id>` and decrypted on unlock. This lets the
 // sync layer still ack them (so the sender gets "delivered" as soon as the device
@@ -5314,6 +5349,17 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
     const ts = card.at || now();
     existing.invitedIds = (existing.invitedIds ?? []).filter((id) => id !== from);
     existing.participantIds = [...existing.participantIds, from];
+    // The accepter becomes a member on OUR device here. We author (never receive)
+    // this group's roster, so the handleGroupCard hydrate above never runs for us —
+    // if we don't personally know them they'd sit in the roster as a raw id-slice.
+    // A placeholder contact may already exist from setting up the invite session, so
+    // hydrate whenever they're unresolved (no @username), not only when absent, so
+    // they render as a name/photo instead of "88155153".
+    const accepter = await getContact(from);
+    if (!accepter?.username && !(await hasTombstone('contacts', from))) {
+      if (!accepter) await addContactWithId(from, '');
+      void hydrateContactFromDirectory(from);
+    }
     const roster = await buildRoster([self, ...existing.participantIds]);
     applyAutoName(existing, roster, self);
     existing.rosterAt = ts;
@@ -5360,7 +5406,13 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
     return;
   }
 
-  // Upsert co-member contacts so their names render in the group view.
+  // Upsert co-member contacts so their names render in the group view. The roster
+  // only carries {id, name} (name filled from the card author's own contacts, with
+  // a raw-id fallback) — never an @username or photo — so ALSO pull each member's
+  // real profile from the directory. Without this a member the card author didn't
+  // personally know rides in as a raw id-slice and stays that way: the one-shot
+  // first-frame hydrate (receiveIncoming) is skipped once this placeholder exists,
+  // and the connect-time refreshContactProfiles only walks contacts that resolve.
   for (const m of card.members) {
     if (!m.id || m.id === self) continue;
     const c = await getContact(m.id);
@@ -5372,6 +5424,9 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
       c.updatedAt = now();
       await put('contacts', c);
     }
+    // Fire-and-forget: fills the real name/@username/photo when the member has
+    // published a profile; a no-op (kept as-is) for one who hasn't yet.
+    if (!c?.username) void hydrateContactFromDirectory(m.id);
   }
 
   const participantIds = card.members.map((m) => m.id).filter((id) => id !== self);
