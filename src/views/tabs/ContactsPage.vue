@@ -299,9 +299,11 @@ const acceptInvite = (groupId?: string) => groupId && acceptGroupInvite(groupId)
 const declineInvite = (groupId?: string) => groupId && declineGroupInvite(groupId);
 
 // Pending invitations (codes you've sent, awaiting the person to join). The label
-// is local; the expiry/redemption state comes from the server (fetched below).
+// is local; the expiry/redemption state comes from the server (fetched below). A
+// redeemed invite (joined) drops out of this waiting list — the person has an
+// account — even though the record lingers until their "joined Ring" announcement.
 const invited = useLiveQuery(
-  () => listPendingInvites(),
+  () => listPendingInvites().then((list) => list.filter((i) => !i.joined)),
   ['settings'],
   [] as PendingInvite[],
 );
@@ -332,6 +334,11 @@ function isExpired(code: string): boolean {
 }
 // Status line under each invite's name.
 function inviteStatus(code: string): string {
+  // Redeemed: the server reports who used the code. Show "Joined" right away rather
+  // than a stale "Waiting to join" — the local placeholder is cleared separately by
+  // the invite sweep (processSentInvitations), which needs the network, so this
+  // keeps the row honest in the interim and while offline.
+  if (serverInvites.value.get(code)?.usedBy) return 'Joined';
   const exp = expiresAt(code);
   if (exp === undefined) return 'Waiting to join'; // offline / legacy never-expiring
   const left = exp - now.value;

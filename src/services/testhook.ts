@@ -27,6 +27,7 @@ import {
   requestFriend as dbRequestFriend,
   acceptRequest as dbAcceptRequest,
   addPendingInvite,
+  listPendingInvites,
   listContacts,
   createGroup as dbCreateGroup,
   addToGroup as dbAddToGroup,
@@ -375,6 +376,11 @@ export function installTestHook(): void {
     },
     /** Force an invitation auto-connect sweep (poll redemptions / connect inviter). */
     syncInvites: () => runInviteSync(),
+    /** Codes still shown in the "Invited" (waiting) list — for asserting a redeemed
+     *  code is cleared even when the invitee never finishes their profile. Mirrors the
+     *  UI: a joined (redeemed) invite has dropped out even though its record lingers. */
+    pendingInviteCodes: async (): Promise<string[]> =>
+      (await listPendingInvites()).filter((i) => !i.joined).map((i) => i.code),
     /** Current in-app notification banners (kind/name/body) for asserting alerting. */
     notices: (): { kind: string; name: string; body: string }[] =>
       notifyBanners.value.map((b) => ({ kind: b.kind, name: b.name, body: b.body })),
