@@ -168,7 +168,7 @@ import {
   chatbubbleOutline, documentTextOutline, videocamOutline,
 } from 'ionicons/icons';
 import {
-  getChat, listContacts, addMemberToGroup, removeMember, leaveGroup,
+  getChat, listContacts, listAllContacts, addMemberToGroup, removeMember, leaveGroup,
   renameGroup, setGroupAvatar, clearGroupAvatar, setChatMute, setChatTtl, setChatSendQuality,
   setChatNotifyPrefs, type ChatNotifyContent,
 } from '@/db/queries';
@@ -182,7 +182,16 @@ const router = useRouter();
 const chatId = route.params.id as string;
 
 const chat = useLiveQuery<Chat | undefined>(() => getChat(chatId), ['chats'], undefined);
+// Filtered (address-book) contacts — for the "add member" picker, which should
+// only offer real, accepted contacts.
 const allContacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+// Unfiltered contacts — for resolving the member/invited rosters to a name + photo.
+// A group member is that person whether or not your 1:1 with them is accepted, so
+// listContacts()'s pending/ghosted filter must not turn them into a raw id here.
+const memberContacts = useLiveQuery(() => listAllContacts(), ['contacts'], [] as Contact[]);
+const memberContactMap = computed(
+  () => new Map(memberContacts.value.map((c) => [c.id, c])),
+);
 
 const muted = computed(() => !!chat.value?.mutedUntil && chat.value.mutedUntil > Date.now());
 const muteLabel = computed(() => {
@@ -306,7 +315,7 @@ const { name: selfName, avatar: selfAvatar } = useSelfProfile();
 // Member profiles (resolve participant ids → contacts).
 const members = computed(() =>
   (chat.value?.participantIds ?? []).map((id) => {
-    const c = allContacts.value.find((x) => x.id === id);
+    const c = memberContactMap.value.get(id);
     return { id, name: c?.name ?? id.slice(0, 8), avatar: c?.avatar ?? initialsAvatar(c?.name ?? '?') };
   }),
 );
@@ -381,7 +390,7 @@ async function addMember(): Promise<void> {
 // Invited-but-not-joined members (pending acceptance).
 const invited = computed(() =>
   (chat.value?.invitedIds ?? []).map((id) => {
-    const c = allContacts.value.find((x) => x.id === id);
+    const c = memberContactMap.value.get(id);
     return { id, name: c?.name ?? id.slice(0, 8), avatar: c?.avatar ?? initialsAvatar(c?.name ?? '?') };
   }),
 );

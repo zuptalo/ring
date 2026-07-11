@@ -457,7 +457,7 @@ import { useCallParticipants } from '@/composables/useCallParticipants';
 import { getQuickDeclines } from '@/services/quick-declines';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { callDiagLines, callDiagSnapshot, callDiagOpen, clearDiag } from '@/services/call/diag';
-import { listContacts } from '@/db/queries';
+import { listContacts, listAllContacts } from '@/db/queries';
 import { useSelfProfile } from '@/composables/useSelfProfile';
 import { initialsAvatar } from '@/db/avatars';
 import type { Contact } from '@/db/types';
@@ -660,7 +660,12 @@ interface Tile {
 // Reactive contacts, keyed by userId, so a tile can resolve its owner's name + avatar
 // synchronously (mirrors ChatDetailPage). Updates live if a contact card changes.
 const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
-const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c])));
+// Tiles resolve their owner from the UNFILTERED set: a call participant is that
+// person whether or not your 1:1 with them is accepted, so listContacts()'s
+// pending/ghosted filter must not blank their name/avatar on a tile. The filtered
+// `contacts` above still backs the "add people" picker (real contacts only).
+const tileContacts = useLiveQuery(() => listAllContacts(), ['contacts'], [] as Contact[]);
+const contactsMap = computed(() => new Map(tileContacts.value.map((c) => [c.id, c])));
 
 // Add people to the call (spec 1028, US2). Available on a CONNECTED call — 1:1 or
 // group — with room left under its kind's cap; adding on a 1:1 promotes it into a
