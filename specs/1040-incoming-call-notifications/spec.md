@@ -392,6 +392,31 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   "New friend request" copy, verified by end-to-end test of the
   request→accept flow with the requester's app closed.
 
+## Zero-Knowledge Impact
+
+- **What crosses the wire**: (a) The existing content-free push tickles
+  (`{"t":"call"}`, `{"t":"msg"}`, `{"t":"conn"}`) continue to cross the push
+  services untouched; if a new tickle type is needed to end a ring visibly
+  (e.g. a call-ended wake), it carries a frame-type discriminator only — no
+  names, user ids, call ids, or group ids. (b) Any caller→callee call
+  metadata needed for identity or missed-call traces rides the existing
+  end-to-end-encrypted messaging/signalling channels as sealed envelopes.
+- **What is encrypted**: All identity and call context (who called, call
+  type, group/room association, outcome) is either already on the callee's
+  device or arrives E2EE; the notification text is composed on-device.
+- **What metadata is unavoidably visible**: The server already knows it
+  relayed a call tickle and sealed frames between two account ids (routing
+  metadata that relaying physically requires); this feature adds no new
+  server-visible fields. The platform push services (APNs/FCM) see only
+  frame-type tickles, exactly as today.
+- **Why**: Caller identity display, badge accounting, and missed-call
+  logging are all client-side concerns resolved from on-device data plus
+  sealed payloads; the server remains unable to read who called whom about
+  what. The friend-request fix changes only which already-server-visible
+  connection states (`accepted`) are echoed back to their own requester —
+  the server learns nothing new; names are still resolved on-device from
+  the public directory profile.
+
 ## Assumptions
 
 - The existing ~60-second ring window and repeated re-alert behavior for
