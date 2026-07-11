@@ -65,6 +65,9 @@ await shot(bob, 'armada-7-toast-over-game');
 await bob.page.locator('.nb-main').first().click().catch(() => {});
 await bob.page.waitForTimeout(900);
 await shot(bob, 'armada-8-pill');
+// The pill tucks into just the circular glyph after ~2.5s so it stops covering the chat.
+await bob.page.waitForTimeout(2500);
+await shot(bob, 'armada-8b-pill-collapsed');
 
 // 5 — back in via the pill; then Alice resigns so Bob gets the medal ceremony.
 await bob.page.locator('.fgb').click().catch(() => {});

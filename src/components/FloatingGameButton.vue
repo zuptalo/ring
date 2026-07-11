@@ -8,6 +8,7 @@
   <div
     v-if="show"
     class="fgb"
+    :class="{ 'fgb-collapsed': collapsed }"
     :style="style"
     role="button"
     :aria-label="label"
@@ -25,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { IonBadge, IonIcon } from '@ionic/vue';
 import { locateOutline } from 'ionicons/icons';
 import { useOngoingGames } from '@/composables/useOngoingGames';
@@ -39,6 +40,28 @@ const label = computed(() =>
     ? `Back to your game, ${awaitingCount.value} awaiting your move`
     : 'Back to your game',
 );
+
+// The pill covers a whole message-card width when it lingers over the chat, so it
+// tucks itself into just the circular glyph after a moment (the label appears long
+// enough to be learnable, then gets out of the way). It re-expands briefly when it
+// (re)appears or when a new "your move" lands, so urgency still catches the eye.
+const collapsed = ref(false);
+let collapseTimer: ReturnType<typeof setTimeout> | null = null;
+function expandBriefly(): void {
+  collapsed.value = false;
+  if (collapseTimer) clearTimeout(collapseTimer);
+  collapseTimer = setTimeout(() => (collapsed.value = true), 2500);
+}
+watch(show, (on) => {
+  if (on) expandBriefly();
+  else if (collapseTimer) clearTimeout(collapseTimer);
+}, { immediate: true });
+watch(awaitingCount, (n, prev) => {
+  if (show.value && n > (prev ?? 0)) expandBriefly();
+});
+onUnmounted(() => {
+  if (collapseTimer) clearTimeout(collapseTimer);
+});
 
 /* ---- free drag (tap = open the most urgent game); MinimizedCall pattern ---- */
 const pos = ref<{ x: number; y: number } | null>(null);
@@ -108,6 +131,22 @@ function onUp(): void {
   cursor: grab;
   touch-action: none;
   max-width: 230px;
+  transition: padding 0.25s ease, gap 0.25s ease;
+}
+/* Tucked away: just the circular glyph, hugging the left edge — the chat stays
+   readable. The badge rides the circle's shoulder so urgency is still visible. */
+.fgb-collapsed {
+  padding: 6px;
+  gap: 0;
+}
+.fgb-collapsed .fgb-text {
+  max-width: 0;
+  opacity: 0;
+}
+.fgb-collapsed .fgb-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
 }
 .fgb-glyph {
   width: 30px;
@@ -126,6 +165,8 @@ function onUp(): void {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 180px;
+  transition: max-width 0.25s ease, opacity 0.2s ease;
 }
 .fgb-badge {
   flex: none;
