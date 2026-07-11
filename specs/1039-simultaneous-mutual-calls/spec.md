@@ -99,6 +99,23 @@ While someone is placing a call to contact A (the brief setup moment before it a
 - **SC-004**: In mismatched-kind trials, zero occurrences of a camera turning on for a user who neither placed nor accepted a video call.
 - **SC-005**: After each trial, each device's call history shows exactly one entry for the encounter, marked answered (not missed/declined).
 
+## Zero-Knowledge Impact
+
+- **What crosses the wire**: nothing new. Resolution is decided independently on each
+  device from information it already has — its own outgoing attempt and the peer's
+  crossing (sealed) call offer. Connecting uses the same sealed answer a manual accept
+  would send; abandoning the yielding attempt uses the same sealed cancel/end a manual
+  hang-up during "Calling…" would send.
+- **What is encrypted**: everything content-bearing, exactly as today — offers, answers,
+  cancels, and all call signalling remain sealed over the pair's existing ratchet. No new
+  frame types, no new fields readable by the server.
+- **Unavoidably visible metadata**: unchanged — the server continues to see only that
+  sealed call-signalling envelopes flow between the two users (as for any call today).
+  The resolution does not create additional envelopes beyond a normal placed-then-
+  answered call plus the one cancel of the abandoned attempt.
+- **Why**: the feature is purely a client-side policy change about how two already-
+  visible attempts are presented and answered; the server keeps relaying blindly.
+
 ## Assumptions
 
 - Scope is 1:1 direct calls between contacts. Group calls resolve join collisions by an existing mechanism and are out of scope.
