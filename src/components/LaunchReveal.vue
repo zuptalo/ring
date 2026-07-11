@@ -14,6 +14,12 @@
        src/vite-env.d.ts:  declare module 'flubber'; -->
   <ion-page v-if="visible" class="launch-reveal" :class="{ leaving }">
     <ion-content :fullscreen="true">
+      <!-- Discreet escape hatch: a returning user who's seen the reveal can dismiss it.
+           Kept low-key (muted, corner, fades in after a beat) so it never competes with
+           the montage; runs the same fade-and-hand-off as a natural finish. -->
+      <button v-if="!leaving" type="button" class="rv-skip" @click="beginExit" aria-label="Skip intro">
+        Skip
+      </button>
       <div class="rv-content" aria-hidden="true">
         <!-- ambient glow -->
         <div class="rv-glow" :style="{ opacity: 0.5 + 0.5 * glowPulse }"></div>
@@ -23,8 +29,10 @@
           <svg :width="MARK" :height="MARK" viewBox="0 0 100 100" style="display:block; overflow:visible">
             <path :d="f.d" fill="#fff" />
 
-            <!-- gamepad detail: visible only while the controller is held -->
-            <g v-if="f.detailOp > 0" :style="{ opacity: f.detailOp }">
+            <!-- gamepad detail: visible only while the controller is held. Rides the
+                 controller's normalize transform so the buttons stay on the (re-centred,
+                 re-scaled) body instead of the raw coordinates they were drawn for. -->
+            <g v-if="f.detailOp > 0" :transform="CONTROLLER_TF" :style="{ opacity: f.detailOp }">
               <rect x="17" y="53.5" width="19" height="7" rx="2.2" :fill="PRIMARY" />
               <rect x="23" y="47.5" width="7" height="19" rx="2.2" :fill="PRIMARY" />
               <circle cx="72" cy="50" r="3.1" :fill="PRIMARY" />
@@ -76,19 +84,86 @@ import { interpolate, separate, combine } from 'flubber';
 const PRIMARY = 'var(--ion-color-primary)';
 const MARK = 84; // px, the morphing symbol inside the 128px tile
 
-// ── single-outline silhouettes (viewBox 100, no arcs so flubber parses cleanly) ──
-const BUBBLE = 'M28 22 L72 22 C77.5 22 82 26.5 82 32 L82 58 C82 63.5 77.5 68 72 68 L44 68 L30 82 L30 68 L28 68 C22.5 68 18 63.5 18 58 L18 32 C18 26.5 22.5 22 28 22 Z';
-const HANDSET = 'M32 20 C40 18 46 24 48 32 L50 44 C48 47 45 49 42 50 C48 60 54 66 64 72 C65 69 67 66 70 64 L82 66 C90 68 94 76 90 84 C84 94 70 95 60 90 C38 80 22 60 16 36 C14 27 22 20 32 20 Z';
-const CAMERA = 'M24 36 L56 36 C60.4 36 64 39.6 64 44 L64 47 L84 35 L84 77 L64 65 L64 68 C64 72.4 60.4 76 56 76 L24 76 C19.6 76 16 72.4 16 68 L16 44 C16 39.6 19.6 36 24 36 Z';
-const CONTROLLER = 'M34 38 L66 38 C78 38 87 47 90 59 L93 73 C95 82 86 87 79 83 L71 75 L29 75 L21 83 C14 87 5 82 7 73 L10 59 C13 47 22 38 34 38 Z';
+// ── normalize each montage silhouette to the final mark's footprint ───────────
+// The hand-drawn silhouettes were authored at inconsistent boxes: the camera is
+// wide and squat and sits low, the controller runs 90 units wide and is pushed
+// down, while the resolved shield is ~62×70 centred at (50,50). So mid-montage the
+// symbols looked cramped and off-centre next to the final icon. Recentre + UNIFORM-
+// scale every intermediate shape to one shared box (same centre, same max extent),
+// so the whole sequence reads at the SAME size/position as the resolved Ring mark.
+// Uniform scale keeps each symbol's own aspect (a phone stays tall, a controller
+// stays wide) — only its size and placement are normalized. The SHIELD/ring finale
+// is deliberately left as-is: it already matches the real app icon.
+const NCENTER = { x: 50, y: 49 };
+const NSIZE = 66; // target max( width, height ) in the 0–100 viewBox
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+function pathBox(d: string): { cx: number; cy: number; w: number; h: number } {
+  const n = (d.match(/-?\d*\.?\d+/g) ?? []).map(Number);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i + 1 < n.length; i += 2) {
+    minX = Math.min(minX, n[i]); maxX = Math.max(maxX, n[i]);
+    minY = Math.min(minY, n[i + 1]); maxY = Math.max(maxY, n[i + 1]);
+  }
+  return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: maxX - minX, h: maxY - minY };
+}
+// Walk the path, keeping command letters and transforming every (x,y) number pair.
+// Safe because these silhouettes use only M/L/C/Z — all coordinate pairs, no arcs.
+function mapPath(d: string, fn: (x: number, y: number) => [number, number]): string {
+  const toks = d.match(/[a-zA-Z]|-?\d*\.?\d+/g) ?? [];
+  let out = '', i = 0;
+  while (i < toks.length) {
+    if (/[a-zA-Z]/.test(toks[i])) {
+      out += (out ? ' ' : '') + toks[i++];
+      const nums: number[] = [];
+      while (i < toks.length && !/[a-zA-Z]/.test(toks[i])) nums.push(parseFloat(toks[i++]));
+      for (let j = 0; j + 1 < nums.length; j += 2) {
+        const [x, y] = fn(nums[j], nums[j + 1]);
+        out += ` ${round2(x)} ${round2(y)}`;
+      }
+    } else i++;
+  }
+  return out;
+}
+function normScale(d: string): number {
+  const b = pathBox(d);
+  return NSIZE / Math.max(b.w, b.h);
+}
+function normalize(d: string): string {
+  const b = pathBox(d), s = normScale(d);
+  return mapPath(d, (x, y) => [(x - b.cx) * s + NCENTER.x, (y - b.cy) * s + NCENTER.y]);
+}
+// The SVG-transform equivalent of normalize(), for an overlay (the gamepad detail)
+// that must ride its shape's normalized position instead of the raw coordinates.
+function normTransform(d: string): string {
+  const b = pathBox(d);
+  return `translate(${NCENTER.x} ${NCENTER.y}) scale(${round2(normScale(d))}) translate(${round2(-b.cx)} ${round2(-b.cy)})`;
+}
+
+// ── single-outline silhouettes (viewBox 100, no arcs so flubber parses cleanly),
+//    each normalized above so the montage reads at the final icon's size ──
+const BUBBLE = normalize('M28 22 L72 22 C77.5 22 82 26.5 82 32 L82 58 C82 63.5 77.5 68 72 68 L44 68 L30 82 L30 68 L28 68 C22.5 68 18 63.5 18 58 L18 32 C18 26.5 22.5 22 28 22 Z');
+const HANDSET = normalize('M32 20 C40 18 46 24 48 32 L50 44 C48 47 45 49 42 50 C48 60 54 66 64 72 C65 69 67 66 70 64 L82 66 C90 68 94 76 90 84 C84 94 70 95 60 90 C38 80 22 60 16 36 C14 27 22 20 32 20 Z');
+const CAMERA = normalize('M24 36 L56 36 C60.4 36 64 39.6 64 44 L64 47 L84 35 L84 77 L64 65 L64 68 C64 72.4 60.4 76 56 76 L24 76 C19.6 76 16 72.4 16 68 L16 44 C16 39.6 19.6 36 24 36 Z');
+const CONTROLLER_RAW = 'M34 38 L66 38 C78 38 87 47 90 59 L93 73 C95 82 86 87 79 83 L71 75 L29 75 L21 83 C14 87 5 82 7 73 L10 59 C13 47 22 38 34 38 Z';
+const CONTROLLER = normalize(CONTROLLER_RAW);
+const CONTROLLER_TF = normTransform(CONTROLLER_RAW); // the gamepad detail rides the normalized body
 // Shield pre-transformed to the favicon's inner placement (translate 8.98,8.16 · scale 0.82).
+// Left UNCHANGED — this is the resolved app icon the montage settles into.
 const SHIELD = 'M49.98 14.72 L81.14 25.38 L81.14 50.8 C81.14 67.2 68.02 79.5 49.98 85.24 C31.94 79.5 18.82 67.2 18.82 50.8 L18.82 25.38 Z';
 const RING = { cx: 49.98, cy: 48.34, r: 14.76, sw: 5.74 };
 
 function circlePts(cx: number, cy: number, r: number, n = 34): [number, number][] {
   return Array.from({ length: n }, (_, i) => { const a = (i / n) * Math.PI * 2; return [cx + Math.cos(a) * r, cy + Math.sin(a) * r] as [number, number]; });
 }
-const CIRCLES = [circlePts(32, 39, 12), circlePts(68, 39, 12), circlePts(32, 71, 12), circlePts(68, 71, 12)];
+// Group-of-four, recentred to NCENTER and uniformly scaled to NSIZE like the other
+// marks (raw grid was centred at y≈55 → it sat low; its 60-unit extent scales to 66).
+const G = NSIZE / 60, G_DX = 18 * G, G_DY = 16 * G, G_R = 12 * G;
+const CIRCLES = [
+  circlePts(NCENTER.x - G_DX, NCENTER.y - G_DY, G_R),
+  circlePts(NCENTER.x + G_DX, NCENTER.y - G_DY, G_R),
+  circlePts(NCENTER.x - G_DX, NCENTER.y + G_DY, G_R),
+  circlePts(NCENTER.x + G_DX, NCENTER.y + G_DY, G_R),
+];
 
 // ── flubber interpolators (built once) ───────────────────────────────────────
 const O = { maxSegmentLength: 3 };
@@ -192,7 +267,11 @@ const f = computed(() => {
 // ── show-once-per-version wiring (identical to the previous LaunchReveal) ─────
 const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const automated = (navigator as unknown as { webdriver?: boolean }).webdriver === true;
-const forced = window.location.search.includes('launch-reveal');
+// main.ts stashes this from the ENTRY url before the router redirect strips the query;
+// fall back to a live read (covers a direct in-app navigation that kept the param).
+const forced =
+  (window as unknown as { __ringLaunchReveal?: boolean }).__ringLaunchReveal === true ||
+  window.location.search.includes('launch-reveal');
 
 const version = __APP_VERSION__;
 const REVEAL_SEEN_KEY = 'ring.revealSeenVersion';
@@ -210,6 +289,7 @@ let done = false;
 function beginExit(): void {
   if (done) return;
   done = true;
+  if (raf) { cancelAnimationFrame(raf); raf = undefined; } // stop the loop at once on a skip
   window.setTimeout(() => { leaving.value = true; }, 0);
   window.setTimeout(() => { visible.value = false; }, 350);
 }
@@ -254,6 +334,33 @@ onUnmounted(() => {
 .launch-reveal.leaving {
   opacity: 0;
   pointer-events: none;
+}
+.rv-skip {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  right: calc(env(safe-area-inset-right, 0px) + 14px);
+  z-index: 2;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--app-text-muted);
+  opacity: 0.55;
+  cursor: pointer;
+  /* Fade in a beat after the montage starts so it's there when wanted, never a
+     distraction up front. */
+  animation: rv-skip-in 0.5s ease 0.9s both;
+}
+.rv-skip:hover,
+.rv-skip:active {
+  opacity: 0.9;
+}
+@keyframes rv-skip-in {
+  from { opacity: 0; }
+  to { opacity: 0.55; }
 }
 .rv-content {
   position: absolute;

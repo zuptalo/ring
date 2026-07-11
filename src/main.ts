@@ -32,6 +32,14 @@ import '@ionic/vue/css/palettes/dark.class.css';
 /* Theme variables */
 import './theme/variables.css';
 
+// Capture ?launch-reveal NOW, before anything else runs. LaunchReveal mounts only after
+// router.isReady() (see the mount block below), by which point the auth-gate redirect has
+// already rewritten the URL and stripped the query — so the component can't read it there.
+// This top-level statement runs while window.location is still the original entry URL, so
+// the manual "replay the intro" hook (visit /?launch-reveal) works on any device.
+(window as unknown as { __ringLaunchReveal?: boolean }).__ringLaunchReveal =
+  window.location.search.includes('launch-reveal');
+
 // scrollAssist is disabled: we keep focused inputs visible by sizing the app
 // to the visual viewport (see useViewportHeight). Leaving scrollAssist on makes
 // it scroll the window on every focus change (e.g. each OTP box as focus
