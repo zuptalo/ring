@@ -27,6 +27,7 @@ import { computeDelta, userFacing, displayVersion, type ReleaseNote } from '@/se
 import WhatsNewSheet from '@/components/WhatsNewSheet.vue';
 import router from '@/router';
 import { callState } from '@/composables/useCall';
+import { useInstallGuard } from '@/composables/useInstallGuard';
 
 /** True while a call is in any live phase (ringing through connected). Applying an
  *  update reloads the page, which tears down the in-memory WebRTC state — so we must
@@ -55,6 +56,8 @@ let started = false;
 let swReg: ServiceWorkerRegistration | null = null;
 let lastCheck = 0;
 const CHECK_THROTTLE_MS = 10_000;
+// One silent install-gate auto-update per tab session (loop guard — see maybePrompt).
+const GATE_UPDATED_KEY = 'ring.installGateAutoUpdated';
 
 /**
  * Ask the service worker to check for a newer deployed build. Safe to call on app
@@ -138,6 +141,11 @@ export function useAppUpdate(): void {
   if (started) return; // singleton: one registration + prompt driver per app
   started = true;
 
+  // A visitor still behind the install gate (a plain browser tab on the public origin)
+  // is blocked from the app and about to install. They must land on the LATEST build,
+  // never a previous deploy's cached shell — see the auto-apply branch in maybePrompt.
+  const { mustInstall } = useInstallGuard();
+
   const { needRefresh, updateServiceWorker } = useRegisterSW({
     onRegisteredSW(_swUrl, reg) {
       if (!reg) return;
@@ -163,6 +171,20 @@ export function useAppUpdate(): void {
   // for someone who never fully closes the app — it comes back next time they reopen it.
   async function maybePrompt(): Promise<void> {
     if (!needRefresh.value || prompting) return;
+    // Install-gate visitor: don't offer a card they'd have to tap — a browser-gated
+    // visitor must never install a stale cached build. Silently pull the waiting update
+    // (skipWaiting + reload) so the guide they read and the shell they install are the
+    // latest. sessionStorage caps it to one auto-apply per tab: if an update somehow
+    // fails to take, we stop rather than reload-loop. No call/session to protect here.
+    if (mustInstall.value) {
+      let already = false;
+      try { already = sessionStorage.getItem(GATE_UPDATED_KEY) === '1'; } catch { /* ignore */ }
+      if (already) return;
+      try { sessionStorage.setItem(GATE_UPDATED_KEY, '1'); } catch { /* ignore */ }
+      prompting = true;
+      await applyUpdate(updateServiceWorker);
+      return;
+    }
     // Defer entirely while a call is live: a stray tap on the update banner mid-ring
     // would reload the page and kill the call. The watch on callState below re-fires
     // this the moment the call ends, and every foreground re-checks too, so the
@@ -227,6 +249,11 @@ export function useAppUpdate(): void {
   // Fire when a new worker first appears; immediate covers an update that was
   // already waiting when the app mounted.
   watch(needRefresh, () => void maybePrompt(), { immediate: true });
+
+  // While the install gate is up, actively check for a newer build so the auto-apply
+  // in maybePrompt has something to pull — a gated visitor has no in-app path to the
+  // latest, and registerSW's one-shot open check could predate a just-shipped deploy.
+  watch(mustInstall, (must) => { if (must) checkForUpdate(true); }, { immediate: true });
 
   // A pending update deferred during a call (maybePrompt bails while isInCall) should
   // resurface the instant the call settles, not only on the next foreground.
