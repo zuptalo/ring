@@ -1449,4 +1449,39 @@ const citation = computed(() => {
 :root:not(.ion-palette-dark) .armada .ar-pips i { background: rgba(16, 120, 90, 0.3); }
 :root:not(.ion-palette-dark) .armada .ar-log-row,
 :root:not(.ion-palette-dark) .armada .ar-log-empty { color: rgba(16, 40, 28, 0.72); }
+
+/* The end-of-war result ceremony is authored dark (see .ar-result* above); like the
+   board, flip it to the bright naval-chart palette in light mode. Without these it
+   stayed a dark card on a light device, and its two OUTLINE buttons — .ar-btn uses
+   --g-text (near-black in light) on --g-border-accent — became near-black text on a
+   dark card, i.e. invisible. A light card restores their contrast. */
+:root:not(.ion-palette-dark) .armada .ar-result { background: rgba(16, 40, 28, 0.4); }
+:root:not(.ion-palette-dark) .armada .ar-result-card {
+  background: linear-gradient(180deg, #ffffff, #eef3f0);
+  border-color: rgba(197, 56, 74, 0.28);
+  box-shadow: 0 30px 80px rgba(16, 40, 28, 0.28);
+}
+:root:not(.ion-palette-dark) .armada .ar-result-card.won { border-color: rgba(184, 134, 11, 0.4); }
+:root:not(.ion-palette-dark) .armada .ar-eyebrow { color: rgba(10, 125, 89, 0.8); }
+:root:not(.ion-palette-dark) .armada .ar-verdict { color: #c5384a; }
+:root:not(.ion-palette-dark) .armada .ar-verdict.won { color: #b8860b; }
+:root:not(.ion-palette-dark) .armada .ar-rank { color: #c5384a; }
+:root:not(.ion-palette-dark) .armada .ar-rank.won { color: #b8860b; }
+:root:not(.ion-palette-dark) .armada .ar-citation { color: rgba(16, 40, 28, 0.7); }
+:root:not(.ion-palette-dark) .armada .ar-stats {
+  background: rgba(16, 40, 28, 0.04);
+  border-color: rgba(16, 40, 28, 0.08);
+}
+:root:not(.ion-palette-dark) .armada .ar-stat b { color: rgba(16, 40, 28, 0.92); }
+:root:not(.ion-palette-dark) .armada .ar-stat b.acc,
+:root:not(.ion-palette-dark) .armada .ar-stat b.good { color: #0a7d59; }
+:root:not(.ion-palette-dark) .armada .ar-stat b.bad { color: #c5384a; }
+:root:not(.ion-palette-dark) .armada .ar-stat span { color: rgba(16, 40, 28, 0.5); }
+/* Give the two outline buttons a readable emerald tint on the light card (the shared
+   --g-surface wash is nearly white on white). The filled "New battle" is unaffected. */
+:root:not(.ion-palette-dark) .armada .ar-result-btns .ar-btn:not(.primary) {
+  background: rgba(16, 120, 90, 0.08);
+  border-color: rgba(16, 120, 90, 0.4);
+  color: #0a5f45;
+}
 </style>
