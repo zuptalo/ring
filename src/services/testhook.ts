@@ -221,6 +221,7 @@ import {
   callStats,
   videoTransceiverCount,
   inboundVideoFrames,
+  oneToOneQualityDiag,
   acceptAndHold,
   swapCalls,
   endActive,
@@ -1552,6 +1553,10 @@ export function installTestHook(): void {
     /** Call introspection for assertions. */
     callState: () => callState.value,
     callMeta: () => callMeta.value,
+    /** 1:1 adaptive quality: current tier / floor-pause / peer ceiling (spec 2025). */
+    callQuality: () => oneToOneQualityDiag(),
+    /** The local camera track's actual settings (capture resolution assertions, spec 2025). */
+    localVideoSettings: () => localStream.value?.getVideoTracks()[0]?.getSettings() ?? null,
     stats: () => callStats.value,
     remoteTracks: () =>
       (remoteStream.value?.getTracks().length ?? 0) +

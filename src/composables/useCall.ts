@@ -739,20 +739,32 @@ async function toast(message: string): Promise<void> {
   await appToast({ message, duration: 3500 });
 }
 
+/** Camera constraints for every in-call getUserMedia (initial capture, camera flip, and
+ *  the screen-share/hold restores — one helper so they can't drift apart, spec 2025).
+ *
+ *  iOS: DO NOT impose a resolution/orientation. On the A11/iOS-16.7 iPhone 8, naming any
+ *  width/height makes WebKit start at the requested orientation, then flip to the
+ *  perpendicular one and MUTE the track in the same instant — permanently (≈1fps, frozen
+ *  self-view, black tile to the peer). It always flips AWAY from whatever we ask, so there
+ *  is no "right" resolution to request; the only escape is to impose none and let WebKit
+ *  open the sensor in its native format (which is also why iOS is NOT stuck at VGA). We
+ *  still pin a frameRate ideal (cheap, doesn't drive the orientation flip).
+ *
+ *  Everywhere else: ask for 1280×720 `ideal` (spec 2025 FR-003). Chromium's unconstrained
+ *  default is 640×480 — the single biggest reason Ring video read soft next to native
+ *  apps on Android/desktop. `ideal` (never `exact`) so cameras without 720p still open. */
+function videoConstraints(facing: 'user' | 'environment' = 'user'): MediaTrackConstraints {
+  const base: MediaTrackConstraints = { facingMode: { ideal: facing }, frameRate: { ideal: 30 } };
+  if (isIOS()) return base;
+  return { ...base, width: { ideal: 1280 }, height: { ideal: 720 } };
+}
+
 function gumConstraints(kind: CallKind): MediaStreamConstraints {
   // Echo cancellation / noise suppression / AGC matter especially on loudspeaker
   // (the default for video calls), where open-air feedback would otherwise howl.
   return {
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    // Ask for the front camera but DO NOT impose a resolution/orientation. On the A11/iOS-16.7
-    // iPhone 8, naming any width/height makes WebKit start at the requested orientation, then flip to
-    // the perpendicular one and MUTE the track in the same instant — permanently (≈1fps, frozen
-    // self-view, black tile to the peer). It always flips AWAY from whatever we ask, so there is no
-    // "right" resolution to request; the only escape is to impose none and let WebKit open the sensor
-    // in its native format with nothing to reconfigure away from. We still pin a frameRate ideal (cheap,
-    // doesn't drive the orientation flip) and rely on the per-tier bitrate cap (not resolution) to keep
-    // the encoder sane. Newer phones already coped with an explicit size, so this only helps the iPhone 8.
-    video: kind === 'video' ? { facingMode: { ideal: 'user' }, frameRate: { ideal: 30 } } : false,
+    video: kind === 'video' ? videoConstraints() : false,
   };
 }
 
@@ -987,8 +999,10 @@ async function pollStats(): Promise<void> {
       if (s.type === 'remote-inbound-rtp' && typeof s.roundTripTime === 'number') rtt = s.roundTripTime;
     });
     // 1:1 adaptive outgoing quality (spec 0004 US4): the group path adapts per-leg inside
-    // MeshSession; the 1:1 PC adapts here off the same sample.
-    if (pc) await adaptOneToOne(report);
+    // MeshSession; the 1:1 PC adapts here off the same sample — every SECOND 1s tick, the
+    // ~2s cadence the controller's streak constants were tuned for (spec 2025 FR-007).
+    adaptTick += 1;
+    if (pc && adaptTick % 2 === 0) await adaptOneToOne(report);
   } catch {
     return;
   }
@@ -1159,7 +1173,9 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   hasMultipleCameras.value = false;
   videoQuality.value = 'auto';
   lessDataCalls = false;
-  oneToOneQc = initialController(); // next call starts low again
+  oneToOneQc = initialController('high'); // next 1:1 call starts sharp again (spec 2025)
+  oneToOneVideoSuspended = false; // the paused-by-adaptation flag never outlives its call
+  adaptTick = 0;
   // spec 0007: reset 1:1 connection-health state so the next call starts clean.
   oneToOneDownlink = 'hd';
   oneToOneHealthSeq = 0;
@@ -2122,6 +2138,7 @@ async function yieldToMutualCall(frame: Extract<CallFrame, { t: 'call-offer' }>,
   }
   localStream.value = null;
   pendingIce.length = 0;
+  oneToOneVideoSuspended = false; // the abandoned attempt's PC is gone; flag dies with it
   const reuse = mode === 'auto-accept' && media != null;
   if (!reuse && media) {
     void Promise.resolve(media)
@@ -2725,15 +2742,26 @@ function videoSender(): RTCRtpSender | null {
 }
 
 /* ---- outgoing-video quality (adaptive, spec 0004 US4) ----
- * Both 1:1 and group video START LOW and adapt: each connection runs the pure controller in
- * services/call/quality (AIMD over getStats — climb only with headroom, back off on local or
- * remote-reported congestion). The manual quality pin + "use less data" are an UPPER-BOUND
- * clamp (the controller may still drop below to keep the call alive). Group adaptation is
- * per-receiver inside MeshSession; 1:1 runs here against the single PC's video sender. */
+ * Each connection runs the pure controller in services/call/quality (AIMD over getStats —
+ * climb on health, back off on genuine local or remote-reported congestion). 1:1 starts
+ * HIGH (one cheap encode, spec 2025); mesh legs start MEDIUM (N parallel encoders). The
+ * manual quality pin + "use less data" are an UPPER-BOUND clamp (the controller may still
+ * drop below to keep the call alive). Group adaptation is per-receiver inside MeshSession;
+ * 1:1 runs here against the single PC's video sender. */
 let lessDataCalls = false;
 
-// 1:1 adaptive state, sampled in pollStats; reset per call.
-let oneToOneQc: ControllerState = initialController();
+// 1:1 adaptive state, sampled in pollStats; reset per call. Starts HIGH (spec 2025
+// FR-001): a single encode is cheap and the first sample lands within ~2s to correct a
+// genuinely bad link — starting sharp is the point (mesh legs keep the medium start).
+let oneToOneQc: ControllerState = initialController('high');
+// Spec 2025 FR-005: set when ADAPTATION detached the video track at tier 'off' (a real
+// pause — a 1 bps cap kept the encoder "bandwidth limited" forever, so video never came
+// back). Only the flag's owner re-attaches, so this never fights the user's camera
+// toggle or hold/resume, which manage tracks through their own paths.
+let oneToOneVideoSuspended = false;
+// Spec 2025 FR-007: pollStats ticks every 1s for the byte counters/warning/ⓘ, but the
+// controller's streak constants were designed for ~2s samples — adapt every SECOND tick.
+let adaptTick = 0;
 
 // 1:1 connection-health (spec 0007 US2). We periodically tell the peer the max quality we want from
 // THEM (`requestedTier`, from our downlink + manual pin + view size), and apply the peer's report to
@@ -2768,6 +2796,24 @@ function qualityClamp(): Tier {
  *  every field, and there may be no sender yet on an audio call. */
 async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise<void> {
   if (!sender) return;
+  // Tier 'off' is a REAL pause (spec 2025 FR-005): detach the track so nothing is encoded.
+  // The old 1 bps cap left a zombie encode whose own "bandwidth limited" reading kept the
+  // controller congested forever — video that dipped once never came back. With the track
+  // detached, samples read healthy and the ladder climbs back out on its own.
+  if (tier === 'off') {
+    if (!oneToOneVideoSuspended && sender.track) {
+      oneToOneVideoSuspended = true;
+      await sender.replaceTrack(null).catch(() => {});
+    }
+    return;
+  }
+  // Leaving the floor: re-attach ONLY what adaptation itself detached (never a track the
+  // user's camera toggle or a hold removed — those paths own their tracks).
+  if (oneToOneVideoSuspended) {
+    oneToOneVideoSuspended = false;
+    const v = localStream.value?.getVideoTracks()[0];
+    if (v && v.readyState === 'live') await sender.replaceTrack(v).catch(() => {});
+  }
   // iOS/WebKit: tier by BITRATE ONLY (`avoidEncoderScaling`) — never via scaleResolutionDownBy/
   // maxFramerate, which stall the old iPhone H.264 encoder (spec 0005). maxBitrate alone is honored
   // and safe (the iPhone-8 black-video bug was the camera-mute/​re-acquire, not the bitrate cap), so
@@ -2831,7 +2877,12 @@ async function reportHealthToPeer(report: RTCStatsReport, now: number): Promise<
   inPrevFramesDropped = framesDropped;
   inPrevFramesReceived = framesReceived;
   const fractionLost = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
-  oneToOneDownlink = downlinkClassFrom({ fractionLost, framesDropped: dDrop, framesReceived: dFrames }, oneToOneDownlink);
+  // packets: the window's evidence size — a near-empty interval must not move the class
+  // (spec 2025 FR-006).
+  oneToOneDownlink = downlinkClassFrom(
+    { fractionLost, framesDropped: dDrop, framesReceived: dFrames, packets: dRecv + dLost },
+    oneToOneDownlink,
+  );
   // requestedTier = min(downlink, manual pin/data-saver, view size). The 1:1 remote is shown
   // (near-)fullscreen, so the tile target is HD here; US4 refines this with the real rendered size.
   const requested = requestedTierOf(oneToOneDownlink, qualityClamp(), 'hd');
@@ -2885,6 +2936,18 @@ function sendHealthNow(): void {
  *  No-op off a group call. */
 export function setGroupTileSize(px: number): void {
   groupSession?.setAllTileTargets(tileTarget(px));
+}
+
+/** Test-only introspection (spec 2025): the 1:1 controller's current tier, whether
+ *  adaptation has the video paused (the recoverable floor), and the peer-requested
+ *  ceiling — so probes/e2e can watch the climb and the floor recovery. */
+export function oneToOneQualityDiag(): { tier: Tier; suspended: boolean; requestedByPeer?: Tier; downlink: Tier } {
+  return {
+    tier: oneToOneQc.tier,
+    suspended: oneToOneVideoSuspended,
+    requestedByPeer: oneToOnePeerReq?.tier,
+    downlink: oneToOneDownlink,
+  };
 }
 
 /** Change the outgoing-video quality tier and apply it immediately. */
@@ -2972,7 +3035,7 @@ export async function switchCamera(): Promise<void> {
   const next = cameraFacing.value === 'user' ? 'environment' : 'user';
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: next } } });
+    stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(next) });
   } catch {
     await toast('Could not switch camera');
     return;
@@ -3064,7 +3127,7 @@ async function stopScreenShare(): Promise<void> {
   // Otherwise restore the camera (a fresh capture; the old one was stopped on share).
   let camTrack: MediaStreamTrack | null = null;
   try {
-    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+    const s = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(cameraFacing.value) });
     camTrack = s.getVideoTracks()[0] ?? null;
   } catch {
     camTrack = null;
@@ -3084,7 +3147,7 @@ async function addLocalVideo(renegotiateAfter: boolean): Promise<boolean> {
   if (!pc || !meta) return false;
   let s: MediaStream;
   try {
-    s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+    s = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(cameraFacing.value) });
   } catch {
     await toast('Camera unavailable');
     return false;
@@ -3160,7 +3223,7 @@ export async function toggleVideoMode(): Promise<void> {
   // Group: turn on my own video immediately (each peer renegotiates to receive it).
   let s: MediaStream;
   try {
-    s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacing.value } } });
+    s = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(cameraFacing.value) });
   } catch {
     await toast('Camera unavailable');
     return;
