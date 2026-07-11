@@ -1,4 +1,4 @@
-# Feature Specification: Incoming Call Notifications — Caller Identity, Badge, and Missed-Call Trace
+# Feature Specification: Incoming Call & Friend-Request Notifications — Identity, Badge, and Missed-Call Trace
 
 **Feature Branch**: `feat/1040-incoming-call-notifications`
 
@@ -11,7 +11,7 @@
      are derived from the directory number (0001+ planned, 1001+ ad-hoc,
      2001+ hotfix), so do not restate them by hand. -->
 
-**Input**: User description: "Incoming call notification improvements. (1) When a call comes in while the app is closed or backgrounded, the app icon badge count should increase by one because the incoming call is new activity — but only once for the first call notification of that call; subsequent/repeated notifications for the same ringing call must not increment the badge again. (2) If the user opens the app (by tapping the call notification or opening it directly), further push notifications for that call should stop, and the call's badge increment should be removed so only unread message counts remain on the app badge. (3) When a call is missed — either the user never opened the app, or opened it but chose not to answer — it must be logged as a missed call with a visible trace: in the 1:1 chat with the caller for direct calls, in the group chat the call was started from for group calls, and in the Calls tab for group ad-hoc calls. The point is there must always be a trace of missed calls. (4) The OS notification for an incoming call currently shows no detail about who is calling; it should show caller identity, e.g. 'Kamran is calling you' with a video emoji or audio emoji depending on call type, so the user knows what's happening directly from the notification."
+**Input**: User description: "Incoming call notification improvements. (1) When a call comes in while the app is closed or backgrounded, the app icon badge count should increase by one because the incoming call is new activity — but only once for the first call notification of that call; subsequent/repeated notifications for the same ringing call must not increment the badge again. (2) If the user opens the app (by tapping the call notification or opening it directly), further push notifications for that call should stop, and the call's badge increment should be removed so only unread message counts remain on the app badge. (3) When a call is missed — either the user never opened the app, or opened it but chose not to answer — it must be logged as a missed call with a visible trace: in the 1:1 chat with the caller for direct calls, in the group chat the call was started from for group calls, and in the Calls tab for group ad-hoc calls. The point is there must always be a trace of missed calls. (4) The OS notification for an incoming call currently shows no detail about who is calling; it should show caller identity, e.g. 'Kamran is calling you' with a video emoji or audio emoji depending on call type, so the user knows what's happening directly from the notification." — Follow-up in the same session: "also when someone accepts my friend request, instead of 'X has accepted your friend request' in a web push notification, I get that a friend request has come in! let's address this as part of the same fix as well."
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -96,7 +96,43 @@ for an ad-hoc group call.
 
 ---
 
-### User Story 3 - A ringing call badges the app icon once (Priority: P3)
+### User Story 3 - Friend-request outcomes are announced truthfully (Priority: P3)
+
+Sara sent Kamran a friend request yesterday. Today Kamran accepts it while
+Sara's app is closed. Sara's notification reads "Kamran accepted your friend
+request" — not today's misleading "New friend request — Tap to review", which
+tells her the opposite of what happened (that someone new is asking *her*).
+
+**Why this priority**: This is a plain correctness bug in an existing
+notification: the copy misstates the event. It confuses users into looking for
+a pending request that does not exist, and it hides the good news that a
+connection was established.
+
+**Independent Test**: From account A (app closed on A's device), send a friend
+request to account B; accept it on B. Verify A's notification names B and says
+the request was accepted. Repeat for decline.
+
+**Acceptance Scenarios**:
+
+1. **Given** the user has an outgoing friend request and their app is closed
+   or backgrounded, **When** the other person accepts it, **Then** the
+   notification says that person accepted the friend request (e.g. "Kamran ·
+   accepted your friend request"), naming them when their public profile is
+   resolvable on-device.
+2. **Given** the same state, **When** the other person declines, **Then** the
+   notification reflects the decline (existing declined copy), never "New
+   friend request".
+3. **Given** the event type cannot be determined (device offline, state
+   cannot be reconciled in time), **Then** a fallback notification MAY be
+   shown to satisfy platform visibility rules, but its copy MUST be neutral
+   about the event type (e.g. contact activity to review) rather than
+   claiming a new incoming request.
+4. **Given** an actual new incoming friend request arrives, **Then** the
+   existing "wants to be friends" notification behavior is unchanged.
+
+---
+
+### User Story 4 - A ringing call badges the app icon once (Priority: P4)
 
 Kamran calls Sara while Ring is closed. Her app icon badge, which read "2" for
 two unread messages, now reads "3" — the ringing call is new activity. The ring
@@ -128,7 +164,7 @@ by exactly 1 over the whole ring.
 
 ---
 
-### User Story 4 - Opening the app clears the ring's notification footprint (Priority: P4)
+### User Story 5 - Opening the app clears the ring's notification footprint (Priority: P5)
 
 Sara hears the ring and opens Ring — by tapping the call notification or just
 launching the app. The in-app incoming-call screen takes over: the OS
@@ -136,7 +172,7 @@ notification for that call is dismissed, no further notifications for that call
 appear, and the badge increment the ringing call added is removed, leaving only
 the unread counts that were already standing.
 
-**Why this priority**: Follow-through on stories 1 and 3 — stale call
+**Why this priority**: Follow-through on stories 1 and 4 — stale call
 notifications and a leftover badge after the app is already handling the call
 read as bugs, but this only matters once those stories exist.
 
@@ -187,6 +223,12 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   behavior; notifications and missed-call traces are unaffected.
 - Repeated ring notifications must keep re-alerting audibly (current behavior)
   even though they no longer re-increment the badge.
+- A friend-request acceptance happens while the device is offline → the
+  outcome is still announced correctly (or at worst neutrally) when the device
+  next reconciles, and only once.
+- The user opens the app and sees the acceptance in-app before any
+  notification is shown → no stale "accepted" notification needs to fire
+  afterwards.
 
 ## Requirements *(mandatory)*
 
@@ -216,7 +258,7 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
 - **FR-006**: A raw internal identifier (user id, room id) MUST never be shown
   as a caller name; unresolvable identity falls back to generic text.
 
-**Badge lifecycle for a ringing call (US3, US4)**
+**Badge lifecycle for a ringing call (US4, US5)**
 
 - **FR-007**: The first notification shown for an incoming call while the app
   is closed or backgrounded MUST increase the app icon badge count by exactly
@@ -230,7 +272,7 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   moment across its lifecycle (ringing → missed-unseen); transitioning from
   "ringing" to "missed, unseen" must not double-count.
 
-**Notification lifecycle on open (US4)**
+**Notification lifecycle on open (US5)**
 
 - **FR-011**: Opening the app while a call is ringing MUST dismiss the OS
   notification for that call and suppress further OS notifications for it
@@ -263,6 +305,27 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   about the same call arrive (e.g. the device later reconnects and also learns
   about the call through normal sync).
 
+**Friend-request outcome notifications (US3)**
+
+- **FR-019**: When another user accepts the user's outgoing friend request,
+  the resulting notification MUST state that the request was accepted, naming
+  the accepter when their public profile is resolvable on-device — never copy
+  implying a new incoming request.
+- **FR-020**: When another user declines the outgoing request, the
+  notification MUST reflect the decline; existing incoming-request ("wants to
+  be friends") notifications are unchanged.
+- **FR-021**: When the event type behind a contact-activity wake cannot be
+  determined in time, any fallback notification shown to satisfy platform
+  visibility rules MUST use copy that is neutral about the event type, not
+  "New friend request".
+- **FR-022**: A given friend-request outcome (accept/decline of a specific
+  request) MUST be announced at most once; later wakes or reconciles must not
+  repeat it.
+- **FR-023**: Names in friend-request notifications MUST continue to be
+  resolved on-device from the public directory profile, exactly as the
+  existing incoming-request notification does; the push payload itself stays
+  content-free.
+
 ### Key Entities
 
 - **Incoming-call notification**: The OS-level alert for a ringing call.
@@ -275,6 +338,9 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
 - **Missed-call record**: The durable trace of an unanswered call (already
   exists as the call-log entry with missed/outcome/seen semantics); this
   feature extends its coverage to calls the app never witnessed live.
+- **Friend-request outcome notification**: The alert announcing what happened
+  to the user's outgoing friend request (accepted/declined). Must always match
+  the actual event, or be neutral when the event is unknown.
 
 ## Success Criteria *(mandatory)*
 
@@ -298,6 +364,10 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
 - **SC-006**: No stale incoming-call notification remains on the lock screen
   more than a ring-window's length after the call ended (answered, cancelled,
   or expired), on platforms that permit notification withdrawal.
+- **SC-007**: 100% of friend-request acceptances that reach a closed app as a
+  push produce an "accepted" notification (named or neutral), and 0% produce
+  "New friend request" copy, verified by end-to-end test of the
+  request→accept flow with the requester's app closed.
 
 ## Assumptions
 
@@ -319,3 +389,7 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
 - Notification-preference settings (mute, badge-only, web-push off) continue
   to gate whether any alert or badge change happens at all; this spec only
   shapes alerts that are already allowed to show.
+- Naming the accepter in a friend-request-outcome notification exposes nothing
+  new: incoming-request notifications already name the requester from their
+  public directory profile, and both parties to a request already know each
+  other's identity.

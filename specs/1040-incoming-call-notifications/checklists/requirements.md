@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Incoming Call Notifications — Caller Identity, Badge, and Missed-Call Trace
+# Specification Quality Checklist: Incoming Call & Friend-Request Notifications — Identity, Badge, and Missed-Call Trace
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-07-12
@@ -37,4 +37,8 @@
   current generic alert, and the existing call-log outcome taxonomy is reused.
   These live in the Assumptions section and in FR-004/FR-005/FR-016; revisit
   during `/speckit-clarify` if any default is wrong.
+- Scope amended same-day at the user's request: User Story 3 + FR-019..023 add
+  truthful friend-request outcome notifications ("X accepted your friend
+  request" instead of the misleading "New friend request" fallback). Checklist
+  re-validated against the amended spec; all items still pass.
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
