@@ -23,6 +23,7 @@ import {
   createCall,
   finishCall,
   markCallMissed,
+  deleteCalls,
   recordGroupCall,
   logCallToChat,
   sendMessage,
@@ -43,8 +44,10 @@ import { MeshSession } from '@/services/call/mesh';
 import { syncState } from '@/composables/useSync';
 import { startLoopTone, stopLoopTone, playTone, cue, type ToneName } from '@/services/sound';
 import type { CallState, CallMeta, CallKind, EndReason } from '@/services/call/types';
+import type { CallSignal } from '@/services/crypto/message';
 import { VIDEO_MAX } from '@/services/call/types';
 import { remainingSlots, canAdd } from '@/services/call/capacity';
+import { glareRole, yieldMode } from '@/services/call/glare';
 import { planInvite } from '@/services/call/invite-plan';
 import { newJoiners } from '@/services/call/join-cue';
 import {
@@ -441,6 +444,32 @@ export function groupCallDiag(): Promise<{
 
 let pendingOffer: { sdp: string; sdpType: RTCSdpType } | null = null;
 const pendingIce: RTCIceCandidateInit[] = [];
+
+/* ---- mutual-call (glare) resolution, spec 1039 ----
+ * startDirectCall runs through several awaits (capture, PC build, offer send) before the
+ * call state leaves 'idle'. A crossing offer from the SAME contact landing inside that
+ * window is a mutual attempt and is resolved by handleOffer (services/call/glare) — which
+ * repurposes the call slot. The in-flight startDirectCall must then stop touching shared
+ * state, or it stamps 'dialing' (tones, navigation) over the call that replaced it and
+ * both sides end up stranded on "Calling…". The token identifies the attempt that still
+ * owns the slot; startDirectCall re-checks it after every await. */
+let outgoingAttemptId: string | null = null;
+// The current outgoing attempt's in-flight camera/mic capture. Kept so a glare yield can
+// hand the ALREADY-CAPTURED stream to the auto-accept path instead of running a second
+// concurrent getUserMedia (a documented WebKit mute trigger, bug 179363).
+let pendingCapture: Promise<MediaStream> | null = null;
+// callIds retired by glare resolution — the crossing offer we ignored (winner side) and
+// our own yielded attempt. The relay retains sealed offers for recovery redelivery
+// (spec 2012), so a late copy of these must be dropped, never rung. Session-scoped,
+// size-capped (a stale entry is only ever a re-drop, never a lost call).
+const glareDroppedCallIds = new Set<string>();
+function rememberGlareDrop(callId: string): void {
+  glareDroppedCallIds.add(callId);
+  if (glareDroppedCallIds.size > 32) {
+    const oldest = glareDroppedCallIds.values().next().value;
+    if (oldest) glareDroppedCallIds.delete(oldest);
+  }
+}
 
 /* ---- connect-milestone instrumentation (spec 2008, dev/test-only) -------------------------
  * Records ephemeral timestamps for the 1:1 connect path so the Playwright harness can assert the
@@ -1085,6 +1114,15 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   stopTimers();
   stopLoopTone();
 
+  // (spec 1039) Retire the outgoing-attempt token so an in-flight startDirectCall stops
+  // mutating shared state, and release an unclaimed in-flight capture (the camera would
+  // otherwise stay live if teardown won the race against getUserMedia resolving).
+  outgoingAttemptId = null;
+  if (pendingCapture) {
+    void pendingCapture.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => {});
+    pendingCapture = null;
+  }
+
   const meta = callMeta.value;
   const wasConnected = callState.value === 'connected';
   // Total bytes moved this call (sent + received), from the last stats sample.
@@ -1291,8 +1329,15 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
     name: contact.name,
     avatar: contact.avatar,
   };
+  // (spec 1039) This attempt owns the call slot until it's answered, torn down, or a
+  // mutual-call resolution yields it. Everything below re-checks after each await.
+  outgoingAttemptId = callId;
+  const attemptAlive = (): boolean =>
+    outgoingAttemptId === callId && callMeta.value?.callId === callId && !callMeta.value?.tornDown;
+
   await createCall({ callId, contactId, direction: 'outgoing', video: kind === 'video' });
   await loadCallPrefs(); // data-saver floor + call-sounds pref, read once for this call
+  if (!attemptAlive()) return; // yielded to a mutual call while we set up (spec 1039)
 
   // Fast-connect (spec 2008): warm the TURN credential cache OFF the critical path before we
   // await getUserMedia, so the fetch overlaps camera/mic capture and `newPeerConnection` finds it
@@ -1303,11 +1348,15 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
   warmTurnConfig();
 
   let stream: MediaStream;
+  const capture = navigator.mediaDevices.getUserMedia(gumConstraints(kind));
+  pendingCapture = capture;
   try {
     markConnect('gumStart');
-    stream = await navigator.mediaDevices.getUserMedia(gumConstraints(kind));
+    stream = await capture;
     markConnect('gumResolved');
   } catch (err) {
+    if (pendingCapture === capture) pendingCapture = null;
+    if (!attemptAlive()) return; // slot already repurposed; nothing of ours to tear down
     // The call can't start without local media. Tell the caller WHY (blocked permission,
     // no device, in use) rather than the bare "Couldn't connect the call" — the usual
     // Android cause is the app's mic (or camera) permission being off at the OS level. Pass
@@ -1316,10 +1365,29 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
     await teardown('failed', { silent: true });
     return;
   }
+  if (!attemptAlive()) {
+    // The slot was repurposed while we were capturing. A glare yield CLAIMS the capture
+    // (sets pendingCapture to null / its own) to reuse it for the auto-accept; if it's
+    // still ours, nothing claimed it — release the camera/mic instead of leaking it live.
+    if (pendingCapture === capture) {
+      pendingCapture = null;
+      stream.getTracks().forEach((t) => t.stop());
+    }
+    return;
+  }
   localStream.value = stream;
 
   try {
-    pc = await newPeerConnection();
+    const conn = await newPeerConnection();
+    if (!attemptAlive()) {
+      try {
+        conn.close();
+      } catch {
+        /* already closed */
+      }
+      return;
+    }
+    pc = conn;
     wireIce(pc);
     addLocalTracks(pc, stream);
     const offer = await pc.createOffer();
@@ -1332,12 +1400,14 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
       sdpType: offer.type,
     });
     markConnect('offerSent');
+    if (!attemptAlive()) return; // our offer may still cross; the winner ignores it (glare)
     if (!sent) {
       console.warn('[call] offer not sent (no session or offline)');
       await teardown('unavailable');
       return;
     }
   } catch (e) {
+    if (!attemptAlive()) return;
     console.warn('[call] startDirectCall failed', e);
     await teardown('failed');
     return;
@@ -1823,6 +1893,11 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
   // ringing for this same callId, don't raise a second incoming screen.
   if (callState.value === 'incoming' && callMeta.value?.callId === frame.callId) return;
 
+  // (spec 1039) An offer already retired by mutual-call resolution (the crossing offer we
+  // ignored as winner, or our own yielded attempt) may be redelivered late by the same
+  // retention path — drop it; it must never raise a ring.
+  if (glareDroppedCallIds.has(frame.callId)) return;
+
   // Renegotiation of an in-progress call (e.g. the peer's ICE restart): same
   // call + peer and we're already connected/connecting → apply as offer/answer,
   // don't raise a new incoming call.
@@ -1875,23 +1950,40 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
     return;
   }
 
-  if (callState.value !== 'idle') {
-    const meta = callMeta.value;
-    const glareWithPeer = meta?.direction === 'outgoing' && meta.peerUserId === from;
-    if (glareWithPeer) {
-      const self = getSelfUserId() ?? '';
-      if (self < from) return; // we win, keep our outgoing offer, ignore theirs
-      await teardown('answered-elsewhere', { silent: true }); // we yield, accept theirs
-    } else if (canRaiseSecondIncoming()) {
+  // Mutual call — glare (spec 1039): they called us while we have an UNANSWERED outgoing
+  // attempt at them. Detected via callMeta, which startDirectCall sets synchronously — NOT
+  // via callState, which only leaves 'idle' after capture + PC build + offer send. Mutual
+  // taps usually land inside that setup window, and missing them here is what used to
+  // clobber the slot and strand BOTH sides on "Calling…". Runs before the per-chat-mute
+  // gate below: a mutual attempt is not an unsolicited ring — this user just placed a
+  // call at that very contact.
+  const unanswered =
+    callState.value === 'idle' || callState.value === 'dialing' || callState.value === 'remote-ringing';
+  const role = glareRole(getSelfUserId() ?? '', from, callMeta.value, unanswered);
+  if (role === 'win') {
+    // Our attempt survives (deterministic id tie-break, same on both sides). Their
+    // crossing offer dies here — they auto-answer OURS instead.
+    rememberGlareDrop(frame.callId);
+    return;
+  }
+  if (role === 'yield') {
+    await yieldToMutualCall(frame, from);
+    return;
+  }
+
+  // Busy gate: `callMeta` (not just callState) so an offer from a THIRD party landing in
+  // an outgoing call's setup window gets the normal busy/call-waiting treatment instead of
+  // falling through and corrupting the call being placed (spec 1039 FR-006).
+  if (callState.value !== 'idle' || callMeta.value) {
+    if (canRaiseSecondIncoming()) {
       // Call waiting (spec 0005): a held slot is free AND no one is already waiting → offer
       // Accept & hold instead of busy. The waiting-slot check (spec 2009) stops a later caller
       // from stealing the place of one already in the prompt.
       await presentSecondDirect(frame, from);
       return;
-    } else {
-      void sendControl('call-busy', from, frame.callId);
-      return;
     }
+    void sendControl('call-busy', from, frame.callId);
+    return;
   }
 
   let contact = await getContact(from);
@@ -1919,9 +2011,22 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
     return;
   }
 
+  await ringForOffer(frame.callId, from, contact, chatId, signal);
+}
+
+/** Stage an incoming 1:1 offer into the (free) call slot and ring for it. Shared by the
+ *  normal incoming path above and the mismatched-kind mutual-call fallback (spec 1039),
+ *  which must ring WITHOUT re-running the per-chat-mute gate. */
+async function ringForOffer(
+  callId: string,
+  from: string,
+  contact: { name: string; avatar: string },
+  chatId: string,
+  signal: CallSignal,
+): Promise<void> {
   const kind: CallKind = signal.kind ?? 'audio';
   callMeta.value = {
-    callId: frame.callId,
+    callId,
     isGroup: false,
     kind,
     direction: 'incoming',
@@ -1933,8 +2038,8 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
     name: contact.name,
     avatar: contact.avatar,
   };
-  pendingOffer = { sdp: signal.sdp, sdpType: signal.sdpType ?? 'offer' };
-  await createCall({ callId: frame.callId, contactId: from, direction: 'incoming', video: kind === 'video' });
+  pendingOffer = { sdp: signal.sdp!, sdpType: signal.sdpType ?? 'offer' };
+  await createCall({ callId, contactId: from, direction: 'incoming', video: kind === 'video' });
 
   // Fast-connect (spec 2008): warm the TURN cache NOW, during the ring, so accepting doesn't pay a
   // cold fetch. Network/SDP prep only — NO camera/mic capture before the user accepts (Principle
@@ -1947,23 +2052,132 @@ async function handleOffer(frame: Extract<CallFrame, { t: 'call-offer' }>): Prom
   setState('incoming');
   presentIncoming(); // full-screen if the app is being opened for this call; else the banner
   startLoopTone('beacon', 2000);
-  void sendControl('call-ringing', from, frame.callId);
+  void sendControl('call-ringing', from, callId);
 
   clearRingTimeout();
   noAnswerTimer = setTimeout(() => {
-    void sendControl('call-end', from, frame.callId, { reason: 'timeout' });
+    void sendControl('call-end', from, callId, { reason: 'timeout' });
     void teardown('timeout');
   }, RING_TIMEOUT_MS);
 }
 
-/** Accept the current incoming call (branches to the group path for a group ring). */
+/** Mutual-call resolution, yielding side (spec 1039): we placed a call at `from` and their
+ *  offer crossed ours — the id tie-break says THEIR attempt survives. Abandon ours
+ *  surgically (no teardown: the slot is reused in the same breath) and join theirs —
+ *  automatically when the kinds match (both people already asked for exactly this call),
+ *  via a normal ring when they differ (never auto-enable media this user didn't ask for,
+ *  FR-004). */
+async function yieldToMutualCall(frame: Extract<CallFrame, { t: 'call-offer' }>, from: string): Promise<void> {
+  const mine = callMeta.value;
+  if (!mine || mine.tornDown) return;
+
+  // Resolve + open the surviving offer FIRST — its kind picks auto-accept vs ring, and if
+  // it can't be opened we keep our own attempt (losing both calls would be worse).
+  let contact = await getContact(from);
+  if (!contact) {
+    await addContactWithId(from, '');
+    contact = await getContact(from);
+  }
+  if (!contact) return;
+  const chatId = await sessionChatIdForPeer(contact); // may be a hidden 1:1 (knock-knock, spec 1027)
+  const signal = await openSealedSignal(chatId, frame.ciphertext);
+  if (!signal || signal.type !== 'offer' || !signal.sdp) return;
+  // The slot may have moved on while we awaited (our attempt answered, torn down, or an
+  // earlier copy of this offer already resolved the glare) — re-check before acting on it.
+  if (callMeta.value !== mine || mine.tornDown) return;
+  const offerKind: CallKind = signal.kind ?? 'audio';
+  const mode = yieldMode(mine.kind, offerKind);
+
+  // Abandon OUR attempt. No teardown(): it would stop shared media, log the call, cue
+  // "ended", and settle the state we're about to reuse. Surgical steps instead:
+  const abandonedId = mine.callId;
+  outgoingAttemptId = null; // the in-flight startDirectCall stops at its next token check
+  mine.tornDown = true; // and any racing teardown of the old attempt becomes a no-op
+  rememberGlareDrop(abandonedId); // a late redelivery of our own offer must not ring
+  clearDialTimer();
+  clearRingTimeout();
+  stopLoopTone();
+  // Withdraw our offer so the relay drops its retained copy and any of the winner's other
+  // devices stop ringing for it (same control a dial-timeout give-up sends).
+  void sendControl('call-cancel', from, abandonedId, { reason: 'answered-elsewhere' });
+  // FR-007: the abandoned attempt must not surface as a separate unanswered call — the
+  // encounter is logged once, by the surviving call's incoming record below.
+  void deleteCalls([abandonedId]);
+
+  // Claim our attempt's media (captured or still capturing) before dismantling: same-kind
+  // auto-accept reuses it — a second concurrent getUserMedia is a WebKit mute trigger
+  // (bug 179363) — and on a mismatch it must be released, not leaked live.
+  const media: Promise<MediaStream> | MediaStream | null = pendingCapture ?? localStream.value;
+  pendingCapture = null;
+  if (pc) {
+    pc.onicecandidate = null;
+    pc.ontrack = null;
+    pc.onconnectionstatechange = null;
+    try {
+      pc.close();
+    } catch {
+      /* already closed */
+    }
+    pc = null;
+  }
+  localStream.value = null;
+  pendingIce.length = 0;
+  const reuse = mode === 'auto-accept' && media != null;
+  if (!reuse && media) {
+    void Promise.resolve(media)
+      .then((s) => s.getTracks().forEach((t) => t.stop()))
+      .catch(() => {});
+  }
+
+  if (mode === 'ring') {
+    // Kinds differ: present the surviving call as a normal incoming ring (the established
+    // consent surface). Deliberately NOT re-running the per-chat-mute gate: a mutual
+    // attempt is solicited — this user just called that contact themselves.
+    await ringForOffer(frame.callId, from, contact, chatId, signal);
+    return;
+  }
+
+  // Same kind: connect without ringing. The state flows dialing → connecting → connected,
+  // so the caller's "calling" cue transitions straight into the call (FR-008) — the
+  // incoming ringtone never plays and no incoming UI is raised.
+  callMeta.value = {
+    callId: frame.callId,
+    isGroup: false,
+    kind: offerKind,
+    direction: 'incoming',
+    peerUserId: from,
+    chatId,
+    roster: [from],
+    name: contact.name,
+    avatar: contact.avatar,
+  };
+  pendingOffer = { sdp: signal.sdp, sdpType: signal.sdpType ?? 'offer' };
+  await createCall({ callId: frame.callId, contactId: from, direction: 'incoming', video: offerKind === 'video' });
+  resetConnectMarks();
+  markConnect('ringStart');
+  markConnect('turnWarmStart');
+  warmTurnConfig();
+  await acceptIncoming({ media: media ?? undefined, auto: true });
+}
+
+/** Accept the current incoming call (branches to the group path for a group ring).
+ *  Parameterless on purpose — it's bound straight to @click handlers. */
 export async function acceptCall(): Promise<void> {
+  return acceptIncoming();
+}
+
+/** The accept flow. `opts` is the mutual-call auto-accept path (spec 1039): `auto` joins
+ *  without the slot ever having rung (callState never reached 'incoming'), and `media`
+ *  hands over the yielded attempt's already-captured stream so no second concurrent
+ *  getUserMedia runs (WebKit mute hazard, bug 179363). */
+async function acceptIncoming(opts?: { media?: Promise<MediaStream> | MediaStream; auto?: boolean }): Promise<void> {
   if (callMeta.value?.isGroup) {
     await acceptGroupCall();
     return;
   }
   const meta = callMeta.value;
-  if (callState.value !== 'incoming' || !meta?.chatId || !meta.peerUserId || !pendingOffer) return;
+  const stateOk = callState.value === 'incoming' || opts?.auto === true;
+  if (!stateOk || !meta?.chatId || !meta.peerUserId || !pendingOffer) return;
   clearRingTimeout();
   stopLoopTone();
   await loadCallPrefs(); // data-saver floor + call-sounds pref, read once for this call
@@ -1974,12 +2188,13 @@ export async function acceptCall(): Promise<void> {
   // ICE doesn't need the captured stream — so overlapping them removes the serial gap. TURN was
   // already warmed during the ring, so newPeerConnection doesn't pay a cold fetch here.
   markConnect('gumStart');
-  const gumPromise = navigator.mediaDevices
-    .getUserMedia(gumConstraints(meta.kind))
-    .then((s) => {
-      markConnect('gumResolved');
-      return s;
-    });
+  const gumPromise = (opts?.media != null
+    ? Promise.resolve(opts.media)
+    : navigator.mediaDevices.getUserMedia(gumConstraints(meta.kind))
+  ).then((s) => {
+    markConnect('gumResolved');
+    return s;
+  });
   gumPromise.catch(() => {}); // tame the unhandled-rejection while the PC sets up in parallel
 
   try {
