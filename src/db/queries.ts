@@ -6178,6 +6178,13 @@ export interface PendingInvite {
   code: string;
   label: string; // your note for who you sent it to (replaced by their profile on join)
   createdAt: number;
+  // Set once the server reports the code redeemed. The row then drops out of the
+  // "Invited" (waiting) list immediately — the invitee has an account — but the
+  // record itself lingers (keeping your label) until the invitee FINISHES their
+  // profile and the one-time "X joined Ring" announcement fires, at which point it
+  // is removed for good. Kept out of listPendingInvites' semantics so the sweep gate
+  // (useSync) still runs the announcement; only the UI + test hook hide joined ones.
+  joined?: boolean;
 }
 
 /** Record a sent invite code with your label (shows under Contacts → Invited). */
@@ -6199,6 +6206,15 @@ export async function listPendingInvites(): Promise<PendingInvite[]> {
 
 export async function removePendingInvite(code: string): Promise<void> {
   await remove('settings', `${PENDING_INVITE_PREFIX}${code}`);
+}
+
+/** Mark a sent invite as redeemed: it leaves the "Invited" waiting list right away
+ *  (the invitee has registered), but the record survives — keeping your label — so
+ *  the later "X joined Ring" announcement can still use it. No-op if already gone. */
+export async function markInviteJoined(code: string): Promise<void> {
+  const pending = await getPendingInvite(code);
+  if (!pending || pending.joined) return;
+  await setSetting<PendingInvite>(`${PENDING_INVITE_PREFIX}${code}`, { ...pending, joined: true });
 }
 
 /** Cancel a sent invite for real: delete it server-side so it can no longer be

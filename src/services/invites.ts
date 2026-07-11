@@ -18,6 +18,7 @@ import {
   acceptRequest,
   markAutoAccept,
   removePendingInvite,
+  markInviteJoined,
   isLinkedOrRequested,
   getPendingInvite,
   isInviteHandled,
@@ -86,16 +87,28 @@ async function processSentInvitations(): Promise<void> {
     await markAutoAccept(inv.usedBy); // auto-accept their request if/when it arrives
     await acceptRequest(inv.usedBy); // accept now if their card already arrived (else no-op)
 
+    // The code is genuinely redeemed the instant the server reports `usedBy` (set
+    // when the invitee picks a username). Drop it from the "Invited" waiting list NOW,
+    // decoupled from whether they've finished their profile — previously the row was
+    // held until a published avatar, so an invitee who registered but never set a
+    // photo left it stuck as "Waiting to join" forever (you had to remove it by hand).
+    // markInviteJoined only hides it from the list; the record (and your label)
+    // survive so the announcement below can still name them by your label.
+    await markInviteJoined(inv.code);
+
+    // Hold the one-time "X joined Ring" announcement until they've actually FINISHED
+    // setting up: a photo is required to finish and is published to the directory on
+    // completion, so a non-empty directory avatar is our "they tapped Start" signal.
     let profile;
     try {
       profile = await fetchDirectoryUser(inv.usedBy);
     } catch {
-      continue; // transient: re-check next sweep
+      continue; // transient: re-check next sweep (already dropped from the list)
     }
     if (!profile?.avatar) continue; // profile not finished yet → don't announce
 
-    const pending = await getPendingInvite(inv.code); // our label, before we clear it
-    await removePendingInvite(inv.code); // the placeholder becomes a real contact
+    const pending = await getPendingInvite(inv.code); // your label survives markInviteJoined
+    await removePendingInvite(inv.code); // fully clean up now that we're announcing
     await markInviteHandled(inv.code); // announce exactly once
 
     // "Mom joined Ring": prefer our label, then their published/synced name. Shown as a
