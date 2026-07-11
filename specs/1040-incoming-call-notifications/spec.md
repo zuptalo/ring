@@ -13,6 +13,16 @@
 
 **Input**: User description: "Incoming call notification improvements. (1) When a call comes in while the app is closed or backgrounded, the app icon badge count should increase by one because the incoming call is new activity — but only once for the first call notification of that call; subsequent/repeated notifications for the same ringing call must not increment the badge again. (2) If the user opens the app (by tapping the call notification or opening it directly), further push notifications for that call should stop, and the call's badge increment should be removed so only unread message counts remain on the app badge. (3) When a call is missed — either the user never opened the app, or opened it but chose not to answer — it must be logged as a missed call with a visible trace: in the 1:1 chat with the caller for direct calls, in the group chat the call was started from for group calls, and in the Calls tab for group ad-hoc calls. The point is there must always be a trace of missed calls. (4) The OS notification for an incoming call currently shows no detail about who is calling; it should show caller identity, e.g. 'Kamran is calling you' with a video emoji or audio emoji depending on call type, so the user knows what's happening directly from the notification." — Follow-up in the same session: "also when someone accepts my friend request, instead of 'X has accepted your friend request' in a web push notification, I get that a friend request has come in! let's address this as part of the same fix as well."
 
+## Clarifications
+
+### Session 2026-07-12
+
+- Q: What happens to the OS call notification once the ring ends unanswered
+  (app still closed)? → A: Replace it with a missed-call notification
+  ("Missed call from \<name\>" — named when resolvable, generic otherwise);
+  tapping it opens the relevant chat / Calls tab. It represents the same
+  single badge unit the ringing call held (no double-count).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Know who is calling from the notification (Priority: P1)
@@ -208,10 +218,11 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   first alert.
 - Two calls ring in overlapping windows → each is tracked separately for badge
   (one increment each) and missed-call traces (one entry each).
-- The caller hangs up (cancel) before the callee ever opens the app → the call
-  notification is withdrawn if the platform allows; the call still surfaces as
-  a missed call, and the badge contribution follows the missed-call rules
-  rather than lingering as "ringing".
+- The caller hangs up (cancel) before the callee ever opens the app → the ring
+  notification is replaced by the missed-call notification (platform
+  permitting); the call still surfaces as a missed call in-app, and the badge
+  contribution follows the missed-call rules rather than lingering as
+  "ringing".
 - Call answered on the user's other device → this device's notification and
   badge contribution clear; no missed-call entry is created for an
   answered-elsewhere call.
@@ -279,8 +290,14 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   while the app is foreground and handling the ring in-app.
 - **FR-012**: If the caller cancels or the ring window expires while the app
   stays closed, the call notification MUST stop re-alerting and, where the
-  platform allows, be updated or withdrawn so a stale "incoming call" alert
-  does not outlive the actual ring.
+  platform allows, be REPLACED by a missed-call notification so a stale
+  "incoming call" alert never outlives the actual ring.
+- **FR-012a**: The missed-call notification MUST read "Missed call from
+  \<name\>" (or the group equivalent) when identity is resolvable on-device,
+  falling back to a generic "Missed call" otherwise; tapping it MUST open the
+  relevant 1:1/group chat, or the Calls tab when no chat applies. It carries
+  the same single badge unit the ringing call held (FR-010) and clears under
+  the existing unseen-missed-call semantics (FR-017).
 
 **Missed-call trace (US2)**
 
@@ -330,7 +347,12 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
 
 - **Incoming-call notification**: The OS-level alert for a ringing call.
   Gains: caller/group identity text, call-type cue, a lifecycle (shown →
-  re-alerted → dismissed on open / withdrawn on cancel or expiry).
+  re-alerted → dismissed on open / replaced by a missed-call notification on
+  cancel or expiry).
+- **Missed-call notification**: The OS-level alert that replaces an unanswered
+  ring ("Missed call from \<name\>", generic when unresolvable). Opens the
+  relevant chat or the Calls tab; holds the call's single badge unit until
+  seen.
 - **Ringing-call badge contribution**: A transient, per-call unit added to the
   app icon badge; created on first notification, removed on app open, and
   handed over (not added) to the missed-unseen contribution when the call is
@@ -363,7 +385,8 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   the wire payloads in tests.
 - **SC-006**: No stale incoming-call notification remains on the lock screen
   more than a ring-window's length after the call ended (answered, cancelled,
-  or expired), on platforms that permit notification withdrawal.
+  or expired), on platforms that permit notification withdrawal; an unanswered
+  ring is replaced by a missed-call notification on those platforms.
 - **SC-007**: 100% of friend-request acceptances that reach a closed app as a
   push produce an "accepted" notification (named or neutral), and 0% produce
   "New friend request" copy, verified by end-to-end test of the
