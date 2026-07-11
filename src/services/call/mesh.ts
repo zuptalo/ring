@@ -102,6 +102,11 @@ interface PeerLeg {
   // independently from this leg's own getStats, so one call can send different qualities to
   // different peers based on each link. Starts low; climbs/backs off via quality.nextTier.
   qc: ControllerState;
+  // Spec 2025 FR-005: true when ADAPTATION detached this leg's video track at tier 'off'
+  // (a real pause — the old 1 bps cap kept the encoder "bandwidth limited" forever and
+  // video never came back). Only adaptation re-attaches what it detached, so this never
+  // fights hold/resume or the camera toggle, which manage tracks through their own paths.
+  videoSuspended: boolean;
   // Per-receiver connection health (spec 0007 US2).
   health: LegHealth;
 }
@@ -527,6 +532,25 @@ export class MeshSession {
   private async setLegTier(leg: PeerLeg, retry = true): Promise<void> {
     const sender = this.videoSenderOf(leg);
     if (!sender) return;
+    // Tier 'off' is a REAL pause for this leg (spec 2025 FR-005): detach the track so
+    // nothing is encoded — the old 1 bps cap left a zombie encode whose own "bandwidth
+    // limited" reading kept the leg congested forever. Held legs are left alone: hold
+    // owns the detached state (and adaptation is suspended while WE are held).
+    if (leg.qc.tier === 'off') {
+      if (!leg.videoSuspended && sender.track && !this.paused && !this.heldPeers.has(leg.peerId)) {
+        leg.videoSuspended = true;
+        await sender.replaceTrack(null).catch(() => {});
+      }
+      return;
+    }
+    // Leaving the floor: re-attach ONLY what adaptation itself detached.
+    if (leg.videoSuspended) {
+      leg.videoSuspended = false;
+      const v = this.local?.getVideoTracks()[0];
+      if (v && v.readyState === 'live' && !this.paused && !this.heldPeers.has(leg.peerId)) {
+        await sender.replaceTrack(v).catch(() => {});
+      }
+    }
     // iOS/WebKit: tier by BITRATE ONLY (`avoidEncoderScaling`) — never scaleResolutionDownBy/
     // maxFramerate, which stall the old iPhone H.264 encoder (spec 0005). maxBitrate alone is honored
     // and safe, so per-receiver + manual quality caps (spec 0007) still apply on iOS. Non-iOS gets the
@@ -596,7 +620,12 @@ export class MeshSession {
     h.inPrevDrop = drop;
     h.inPrevFrames = frames;
     const fractionLost = dRecv + dLost > 0 ? dLost / (dRecv + dLost) : 0;
-    h.downlink = downlinkClassFrom({ fractionLost, framesDropped: dDrop, framesReceived: dFrames }, h.downlink);
+    // packets: the window's evidence size — a near-empty interval must not move the class
+    // (spec 2025 FR-006; 1 lost of 3 packets reads as 33% "loss").
+    h.downlink = downlinkClassFrom(
+      { fractionLost, framesDropped: dDrop, framesReceived: dFrames, packets: dRecv + dLost },
+      h.downlink,
+    );
     // requestedTier = downlink ∧ manual clamp ∧ tile target — sent (if changed/cadence) by pushLegHealth.
     this.pushLegHealth(leg, now);
   }
@@ -765,7 +794,8 @@ export class MeshSession {
       pendingLocalIce: [],
       negotiated: false,
       offerAttempts: 0,
-      qc: initialController(), // starts sending low; the controller climbs from there
+      qc: initialController(), // mesh legs start medium (N parallel encoders); the controller climbs
+      videoSuspended: false, // spec 2025 FR-005
       health: freshLegHealth(), // spec 0007 US2
     };
     this.legs.set(peerId, leg);
@@ -915,6 +945,7 @@ export class MeshSession {
       if (aSender) await aSender.replaceTrack(a).catch(() => {});
       const vSender = this.senderOfKind(leg, 'video');
       if (vSender && v) await vSender.replaceTrack(v).catch(() => {});
+      leg.videoSuspended = false; // resume re-attached video; adaptation re-pauses if still needed
       void this.send('call-ice', leg.peerId, { callId: this.roomId, type: 'resume', roomId: this.roomId });
     }
     this.startDiag();
@@ -944,6 +975,7 @@ export class MeshSession {
     if (aSender) await aSender.replaceTrack(a).catch(() => {});
     const vSender = this.senderOfKind(leg, 'video');
     if (vSender && v) await vSender.replaceTrack(v).catch(() => {});
+    leg.videoSuspended = false; // their resume re-attached our video; adaptation re-pauses if needed
     this.heldPeers.delete(from);
     this.cb.onHeldPeers?.([...this.heldPeers]);
   }

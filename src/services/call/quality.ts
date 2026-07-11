@@ -26,14 +26,17 @@ export interface TierEncoding {
   maxFramerate?: number;
 }
 
-// Concrete sender encodings per tier. `off` is handled by suspending the track, not by
-// these numbers, but is kept here for completeness.
+// Concrete sender encodings per tier. `off` is handled by REALLY suspending the track
+// (spec 2025: the consumers replaceTrack(null) — never these numbers; a 1 bps cap kept
+// the encoder "bandwidth limited" forever and video could never come back). The entry
+// is kept only so the table stays total; hd carries 4 Mbps so a good link is actually
+// sharp (spec 2025 FR-002 — the old 2.5 Mbps read as a visible step below native apps).
 export const TIER_ENCODING: Record<Tier, TierEncoding> = {
   off: { maxBitrate: 1, scaleResolutionDownBy: 4, maxFramerate: 1 },
   low: { maxBitrate: 150_000, scaleResolutionDownBy: 4, maxFramerate: 15 },
   medium: { maxBitrate: 500_000, scaleResolutionDownBy: 2, maxFramerate: 24 },
   high: { maxBitrate: 1_200_000, scaleResolutionDownBy: 1, maxFramerate: 30 },
-  hd: { maxBitrate: 2_500_000, scaleResolutionDownBy: 1, maxFramerate: 30 },
+  hd: { maxBitrate: 4_000_000, scaleResolutionDownBy: 1, maxFramerate: 30 },
 };
 
 /** The encoding to actually push to a sender for a tier. On WebKit/iOS (`avoidEncoderScaling`)
@@ -54,7 +57,7 @@ const TIER_TARGET: Record<Tier, number> = {
   low: 150_000,
   medium: 500_000,
   high: 1_200_000,
-  hd: 2_500_000,
+  hd: 4_000_000,
 };
 
 // Spec 0007: converge fast but stay stable. Climb one step after a SHORT healthy streak (≈ a
@@ -68,15 +71,24 @@ const LOSS_SEVERE = 0.15; // a big loss spike → back off immediately, don't wa
 // Only back off on the bandwidth estimate when it's WELL below what the current tier wants
 // (a margin), since each mesh leg estimates bandwidth independently and the numbers are noisy.
 const BW_BACKOFF_MARGIN = 0.7;
+// Spec 2025 (FR-004): a "bandwidth limited" encoder reading is CONFOUNDED — our own
+// maxBitrate cap produces it on a perfectly healthy link (the encoder is degraded
+// relative to the source *because we asked it to be*). It only counts as congestion when
+// an INDEPENDENT signal corroborates it: receiver-reported loss above this (deliberately
+// below LOSS_HIGH — the limitation reading plus even mild real loss is meaningful), or
+// the send estimate collapsing under the current tier (the BW_BACKOFF_MARGIN path).
+const LOSS_CORROBORATE = 0.02;
 
 /** A single getStats sample, reduced to the signals the controller needs. Fields are
  *  optional because Safari/WebKit doesn't expose them all (the controller degrades to the
  *  cross-browser receiver-loss/RTT signal when bitrate/limitation info is missing). */
 export interface StatsSnapshot {
-  // The browser is limited by bandwidth OR cpu (qualityLimitationReason). CPU matters a lot in
-  // a mesh: each peer is a separate encoder, so N peers = N parallel encodes — a phone/iPad
-  // saturates and silently degrades unless we back off, which is why we treat cpu as congestion.
-  qualityLimited: boolean;
+  // What qualityLimitationReason says is degrading the encode, if anything. CPU matters a
+  // lot in a mesh: each peer is a separate encoder, so N peers = N parallel encodes — a
+  // phone/iPad saturates and silently degrades unless we back off, so cpu is always
+  // congestion (sustained). 'bandwidth' is only congestion when corroborated (spec 2025):
+  // it is routinely self-inflicted by the tier's own maxBitrate cap.
+  limitedBy: 'bandwidth' | 'cpu' | null;
   availableOutgoingBitrate?: number; // candidate-pair (often absent on Safari; noisy in a mesh)
   fractionLost: number; // remote-inbound-rtp.fractionLost, 0..1 (the receiver's downlink view)
   rtt?: number; // remote-inbound-rtp.roundTripTime, seconds
@@ -88,11 +100,13 @@ export interface ControllerState {
   unhealthyStreak: number; // consecutive congested samples (sustained-congestion back-off, spec 0007)
 }
 
-/** Initial state: start at a sensible MID tier (spec 0007) so a good picture appears fast, then
- *  climb to the ceiling on sustained health (or back off if the link can't sustain it) — instead
- *  of starting at the bottom and crawling up, which left calls looking low for many seconds. */
-export function initialController(): ControllerState {
-  return { tier: 'medium', healthyStreak: 0, unhealthyStreak: 0 };
+/** Initial state. The default MID start (spec 0007) makes a good picture appear fast and
+ *  climbs from there — right for mesh legs, where every peer is another parallel encoder.
+ *  The 1:1 path starts a step higher (spec 2025 FR-001): a single encode is cheap, the
+ *  first sample lands within ~2s to correct a genuinely bad link, and starting sharp is
+ *  the whole point of the regression fix. */
+export function initialController(start: Tier = 'medium'): ControllerState {
+  return { tier: start, healthyStreak: 0, unhealthyStreak: 0 };
 }
 
 const idxOf = (t: Tier): number => TIERS.indexOf(t);
@@ -144,13 +158,18 @@ export function nextTier(
   // survival beats any pin/clamp).
   if (snap.fractionLost > LOSS_SEVERE) return down();
 
-  // Mild congestion (browser bandwidth/cpu limitation, >5% loss, or the send estimate collapsing
-  // well below the current tier) must be SUSTAINED before we drop a tier — one noisy sample must
-  // not cause a flap.
+  // Mild congestion must be SUSTAINED before we drop a tier — one noisy sample must not
+  // cause a flap. Signals: cpu limitation (always real — never caused by our own cap),
+  // bandwidth limitation only when corroborated by receiver loss (spec 2025 FR-004 — the
+  // uncorroborated reading is the signature of our own maxBitrate cap and used to ride
+  // the ladder down on perfectly healthy links), >5% loss on its own, or the send
+  // estimate collapsing well below the current tier.
+  const bwCollapsed = knownBw && (snap.availableOutgoingBitrate as number) < TIER_TARGET[state.tier] * BW_BACKOFF_MARGIN;
   const congested =
-    snap.qualityLimited ||
+    snap.limitedBy === 'cpu' ||
+    (snap.limitedBy === 'bandwidth' && snap.fractionLost > LOSS_CORROBORATE) ||
     snap.fractionLost > LOSS_HIGH ||
-    (knownBw && (snap.availableOutgoingBitrate as number) < TIER_TARGET[state.tier] * BW_BACKOFF_MARGIN);
+    bwCollapsed;
   if (congested) {
     const unhealthy = state.unhealthyStreak + 1;
     if (unhealthy >= CONGEST_AFTER) return down();
@@ -179,18 +198,19 @@ export function nextTier(
  *  expose them all) are left undefined; nextTier copes. Shared by the mesh (per-leg) and the
  *  1:1 path. */
 export function snapshotFromReport(report: RTCStatsReport): StatsSnapshot {
-  let qualityLimited = false;
+  let limitedBy: 'bandwidth' | 'cpu' | null = null;
   let availableOutgoingBitrate: number | undefined;
   let fractionLost = 0;
   let rtt: number | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   report.forEach((st: any) => {
     if (st.type === 'outbound-rtp' && st.kind === 'video') {
-      // bandwidth OR cpu: in a mesh, N peers = N parallel encoders, so cpu limitation is common
-      // on phones/tablets and must trigger a back-off just like bandwidth does.
-      if (st.qualityLimitationReason === 'bandwidth' || st.qualityLimitationReason === 'cpu') {
-        qualityLimited = true;
-      }
+      // Keep WHICH reason (spec 2025): cpu is always congestion (in a mesh, N peers = N
+      // parallel encoders and phones saturate); bandwidth needs corroboration in nextTier
+      // because our own maxBitrate cap produces it on healthy links. cpu wins if both
+      // ssrcs somehow disagree — it's the stronger (never self-inflicted) signal.
+      if (st.qualityLimitationReason === 'cpu') limitedBy = 'cpu';
+      else if (st.qualityLimitationReason === 'bandwidth' && limitedBy == null) limitedBy = 'bandwidth';
     } else if (st.type === 'candidate-pair' && typeof st.availableOutgoingBitrate === 'number') {
       if (st.nominated || st.selected || availableOutgoingBitrate == null) {
         availableOutgoingBitrate = st.availableOutgoingBitrate;
@@ -200,7 +220,7 @@ export function snapshotFromReport(report: RTCStatsReport): StatsSnapshot {
       if (typeof st.roundTripTime === 'number') rtt = st.roundTripTime;
     }
   });
-  return { qualityLimited, availableOutgoingBitrate, fractionLost, rtt };
+  return { limitedBy, availableOutgoingBitrate, fractionLost, rtt };
 }
 
 /** Map the manual pin ('auto'|'medium'|'low') + data-saver to the controller's clamp tier.
@@ -230,17 +250,28 @@ export interface InboundSnapshot {
   fractionLost: number; // 0..1, this peer's inbound video loss
   framesDropped?: number; // frames dropped in the interval (decode/render couldn't keep up)
   framesReceived?: number; // frames received in the interval (denominator for the drop ratio)
+  // Packets observed in the interval (received + lost). A couple of packets make the loss
+  // ratio pure noise (1 lost of 3 reads as 33%!) — below MIN_WINDOW_PACKETS the class is
+  // held (spec 2025 FR-006). Optional so senders that can't count packets still classify.
+  packets?: number;
 }
+// Fewer packets than this in a window is statistically meaningless — hold the class.
+const MIN_WINDOW_PACKETS = 50;
 export function downlinkClassFrom(snap: InboundSnapshot, prev: Tier = 'hd'): Tier {
+  // Too little evidence to say anything (a near-idle window right after connect, or an
+  // audio-mostly interval) — don't let a 1-in-3 "loss ratio" walk the class down.
+  if (snap.packets != null && snap.packets < MIN_WINDOW_PACKETS) return prev;
   let target: Tier;
-  if (snap.fractionLost > 0.2) target = 'low';
-  else if (snap.fractionLost > 0.1) target = 'medium';
-  else if (snap.fractionLost > 0.03) target = 'high';
+  if (snap.fractionLost > 0.25) target = 'low';
+  else if (snap.fractionLost > 0.12) target = 'medium';
+  else if (snap.fractionLost > 0.05) target = 'high';
   else target = 'hd';
-  // A high dropped-frame ratio (render/decode can't keep up) trims one more step.
+  // A heavy dropped-frame ratio (render/decode genuinely starving) trims one more step.
+  // The bar is deliberately high (spec 2025): phones drop 10–20% of frames during plain
+  // UI animation, and that noise used to cap the SENDER a tier below what the link takes.
   const recv = snap.framesReceived ?? 0;
   const dropped = snap.framesDropped ?? 0;
-  if (recv > 0 && dropped / (recv + dropped) > 0.1) target = TIERS[Math.max(1, idxOf(target) - 1)];
+  if (recv > 0 && dropped / (recv + dropped) > 0.25) target = TIERS[Math.max(1, idxOf(target) - 1)];
   return stepToward(prev, target);
 }
 

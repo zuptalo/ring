@@ -94,4 +94,4 @@ Specs are grouped by category band; status moves
 | [2022](specs/2022-push-failures-name/spec.md) | Bug: Push failures hide their reason, and dead subscriptions are retried forever | 🟢 shipped |
 | [2023](specs/2023-push-wakes-always/spec.md) | Push Wakes Always End Visibly Where Silence Is Unsafe | 🟢 shipped |
 | [2024](specs/2024-tab-bar-labels/spec.md) | Tab Bar Labels Stay Visible After Switching Tabs | 🟢 shipped |
-| [2025](specs/2025-video-calls-look/spec.md) | Video calls look sharp again and recover from quality dips | ⚪ planned |
+| [2025](specs/2025-video-calls-look/spec.md) | Video calls look sharp again and recover from quality dips | 🟡 in-progress |
