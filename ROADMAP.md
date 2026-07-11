@@ -65,6 +65,7 @@ Specs are grouped by category band; status moves
 | [1037](specs/1037-zombie-push-subscriptions/spec.md) | Zombie Push Subscriptions Rotate Themselves | 🟢 shipped |
 | [1038](specs/1038-armada-fullscreen-naval/spec.md) | Armada — Fullscreen Naval Duel Replaces Battleship | 🔵 in-review |
 | [1039](specs/1039-simultaneous-mutual-calls/spec.md) | Simultaneous mutual calls connect instead of ringing each other | 🟢 shipped |
+| [1040](specs/1040-incoming-call-notifications/spec.md) | Incoming Call Notifications — Caller Identity, Badge, and Missed-Call Trace | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
