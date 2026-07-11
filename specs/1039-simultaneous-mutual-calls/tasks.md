@@ -103,7 +103,7 @@ proceeds and can connect; C sees busy (or the call-waiting prompt per existing r
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T014 Run the full gates: `npm run build`, `npx vitest run` (coverage floors), `npm run test:e2e` (full suite — confirms no regression to busy, call-waiting spec 0005/2009, group calls, upgrade flow)
+- [X] T014 Run the full gates: `npm run build`, `npx vitest run` (coverage floors), `npm run test:e2e` (full suite — confirms no regression to busy, call-waiting spec 0005/2009, group calls, upgrade flow)
 - [X] T015 Bump `**Status**:` in `specs/1039-simultaneous-mutual-calls/spec.md` to `in-progress` → `in-review` as appropriate and run `make roadmap` so the CI roadmap guard stays green
 
 ---
