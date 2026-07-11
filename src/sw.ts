@@ -23,7 +23,7 @@ import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
-  mayEndWakeSilently, platformTrustsSilence, quietNote, stampPushWake, stampedShow, countAccepted,
+  mayEndWakeSilently, quietNote, stampPushWake, stampedShow, countAccepted,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
@@ -807,15 +807,28 @@ async function dispatchPush(event: PushEvent): Promise<void> {
       // never acks) still falls through to the SW promptly enough.
       if (clients.length && (await pageWillNotify(clients, 2200))) {
         // (spec 2023 FR-003) The page owns the RICH alert, but an in-app banner is
-        // invisible to webpushd: on platforms where silence is unsafe, a claimed
-        // wake still counts a strike unless the SW shows something. And one claim
-        // arm shows nothing anywhere — a message for a locked hidden chat on a
-        // visible page (notify.ts, the spec-1027 FR-012 zero-trace claim) — so the
-        // quiet note is the wake's only visible ending there. Platform-gated ONLY
-        // (never visibility-gated): the Chromium claim outcome stays exactly as
-        // before, and the quiet note's content-free body keeps the hidden-chat
-        // trade bounded to what any message push already reveals.
-        if (!platformTrustsSilence(self.navigator.userAgent)) await showQuietNote('msg');
+        // invisible to the OS push service: a claimed wake that shows no OS
+        // notification is a SILENT push, and every userVisibleOnly push service
+        // revokes the subscription after a few of those — not just WebKit's webpushd.
+        // Chromium does too, exempting ONLY a push handled while a window is open AND
+        // focused (its documented "site is visible" carve-out). This skip used to gate
+        // on the platform ALONE, trusting Chromium unconditionally — but the page acks
+        // when it CAN render a banner, and Chromium samples window visibility at event
+        // RESOLUTION, so a page that was visible when it acked and then backgrounded
+        // during the up-to-2200ms wait produced a silent push Chromium counted. Enough
+        // of those and Android's subscription got revoked "after several messages".
+        //
+        // So re-sample the clients HERE (start-of-wake `clients` is now stale) and end
+        // silently only when `mayEndWakeSilently` holds: the platform tolerates silence
+        // AND a window is focused+visible right now. Otherwise show the content-free
+        // quiet note — which is also the only visible ending for the one claim arm that
+        // shows nothing anywhere (a locked hidden chat on a visible page: notify.ts, the
+        // spec-1027 FR-012 zero-trace claim). iOS is unaffected: platformTrustsSilence is
+        // already false there, so this always showed the quiet note and still does; and a
+        // Chrome window that stays focused+visible still skips exactly as before (the user
+        // saw the in-app banner, so no OS duplicate).
+        const nowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) await showQuietNote('msg');
         return;
       }
       // Spec 1032: with sw.fullPersist on (and no page claiming the wake), persist
