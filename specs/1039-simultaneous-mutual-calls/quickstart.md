@@ -33,6 +33,12 @@ connect, no incoming UI, one history entry each), mismatched kinds (ring on the
 yielder, no camera without accept), different-caller-during-setup (busy/call-waiting,
 outgoing attempt intact).
 
+## Manual cue check (FR-008, not machine-checkable)
+
+During a same-kind mutual attempt, listen on the yielding device: the "calling" tone
+must transition straight into the connected call — the incoming ringtone must never
+play. (E2e asserts the UI level: no incoming screen; tones are verified by ear here.)
+
 ## Full gates before calling it done
 
 ```sh

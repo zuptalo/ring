@@ -91,7 +91,7 @@ proceeds and can connect; C sees busy (or the call-waiting prompt per existing r
 
 ### Tests for User Story 3 (write first, must FAIL)
 
-- [ ] T012 [P] [US3] Extend `e2e/mutual-call.spec.ts` with a FAILING different-caller scenario: C's offer lands during B's setup window → B's outgoing call to A still rings/connects, and C receives the busy/call-waiting outcome (FR-006)
+- [ ] T012 [P] [US3] Extend `e2e/mutual-call.spec.ts` with FAILING scenarios: (a) C's offer lands during B's setup window → B's outgoing call to A still rings/connects, and C receives the busy/call-waiting outcome (FR-006); (b) a mutual attempt while one side is already in a connected call follows the existing busy/call-waiting rules, not glare resolution (spec edge case, FR-009)
 
 ### Implementation for User Story 3
 
