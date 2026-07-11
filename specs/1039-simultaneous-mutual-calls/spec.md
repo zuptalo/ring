@@ -68,7 +68,7 @@ While someone is placing a call to contact A (the brief setup moment before it a
 - One person cancels (hangs up) their attempt in the same instant the resolution happens: both sides must settle to idle or to a normal single-direction ring — never a stuck hybrid.
 - The mutual attempt happens while one side's app was just opened via the incoming-call push: resolution still applies (the intent is mutual regardless of how the offer arrived).
 - A mutual attempt between people who are ALREADY in other calls follows the existing busy/call-waiting rules; this feature only governs two attempts aimed at each other while neither call is connected yet.
-- Per-chat mute: a muted chat suppresses that contact's incoming ring today — but a mutual attempt is not an unsolicited ring (the muted person themselves just called that contact), so resolution/auto-connect still applies.
+- Per-chat mute: a muted chat suppresses that contact's incoming ring today — but a mutual attempt is not an unsolicited ring (the muted person themselves just called that contact), so resolution still applies: same-kind attempts auto-connect, and a mismatched-kind fallback ring is allowed to ring despite the mute (the person's own outgoing attempt is the consent).
 
 ## Requirements *(mandatory)*
 
