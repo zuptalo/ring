@@ -40,6 +40,8 @@
 - The avatar-stretch fix (US4) is bundled here because it lives in the same
   call-tile transition surface this feature exercises; it could be split into
   a hotfix spec if preferred.
-- The user's reference screenshot of the avatar bug did not carry into the
-  session; the symptom description stands in for it.
+- The user's reference screenshot of the avatar bug is preserved as
+  `avatar-stretch.png` next to the spec: a three-tile group video call whose
+  joining/leaving (waving-hand) tile renders the avatar as a full-height
+  ellipse.
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`

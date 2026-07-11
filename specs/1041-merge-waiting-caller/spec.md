@@ -133,8 +133,12 @@ join request disappears.
 
 While a participant is joining or leaving a call, their avatar currently
 stretches vertically into a long ellipse for the duration of the transition.
-Avatars must stay perfectly round through every call transition — joining,
-leaving, merging, tile re-layout.
+The user's screenshot ([avatar-stretch.png](./avatar-stretch.png), captured in
+a three-tile group video call) shows the joining/leaving tile — the one that
+overlays the waving-hand emoji on the participant's avatar — rendering the
+avatar as an ellipse spanning nearly the tile's full height. Avatars must stay
+perfectly round through every call transition — joining, leaving, merging,
+tile re-layout.
 
 **Why this priority**: Visible polish bug in the exact UI this feature
 touches; fixing it alongside the merge work avoids shipping a new flow on top
@@ -307,5 +311,6 @@ merge-join path.
   participants too.
 - The avatar-stretch defect is a client-side visual issue in the call UI's
   tile transitions; fixing it requires no server or protocol change. The
-  user-supplied screenshot did not carry into this session, but the symptom
-  (vertical stretch into a tall ellipse during join/leave) is unambiguous.
+  user's screenshot is preserved next to this spec as `avatar-stretch.png`
+  and shows the defect on the joining/leaving (waving-hand) tile of a group
+  video call.
