@@ -12,6 +12,7 @@
  */
 import { ref, computed, watch } from 'vue';
 import { appToast } from '@/services/toast';
+import { describeMediaError } from '@/services/media-errors';
 import router from '@/router';
 import { uid } from '@/utils/uid';
 import {
@@ -1306,8 +1307,13 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
     markConnect('gumStart');
     stream = await navigator.mediaDevices.getUserMedia(gumConstraints(kind));
     markConnect('gumResolved');
-  } catch {
-    await teardown('failed');
+  } catch (err) {
+    // The call can't start without local media. Tell the caller WHY (blocked permission,
+    // no device, in use) rather than the bare "Couldn't connect the call" — the usual
+    // Android cause is the app's mic (or camera) permission being off at the OS level. Pass
+    // silent so teardown doesn't ALSO fire its generic notice over this specific one.
+    await appToast({ message: describeMediaError(err, kind === 'video' ? 'media' : 'microphone'), duration: 4000 });
+    await teardown('failed', { silent: true });
     return;
   }
   localStream.value = stream;
@@ -1992,9 +1998,12 @@ export async function acceptCall(): Promise<void> {
   let stream: MediaStream;
   try {
     stream = await gumPromise; // capture overlapped the setup above; usually already resolved
-  } catch {
+  } catch (err) {
+    // We can't answer without our own mic/camera. Surface the real reason (usually a
+    // blocked OS permission on Android) instead of the generic teardown notice.
+    await appToast({ message: describeMediaError(err, meta.kind === 'video' ? 'media' : 'microphone'), duration: 4000 });
     void sendControl('call-reject', meta.peerUserId, meta.callId, { reason: 'failed' });
-    await teardown('failed');
+    await teardown('failed', { silent: true });
     return;
   }
   localStream.value = stream;
