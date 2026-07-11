@@ -23,7 +23,7 @@ import {
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
 import { kickPendingPosts } from '@/services/pending-posts';
-import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, notifyPostActivity, pruneLocalPost } from '@/db/queries';
+import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, notifyPostActivity, pruneLocalPost, hydrateGroupMembers } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -284,6 +284,11 @@ function start(): void {
         // Refresh contacts' name/photo/About from the directory (replaces the old
         // peer-to-peer "share my name & photo").
         void refreshContactProfiles();
+        // Heal group members still showing as a raw id: every group participant
+        // gets a contact + directory profile, so members added via accept /
+        // ensureGroupChat (which never created a contact) stop rendering as
+        // "88155153" / a "?" disc once they've published a profile.
+        void hydrateGroupMembers();
       }
       void refreshConnections(); // reconcile incoming/outgoing connect requests
       // A reconnect can mean the server was just redeployed; check for a new build
