@@ -224,7 +224,7 @@ import {
   IonNote, IonIcon,
 } from '@ionic/vue';
 import { checkmark, checkmarkDone, timeOutline, informationCircleOutline } from 'ionicons/icons';
-import { getMessage, getChat, listContacts, getSetting } from '@/db/queries';
+import { getMessage, getChat, listAllContacts, getSetting } from '@/db/queries';
 import { get } from '@/db/idb';
 import { initialsAvatar } from '@/db/avatars';
 import type { Chat, Contact, Media, Message, MessageStatus } from '@/db/types';
@@ -248,7 +248,9 @@ const message = useLiveQuery<Message | undefined>(
   undefined,
 );
 const chat = useLiveQuery<Chat | undefined>(() => getChat(chatId), ['chats'], undefined);
-const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+// Unfiltered: a group receipt row must resolve to the member's real name/photo even
+// when your 1:1 with them is pending/ghosted (listContacts()'s address-book filter).
+const contacts = useLiveQuery(() => listAllContacts(), ['contacts'], [] as Contact[]);
 
 // Live countdown for a disappearing message (ticks each second while this page is open).
 const nowMs = ref(Date.now());

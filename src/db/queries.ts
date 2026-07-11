@@ -4899,6 +4899,17 @@ export async function listContacts(q = ''): Promise<Contact[]> {
   return filtered.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Every contact, UNFILTERED — for resolving a co-member's identity (name / photo
+ *  / colour) inside a chat. Unlike listContacts(), it keeps pending and ghosted
+ *  contacts: a group member is still that person whether or not your 1:1 with them
+ *  is accepted, so their messages must render with their real name + avatar
+ *  regardless. Resolving group senders through the FILTERED listContacts() is what
+ *  made a pending/ghosted co-member render as a raw id ("88155153") with a blank
+ *  avatar even though their contact existed and was named. */
+export async function listAllContacts(): Promise<Contact[]> {
+  return getAll<Contact>('contacts');
+}
+
 /* ---- media ---- */
 
 export async function getMediaUrl(id: string): Promise<string | null> {
@@ -5216,7 +5227,17 @@ export async function hydrateContactFromDirectory(id: string): Promise<void> {
   if (u.avatar) c.remoteAvatar = u.avatar;
   if (!c.localProfile) {
     if (name) c.name = name;
-    if (u.avatar) c.avatar = u.avatar;
+    if (u.avatar) {
+      c.avatar = u.avatar;
+    } else if (c.name && c.name !== id.slice(0, 8) && c.avatar === initialsAvatar(id.slice(0, 8))) {
+      // The peer has no published photo and we're still showing the placeholder
+      // initials disc generated from their raw id (a "8" from "88155153"). Now that
+      // we have their real name, regenerate the disc so the initial matches it (an
+      // "A" for "Azin") instead of a leftover id digit — the disc self-heals on the
+      // next connect-time hydrate. A user-set photo or emoji avatar never equals the
+      // id-slice initials, so this only ever replaces the auto-generated placeholder.
+      c.avatar = initialsAvatar(c.name);
+    }
   }
   c.updatedAt = now();
   await put('contacts', c);

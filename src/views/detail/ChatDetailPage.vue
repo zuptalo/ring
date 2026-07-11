@@ -1150,7 +1150,7 @@ import {
   chevronDownOutline, chatbubbleEllipses, albumsOutline, imagesOutline, createOutline, timerOutline,
 } from 'ionicons/icons';
 import {
-  getChat, getContact, listContacts, markChatRead, sendMediaMessage, sendMessage,
+  getChat, getContact, listAllContacts, markChatRead, sendMediaMessage, sendMessage,
   reactToMessage, deleteMessage, softDeleteMessage, deleteMessageForEveryone, editMessage,
   toggleFavorite, setCaption, forwardMessage,
   quickReactEmojis,
@@ -1995,7 +1995,12 @@ function confirmDeleteSelected(): void {
 }
 
 /* ---- reply ---- */
-const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
+// Resolve co-member identity (sender name/avatar/colour, @-mentions, game seats)
+// from the UNFILTERED contact set: a group member is that person regardless of
+// whether your 1:1 with them is accepted, so listContacts()'s pending/ghosted
+// filter must not hide them here (that filter is for the address book) — doing so
+// made a pending/ghosted member render as a raw id with a blank avatar.
+const contacts = useLiveQuery(() => listAllContacts(), ['contacts'], [] as Contact[]);
 const contactsMap = computed(() => new Map(contacts.value.map((c) => [c.id, c])));
 const replyingTo = ref<ReplyRef | null>(null);
 const composerEl = ref<{ $el: HTMLIonTextareaElement } | null>(null);
