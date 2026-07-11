@@ -64,7 +64,7 @@ Specs are grouped by category band; status moves
 | [1036](specs/1036-wall-game-follows/spec.md) | Followers Get the Result Push; Group Chats Retire Games | 🟢 shipped |
 | [1037](specs/1037-zombie-push-subscriptions/spec.md) | Zombie Push Subscriptions Rotate Themselves | 🟢 shipped |
 | [1038](specs/1038-armada-fullscreen-naval/spec.md) | Armada — Fullscreen Naval Duel Replaces Battleship | 🔵 in-review |
-| [1039](specs/1039-simultaneous-mutual-calls/spec.md) | Simultaneous mutual calls connect instead of ringing each other | 🔵 in-review |
+| [1039](specs/1039-simultaneous-mutual-calls/spec.md) | Simultaneous mutual calls connect instead of ringing each other | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
@@ -94,4 +94,4 @@ Specs are grouped by category band; status moves
 | [2022](specs/2022-push-failures-name/spec.md) | Bug: Push failures hide their reason, and dead subscriptions are retried forever | 🟢 shipped |
 | [2023](specs/2023-push-wakes-always/spec.md) | Push Wakes Always End Visibly Where Silence Is Unsafe | 🟢 shipped |
 | [2024](specs/2024-tab-bar-labels/spec.md) | Tab Bar Labels Stay Visible After Switching Tabs | 🟢 shipped |
-| [2025](specs/2025-video-calls-look/spec.md) | Video calls look sharp again and recover from quality dips | 🔵 in-review |
+| [2025](specs/2025-video-calls-look/spec.md) | Video calls look sharp again and recover from quality dips | 🟢 shipped |
