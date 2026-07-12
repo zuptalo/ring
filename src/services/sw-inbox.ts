@@ -37,7 +37,14 @@ import { GAMES } from '@/games/registry';
 import { applySignal as applyGameSignal, deriveStatus as deriveGameStatus } from '@/games/session';
 import { playerIndexOf, lockOpponent, buildWallSession, challengePhase, type WallGameRow } from '@/games/challenge';
 import type { Chat, Contact, Message, Setting } from '@/db/types';
-import type { MessagePayload } from './crypto/message';
+import type { MessagePayload, CallEventSignal } from './crypto/message';
+import {
+  RING_WINDOW_MS,
+  applyCallTickle,
+  applyCallOutcome,
+  sweepStaleUnits,
+  type CallBadgeUnit,
+} from './call-events';
 
 // Same-origin by default (the dev proxy / prod reverse-proxy route /v1 → backend).
 // VITE_API_URL is baked in only when targeting a different backend host.
@@ -75,6 +82,11 @@ export interface SwNote {
 export interface PreviewResult {
   notes: SwNote[];
   pending: number;
+  // Call-event markers decrypted this pass (spec 1040): the caller (sw.ts)
+  // applies their badge-unit transitions and, on an 'answered' outcome, closes
+  // the stale ring notification. The missed/cancelled NOTIFICATION itself rides
+  // `notes` like any other (tag 'ring-call' so it REPLACES the ring alert).
+  callEvents?: CallEventSignal[];
   // The pending count the app-icon BADGE may use (spec 1027, B4): equal to
   // `pending` under badge mode 'always'; under 'never'/'revealed' only frames
   // that decrypted AND resolved to a provably NON-hidden chat. A frame we can't
@@ -333,6 +345,39 @@ export function noteForPayload(
         body: gshowText ? gline : 'New message',
         url: gchat ? `/chat/${gchat.id}` : '/tabs/chats',
         tag: gchat ? `ring:${gchat.id}` : `ring:from:${from}`,
+      },
+      wasMessage: false,
+    };
+  }
+
+  // Call lifecycle markers (spec 1040). Only a missed/cancelled outcome shows —
+  // it REPLACES the stale "Incoming call" alert via the shared 'ring-call' tag.
+  // A ring marker is silent here (the {"t":"call"} wake names the actual ring via
+  // previewCallRing) and an 'answered' outcome is silent (sw.ts closes the ring
+  // notification from the collected callEvents instead).
+  if (payload.callEvent) {
+    const ev = payload.callEvent;
+    if (ev.phase !== 'ended' || (ev.outcome !== 'missed' && ev.outcome !== 'cancelled')) {
+      return { note: null, wasMessage: false };
+    }
+    const cChat = ev.roomId
+      ? chats.find((c) => c.id === ev.roomId && c.isGroup)
+      : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
+    // Hidden chats: calls are excluded from every at-rest surface (Calls tab,
+    // missed badge), so a hidden conversation's missed call shows NOTHING here —
+    // even a nameless "Missed call" alert would leak that hidden activity exists.
+    if (cChat && hidden.has(cChat.id)) return { note: null, wasMessage: false };
+    const caller = known || 'Someone';
+    const isGroupCall = !!ev.roomId;
+    const title = isGroupCall ? cChat?.name || caller : caller;
+    const body = ev.kind === 'video' ? '☎️ Missed video call' : '☎️ Missed call';
+    return {
+      note: {
+        ids: [f.id as string],
+        title,
+        body: isGroupCall && cChat ? `${body} from ${caller}` : body,
+        url: cChat ? `/chat/${cChat.id}` : '/tabs/calls',
+        tag: 'ring-call', // replaces the incoming-call alert (FR-012)
       },
       wasMessage: false,
     };
@@ -796,6 +841,8 @@ export async function previewPending(): Promise<PreviewResult> {
   const seen = new Set(shown);
 
   const raw: SwNote[] = [];
+  const callEvents: CallEventSignal[] = []; // spec 1040: markers for sw.ts's badge/close effects
+  let callEventFrames = 0; // markers are side effects, not backlog — keep them out of the badge count
   let badgeable = 0; // frames provably in a NON-hidden chat (badge modes never/revealed)
   let withheldMessage = false;
   let silencedMessage = false; // a message intentionally silenced by per-chat prefs
@@ -811,6 +858,10 @@ export async function previewPending(): Promise<PreviewResult> {
       continue; // can't decrypt this one (session not reachable yet) → leave it for the page
     }
     seen.add(f.id);
+    if (payload.callEvent) {
+      callEvents.push(payload.callEvent);
+      callEventFrames += 1;
+    }
     // Classify for the badge (spec 1027): the frame counts only when its chat
     // resolves AND is provably not hidden. Same resolution noteForPayload uses.
     if (!badgeAll) {
@@ -864,7 +915,113 @@ export async function previewPending(): Promise<PreviewResult> {
   // When every fetched frame was already shown (all-seen), decryptFailed === 0 and notes is empty →
   // newUnshown is false → the caller shows NO new placeholder (kills the burst extra-generic).
   const newUnshown = decryptFailed > 0;
-  return { notes, pending, badgePending: badgeAll ? pending : badgeable, suppressed, silenced, newUnshown, reason };
+  // Spec 1040: call-event markers are side effects, never unread backlog — a call
+  // would otherwise inflate the badge by its two markers on top of its own unit.
+  const backlog = Math.max(0, pending - callEventFrames);
+  return {
+    notes,
+    pending: backlog,
+    badgePending: badgeAll ? backlog : badgeable,
+    suppressed,
+    silenced,
+    newUnshown,
+    reason,
+    ...(callEvents.length ? { callEvents } : {}),
+  };
+}
+
+/* ---- call-event support for the SW (spec 1040) ---- */
+
+/** What the {"t":"call"} wake shows once a fresh ring marker decrypts. */
+export type CallRingPreview =
+  | { kind: 'named'; title: string; body: string; callId: string }
+  | { kind: 'generic'; callId?: string } // marker found but identity must not show (hidden chat) or resolves to nothing
+  | null; // nothing usable — stay on today's generic ring
+
+/**
+ * Bounded, read-only scan of the pending queue for the freshest still-ringing
+ * call marker — the call wake names its notification from this. Never touches
+ * the shown ledger and never acks, so reminder wakes re-run it and upgrade the
+ * same notification in place (research R2). PIN-locked or undecryptable → null
+ * (the generic ring already showed; FR-004 keeps the first alert undelayed).
+ */
+export async function previewCallRing(): Promise<CallRingPreview> {
+  const token = await readSessionToken();
+  if (!token) return null;
+  const unlockReady = attemptDeviceUnlock().catch(() => false);
+  const fetched = await fetchPendingFrames(token);
+  if ('failure' in fetched || !fetched.frames.length) return null;
+  if (!(await unlockReady)) return null;
+  const [chats, contacts, hidden, committedIds] = await Promise.all([
+    getAll<Chat>('chats'),
+    getAll<Contact>('contacts'),
+    readHiddenSet(),
+    setting<string[]>('inboundSeenIds', []),
+  ]);
+  const committed = new Set(committedIds);
+  let best: { ev: CallEventSignal; from: string } | null = null;
+  const endedIds = new Set<string>();
+  for (const f of fetched.frames) {
+    if (f.t !== 'msg' || !f.from || !f.id || committed.has(f.id)) continue;
+    let payload: MessagePayload;
+    try {
+      payload = await previewPacket(sessionKeyForPeer(chats, f.from as string), f.ciphertext);
+    } catch {
+      continue;
+    }
+    const ev = payload.callEvent;
+    if (!ev) continue;
+    if (ev.phase === 'ended') {
+      endedIds.add(ev.callId);
+      continue;
+    }
+    // `at` is the sender's clock — a display-freshness hint only. A stale ring
+    // stays generic rather than naming a caller who is no longer calling.
+    if (Date.now() - ev.at > RING_WINDOW_MS) continue;
+    if (!best || ev.at > best.ev.at) best = { ev, from: f.from as string };
+  }
+  if (!best || endedIds.has(best.ev.callId)) return null;
+  const { ev, from } = best;
+  const chat = ev.roomId
+    ? chats.find((c) => c.id === ev.roomId && c.isGroup)
+    : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
+  // Hidden chat → the ring must stay generic AND its badge unit is withdrawn by
+  // the caller (hidden calls never badge).
+  if (chat && hidden.has(chat.id)) return { kind: 'generic', callId: ev.callId };
+  const caller = contacts.find((c) => c.id === from)?.name;
+  if (!caller && !(ev.roomId && chat)) return { kind: 'generic', callId: ev.callId }; // never a raw id (FR-006)
+  const emoji = ev.kind === 'video' ? '📹' : '🎙️';
+  if (ev.roomId && chat) {
+    return { kind: 'named', title: chat.name, body: `${emoji} ${caller || 'Someone'} is calling`, callId: ev.callId };
+  }
+  return { kind: 'named', title: caller as string, body: `${emoji} is calling you`, callId: ev.callId };
+}
+
+/** The transient per-call badge units (spec 1040), shared with the page through
+ *  the settings store; the page clears them wholesale on foreground (FR-009). */
+const CALL_BADGE_KEY = 'sw.callBadge';
+
+export async function callBadgeCount(): Promise<number> {
+  const units = await setting<CallBadgeUnit[]>(CALL_BADGE_KEY, []);
+  return sweepStaleUnits(units, Date.now()).length;
+}
+
+/** A call tickle arrived: ensure exactly one ringing unit for it (callId when a
+ *  marker already resolved, else the ring-window heuristic — see call-events.ts). */
+export async function recordCallTickle(callId?: string): Promise<void> {
+  const units = sweepStaleUnits(await setting<CallBadgeUnit[]>(CALL_BADGE_KEY, []), Date.now());
+  await put<Setting<CallBadgeUnit[]>>('settings', { key: CALL_BADGE_KEY, value: applyCallTickle(units, callId, Date.now()) });
+}
+
+/** An outcome marker decrypted: hand the unit over (missed) or retire it (answered). */
+export async function recordCallOutcome(callId: string | undefined, outcome: 'missed' | 'cancelled' | 'answered'): Promise<void> {
+  const units = sweepStaleUnits(await setting<CallBadgeUnit[]>(CALL_BADGE_KEY, []), Date.now());
+  await put<Setting<CallBadgeUnit[]>>('settings', { key: CALL_BADGE_KEY, value: applyCallOutcome(units, callId, outcome, Date.now()) });
+}
+
+/** Withdraw one unit entirely (a hidden chat's call must never badge). */
+export async function withdrawCallBadgeUnit(callId: string | undefined): Promise<void> {
+  await recordCallOutcome(callId, 'answered');
 }
 
 /**
@@ -980,6 +1137,48 @@ async function connName(userId: string, token: string): Promise<string> {
   return 'Someone';
 }
 
+/** One announceable friend-request lifecycle event (pure classification). */
+export interface ConnEvent {
+  key: string; // dedup-ledger key
+  userId: string; // whose name the note carries (resolved by the IO wrapper)
+  body: string;
+  tag: string;
+}
+
+/**
+ * Classify the server's connection state into NEW events (pure core, unit-
+ * tested; spec 1040 US3). Incoming pending → "wants to be friends"; OUR
+ * outgoing accepted/rejected → the truthful outcome copy. The dedup ledger
+ * (`seen`) keeps each event announced at most once (FR-022) — the server's
+ * 24h accepted-row window sits inside the ledger's 48h TTL, so an accepted
+ * row can never re-announce after its ledger entry expires.
+ */
+export function classifyConnEvents(
+  data: { incoming?: ConnReq[]; outgoing?: ConnReq[] },
+  seen: ReadonlySet<string>,
+): { events: ConnEvent[]; pendingIncoming: number } {
+  const events: ConnEvent[] = [];
+  const taken = new Set(seen);
+  const add = (key: string, userId: string, body: string, tag: string): void => {
+    if (taken.has(key)) return;
+    taken.add(key);
+    events.push({ key, userId, body, tag });
+  };
+  let pendingIncoming = 0;
+  for (const r of data.incoming ?? []) {
+    if (r.state === 'pending' && r.requester) {
+      pendingIncoming++;
+      add(`req:${r.requester}`, r.requester, 'wants to be friends', 'ring:conn:req');
+    }
+  }
+  for (const r of data.outgoing ?? []) {
+    if (!r.target) continue;
+    if (r.state === 'accepted') add(`acc:${r.target}`, r.target, 'accepted your friend request', `ring:conn:acc:${r.target}`);
+    else if (r.state === 'rejected') add(`rej:${r.target}`, r.target, 'declined your friend request', `ring:conn:rej:${r.target}`);
+  }
+  return { events, pendingIncoming };
+}
+
 export async function previewConnections(): Promise<{ notes: ConnNote[]; pendingIncoming: number }> {
   const token = await readSessionToken();
   if (!token) return { notes: [], pendingIncoming: 0 };
@@ -999,26 +1198,13 @@ export async function previewConnections(): Promise<{ notes: ConnNote[]; pending
     return { notes: [], pendingIncoming: 0 };
   }
   const seen = new Set((await loadConnShownEntries()).map((e) => e.id));
-  const notes: ConnNote[] = [];
   // Title = WHO, body = the action — so iOS renders "<name>: wants to be friends". The app
   // name ("Ring") is already the notification's source line, so the old "Ring / New friend
   // request" was doubly redundant.
-  const add = (key: string, title: string, body: string, tag: string): void => {
-    if (seen.has(key)) return;
-    seen.add(key);
-    notes.push({ keys: [key], title, body, url: '/tabs/contacts', tag });
-  };
-  let pendingIncoming = 0;
-  for (const r of data.incoming ?? []) {
-    if (r.state === 'pending' && r.requester) {
-      pendingIncoming++;
-      add(`req:${r.requester}`, await connName(r.requester, token), 'wants to be friends', 'ring:conn:req');
-    }
-  }
-  for (const r of data.outgoing ?? []) {
-    if (!r.target) continue;
-    if (r.state === 'accepted') add(`acc:${r.target}`, await connName(r.target, token), 'accepted your friend request', `ring:conn:acc:${r.target}`);
-    else if (r.state === 'rejected') add(`rej:${r.target}`, await connName(r.target, token), 'declined your friend request', `ring:conn:rej:${r.target}`);
+  const { events, pendingIncoming } = classifyConnEvents(data, seen);
+  const notes: ConnNote[] = [];
+  for (const ev of events) {
+    notes.push({ keys: [ev.key], title: await connName(ev.userId, token), body: ev.body, url: '/tabs/contacts', tag: ev.tag });
   }
   return { notes, pendingIncoming };
 }

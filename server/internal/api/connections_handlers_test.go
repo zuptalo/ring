@@ -48,6 +48,7 @@ func (f *fakeConnNotifier) wokeCount(userID string) int {
 type fakeConn struct {
 	withdrawn map[[2]string]bool // (requester,target) -> true
 	rejected  map[[2]string]bool // (requester,target) declined → suppressed (FR-007)
+	outgoing  []store.ConnectionReq // what OutgoingRequests returns (spec 1040)
 }
 
 func newFakeConn() *fakeConn {
@@ -79,7 +80,10 @@ func (c *fakeConn) IncomingRequests(_ context.Context, _ string) ([]store.Connec
 	return nil, nil
 }
 func (c *fakeConn) OutgoingRequests(_ context.Context, _ string) ([]store.ConnectionReq, error) {
-	return nil, nil
+	// Models the real store's contract (spec 1040): pending + rejected always,
+	// accepted only while fresh (updated within 24h) — the SW's accepted-note
+	// window. Tests inject rows via `outgoing`.
+	return c.outgoing, nil
 }
 
 // newConnTestServer builds the router with a real fake store (for register/auth)
@@ -245,4 +249,50 @@ func registerLookup(t *testing.T, srv http.Handler, token string) string {
 		t.Fatalf("decode me: %v", err)
 	}
 	return me.UserID
+}
+
+// TestListConnectionsPassesAcceptedOutcomeThrough (spec 1040 US3): the outgoing
+// list carries accepted/rejected states verbatim to the requester — the service
+// worker's "accepted your friend request" note is built from exactly this
+// payload, and a handler-side filter would silently revive the "New friend
+// request" mis-copy bug. (The store-side recency window — accepted rows only
+// while updated within 24h — lives in the SQL and is covered by the e2e stack's
+// real database.)
+func TestListConnectionsPassesAcceptedOutcomeThrough(t *testing.T) {
+	conn := newFakeConn()
+	srv, _ := newConnTestServer(conn)
+	tok, uid, _ := registerNamed(t, srv, "alice")
+
+	conn.outgoing = []store.ConnectionReq{
+		{Requester: uid, Target: "friend-1", State: "accepted", UpdatedMs: 1000},
+		{Requester: uid, Target: "friend-2", State: "rejected", UpdatedMs: 900},
+		{Requester: uid, Target: "friend-3", State: "pending", UpdatedMs: 800},
+	}
+
+	rr := do(t, srv, http.MethodGet, "/v1/connections", tok, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Outgoing []struct {
+			Target string `json:"target"`
+			State  string `json:"state"`
+		} `json:"outgoing"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]string{}
+	for _, o := range resp.Outgoing {
+		got[o.Target] = o.State
+	}
+	want := map[string]string{"friend-1": "accepted", "friend-2": "rejected", "friend-3": "pending"}
+	for target, state := range want {
+		if got[target] != state {
+			t.Errorf("outgoing[%s] state = %q, want %q (full: %v)", target, got[target], state, got)
+		}
+	}
+	if strings.Contains(rr.Body.String(), "friend-1") && got["friend-1"] != "accepted" {
+		t.Errorf("accepted row must pass through with its state intact")
+	}
 }
