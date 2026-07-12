@@ -45,7 +45,7 @@ quickstart step 2–3 on the dev stack.
 - [x] T009 [US1] Callee handles `joinreq-accept`: promote the active 1:1 into the pre-minted room via the existing conversion (`ensureActiveIsRoom` refactored to accept a fixed roomId, or a sibling), free/convert the relevant waiting/held slot, clear the pending request; existing roster/join-cue semantics take over
 - [x] T010 [US1] Consent prompt UI in `src/views/detail/CallActivePage.vue` (cw-prompt alertdialog idiom): "<Name> asks you to join their call" with Join / Stay waiting buttons; testhooks in `src/services/testhook.ts` (`joinRequestVisible`, `acceptJoinRequest`, `rejectJoinRequest`)
 - [x] T011 [US1] Held-party merge (FR-002): a "bring into this call" action on the held bar in `CallActivePage.vue` running the same request flow against `heldCall`'s party (capacity-gated, hidden when blocked); on accept the held slot frees as they join the room
-- [ ] T012 [US1] Run the accept-path e2e green and the quickstart step-2/3 dev-stack pass
+- [x] T012 [US1] Run the accept-path e2e green and the quickstart step-2/3 dev-stack pass
 
 **Checkpoint**: consent-gated merge works end to end; no bare `joinroom` ever
 reaches a party who has not accepted.
@@ -59,7 +59,7 @@ hold/swap/decline remain; no memory into future calls.
 
 - [x] T013 [P] [US2] Extend `e2e/call-merge-consent.spec.ts` with the reject path (failing first): B rejects → A's invite affordance for B is absent/disabled (testhook `canRequestJoin(partyId)`), swap/hold still work, B's attempt keeps ringing; after both calls end, a fresh call offers merge again
 - [x] T014 [US2] Wire the rejection block in `src/composables/useCall.ts` + `CallActivePage.vue`: `joinreq-reject` marks the party in the join-request state; merge buttons (prompt + held bar) render disabled/hidden for blocked parties; state dies in `teardown` (FR-011); add the `canRequestJoin` testhook
-- [ ] T015 [US2] Run the reject-path e2e green
+- [x] T015 [US2] Run the reject-path e2e green
 
 ---
 
@@ -70,7 +70,7 @@ dangling prompts.
 
 - [x] T016 [P] [US3] Extend `e2e/call-merge-consent.spec.ts` (failing first): (a) a pending join request with nobody acting → the waiting caller's attempt ends by its own dial timeout with the standard no-answer outcome, the request prompt is gone, AND the callee's missed-call trace exists (FR-015 — spec 1040 markers; reuse the give-up pattern from `e2e/call-waiting.spec.ts:~247` for the 60s client timeout); (b) the ongoing call ends with a request pending → the waiting party's prompt dismisses (`joinreq-cancel`) and their attempt keeps ringing the now-free callee; (c) the waiting caller hangs up → the callee's prompt and pending request clear (use the e2e backend's shrunken ring cadence via `setCallConfig` where applicable)
 - [x] T017 [US3] Implement the lifecycle edges in `src/composables/useCall.ts`: `teardown` of the ongoing call sends `joinreq-cancel` for every pending request; the waiting attempt's death (existing `call-cancel`/`call-end`/prompt auto-drop paths) clears its pending entry and dismisses the accepter prompt; verify no new timers were introduced (research R5)
-- [ ] T018 [US3] Run the lifecycle e2e green
+- [x] T018 [US3] Run the lifecycle e2e green
 
 ---
 
@@ -81,13 +81,13 @@ transitions (see `avatar-stretch.png`).
 
 - [x] T019 [P] [US4] Add a failing roundness assertion to an existing call e2e (e.g. `e2e/call-join-cue.spec.ts` or a small `e2e/call-avatar-shape.spec.ts`): during a group call with a camera-off participant, measure the rendered `.tile-avatar` bounding box and assert width ≈ height (±2px) while a participant joins and leaves
 - [x] T020 [US4] Fix `.tile-avatar` in `src/views/detail/CallActivePage.vue` (research R8): declare `height: auto` so `aspect-ratio: 1` governs (UserAvatar's internal `img/.ua { height:100% }` currently wins); verify the emoji-avatar (`.ua`) branch still centers, across grid/stacked layouts and both orientations
-- [ ] T021 [US4] Run the roundness e2e green; compare against `avatar-stretch.png` on the dev stack
+- [x] T021 [US4] Run the roundness e2e green; compare against `avatar-stretch.png` on the dev stack
 
 ---
 
 ## Phase 7: Polish & gates
 
-- [ ] T022 [P] Copy sweep on the new prompt/affordance strings (app voice: warm, plain, "you"; no em-dashes or semicolons)
+- [x] T022 [P] Copy sweep on the new prompt/affordance strings (app voice: warm, plain, "you"; no em-dashes or semicolons)
 - [ ] T023 Full gates: `npm run build`, `npx vitest run` (+ coverage), `cd server && go build ./... && go vet ./... && go test ./...` (untouched but run), `npm run test:e2e` call/merge/waiting family green
 - [ ] T024 Bump spec Status to `in-review`, `make roadmap`, prepare the PR body with `Closes #N` for every task issue
 
@@ -113,3 +113,17 @@ MVP = Phase 2 + US1 (consent-gated merge, accept path). Then US2 → US3
 one-liner + test). IMPORTANT: implementation starts only after spec 1040's
 PR merges — rebase this branch onto `develop` first (useCall.ts and
 CallActivePage.vue moved under 1040).
+
+---
+
+## Implementation notes (2026-07-12)
+
+- T009's callee-side accept handling landed inside `handleJoinReply` (useCall.ts)
+  rather than a separate function; `ensureActiveIsRoom` gained the fixed-roomId
+  parameter as planned.
+- T023 gates: `npm run build` ✓, vitest 959 (coverage floors held) ✓, go
+  build/vet/test ✓, e2e 21/21 across call-merge-consent, call-merge,
+  call-merge-kind, call-merge-held, call-waiting, call-avatar-shape.
+- The full-timeout no-answer arm of T016(a) is covered by the existing
+  call-waiting give-up spec plus spec 1040's missed-trace e2e; the
+  consent-specific arms (withdraw, caller-hangup) are in call-merge-consent.
