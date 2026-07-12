@@ -19,6 +19,8 @@ import {
   commitment,
   randomSalt,
   judgeShot,
+  answersHonest,
+  sunkShipValid,
   cellsOf,
   fleetView,
   SIZE,
@@ -296,6 +298,57 @@ describe('verification (the honesty machinery)', () => {
   it('both reveals invalid → a disgraceful draw', () => {
     const s = riggedGame({ layout: L1, salt: S0 }, { layout: L0, salt: S1 }); // both bad salts
     expect(status(s)).toEqual({ state: 'draw' });
+  });
+});
+
+describe('declared sunk-ship geometry (spec 2026)', () => {
+  const DESTROYER = { r: 8, c: 3, len: 2, dir: 'h' } as const; // L1's 2-ship: cells 83, 84
+
+  /** Sink L1's destroyer, with P1 declaring `ship` (or nothing) on the sink. */
+  function sinkDestroyer(ship?: unknown): ArmadaState {
+    let s = committed();
+    s = apply(s, { t: 'shot', cell: 83 }, 0);
+    s = apply(s, { t: 'answer', r: 'hit' }, 1);
+    s = apply(s, { t: 'shot', cell: p1Miss(0) }, 1);
+    s = apply(s, { t: 'answer', r: 'miss' }, 0);
+    s = apply(s, { t: 'shot', cell: 84 }, 0);
+    s = apply(s, { t: 'answer', r: 'sunk', ...(ship !== undefined ? { ship } : {}) } as ArmadaMove, 1);
+    return s;
+  }
+
+  it('a valid declaration is stored on the shot record', () => {
+    expect(sinkDestroyer(DESTROYER).shots[0][1]).toEqual({ cell: 84, r: 'sunk', ship: DESTROYER });
+  });
+
+  it('an undeclared sink stays legal and bare (answers from older clients)', () => {
+    expect(sinkDestroyer().shots[0][1]).toEqual({ cell: 84, r: 'sunk' });
+  });
+
+  it('a malformed declaration is STRIPPED, never fatal (move compatibility)', () => {
+    for (const bad of [
+      { r: 8, c: 3, len: 9, dir: 'h' }, // impossible length
+      { r: 8, c: 9, len: 2, dir: 'h' }, // runs off the board
+      { r: 0, c: 0, len: 2, dir: 'h' }, // does not cover the answered cell
+      { r: 8, c: 3.5, len: 2, dir: 'h' }, // non-integer geometry
+      'destroyer', // not even a ship
+    ]) {
+      expect(sinkDestroyer(bad).shots[0][1]).toEqual({ cell: 84, r: 'sunk' });
+    }
+  });
+
+  it('sunkShipValid demands the answered cell be covered', () => {
+    expect(sunkShipValid(DESTROYER, 84)).toBe(true);
+    expect(sunkShipValid(DESTROYER, 85)).toBe(false);
+  });
+
+  it('a truthful declaration verifies; a geometry lie is cheating', () => {
+    // {r:7,c:4,len:2,dir:'v'} covers the answered cell 84 too (cells 74, 84) —
+    // structurally sane, so it survives applyMove — but it is NOT the destroyer,
+    // and the reveal must expose it exactly like a lied result.
+    const honest = { ...sinkDestroyer(DESTROYER), reveals: [null, { layout: L1, salt: S1 }] } as ArmadaState;
+    expect(answersHonest(1, honest)).toBe(true);
+    const liar = { ...sinkDestroyer({ r: 7, c: 4, len: 2, dir: 'v' }), reveals: [null, { layout: L1, salt: S1 }] } as ArmadaState;
+    expect(answersHonest(1, liar)).toBe(false);
   });
 });
 

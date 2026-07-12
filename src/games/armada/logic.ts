@@ -54,13 +54,20 @@ export interface Reveal {
 export type ArmadaMove =
   | { t: 'commit'; h: string }
   | { t: 'shot'; cell: number }
-  | { t: 'answer'; r: 'miss' | 'hit' | 'sunk'; reveal?: Reveal }
+  | { t: 'answer'; r: 'miss' | 'hit' | 'sunk'; ship?: Ship; reveal?: Reveal }
   | { t: 'reveal'; layout: Layout; salt: string }
 
 export interface ShotRec {
   cell: number
   /** The defender's declared result (trusted in play, verified at the end). */
   r: 'miss' | 'hit' | 'sunk'
+  /** On 'sunk' (spec 2026): the defender's declared geometry of the ship that
+   *  went down, so the attacker draws the exact wreck instead of guessing it
+   *  from contiguous hit cells (the guess merged collinear ADJACENT ships —
+   *  two phantom carriers — until the end-of-game reveal corrected it).
+   *  Optional on the wire: answers from older clients lack it and fall back
+   *  to the guess. Verified against the reveal like the result itself. */
+  ship?: Ship
 }
 
 export interface ArmadaState {
@@ -193,6 +200,22 @@ export function randomSalt(): string {
   return toB64url(randomBytes(32))
 }
 
+/** Structural sanity for a declared sunk-ship geometry (spec 2026): a single
+ *  in-bounds ship of a fleet-plausible length that covers the answered cell.
+ *  Deliberately NOT a rejection gate in applyMove — old engines accept the
+ *  unknown field silently, so a malformed declaration is stripped, never fatal
+ *  (the two engine generations must stay move-compatible). Honesty against the
+ *  actual layout is answersHonest's job at the reveal. */
+export function sunkShipValid(v: unknown, cell: number): v is Ship {
+  const s = v as Ship
+  if (!s || typeof s !== 'object') return false
+  if (!Number.isInteger(s.r) || !Number.isInteger(s.c) || !Number.isInteger(s.len)) return false
+  if (s.dir !== 'h' && s.dir !== 'v') return false
+  if (s.len < 2 || s.len > 5 || s.r < 0 || s.c < 0) return false
+  if (s.dir === 'h' ? s.c + s.len > SIZE || s.r >= SIZE : s.r + s.len > SIZE || s.c >= SIZE) return false
+  return cellsOf(s).includes(cell)
+}
+
 /** The truthful answer for a shot against `layout`, given every hit cell so
  *  far INCLUDING this one when it hits ('sunk' exactly on a ship's last cell). */
 export function judgeShot(layout: Layout, cell: number, hitsSoFar: number[]): 'miss' | 'hit' | 'sunk' {
@@ -256,7 +279,14 @@ export function applyMove(s: ArmadaState, move: ArmadaMove, player: 0 | 1): Arma
   if (s.pending) {
     if (move.t !== 'answer' || !['miss', 'hit', 'sunk'].includes(move.r)) return null
     const attacker = s.pending.by
-    const rec: ShotRec = { cell: s.pending.cell, r: move.r }
+    // A 'sunk' answer may declare the wreck's geometry (spec 2026). Copied
+    // field-by-field into the record (never the wire object itself) and kept
+    // only when structurally sane — stripped otherwise, see sunkShipValid.
+    const declaredShip =
+      move.r === 'sunk' && sunkShipValid(move.ship, s.pending.cell)
+        ? { r: move.ship.r, c: move.ship.c, len: move.ship.len, dir: move.ship.dir }
+        : undefined
+    const rec: ShotRec = { cell: s.pending.cell, r: move.r, ...(declaredShip ? { ship: declaredShip } : {}) }
     const shots: ArmadaState['shots'] = [attacker === 0 ? [...s.shots[0], rec] : s.shots[0], attacker === 1 ? [...s.shots[1], rec] : s.shots[1]]
     const ends = declaredHits(shots[attacker]) >= FLEET_CELLS
     if (ends) {
@@ -287,6 +317,15 @@ export function answersHonest(side: 0 | 1, s: ArmadaState): boolean {
     const truth = judgeShot(reveal.layout, shot.cell, hits)
     if (truth !== 'miss') hits.push(shot.cell)
     if (shot.r !== truth) return false
+    // A declared wreck must be the real ship (spec 2026): the attacker rendered
+    // their board from it, so a geometry lie is cheating exactly like a result
+    // lie. Same cells ⇒ same ship (len ≥ 2 rules out h/v ambiguity). Absent on
+    // answers from older clients — nothing to check then.
+    if (shot.r === 'sunk' && shot.ship) {
+      const real = reveal.layout.find((sh) => cellsOf(sh).includes(shot.cell))
+      const sig = (sh: Ship): string => cellsOf(sh).sort((a, b) => a - b).join(',')
+      if (!real || sig(real) !== sig(shot.ship)) return false
+    }
   }
   return true
 }

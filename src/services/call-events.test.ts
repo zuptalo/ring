@@ -9,8 +9,12 @@ import {
   applyCallTickle,
   applyCallOutcome,
   sweepStaleUnits,
+  hasFreshRing,
+  ringReassert,
+  ringAlreadyNamed,
   type PendingCallEvent,
   type CallBadgeUnit,
+  type RingShownSig,
 } from './call-events';
 
 const NOW = 1_800_000_000_000;
@@ -162,5 +166,65 @@ describe('badge units — FR-007/FR-008/FR-010', () => {
       { callId: 'new', ts: NOW, state: 'ringing' },
     ];
     expect(sweepStaleUnits(units, NOW)).toEqual([expect.objectContaining({ callId: 'new' })]);
+  });
+});
+
+describe('hasFreshRing — the msg-wake ring-upgrade gate (spec 2026)', () => {
+  it('a fresh ring with no outcome in the batch → true', () => {
+    expect(hasFreshRing([buildRingEvent('c1', 'audio', NOW)], NOW + 5_000)).toBe(true);
+  });
+
+  it('empty / absent batches → false', () => {
+    expect(hasFreshRing(undefined, NOW)).toBe(false);
+    expect(hasFreshRing([], NOW)).toBe(false);
+  });
+
+  it('a ring past the window is stale → false (never name a caller who stopped calling)', () => {
+    expect(hasFreshRing([buildRingEvent('c1', 'audio', NOW)], NOW + RING_WINDOW_MS + 1)).toBe(false);
+  });
+
+  it('a ring whose call also ENDED in the same batch → false (missed/cancelled owns the alert)', () => {
+    const batch = [
+      buildRingEvent('c1', 'audio', NOW),
+      buildEndedEvent('c1', 'audio', 'missed', NOW + 30_000),
+    ];
+    expect(hasFreshRing(batch, NOW + 31_000)).toBe(false);
+  });
+
+  it('an ended marker for a DIFFERENT call does not kill a fresh ring', () => {
+    const batch = [
+      buildEndedEvent('c0', 'audio', 'answered', NOW),
+      buildRingEvent('c1', 'video', NOW + 1_000),
+    ];
+    expect(hasFreshRing(batch, NOW + 2_000)).toBe(true);
+  });
+
+  it('outcome-only batches → false', () => {
+    expect(hasFreshRing([buildEndedEvent('c1', 'audio', 'missed', NOW)], NOW)).toBe(false);
+  });
+});
+
+describe('ring shown-signature — minimal shows on the ring-call tag (spec 2026)', () => {
+  const named: RingShownSig = { callId: 'c1', named: true, title: 'Mac', body: 'is calling you 📞', ts: NOW };
+
+  it('reminder re-assert: a fresh NAMED alert re-asserts itself, never downgrades to generic', () => {
+    expect(ringReassert(named, NOW + 10_000)).toEqual({ title: 'Mac', body: 'is calling you 📞' });
+  });
+
+  it('reminder re-assert: absent / generic / stale signatures → null (show the generic)', () => {
+    expect(ringReassert(undefined, NOW)).toBeNull();
+    expect(ringReassert({ named: false, ts: NOW }, NOW)).toBeNull();
+    expect(ringReassert(named, NOW + RING_WINDOW_MS + 1)).toBeNull();
+  });
+
+  it('already-named: an identical fresh naming is skipped (no extra iOS center entry)', () => {
+    expect(ringAlreadyNamed(named, 'Mac', 'is calling you 📞', NOW + 5_000)).toBe(true);
+  });
+
+  it('already-named: different content, generic, or stale signatures re-show', () => {
+    expect(ringAlreadyNamed(named, 'Family', 'Mac is calling 📞', NOW)).toBe(false); // content changed
+    expect(ringAlreadyNamed({ named: false, ts: NOW }, 'Mac', 'is calling you 📞', NOW)).toBe(false);
+    expect(ringAlreadyNamed(named, 'Mac', 'is calling you 📞', NOW + RING_WINDOW_MS + 1)).toBe(false);
+    expect(ringAlreadyNamed(undefined, 'Mac', 'is calling you 📞', NOW)).toBe(false);
   });
 });

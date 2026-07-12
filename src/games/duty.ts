@@ -16,12 +16,14 @@
 
 import {
   FLEET_CELLS,
+  cellsOf,
   judgeShot,
   status,
   type ArmadaMove,
   type ArmadaState,
   type Layout,
   type Reveal,
+  type Ship,
 } from './armada/logic'
 
 export interface DutySecret {
@@ -75,9 +77,15 @@ export function owedMove(
   const incoming = s.shots[p.by].filter((x) => x.r !== 'miss').map((x) => x.cell)
   const r = judgeShot(secret.layout, p.cell, incoming)
   const declared = incoming.length + (r === 'miss' ? 0 : 1)
+  // A sink declares the wreck's geometry (spec 2026) so the attacker draws the
+  // exact ship instead of guessing from contiguous hits (the guess merged
+  // collinear adjacent ships into phantom fleets). Plain-copied like every
+  // emitted move — the reactive-Proxy DataCloneError trap.
+  const sunk = r === 'sunk' ? secret.layout.find((sh) => cellsOf(sh).includes(p.cell)) : undefined
+  const ship: { ship?: Ship } = sunk ? { ship: { r: sunk.r, c: sunk.c, len: sunk.len, dir: sunk.dir } } : {}
   if (declared >= FLEET_CELLS) {
     // The final answer carries the loser's reveal (a bare final answer is illegal).
-    return { t: 'answer', r: 'sunk', reveal: plainReveal(secret) }
+    return { t: 'answer', r: 'sunk', ...ship, reveal: plainReveal(secret) }
   }
-  return { t: 'answer', r }
+  return { t: 'answer', r, ...ship }
 }

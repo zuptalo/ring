@@ -3274,7 +3274,7 @@ function postShareLabel(p: Pick<Post, 'kind' | 'game'>): string {
   // A challenge post leads with the urgency: the first to accept plays (spec 0009).
   if (p.game) {
     const gname = GAMES[p.game.gameType]?.displayName ?? 'game';
-    return `started a ${gname} challenge, be quick if you want it 🫵`;
+    return `started a ${gname} challenge, be quick if you want it 🎮`;
   }
   return p.kind === 'image'
     ? 'shared a photo'
@@ -4444,6 +4444,60 @@ export async function sweepExpiredMessages(): Promise<number> {
   const due = (await getAll<Message>('messages')).filter((m) => m.expiresAt && m.expiresAt <= t);
   for (const m of due) await deleteMessage(m.id);
   return due.length;
+}
+
+/** Repair sweep (spec 2026): group-call rows logged from a missed-call marker
+ *  briefly carried an initials avatar built from "<name> & others" — the raw
+ *  ampersand made the SVG invalid XML, so the Calls tab rendered a broken
+ *  image. Regenerate the glyph for any call row whose stored avatar decodes to
+ *  malformed XML (group rows get the people glyph the live UI uses). */
+export async function repairBrokenCallAvatars(): Promise<number> {
+  const rawAmp = /&(?!amp;|lt;|gt;|quot;|apos;|#)/;
+  let repaired = 0;
+  for (const call of await getAll<Call>('calls')) {
+    const m = (call.avatar ?? '').match(/^data:image\/svg\+xml;utf8,(.*)$/);
+    if (!m) continue;
+    let svg = '';
+    try {
+      svg = decodeURIComponent(m[1]);
+    } catch {
+      /* undecodable counts as broken too */
+    }
+    if (svg && !rawAmp.test(svg)) continue;
+    call.avatar = call.isGroup ? groupAvatar(call.roomId ?? call.contactId) : initialsAvatar(call.name);
+    call.updatedAt = now();
+    await put('calls', call);
+    repaired += 1;
+  }
+  return repaired;
+}
+
+/** Repair sweep (spec 2026): the spec-1032 SW drain briefly persisted spec-1040
+ *  call-event marker frames as empty 'callevent' messages — and ACKED them, so
+ *  they are never redelivered for the page to reprocess. Remove the junk rows,
+ *  deflate the unread counts they inflated (the drain bumped `unread` once per
+ *  row; opening the chat since already zeroed it, so clamp at 0), and recompute
+ *  the chat previews they clobbered. Runs on every open rather than once: the
+ *  pre-fix service worker can stay active — and keep storing junk — until the
+ *  user accepts the app update. Cheap when clean (one indexed scan, no writes). */
+export async function sweepCallEventMessages(): Promise<number> {
+  const junk = (await getAll<Message>('messages')).filter((m) => (m.kind as string) === 'callevent');
+  if (!junk.length) return 0;
+  const perChat = new Map<string, number>();
+  for (const m of junk) {
+    await remove('messages', m.id);
+    perChat.set(m.chatId, (perChat.get(m.chatId) ?? 0) + 1);
+  }
+  for (const [chatId, n] of perChat) {
+    const chat = await getChat(chatId);
+    if (chat?.unread) {
+      chat.unread = Math.max(0, chat.unread - n);
+      chat.updatedAt = now();
+      await put('chats', chat);
+    }
+    await refreshChatPreview(chatId);
+  }
+  return junk.length;
 }
 
 /** Mute (or unmute) a chat's alerting until `until` epoch-ms (a far-future value =
@@ -6286,7 +6340,10 @@ async function logMissedFromMarker(p: PendingCallEvent, knownChatId?: string): P
       id: p.callId,
       contactId: p.roomId,
       name,
-      avatar: groupChat?.avatar ?? initialsAvatar(name),
+      // Ad-hoc rooms have no group chat: use the same people-glyph the live
+      // call UI logs for outgoing ad-hoc calls (groupAvatar), not initials —
+      // "Macbook & others" has no sensible initials.
+      avatar: groupChat?.avatar ?? groupAvatar(p.roomId),
       direction: 'incoming',
       missed: true,
       video,

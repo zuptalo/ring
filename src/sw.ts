@@ -25,9 +25,11 @@ import {
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
   mayEndWakeSilently, quietNote, stampPushWake, stampedShow, countAccepted,
   previewCallRing, recordCallTickle, recordCallOutcome, withdrawCallBadgeUnit, callBadgeCount,
+  readRingShown, recordRingShown, clearRingShown,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import type { CallEventSignal } from '@/services/crypto/message';
+import { hasFreshRing, ringReassert, ringAlreadyNamed } from '@/services/call-events';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
 import { resubscribePush } from '@/services/sw-push';
 import { setPendingNav } from '@/services/pending-nav';
@@ -157,19 +159,43 @@ async function showGeneric(reason?: string): Promise<void> {
   });
 }
 
-async function showCall(named?: { title: string; body: string }): Promise<void> {
-  // (spec 1040) The generic ring shows IMMEDIATELY (renotify → the re-alert), then
-  // previewCallRing may upgrade it in place with the caller's name. The upgrade
-  // re-show keeps the tag but not renotify, so naming never buzzes a second time.
-  await self.registration.showNotification(named?.title ?? 'Incoming call', {
-    body: named?.body ?? 'Tap to answer',
-    icon: ICON,
-    badge: BADGE,
-    tag: 'ring-call',
-    renotify: !named, // each repeated ring push re-alerts (a single updating notification)
-    requireInteraction: true, // a ring shouldn't auto-dismiss before it's seen
-    data: { url: '/tabs/chats' },
-  });
+async function showCall(named?: { title: string; body: string }, opts?: { realert?: boolean }): Promise<void> {
+  // (spec 1040) The generic ring shows IMMEDIATELY (the tickle wake never waits on
+  // decryption), then previewCallRing / the marker's own msg wake may upgrade it
+  // with the caller's name.
+  // (spec 2026) Every re-show CLOSES the previous ring alert first: iOS keeps a
+  // separate Notification Center entry per showNotification call even on the same
+  // tag (the spec-2020 lesson), so the old same-tag+renotify:false "in-place"
+  // upgrade actually read as a DOUBLE notification there — generic and named
+  // stacked — and each group reminder push stacked one more generic. Callers keep
+  // total shows minimal via the sw.ringShown signature (never downgrade to
+  // generic on a reminder, never repeat an identical naming). Closing first is
+  // safe: this wake's visible ending is the show right below; and if that show
+  // somehow fails after the close, the catch re-asserts a generic ring so the
+  // callee is never left ring-less mid-ring (the rejection still reaches the
+  // caller's visibility accounting).
+  await closeByTag('ring-call');
+  const show = (title: string, body: string, silent: boolean) =>
+    self.registration.showNotification(title, {
+      body,
+      icon: ICON,
+      badge: BADGE,
+      tag: 'ring-call',
+      // Naming is SILENT: the generic ring already alerted for this call, so the
+      // upgrade must not buzz a second time (close-first makes it a fresh
+      // notification, which would otherwise re-alert). A generic show, and a
+      // reminder's named re-assert (opts.realert — re-alerting is the reminder's
+      // whole job), should keep alerting.
+      silent,
+      requireInteraction: true, // a ring shouldn't auto-dismiss before it's seen
+      data: { url: '/tabs/chats' },
+    });
+  try {
+    await show(named?.title ?? 'Incoming call', named?.body ?? 'Tap to answer', !!named && !opts?.realert);
+  } catch (e) {
+    if (named) await show('Incoming call', 'Tap to answer', true).catch(() => {});
+    throw e;
+  }
 }
 
 /** (spec 1040) Apply decrypted call-event outcomes: hand the badge unit over
@@ -183,10 +209,48 @@ async function applyCallEventEffects(evs?: CallEventSignal[]): Promise<void> {
     try {
       await recordCallOutcome(ev.callId, ev.outcome);
       if (ev.outcome === 'answered') await closeByTag('ring-call');
+      // (spec 2026) The ring is over either way — retire the shown-signature so a
+      // late reminder tickle can't re-assert a stale name. Only for the call the
+      // signature is actually about (a fresh overlapping ring keeps its own).
+      const sig = await readRingShown();
+      if (!sig?.callId || sig.callId === ev.callId) await clearRingShown();
     } catch (e) {
       console.warn('[sw] call-event effect failed', e);
     }
   }
+}
+
+/** (spec 2026) A msg wake decrypted a fresh dial-time ring marker: name the ring
+ *  notification in place. The {"t":"call"} tickle wake showed the undelayed
+ *  generic ring, but the marker itself rides the queued message channel a few
+ *  seconds later (its send is deliberately deferred off the call-setup hot
+ *  path), so THIS wake is where the caller's name becomes available —
+ *  previewCallRing applies the same naming / hidden-chat / badge rules as the
+ *  tickle path. Returns true when a named re-show happened (a real
+ *  showNotification: it counts as the wake's visible ending, so a marker-only
+ *  wake adds no "New message" noise). */
+async function upgradeRingFromMarkers(evs?: CallEventSignal[]): Promise<boolean> {
+  if (!hasFreshRing(evs, Date.now())) return false;
+  try {
+    const ring = await previewCallRing();
+    if (ring?.kind === 'named') {
+      await recordCallTickle(ring.callId); // claim the tickle's heuristic unit under its real id
+      // Show even when a tickle wake already named the alert identically: the
+      // re-show is SILENT and replaces on the same tag, and it doubles as this
+      // wake's visible ending — the alternative was the quiet "New message"
+      // generic, which reads as a confusing extra notification during a ring.
+      // (Interleaving with the tickle wake's naming is excluded by the caller's
+      // serializeNotify section, so at most one naming is ever in flight.)
+      await showCall({ title: ring.title, body: ring.body });
+      await recordRingShown({ callId: ring.callId, named: true, title: ring.title, body: ring.body, ts: Date.now() });
+      return true;
+    }
+    // Hidden chat: the ring stays generic AND its unit must never badge.
+    if (ring?.kind === 'generic') await withdrawCallBadgeUnit(ring.callId);
+  } catch (e) {
+    console.warn('[sw] ring upgrade from marker failed (ring stays generic)', e);
+  }
+  return false;
 }
 
 /** Format a note's title with its count, e.g. "Alice (3)". The count is the CUMULATIVE per-chat total
@@ -207,6 +271,11 @@ async function showNotes(notes: SwNote[]): Promise<number> {
   const coalesced = await coalesceForShow(notes, Date.now());
   return countAccepted(coalesced.map((n) => async () => {
     try {
+      // (spec 2026) A missed/cancelled call note REPLACES the ring alert (spec
+      // 1040 FR-012) — but iOS stacks same-tag re-shows as separate Notification
+      // Center entries instead of collapsing them, so close the ring explicitly
+      // before showing its replacement.
+      if (n.tag === 'ring-call') await closeByTag('ring-call');
       await self.registration.showNotification(titleWithCount(n), {
         body: n.body,
         icon: ICON,
@@ -568,6 +637,10 @@ async function showMessageNotification(): Promise<void> {
   // count — while a queued wake still gets the lock during another wake's sleep gaps and is never
   // starved past iOS's per-push budget. The first wake's straggler catches the burst's late frames;
   // later wakes find everything shown and re-assert silently. Delivery receipts are unaffected.
+  // (spec 2026) Whether a fresh ring marker already upgraded the 'ring-call'
+  // notification with the caller's name this wake — the upgrade is idempotent
+  // but re-running it pays previewCallRing's queue refetch, so once is enough.
+  let ringUpgraded = false;
   await serializeNotify(async () => {
   const preview = previewPending(); // started once; awaited twice (race, then settle)
   let result: Awaited<ReturnType<typeof previewPending>> = { notes: [], pending: 0, badgePending: 0, suppressed: false, silenced: false, newUnshown: false };
@@ -608,6 +681,13 @@ async function showMessageNotification(): Promise<void> {
     // there's no fresh summary (the mute/badge-only outcome). The badge below still stays accurate.
     shownAny = await reassertFromSummary();
   }
+  // (spec 2026) A fresh dial-time ring marker decrypted this pass names the
+  // ongoing ring alert in place. Runs even when notes were shown (a text can
+  // arrive in the same wake as the marker), and its named re-show counts as the
+  // wake's visible ending — a marker-only wake must upgrade the ring, not add a
+  // generic "New message".
+  ringUpgraded = await upgradeRingFromMarkers(result.callEvents);
+  shownAny = shownAny || ringUpgraded;
   // (spec 1034) Silence is not an outcome: muted / hidden / badge-only / web-push-
   // off (`silenced`), the master-toggle race (`suppressed`), and a nothing-new
   // wake with nothing to re-assert all still consumed a push — end them with the
@@ -628,6 +708,9 @@ async function showMessageNotification(): Promise<void> {
     // ring alert closes when the call was answered elsewhere. Runs before the
     // updateAppBadge below so the badge reflects the handover.
     await applyCallEventEffects(full.callEvents);
+    // (spec 2026) The timed-out race above had no callEvents yet — a slow cold
+    // start's ring marker still names the ring once the full preview settles.
+    if (!ringUpgraded) ringUpgraded = await upgradeRingFromMarkers(full.callEvents);
     if (shownGeneric && full.notes.length) {
       // Upgrade the placeholder to the real sender + text. Show FIRST, close the
       // generic only once a rich note was actually ACCEPTED (spec 2023 FR-007):
@@ -674,6 +757,9 @@ async function showMessageNotification(): Promise<void> {
         return true; // fetch failed → stop the straggler loop
       }
       await applyCallEventEffects(more.callEvents); // spec 1040: stragglers can carry outcomes too
+      // (spec 2026) A marker that arrived after the first fetch (the dial-time
+      // send is deferred a few seconds) still names the ring within this wake.
+      if (!ringUpgraded) ringUpgraded = await upgradeRingFromMarkers(more.callEvents);
       if (more.notes.length) {
         await closeByTag(GENERIC_TAG);
         await showNotes(more.notes);
@@ -751,7 +837,22 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         // Show the ring immediately, ack reachability (so the caller's UI flips to
         // "Ringing"), and nudge any device to reconnect so the live call-offer
         // (buffered briefly server-side) flushes and rings in-app.
-        await showCall();
+        // (spec 2026) A reminder tickle for a ring we already NAMED re-asserts the
+        // named alert (re-alerting is the reminder's whole job) — never downgrades
+        // it back to the generic, which on iOS would stack yet another entry and
+        // then need re-naming. A first tickle shows the undelayed generic (FR-004).
+        const sig = await readRingShown();
+        const reassert = ringReassert(sig, Date.now());
+        await showCall(reassert ?? undefined, { realert: true });
+        if (reassert && sig) {
+          await recordRingShown({ ...sig, ts: Date.now() });
+        } else if (!ringReassert(await readRingShown(), Date.now())) {
+          // Re-read before recording "generic": the ring marker's own msg wake can
+          // name the alert concurrently (the tickle and the marker push land
+          // back-to-back), and a stale {named:false} write here would make the
+          // preview below re-show a name the alert already carries.
+          await recordRingShown({ named: false, ts: Date.now() });
+        }
         void ackCall();
         for (const client of clients) client.postMessage({ type: 'ring:drain' });
         // (spec 1040) One badge unit per call while closed. The tickle carries no
@@ -762,12 +863,25 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         // Name the ring from the caller's sealed dial-time marker (the queued
         // callEvent frame) — an in-place upgrade AFTER the generic alert, so the
         // first ring is never delayed (FR-004). Locked/unresolvable stays generic;
-        // a hidden chat's ring stays generic AND never badges.
+        // a hidden chat's ring stays generic AND never badges. Skipped when the
+        // alert already carries exactly this name (every extra show is an extra
+        // Notification Center entry on iOS).
         try {
           const ring = await previewCallRing();
           if (ring?.kind === 'named') {
             await recordCallTickle(ring.callId); // claim the heuristic unit under its real id
-            await showCall({ title: ring.title, body: ring.body });
+            // The check→show→record must be atomic against the marker msg wake's
+            // upgradeRingFromMarkers (whose enclosing section holds this same
+            // lock): the tickle and marker pushes land back-to-back, and two
+            // unserialized namings each read "not named yet" and BOTH showed —
+            // the double named alert. The slow previewCallRing above stays
+            // outside the lock; only the naming is serialized.
+            await serializeNotify(async () => {
+              if (!ringAlreadyNamed(await readRingShown(), ring.title, ring.body, Date.now())) {
+                await showCall({ title: ring.title, body: ring.body });
+                await recordRingShown({ callId: ring.callId, named: true, title: ring.title, body: ring.body, ts: Date.now() });
+              }
+            });
           } else if (ring?.kind === 'generic') {
             await withdrawCallBadgeUnit(ring.callId);
             await updateAppBadge(0);
