@@ -125,6 +125,13 @@ sweep, verify rows gone, unread corrected, preview recomputed.
 - **FR-005**: All existing spec-1040 behaviors (badge units, missed-call replacement
   notification, page-side missed-call trace) MUST be restored by FR-001 with no change to
   the marker wire format.
+- **FR-006**: At most ONE call notification is visible per call at any moment: the named
+  upgrade, a server reminder re-ring, and the missed/cancelled replacement MUST close the
+  previous `ring-call` notification before re-showing. (iOS keeps a separate Notification
+  Center entry per `showNotification` call even on the same tag — the spec-2020 lesson —
+  so same-tag "in-place" re-shows read as stacked doubles there.) The named upgrade is
+  silent (the generic ring already alerted); reminders and the missed replacement still
+  alert.
 
 ## Success Criteria *(mandatory)*
 

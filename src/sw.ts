@@ -159,18 +159,39 @@ async function showGeneric(reason?: string): Promise<void> {
 }
 
 async function showCall(named?: { title: string; body: string }): Promise<void> {
-  // (spec 1040) The generic ring shows IMMEDIATELY (renotify → the re-alert), then
-  // previewCallRing may upgrade it in place with the caller's name. The upgrade
-  // re-show keeps the tag but not renotify, so naming never buzzes a second time.
-  await self.registration.showNotification(named?.title ?? 'Incoming call', {
-    body: named?.body ?? 'Tap to answer',
-    icon: ICON,
-    badge: BADGE,
-    tag: 'ring-call',
-    renotify: !named, // each repeated ring push re-alerts (a single updating notification)
-    requireInteraction: true, // a ring shouldn't auto-dismiss before it's seen
-    data: { url: '/tabs/chats' },
-  });
+  // (spec 1040) The generic ring shows IMMEDIATELY (the tickle wake never waits on
+  // decryption), then previewCallRing / the marker's own msg wake may upgrade it
+  // with the caller's name.
+  // (spec 2026) Every re-show CLOSES the previous ring alert first: iOS keeps a
+  // separate Notification Center entry per showNotification call even on the same
+  // tag (the spec-2020 lesson), so the old same-tag+renotify:false "in-place"
+  // upgrade actually read as a DOUBLE notification there — generic and named
+  // stacked — and each group reminder push stacked one more generic. Closing
+  // first is safe: this wake's visible ending is the show right below; and if
+  // that show somehow fails after the close, the catch re-asserts a generic ring
+  // so the callee is never left ring-less mid-ring (the rejection still reaches
+  // the caller's visibility accounting).
+  await closeByTag('ring-call');
+  const show = (title: string, body: string, silent: boolean) =>
+    self.registration.showNotification(title, {
+      body,
+      icon: ICON,
+      badge: BADGE,
+      tag: 'ring-call',
+      // Naming is SILENT: the generic ring already alerted for this call, so the
+      // upgrade must not buzz a second time (close-first makes it a fresh
+      // notification, which would otherwise re-alert). A generic (re-)show is a
+      // fresh ring or a server reminder and should keep alerting.
+      silent,
+      requireInteraction: true, // a ring shouldn't auto-dismiss before it's seen
+      data: { url: '/tabs/chats' },
+    });
+  try {
+    await show(named?.title ?? 'Incoming call', named?.body ?? 'Tap to answer', !!named);
+  } catch (e) {
+    if (named) await show('Incoming call', 'Tap to answer', true).catch(() => {});
+    throw e;
+  }
 }
 
 /** (spec 1040) Apply decrypted call-event outcomes: hand the badge unit over
@@ -234,6 +255,11 @@ async function showNotes(notes: SwNote[]): Promise<number> {
   const coalesced = await coalesceForShow(notes, Date.now());
   return countAccepted(coalesced.map((n) => async () => {
     try {
+      // (spec 2026) A missed/cancelled call note REPLACES the ring alert (spec
+      // 1040 FR-012) — but iOS stacks same-tag re-shows as separate Notification
+      // Center entries instead of collapsing them, so close the ring explicitly
+      // before showing its replacement.
+      if (n.tag === 'ring-call') await closeByTag('ring-call');
       await self.registration.showNotification(titleWithCount(n), {
         body: n.body,
         icon: ICON,
