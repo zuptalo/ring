@@ -44,6 +44,7 @@ import {
   applyCallOutcome,
   sweepStaleUnits,
   type CallBadgeUnit,
+  type RingShownSig,
 } from './call-events';
 
 // Same-origin by default (the dev proxy / prod reverse-proxy route /v1 → backend).
@@ -995,6 +996,26 @@ export async function previewCallRing(): Promise<CallRingPreview> {
     return { kind: 'named', title: chat.name, body: `${emoji} ${caller || 'Someone'} is calling`, callId: ev.callId };
   }
   return { kind: 'named', title: caller as string, body: `${emoji} is calling you`, callId: ev.callId };
+}
+
+/** What the 'ring-call' notification currently says (spec 2026): the ring flow
+ *  reads this to avoid re-shows that would stack Notification Center entries on
+ *  iOS (reminder downgrades to generic, repeat namings). TTL'd by the ring
+ *  window via the pure helpers in call-events.ts. */
+const RING_SHOWN_KEY = 'sw.ringShown';
+
+export async function readRingShown(): Promise<RingShownSig | undefined> {
+  return setting<RingShownSig | undefined>(RING_SHOWN_KEY, undefined);
+}
+
+export async function recordRingShown(sig: RingShownSig): Promise<void> {
+  await put<Setting<RingShownSig>>('settings', { key: RING_SHOWN_KEY, value: sig });
+}
+
+/** The ring is over (outcome arrived / page took over): a later tickle must not
+ *  re-assert the stale name. */
+export async function clearRingShown(): Promise<void> {
+  await recordRingShown({ named: false, ts: 0 });
 }
 
 /** The transient per-call badge units (spec 1040), shared with the page through

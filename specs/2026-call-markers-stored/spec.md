@@ -131,7 +131,10 @@ sweep, verify rows gone, unread corrected, preview recomputed.
   Center entry per `showNotification` call even on the same tag — the spec-2020 lesson —
   so same-tag "in-place" re-shows read as stacked doubles there.) The named upgrade is
   silent (the generic ring already alerted); reminders and the missed replacement still
-  alert.
+  alert. Shows are kept to the strict minimum via a persisted shown-signature
+  (`sw.ringShown`): a reminder tickle re-asserts the already-named alert instead of
+  downgrading it to the generic, an identical naming is never re-shown, and the
+  signature retires with the call's outcome.
 
 ## Success Criteria *(mandatory)*
 

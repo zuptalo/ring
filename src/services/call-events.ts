@@ -167,3 +167,39 @@ export function hasFreshRing(evs: readonly CallEventSignal[] | undefined, now: n
   const ended = new Set(evs.filter((e) => e.phase === 'ended').map((e) => e.callId));
   return evs.some((e) => e.phase === 'ring' && !ended.has(e.callId) && now - e.at <= RING_WINDOW_MS);
 }
+
+/**
+ * What the SW last showed on the 'ring-call' tag (persisted in the settings
+ * store, like the badge units). iOS renders EVERY showNotification call as a
+ * new Notification Center entry — same-tag replacement does not collapse
+ * history (the spec-2020 lesson) — so the ring flow must show the strict
+ * minimum: never downgrade a named alert back to generic on a reminder tickle,
+ * and never re-show a name the alert already carries. Single-slot on purpose:
+ * overlapping rings already fold to one unit/alert elsewhere.
+ */
+export interface RingShownSig {
+  callId?: string;
+  named: boolean;
+  title?: string;
+  body?: string;
+  ts: number; // last show; freshness shares the ring window
+}
+
+/** A reminder tickle re-asserts the NAMED alert (re-alerting is the reminder's
+ *  whole job) instead of downgrading to the generic. Stale/absent/generic → null
+ *  (show the undelayed generic as usual). */
+export function ringReassert(sig: RingShownSig | undefined, now: number): { title: string; body: string } | null {
+  if (!sig?.named || !sig.title || now - sig.ts > RING_WINDOW_MS) return null;
+  return { title: sig.title, body: sig.body ?? '' };
+}
+
+/** Skip a naming re-show when the live alert already says exactly this — every
+ *  extra show is an extra Notification Center entry on iOS. */
+export function ringAlreadyNamed(
+  sig: RingShownSig | undefined,
+  title: string,
+  body: string,
+  now: number,
+): boolean {
+  return !!sig?.named && sig.title === title && sig.body === body && now - sig.ts <= RING_WINDOW_MS;
+}
