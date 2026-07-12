@@ -67,6 +67,7 @@ Specs are grouped by category band; status moves
 | [1039](specs/1039-simultaneous-mutual-calls/spec.md) | Simultaneous mutual calls connect instead of ringing each other | 🟢 shipped |
 | [1040](specs/1040-incoming-call-notifications/spec.md) | Incoming Call & Friend-Request Notifications — Identity, Badge, and Missed-Call Trace | 🟢 shipped |
 | [1041](specs/1041-merge-waiting-caller/spec.md) | Merge a Waiting Caller into the Ongoing Call | 🟢 shipped |
+| [1042](specs/1042-connection-indicator/spec.md) | Show when the app has lost its server connection | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
@@ -98,3 +99,4 @@ Specs are grouped by category band; status moves
 | [2024](specs/2024-tab-bar-labels/spec.md) | Tab Bar Labels Stay Visible After Switching Tabs | 🟢 shipped |
 | [2025](specs/2025-video-calls-look/spec.md) | Video calls look sharp again and recover from quality dips | 🟢 shipped |
 | [2026](specs/2026-call-markers-stored/spec.md) | Call markers must never surface as messages | 🟢 shipped |
+| [2027](specs/2027-long-media-captions/spec.md) | Media captions wrap at the photo's edge | 🟢 shipped |

@@ -30,6 +30,9 @@
     <floating-game-button />
     <!-- In-app notification banners (green, with avatar + name): over any route. -->
     <notification-banners />
+    <!-- Connection-state pill (spec 1042): says the server link is down instead
+         of letting sends sit on the pending clock unexplained. -->
+    <connection-banner />
   </ion-app>
 </template>
 
@@ -57,6 +60,7 @@ import MinimizedCall from '@/components/MinimizedCall.vue';
 import MinimizedAudio from '@/components/MinimizedAudio.vue';
 import CallMediaSink from '@/components/CallMediaSink.vue';
 import NotificationBanners from '@/components/NotificationBanners.vue';
+import ConnectionBanner from '@/components/ConnectionBanner.vue';
 import GameOverlay from '@/components/GameOverlay.vue';
 import FloatingGameButton from '@/components/FloatingGameButton.vue';
 import { useGameOverlay } from '@/composables/useGameOverlay';
