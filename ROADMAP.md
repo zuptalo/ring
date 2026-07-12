@@ -68,6 +68,7 @@ Specs are grouped by category band; status moves
 | [1040](specs/1040-incoming-call-notifications/spec.md) | Incoming Call & Friend-Request Notifications — Identity, Badge, and Missed-Call Trace | 🟢 shipped |
 | [1041](specs/1041-merge-waiting-caller/spec.md) | Merge a Waiting Caller into the Ongoing Call | 🟢 shipped |
 | [1042](specs/1042-connection-indicator/spec.md) | Show when the app has lost its server connection | 🟢 shipped |
+| [1044](specs/1044-pinned-chats-show/spec.md) | Pinned Chats Grid (iMessage-style) | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
