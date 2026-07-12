@@ -13,6 +13,17 @@
 
 **Input**: User description: "When we have someone on hold to answer another call, we can switch back and forth between them. Add the possibility to merge the calls: if a group video call is ongoing on one side and another video or audio call comes in, we can send that caller a request to join the group call instead. It is up to them to accept, or reject and wait behind the line. If the join request was rejected, the user should not be able to request that person to join the existing call again — only switching back and forth remains possible. If the user decides to do nothing about the incoming call, or isn't around to do so, the call attempt should auto-drop for the caller after the same amount of time as calling someone who doesn't answer, ending with 'No answer'. Also, during joining or leaving a call the user's avatar gets stretched vertically into a long ellipse — fix this as well."
 
+## Clarifications
+
+### Session 2026-07-12
+
+- Q: What media does the waiting caller join with when they accept a join
+  request? → A: The media they already consented to — their own original call
+  attempt's kind (audio attempt → mic only, camera off; video attempt →
+  camera on) — toggling freely once in the call. Accepting a join request
+  never lights a camera the caller didn't already offer (the capture-consent
+  principle from spec 1039).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Invite the waiting caller into the ongoing call (Priority: P1)
@@ -54,9 +65,11 @@ swappable.
    first (existing add-someone-to-call behavior) and the waiting caller is
    invited into the resulting room.
 5. **Given** an audio caller and an ongoing video call (or vice versa),
-   **When** they accept the join request, **Then** they join under the
-   existing group-call media rules (they can enable or leave off their
-   camera; the call type does not block the merge).
+   **When** they accept the join request, **Then** they join with the media
+   of their own original attempt — an audio caller lands mic-only with the
+   camera off, a video caller lands with their camera on — and can toggle
+   freely in-call; the call type never blocks the merge and acceptance never
+   starts a camera the caller didn't already offer.
 6. **Given** a call already parked on hold, **When** the callee uses the
    merge option on the held call, **Then** the held party receives the same
    join request with the same accept/reject semantics.
@@ -214,7 +227,10 @@ merge-join path.
 - **FR-006**: On rejection, the waiting party's original call attempt MUST
   remain intact with all of today's call-waiting handling available.
 - **FR-007**: Audio and video call attempts MUST both be mergeable into an
-  ongoing call of either kind, subject to existing group-call media rules.
+  ongoing call of either kind. The accepting party joins with the media of
+  their own original attempt (audio → camera off, video → camera on) and can
+  toggle in-call; accepting a join request MUST NOT enable capture the party
+  had not already consented to.
 - **FR-008**: The merge option MUST be unavailable when the ongoing call
   cannot take another participant (existing participant-limit rules).
 
@@ -291,6 +307,24 @@ merge-join path.
 - **SC-007**: The server-visible signalling for a merge contains no more
   information than today's group-call invite signalling (verified by
   inspecting relayed frames in tests).
+
+## Zero-Knowledge Impact
+
+- **What crosses the wire**: The join request, its accept/reject, and its
+  withdrawal ride the EXISTING sealed call-signalling channels (the same
+  class as today's promote/merge `joinroom` signal from spec 1028 and the
+  group-invite controls from specs 0004/1030). The server relays opaque
+  frames and the routing metadata it already holds for any call signal.
+- **What is encrypted**: Everything the request means — which room, which
+  kind, who is asking — is sealed end-to-end exactly like existing call
+  signalling; display names resolve on-device.
+- **What metadata is unavoidably visible**: The server already knows which
+  account ids exchange call signalling and which accounts join a room (it
+  runs the ring/reminder machinery); this feature adds no new fields, no new
+  frame types visible to the server, and no new server-side state.
+- **Why**: Merging is client-side policy over existing signalling; the
+  avatar fix is pure client CSS. The server learns nothing it does not
+  already learn from a hold/swap plus a group-call invite today.
 
 ## Assumptions
 
