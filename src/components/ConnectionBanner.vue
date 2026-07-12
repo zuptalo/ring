@@ -72,10 +72,12 @@ const label = computed(() => (netUp.value ? 'Connecting…' : 'Waiting for netwo
 <style scoped>
 .connbar {
   position: fixed;
-  /* Below the header bar (like the notification banners' offset) so it never
-     covers the title/back control, centered, and narrow enough to read as a
-     status pill rather than a banner. */
-  top: calc(env(safe-area-inset-top, 0px) + 62px);
+  /* Bottom-center, in the floating-widget band above the tab bar / composer
+     (MinimizedCall docks bottom-right, FloatingGameButton bottom-left, both at
+     +66px). A top placement collided with the tab pages' search bar — their
+     large-title layout has no toolbar, so content starts where a header-hugging
+     pill would sit. Down here nothing important ever lives, on any screen. */
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 70px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -109,6 +111,6 @@ const label = computed(() => (netUp.value ? 'Connecting…' : 'Waiting for netwo
 .connbar-fade-enter-from,
 .connbar-fade-leave-to {
   opacity: 0;
-  transform: translateX(-50%) translateY(-6px);
+  transform: translateX(-50%) translateY(6px);
 }
 </style>
