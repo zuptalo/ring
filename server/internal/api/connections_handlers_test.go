@@ -48,6 +48,7 @@ func (f *fakeConnNotifier) wokeCount(userID string) int {
 type fakeConn struct {
 	withdrawn map[[2]string]bool // (requester,target) -> true
 	rejected  map[[2]string]bool // (requester,target) declined → suppressed (FR-007)
+	outgoing  []store.ConnectionReq // what OutgoingRequests returns (spec 1040)
 }
 
 func newFakeConn() *fakeConn {
@@ -79,7 +80,22 @@ func (c *fakeConn) IncomingRequests(_ context.Context, _ string) ([]store.Connec
 	return nil, nil
 }
 func (c *fakeConn) OutgoingRequests(_ context.Context, _ string) ([]store.ConnectionReq, error) {
-	return nil, nil
+	// The default list means UNRESOLVED: pending/rejected only (spec 1040 kept
+	// accepted rows out of it — clients treat leaving this list as "answered").
+	out := make([]store.ConnectionReq, 0, len(c.outgoing))
+	for _, r := range c.outgoing {
+		if r.State != "accepted" {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (c *fakeConn) OutgoingWithRecentAccepts(_ context.Context, _ string) ([]store.ConnectionReq, error) {
+	// Models the real store's ?include=accepted contract (spec 1040): pending +
+	// rejected + accepted-within-24h (the window is SQL-side; the fake returns
+	// everything injected via `outgoing`).
+	return c.outgoing, nil
 }
 
 // newConnTestServer builds the router with a real fake store (for register/auth)
@@ -245,4 +261,70 @@ func registerLookup(t *testing.T, srv http.Handler, token string) string {
 		t.Fatalf("decode me: %v", err)
 	}
 	return me.UserID
+}
+
+// TestListConnectionsAcceptedRowsAreOptIn (spec 1040 US3): the DEFAULT outgoing
+// list means "unresolved" — an answered (accepted) request must leave it, or
+// the friendship UI/tests break. With `?include=accepted` the handler serves
+// the recently-accepted rows the service worker's "accepted your friend
+// request" note is built from, states passed through verbatim. (The store-side
+// 24h recency window lives in the SQL and is covered by the e2e stack's real
+// database.)
+func TestListConnectionsAcceptedRowsAreOptIn(t *testing.T) {
+	conn := newFakeConn()
+	srv, _ := newConnTestServer(conn)
+	tok, uid, _ := registerNamed(t, srv, "alice")
+
+	conn.outgoing = []store.ConnectionReq{
+		{Requester: uid, Target: "friend-1", State: "accepted", UpdatedMs: 1000},
+		{Requester: uid, Target: "friend-2", State: "rejected", UpdatedMs: 900},
+		{Requester: uid, Target: "friend-3", State: "pending", UpdatedMs: 800},
+	}
+
+	states := func(rr interface{ Result() *http.Response }, raw string) map[string]string {
+		t.Helper()
+		var resp struct {
+			Outgoing []struct {
+				Target string `json:"target"`
+				State  string `json:"state"`
+			} `json:"outgoing"`
+		}
+		if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		got := map[string]string{}
+		for _, o := range resp.Outgoing {
+			got[o.Target] = o.State
+		}
+		return got
+	}
+
+	// Default: unresolved only — the accepted row is ABSENT.
+	rr := do(t, srv, http.MethodGet, "/v1/connections", tok, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	got := states(rr, rr.Body.String())
+	if _, present := got["friend-1"]; present {
+		t.Errorf("default outgoing must NOT contain the accepted row, got %v", got)
+	}
+	if got["friend-2"] != "rejected" || got["friend-3"] != "pending" {
+		t.Errorf("default outgoing lost pending/rejected rows: %v", got)
+	}
+
+	// Opt-in: accepted rows pass through with their state intact.
+	rr = do(t, srv, http.MethodGet, "/v1/connections?include=accepted", tok, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list(include=accepted) status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	got = states(rr, rr.Body.String())
+	want := map[string]string{"friend-1": "accepted", "friend-2": "rejected", "friend-3": "pending"}
+	for target, state := range want {
+		if got[target] != state {
+			t.Errorf("include=accepted outgoing[%s] state = %q, want %q (full: %v)", target, got[target], state, got)
+		}
+	}
+	if !strings.Contains(rr.Body.String(), "friend-1") {
+		t.Errorf("accepted row missing from include=accepted response")
+	}
 }

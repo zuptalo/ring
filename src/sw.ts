@@ -24,8 +24,10 @@ import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
   mayEndWakeSilently, quietNote, stampPushWake, stampedShow, countAccepted,
+  previewCallRing, recordCallTickle, recordCallOutcome, withdrawCallBadgeUnit, callBadgeCount,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
+import type { CallEventSignal } from '@/services/crypto/message';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
 import { resubscribePush } from '@/services/sw-push';
 import { setPendingNav } from '@/services/pending-nav';
@@ -155,16 +157,36 @@ async function showGeneric(reason?: string): Promise<void> {
   });
 }
 
-async function showCall(): Promise<void> {
-  await self.registration.showNotification('Incoming call', {
-    body: 'Tap to answer',
+async function showCall(named?: { title: string; body: string }): Promise<void> {
+  // (spec 1040) The generic ring shows IMMEDIATELY (renotify → the re-alert), then
+  // previewCallRing may upgrade it in place with the caller's name. The upgrade
+  // re-show keeps the tag but not renotify, so naming never buzzes a second time.
+  await self.registration.showNotification(named?.title ?? 'Incoming call', {
+    body: named?.body ?? 'Tap to answer',
     icon: ICON,
     badge: BADGE,
     tag: 'ring-call',
-    renotify: true, // each repeated ring push re-alerts (a single updating notification)
+    renotify: !named, // each repeated ring push re-alerts (a single updating notification)
     requireInteraction: true, // a ring shouldn't auto-dismiss before it's seen
     data: { url: '/tabs/chats' },
   });
+}
+
+/** (spec 1040) Apply decrypted call-event outcomes: hand the badge unit over
+ *  (missed) or retire it, and close the stale ring alert when the call was
+ *  answered on another device (the missed/cancelled case needs no close — its
+ *  own note REPLACES the ring via the shared 'ring-call' tag). Idempotent:
+ *  outcome frames can be previewed again on later wakes until the page drains. */
+async function applyCallEventEffects(evs?: CallEventSignal[]): Promise<void> {
+  for (const ev of evs ?? []) {
+    if (ev.phase !== 'ended' || !ev.outcome) continue;
+    try {
+      await recordCallOutcome(ev.callId, ev.outcome);
+      if (ev.outcome === 'answered') await closeByTag('ring-call');
+    } catch (e) {
+      console.warn('[sw] call-event effect failed', e);
+    }
+  }
 }
 
 /** Format a note's title with its count, e.g. "Alice (3)". The count is the CUMULATIVE per-chat total
@@ -333,7 +355,10 @@ async function updateAppBadge(newCount: number): Promise<void> {
       console.warn('[sw] setAppBadge unavailable in SW (older iOS?), page will badge on open');
       return;
     }
-    const total = (await unreadCount()) + newCount;
+    // (spec 1040) + the per-call units: one per ringing/missed-unseen call while
+    // the app is closed. The page clears them on foreground (the calls store is
+    // authoritative from then on), so they never double-count a stored missed call.
+    const total = (await unreadCount()) + newCount + (await callBadgeCount());
     if (total > 0) await nav.setAppBadge(total);
     console.info('[sw] setAppBadge', total);
   } catch (e) {
@@ -472,8 +497,11 @@ async function showConnNotification(): Promise<number> {
     if (accepted > 0) return pendingIncoming;
   }
   // Couldn't reconcile (offline / already-seen) but a tickle implies activity →
-  // a single generic placeholder keeps the userVisibleOnly contract.
-  await self.registration.showNotification('New friend request', {
+  // a single generic placeholder keeps the userVisibleOnly contract. The copy is
+  // EVENT-NEUTRAL (spec 1040 FR-021): this wake may be a new request, an accept,
+  // or a decline — claiming "New friend request" told acceptees the opposite of
+  // what happened.
+  await self.registration.showNotification('Contact updates', {
     body: 'Tap to review',
     icon: ICON,
     badge: BADGE,
@@ -596,6 +624,10 @@ async function showMessageNotification(): Promise<void> {
       new Promise<typeof result>((resolve) => setTimeout(() => resolve(result), SETTLE_MAX_MS)),
     ]);
     pending = full.pending || pending;
+    // (spec 1040) Call outcomes decrypted this pass: badge-unit handover, and the
+    // ring alert closes when the call was answered elsewhere. Runs before the
+    // updateAppBadge below so the badge reflects the handover.
+    await applyCallEventEffects(full.callEvents);
     if (shownGeneric && full.notes.length) {
       // Upgrade the placeholder to the real sender + text. Show FIRST, close the
       // generic only once a rich note was actually ACCEPTED (spec 2023 FR-007):
@@ -641,6 +673,7 @@ async function showMessageNotification(): Promise<void> {
       } catch {
         return true; // fetch failed → stop the straggler loop
       }
+      await applyCallEventEffects(more.callEvents); // spec 1040: stragglers can carry outcomes too
       if (more.notes.length) {
         await closeByTag(GENERIC_TAG);
         await showNotes(more.notes);
@@ -721,6 +754,27 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         await showCall();
         void ackCall();
         for (const client of clients) client.postMessage({ type: 'ring:drain' });
+        // (spec 1040) One badge unit per call while closed. The tickle carries no
+        // callId (content-free), so this pass uses the ring-window heuristic; the
+        // marker preview below claims/keys the unit once it decrypts.
+        await recordCallTickle();
+        await updateAppBadge(0);
+        // Name the ring from the caller's sealed dial-time marker (the queued
+        // callEvent frame) — an in-place upgrade AFTER the generic alert, so the
+        // first ring is never delayed (FR-004). Locked/unresolvable stays generic;
+        // a hidden chat's ring stays generic AND never badges.
+        try {
+          const ring = await previewCallRing();
+          if (ring?.kind === 'named') {
+            await recordCallTickle(ring.callId); // claim the heuristic unit under its real id
+            await showCall({ title: ring.title, body: ring.body });
+          } else if (ring?.kind === 'generic') {
+            await withdrawCallBadgeUnit(ring.callId);
+            await updateAppBadge(0);
+          }
+        } catch (e) {
+          console.warn('[sw] call-ring preview failed (ring stays generic)', e);
+        }
         return;
       }
       if (kind === 'conn') {

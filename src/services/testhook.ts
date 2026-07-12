@@ -530,6 +530,7 @@ export function installTestHook(): void {
         poll: m.poll ?? null,
         contact: m.contact ?? null,
         audio: m.audio ?? null,
+        callLog: m.callLog ?? null, // spec 1040: missed-trace assertions
       })),
     /* ---- media blob lifecycle (server cleanup tests) ---- */
     /** A message's media state: whether the bytes are on-device (mediaId), still pending,
@@ -1038,6 +1039,19 @@ export function installTestHook(): void {
         updatedAt: opts.ts,
       });
     },
+
+    /** Spec 1040: the raw calls-store rows (the Calls tab's source), so the e2e
+     *  missed-call-trace tests can assert a marker-created row (missed, unseen)
+     *  and the no-duplicate rule without scraping the UI. */
+    callRows: async (): Promise<Array<{ id: string; contactId: string; missed: boolean; seen?: boolean; direction: string; isGroup?: boolean }>> =>
+      (await getAll<Call>('calls')).map((c) => ({
+        id: c.id,
+        contactId: c.contactId,
+        missed: c.missed,
+        seen: c.seen,
+        direction: c.direction,
+        isGroup: c.isGroup,
+      })),
 
     /* ---- media storage cleanup ---- */
     /** Seed a fake media blob + a message linking it (for storage tests). */

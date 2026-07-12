@@ -23,7 +23,7 @@ import {
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
 import { kickPendingPosts } from '@/services/pending-posts';
-import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, notifyPostActivity, pruneLocalPost, hydrateGroupMembers } from '@/db/queries';
+import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, notifyPostActivity, pruneLocalPost, hydrateGroupMembers, reconcilePendingCallEvents } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -297,6 +297,11 @@ function start(): void {
       if (typeof document === 'undefined' || document.visibilityState === 'visible') {
         checkForUpdate(true);
       }
+      // (spec 1040) Settle any pending call-event markers: rings the live UI (or a
+      // marker outcome) already resolved clear silently; stale rings with no outcome
+      // become the missed-call trace. Runs after the drain paths above so a queued
+      // outcome marker lands before the stale judgement.
+      if (isUnlocked.value) void reconcilePendingCallEvents();
       void applyPushPreference(true); // (re)register or drop push per the notification prefs
       void sendPresencePrefs(); // upload our sharing booleans
       void sendPresenceSub(); // watch our contacts' presence

@@ -40,7 +40,9 @@ import { computeUnreadTotal, type HiddenBadgeMode } from '@/db/badge-count';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
   EditSignal, EraseSignal, LinkPreviewSignal, GameMoveSignal, GameAcceptSignal, GameCancelSignal,
+  CallEventSignal,
 } from '@/services/crypto/message';
+import { RING_WINDOW_MS, reconcilePending, type PendingCallEvent } from '@/services/call-events';
 import { GAMES } from '@/games/registry';
 import {
   applySignal as applyGameSignal,
@@ -5726,6 +5728,12 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     if (remoteId) await markInboundSeen(remoteId);
     return;
   }
+  // Call lifecycle markers (spec 1040) → missed-call trace bookkeeping, never stored.
+  if (payload.callEvent) {
+    await handleCallEvent(from, chatId, payload.callEvent);
+    if (remoteId) await markInboundSeen(remoteId);
+    return;
+  }
 
   // A group message arrives over a 1:1 session but belongs to the group chat.
   const isGroupMsg = !!payload.groupId;
@@ -6187,6 +6195,175 @@ export async function logCallToChat(chatId: string, log: CallLog): Promise<void>
   chat.lastMessageTime = ts;
   chat.updatedAt = ts;
   await put('chats', chat);
+}
+
+/* ---- call-event markers (spec 1040) ----
+ *
+ * The caller sends sealed `callEvent` frames over the pairwise ratchet: `ring`
+ * at dial time, `ended` at outcome time. They exist so a callee whose app never
+ * ran during the ring still (a) sees the caller named in the OS notification
+ * (SW preview) and (b) gets the missed-call trace on next open. All decisions
+ * are the pure rules in services/call-events.ts; this section is the stateful
+ * glue: the pending ledger (settings store), the send helper, and the
+ * trace-writing reconciler. Idempotent by callId — a row the live call UI
+ * already logged always wins (FR-018). */
+
+const CALL_EVENTS_PENDING_KEY = 'callEvents.pending';
+
+const readPendingCallEvents = (): Promise<Record<string, PendingCallEvent>> =>
+  getSetting<Record<string, PendingCallEvent>>(CALL_EVENTS_PENDING_KEY, {});
+const writePendingCallEvents = (map: Record<string, PendingCallEvent>): Promise<void> =>
+  setSetting(CALL_EVENTS_PENDING_KEY, map);
+
+/** Send one call-event marker to one user (1:1 callee, or each group invitee).
+ *  Fire-and-forget: a marker must never block or fail call setup. Reuses the
+ *  member-session machinery so group co-members without a visible chat work. */
+export async function sendCallEvent(toUserId: string, ev: CallEventSignal): Promise<void> {
+  try {
+    if ((await isContactGhosted(toUserId)) || (await isPeerBlocked(toUserId))) return;
+    const chatId = await memberSessionChat(toUserId);
+    if (!chatId) return;
+    const sealed = await sealForChat(chatId, toUserId, false, {
+      body: '',
+      kind: 'callevent',
+      timestamp: ev.at,
+      callEvent: ev,
+    });
+    if (sealed) await enqueue({ t: 'msg', id: uid(), to: sealed.to, ciphertext: sealed.packet });
+  } catch (e) {
+    console.warn('[call-events] marker send failed', e);
+  }
+}
+
+/** Rooms whose ring THIS device handled live (ring UI, second-call prompt, or
+ *  busy auto-decline). The live flows own the trace, so a marker for such a
+ *  room must not create a second one — including a marker that arrives AFTER
+ *  the live invite (markers ride the queued message channel; invites ride the
+ *  live socket, so either order happens). Entries expire with the ring window.
+ *  (A 1:1 ring needs none of this — its live offer path creates the calls-store
+ *  row keyed by the same callId, which is the dedup signal.) */
+const CALL_EVENTS_SEEN_LIVE_KEY = 'callEvents.seenLiveRooms';
+
+async function roomSeenLive(roomId: string | undefined): Promise<boolean> {
+  if (!roomId) return false;
+  const map = await getSetting<Record<string, number>>(CALL_EVENTS_SEEN_LIVE_KEY, {});
+  const ts = map[roomId];
+  return typeof ts === 'number' && now() - ts <= RING_WINDOW_MS;
+}
+
+/** The live UI is handling the group ring for this room: drop any pending
+ *  markers and remember the room so a late-arriving marker stays silent too. */
+export async function markGroupRingSeenLive(roomId: string): Promise<void> {
+  const map = await readPendingCallEvents();
+  let changed = false;
+  for (const [id, p] of Object.entries(map)) {
+    if (p.roomId === roomId) {
+      delete map[id];
+      changed = true;
+    }
+  }
+  if (changed) await writePendingCallEvents(map);
+  const seen = await getSetting<Record<string, number>>(CALL_EVENTS_SEEN_LIVE_KEY, {});
+  const cutoff = now() - RING_WINDOW_MS;
+  const fresh = Object.fromEntries(Object.entries(seen).filter(([, ts]) => ts >= cutoff));
+  fresh[roomId] = now();
+  await setSetting(CALL_EVENTS_SEEN_LIVE_KEY, fresh);
+}
+
+/** Write the missed-call trace a marker (or stale-ring reconcile) decided on:
+ *  the Calls-tab row (keyed by the marker callId → idempotent) and the in-chat
+ *  call row when a chat resolves. Hidden chats need no special casing here —
+ *  the Calls tab, badges, and chat list already exclude them downstream. */
+async function logMissedFromMarker(p: PendingCallEvent, knownChatId?: string): Promise<void> {
+  if (await get<Call>('calls', p.callId)) return; // live path logged it — never duplicate
+  const video = p.kind === 'video';
+  if (p.roomId) {
+    const groupChat = await getChat(p.roomId);
+    const initiator = await getContact(p.from);
+    const name = groupChat?.name ?? (initiator?.name ? `${initiator.name} & others` : 'Group call');
+    const ts = now();
+    await put<Call>('calls', {
+      id: p.callId,
+      contactId: p.roomId,
+      name,
+      avatar: groupChat?.avatar ?? initialsAvatar(name),
+      direction: 'incoming',
+      missed: true,
+      video,
+      seen: false,
+      timestamp: ts,
+      updatedAt: ts,
+      isGroup: true,
+      roomId: p.roomId,
+      participants: initiator?.name ? [initiator.name] : undefined,
+    });
+    if (groupChat) await logCallToChat(p.roomId, { direction: 'incoming', video, missed: true });
+    return;
+  }
+  await createCall({ callId: p.callId, contactId: p.from, direction: 'incoming', video });
+  const chatId =
+    knownChatId ??
+    (await getAll<Chat>('chats')).find(
+      (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === p.from,
+    )?.id;
+  if (chatId) await logCallToChat(chatId, { direction: 'incoming', video, missed: true });
+}
+
+/** Apply one inbound marker (side effect, never a stored message). */
+async function handleCallEvent(from: string, chatId: string, ev: CallEventSignal): Promise<void> {
+  const map = await readPendingCallEvents();
+  if (ev.phase === 'ring') {
+    if (await roomSeenLive(ev.roomId)) return; // the live ring UI owns this room's trace
+    if (!map[ev.callId] && !(await get<Call>('calls', ev.callId))) {
+      map[ev.callId] = {
+        callId: ev.callId,
+        from,
+        kind: ev.kind,
+        ...(ev.roomId ? { roomId: ev.roomId } : {}),
+        receivedAt: now(),
+      };
+      await writePendingCallEvents(map);
+      // If no outcome ever arrives (caller died mid-ring), reconcile after the
+      // window instead of waiting for the next app open.
+      setTimeout(() => void reconcilePendingCallEvents(), RING_WINDOW_MS + 5_000);
+    }
+    return;
+  }
+  if (!ev.outcome) return;
+  const p: PendingCallEvent = map[ev.callId] ?? {
+    callId: ev.callId,
+    from,
+    kind: ev.kind,
+    ...(ev.roomId ? { roomId: ev.roomId } : {}),
+    receivedAt: now(),
+  };
+  const hasRow = !!(await get<Call>('calls', ev.callId));
+  const sawLive = await roomSeenLive(ev.roomId ?? p.roomId);
+  const decision = reconcilePending(p, { hasRow, sawLive, now: now(), outcome: ev.outcome });
+  if (decision === 'log-missed') await logMissedFromMarker(p, p.roomId ? undefined : chatId);
+  if (map[ev.callId]) {
+    delete map[ev.callId];
+    await writePendingCallEvents(map);
+  }
+}
+
+/** Sweep the pending ledger: rows the live UI logged clear silently; stale
+ *  rings with no outcome become missed-call traces (the caller crashed
+ *  mid-ring). Called on connect/open and after the ring window. */
+export async function reconcilePendingCallEvents(): Promise<void> {
+  const map = await readPendingCallEvents();
+  const entries = Object.values(map);
+  if (!entries.length) return;
+  let changed = false;
+  for (const p of entries) {
+    const hasRow = !!(await get<Call>('calls', p.callId));
+    const decision = reconcilePending(p, { hasRow, sawLive: await roomSeenLive(p.roomId), now: now() });
+    if (decision === 'keep') continue;
+    if (decision === 'log-missed') await logMissedFromMarker(p);
+    delete map[p.callId];
+    changed = true;
+  }
+  if (changed) await writePendingCallEvents(map);
 }
 
 /* ---- invitations (pending placeholders + auto-accept) ---- */

@@ -21,6 +21,11 @@ export function useAppBadge(): void {
     // summary so a stray push within its TTL can't silently re-assert a notification for a chat that's
     // just been read (or re-assert a now-stale cumulative count).
     void setSetting(SUMMARY_KEY, []);
+    // (spec 1040 FR-009) Retire the SW's per-call badge units: a still-ringing
+    // call is now handled by the open app (its increment goes away), and a missed
+    // call is represented in the calls store by now, which useBadges counts —
+    // keeping the unit too would double-badge it.
+    void setSetting('sw.callBadge', []);
     void getSetting<string>('notifications.badge', 'open').then((mode) => {
       if (mode !== 'open') return; // "When viewed" → leave the unread-count badge
       const nav = navigator as Navigator & { clearAppBadge?: () => Promise<void> };
