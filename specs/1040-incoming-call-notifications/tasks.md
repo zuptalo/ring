@@ -44,7 +44,7 @@ note variant.
 
 - [ ] T006 [P] [US1] Write failing vitest specs in `src/services/sw-inbox.calls.test.ts` for the call-note builder: 1:1 audio/video named copy, group copy with group-name resolution via `roomId`, hidden-chat → generic, unresolvable identity → generic, raw-id never shown (FR-006)
 - [ ] T007 [US1] Implement the call-note builder in `src/services/sw-inbox.ts`: recognize `callEvent` ring frames in the preview path (`noteForPayload`/a dedicated `previewCallRing`), resolve caller/group names from local stores, apply the hidden-chat gate before naming, return the note or null
-- [ ] T008 [US1] Update the `{"t":"call"}` wake path in `src/sw.ts`: run a bounded pending preview for a fresh ring marker; show the named ring (same `tag: 'ring-call'`, `renotify`, `requireInteraction`) or today's generic; re-ring wakes re-run the preview so identity upgrades in place (research R2); never delay the first alert (FR-004)
+- [ ] T008 [US1] Update the `{"t":"call"}` wake path in `src/sw.ts`: run a bounded pending preview for a fresh ring marker; show the named ring (same `tag: 'ring-call'`, `renotify`, `requireInteraction`) or today's generic; re-ring wakes re-run the preview so identity upgrades in place (research R2); never delay the first alert (FR-004). NOTE: the `swNotifiedIds` shown-ledger dedups message notes — ring notes must stay re-buildable from the same pending marker across reminder wakes
 - [ ] T009 [US1] Verify on the dev stack per quickstart.md step 2 (named audio, named video, group, and locked-device generic fallback); record results in the PR description
 
 **Checkpoint**: US1 delivers standalone value (named rings) with zero

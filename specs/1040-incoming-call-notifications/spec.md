@@ -165,8 +165,10 @@ by exactly 1 over the whole ring.
    app icon badge shows N+1.
 2. **Given** the same call re-alerts (repeated ring notifications for the same
    call), **Then** the badge remains N+1 — no further increments.
-3. **Given** two distinct incoming calls ring while the app stays closed,
-   **Then** each contributes one increment (N+2).
+3. **Given** two distinct incoming calls ring while the app stays closed and
+   the device can tell them apart, **Then** each contributes one increment
+   (N+2); an undistinguishable overlap (locked device) folds into one
+   increment rather than overcounting.
 4. **Given** the ring ends unanswered while the app stays closed, **Then** the
    badge does not double-count the same call as both "ringing" and "missed":
    the total call-related contribution for that call is one until the user
@@ -275,7 +277,10 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   is closed or backgrounded MUST increase the app icon badge count by exactly
   one.
 - **FR-008**: Subsequent/repeated notifications for the same ringing call MUST
-  NOT increase the badge further; distinct concurrent calls each count once.
+  NOT increase the badge further; distinct concurrent calls each count once
+  when the device can tell the calls apart (identity resolvable). When it
+  cannot (e.g. locked device), overlapping rings MAY fold into one unit —
+  undercounting is the accepted degradation, never overcounting.
 - **FR-009**: When the user opens the app during the ring (via the
   notification or directly), the ringing-call badge contribution MUST be
   removed so the badge reflects only standing unread/missed counts.
