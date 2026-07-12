@@ -4991,10 +4991,17 @@ function cancelRecording() {
   background: var(--app-bubble-out);
 }
 /* Media bubbles: a thin (3px) frame hugging the photo/video; caption, sender and
-   timestamp keep a small inset so they don't touch the edge. */
+   timestamp keep a small inset so they don't touch the edge. Capped at the media
+   frame's width (240px + the 2×3px inset — spec 2027): the bubble is a column
+   flexbox sized shrink-to-fit, so without the cap a LONG caption's unwrapped
+   line — not the photo — set the bubble width (up to the 78% column cap),
+   leaving the photo floating against dead bubble background. With it, captions,
+   sender lines, quotes, and the footer all wrap at the photo's edge. min() keeps
+   narrow viewports consistent: media and bubble shrink together. */
 .bubble-media {
   padding: 3px;
   gap: 0;
+  max-width: min(100%, 246px);
 }
 .bubble-media .bubble-image {
   border-radius: 13px;
