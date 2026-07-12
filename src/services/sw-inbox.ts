@@ -371,12 +371,12 @@ export function noteForPayload(
     const caller = known || 'Someone';
     const isGroupCall = !!ev.roomId;
     const title = isGroupCall ? cChat?.name || caller : caller;
-    const body = ev.kind === 'video' ? '☎️ Missed video call' : '☎️ Missed call';
+    const what = ev.kind === 'video' ? 'Missed video call' : 'Missed call';
     return {
       note: {
         ids: [f.id as string],
         title,
-        body: isGroupCall && cChat ? `${body} from ${caller}` : body,
+        body: isGroupCall && cChat ? `${what} from ${caller} ☎️` : `${what} ☎️`,
         url: cChat ? `/chat/${cChat.id}` : '/tabs/calls',
         tag: 'ring-call', // replaces the incoming-call alert (FR-012)
       },
@@ -991,11 +991,11 @@ export async function previewCallRing(): Promise<CallRingPreview> {
   if (chat && hidden.has(chat.id)) return { kind: 'generic', callId: ev.callId };
   const caller = contacts.find((c) => c.id === from)?.name;
   if (!caller && !(ev.roomId && chat)) return { kind: 'generic', callId: ev.callId }; // never a raw id (FR-006)
-  const emoji = ev.kind === 'video' ? '📹' : '🎙️';
+  const emoji = ev.kind === 'video' ? '📹' : '📞';
   if (ev.roomId && chat) {
-    return { kind: 'named', title: chat.name, body: `${emoji} ${caller || 'Someone'} is calling`, callId: ev.callId };
+    return { kind: 'named', title: chat.name, body: `${caller || 'Someone'} is calling ${emoji}`, callId: ev.callId };
   }
-  return { kind: 'named', title: caller as string, body: `${emoji} is calling you`, callId: ev.callId };
+  return { kind: 'named', title: caller as string, body: `is calling you ${emoji}`, callId: ev.callId };
 }
 
 /** What the 'ring-call' notification currently says (spec 2026): the ring flow
@@ -1320,7 +1320,7 @@ async function swPostChallengeLine(
     const { payload } = openReceivedPost(bytes, p.wrappedKey, getIdentityKeys().x.privateKey);
     if (!payload.game) return null;
     const gname = GAMES[payload.game.gameType]?.displayName ?? 'game';
-    return `started a ${gname} challenge, be quick if you want it 🫵`;
+    return `started a ${gname} challenge, be quick if you want it 🎮`;
   } catch {
     return null;
   }

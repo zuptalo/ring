@@ -235,10 +235,12 @@ async function upgradeRingFromMarkers(evs?: CallEventSignal[]): Promise<boolean>
     const ring = await previewCallRing();
     if (ring?.kind === 'named') {
       await recordCallTickle(ring.callId); // claim the tickle's heuristic unit under its real id
-      // Already named identically (a reminder tickle beat this wake to it) → no
-      // re-show; returning false routes this wake to its own quiet/nothing-new
-      // ending, since nothing was made visible here.
-      if (ringAlreadyNamed(await readRingShown(), ring.title, ring.body, Date.now())) return false;
+      // Show even when a tickle wake already named the alert identically: the
+      // re-show is SILENT and replaces on the same tag, and it doubles as this
+      // wake's visible ending — the alternative was the quiet "New message"
+      // generic, which reads as a confusing extra notification during a ring.
+      // (Interleaving with the tickle wake's naming is excluded by the caller's
+      // serializeNotify section, so at most one naming is ever in flight.)
       await showCall({ title: ring.title, body: ring.body });
       await recordRingShown({ callId: ring.callId, named: true, title: ring.title, body: ring.body, ts: Date.now() });
       return true;
@@ -842,7 +844,15 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         const sig = await readRingShown();
         const reassert = ringReassert(sig, Date.now());
         await showCall(reassert ?? undefined, { realert: true });
-        await recordRingShown(reassert && sig ? { ...sig, ts: Date.now() } : { named: false, ts: Date.now() });
+        if (reassert && sig) {
+          await recordRingShown({ ...sig, ts: Date.now() });
+        } else if (!ringReassert(await readRingShown(), Date.now())) {
+          // Re-read before recording "generic": the ring marker's own msg wake can
+          // name the alert concurrently (the tickle and the marker push land
+          // back-to-back), and a stale {named:false} write here would make the
+          // preview below re-show a name the alert already carries.
+          await recordRingShown({ named: false, ts: Date.now() });
+        }
         void ackCall();
         for (const client of clients) client.postMessage({ type: 'ring:drain' });
         // (spec 1040) One badge unit per call while closed. The tickle carries no
@@ -860,10 +870,18 @@ async function dispatchPush(event: PushEvent): Promise<void> {
           const ring = await previewCallRing();
           if (ring?.kind === 'named') {
             await recordCallTickle(ring.callId); // claim the heuristic unit under its real id
-            if (!ringAlreadyNamed(await readRingShown(), ring.title, ring.body, Date.now())) {
-              await showCall({ title: ring.title, body: ring.body });
-              await recordRingShown({ callId: ring.callId, named: true, title: ring.title, body: ring.body, ts: Date.now() });
-            }
+            // The check→show→record must be atomic against the marker msg wake's
+            // upgradeRingFromMarkers (whose enclosing section holds this same
+            // lock): the tickle and marker pushes land back-to-back, and two
+            // unserialized namings each read "not named yet" and BOTH showed —
+            // the double named alert. The slow previewCallRing above stays
+            // outside the lock; only the naming is serialized.
+            await serializeNotify(async () => {
+              if (!ringAlreadyNamed(await readRingShown(), ring.title, ring.body, Date.now())) {
+                await showCall({ title: ring.title, body: ring.body });
+                await recordRingShown({ callId: ring.callId, named: true, title: ring.title, body: ring.body, ts: Date.now() });
+              }
+            });
           } else if (ring?.kind === 'generic') {
             await withdrawCallBadgeUnit(ring.callId);
             await updateAppBadge(0);

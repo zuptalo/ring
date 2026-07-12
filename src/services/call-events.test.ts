@@ -205,10 +205,10 @@ describe('hasFreshRing — the msg-wake ring-upgrade gate (spec 2026)', () => {
 });
 
 describe('ring shown-signature — minimal shows on the ring-call tag (spec 2026)', () => {
-  const named: RingShownSig = { callId: 'c1', named: true, title: 'Mac', body: '🎙️ is calling you', ts: NOW };
+  const named: RingShownSig = { callId: 'c1', named: true, title: 'Mac', body: 'is calling you 📞', ts: NOW };
 
   it('reminder re-assert: a fresh NAMED alert re-asserts itself, never downgrades to generic', () => {
-    expect(ringReassert(named, NOW + 10_000)).toEqual({ title: 'Mac', body: '🎙️ is calling you' });
+    expect(ringReassert(named, NOW + 10_000)).toEqual({ title: 'Mac', body: 'is calling you 📞' });
   });
 
   it('reminder re-assert: absent / generic / stale signatures → null (show the generic)', () => {
@@ -218,13 +218,13 @@ describe('ring shown-signature — minimal shows on the ring-call tag (spec 2026
   });
 
   it('already-named: an identical fresh naming is skipped (no extra iOS center entry)', () => {
-    expect(ringAlreadyNamed(named, 'Mac', '🎙️ is calling you', NOW + 5_000)).toBe(true);
+    expect(ringAlreadyNamed(named, 'Mac', 'is calling you 📞', NOW + 5_000)).toBe(true);
   });
 
   it('already-named: different content, generic, or stale signatures re-show', () => {
-    expect(ringAlreadyNamed(named, 'Family', '🎙️ Mac is calling', NOW)).toBe(false); // content changed
-    expect(ringAlreadyNamed({ named: false, ts: NOW }, 'Mac', '🎙️ is calling you', NOW)).toBe(false);
-    expect(ringAlreadyNamed(named, 'Mac', '🎙️ is calling you', NOW + RING_WINDOW_MS + 1)).toBe(false);
-    expect(ringAlreadyNamed(undefined, 'Mac', '🎙️ is calling you', NOW)).toBe(false);
+    expect(ringAlreadyNamed(named, 'Family', 'Mac is calling 📞', NOW)).toBe(false); // content changed
+    expect(ringAlreadyNamed({ named: false, ts: NOW }, 'Mac', 'is calling you 📞', NOW)).toBe(false);
+    expect(ringAlreadyNamed(named, 'Mac', 'is calling you 📞', NOW + RING_WINDOW_MS + 1)).toBe(false);
+    expect(ringAlreadyNamed(undefined, 'Mac', 'is calling you 📞', NOW)).toBe(false);
   });
 });

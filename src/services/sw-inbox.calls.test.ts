@@ -61,18 +61,18 @@ describe('noteForPayload — missed-call replacement (US2, FR-012/FR-012a)', () 
     expect(wasMessage).toBe(false);
     expect(note).toMatchObject({
       title: 'Kamran',
-      body: '☎️ Missed call',
+      body: 'Missed call ☎️',
       url: '/chat/chat-1',
       tag: 'ring-call', // replaces the "Incoming call" alert in place
     });
   });
 
   it('a missed video call says so', () => {
-    expect(run(ended({ kind: 'video' }))?.note?.body).toBe('☎️ Missed video call');
+    expect(run(ended({ kind: 'video' }))?.note?.body).toBe('Missed video call ☎️');
   });
 
   it('cancelled (caller hung up before answer) reads as a missed call too', () => {
-    expect(run(ended({ outcome: 'cancelled' }))?.note?.body).toBe('☎️ Missed call');
+    expect(run(ended({ outcome: 'cancelled' }))?.note?.body).toBe('Missed call ☎️');
   });
 
   it('a group call names the group and the caller, deep-linking the group chat', () => {
@@ -80,7 +80,7 @@ describe('noteForPayload — missed-call replacement (US2, FR-012/FR-012a)', () 
     const { note } = run(ended({ roomId: 'room-1' }), { chats: [g] });
     expect(note).toMatchObject({
       title: 'Weekend Trip',
-      body: '☎️ Missed call from Kamran',
+      body: 'Missed call from Kamran ☎️',
       url: '/chat/room-1',
     });
   });

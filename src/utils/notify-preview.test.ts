@@ -38,10 +38,10 @@ describe('notifyPreview', () => {
   // Spec 0008 (US3): game bubbles and move signals get spelled-out lines.
   it('spells out a game invitation, with a generic fallback for unknown games', () => {
     expect(notifyPreview(p({ kind: 'game', game: { gameType: 'tictactoe' } }))).toBe(
-      'Wants to play Tic-tac-toe',
+      'Wants to play Tic-tac-toe 🎮',
     );
     expect(notifyPreview(p({ kind: 'game', game: { gameType: 'from-the-future' } }))).toBe(
-      'Wants to play a game',
+      'Wants to play a game 🎮',
     );
   });
 

@@ -3274,7 +3274,7 @@ function postShareLabel(p: Pick<Post, 'kind' | 'game'>): string {
   // A challenge post leads with the urgency: the first to accept plays (spec 0009).
   if (p.game) {
     const gname = GAMES[p.game.gameType]?.displayName ?? 'game';
-    return `started a ${gname} challenge, be quick if you want it 🫵`;
+    return `started a ${gname} challenge, be quick if you want it 🎮`;
   }
   return p.kind === 'image'
     ? 'shared a photo'
