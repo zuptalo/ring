@@ -145,17 +145,29 @@ func (s *Store) IncomingRequests(ctx context.Context, user string) ([]Connection
 }
 
 // OutgoingRequests returns the requests user SENT that are still pending or were
-// rejected (so the UI can show "requested" / "rejected"), newest first — plus
-// RECENTLY accepted ones (spec 1040): the service worker's closed-app reconcile
-// builds its "accepted your friend request" notification from this list, and
-// without accepted rows that code path could never fire (acceptances showed the
-// misleading "New friend request" placeholder instead). The 24h window bounds
-// the response (accepted rows would otherwise accumulate forever) and sits
-// strictly inside the client's 48h shown-ledger TTL, so every acceptance is
-// announced exactly once and can never re-announce after its ledger entry
+// rejected (so the UI can show "requested" / "rejected"), newest first. This
+// set deliberately means "UNRESOLVED": the UI and the e2e suite treat a request
+// leaving this list as answered, so resolved-accepted rows never appear here —
+// they are served only on explicit request (OutgoingWithRecentAccepts below).
+func (s *Store) OutgoingRequests(ctx context.Context, user string) ([]ConnectionReq, error) {
+	return s.listRequests(ctx,
+		`SELECT requester::text, target::text, state, (extract(epoch from updated_at)*1000)::bigint
+		   FROM connections WHERE requester::text = $1 AND state IN ('pending','rejected')
+		   ORDER BY updated_at DESC`, user)
+}
+
+// OutgoingWithRecentAccepts is OutgoingRequests plus RECENTLY accepted rows
+// (spec 1040), served only when a client explicitly asks
+// (GET /v1/connections?include=accepted): the service worker's closed-app
+// reconcile builds its "accepted your friend request" notification from these,
+// and without accepted rows that code path could never fire (acceptances showed
+// the misleading "New friend request" placeholder instead). The 24h window
+// bounds the response (accepted rows would otherwise accumulate forever) and
+// sits strictly inside the client's 48h shown-ledger TTL, so every acceptance
+// is announced exactly once and can never re-announce after its ledger entry
 // expires. Nothing new is revealed: this echoes the requester's own request
 // state back to them.
-func (s *Store) OutgoingRequests(ctx context.Context, user string) ([]ConnectionReq, error) {
+func (s *Store) OutgoingWithRecentAccepts(ctx context.Context, user string) ([]ConnectionReq, error) {
 	return s.listRequests(ctx,
 		`SELECT requester::text, target::text, state, (extract(epoch from updated_at)*1000)::bigint
 		   FROM connections WHERE requester::text = $1

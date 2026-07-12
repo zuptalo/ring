@@ -1,5 +1,13 @@
 # Contract: `GET /v1/connections` outgoing set change (spec 1040)
 
+> **Amended during implementation**: the widened set is served ONLY for
+> `GET /v1/connections?include=accepted`. The default response keeps its
+> existing meaning (UNRESOLVED requests, pending/rejected) because clients and
+> the e2e suite treat a request leaving that list as answered
+> (`e2e/friendship.spec.ts:54` pins it; CI caught the regression). The SW's
+> `previewConnections` is the only `include=accepted` caller; the store method
+> behind it is `OutgoingWithRecentAccepts`.
+
 ## Today
 
 `Store.OutgoingRequests` (`server/internal/store/connections.go:149-153`)

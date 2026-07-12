@@ -1188,7 +1188,11 @@ export async function previewConnections(): Promise<{ notes: ConnNote[]; pending
     const timer = setTimeout(() => ctrl.abort(), PENDING_FETCH_TIMEOUT_MS);
     let res: Response;
     try {
-      res = await fetch(`${API}/connections`, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
+      // ?include=accepted (spec 1040): the DEFAULT list means unresolved
+      // requests (the UI's contract — an answered request leaves it); only this
+      // reconcile also wants the recently-accepted rows its "accepted your
+      // friend request" note is built from.
+      res = await fetch(`${API}/connections?include=accepted`, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
     } finally {
       clearTimeout(timer);
     }

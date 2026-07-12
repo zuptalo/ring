@@ -51,6 +51,9 @@ type ConnectionStore interface {
 	WithdrawConnection(ctx context.Context, requester, target string) error
 	IncomingRequests(ctx context.Context, user string) ([]store.ConnectionReq, error)
 	OutgoingRequests(ctx context.Context, user string) ([]store.ConnectionReq, error)
+	// Spec 1040: OutgoingRequests + accepted rows updated within 24h, served only
+	// for GET /v1/connections?include=accepted (the SW's accepted-note reconcile).
+	OutgoingWithRecentAccepts(ctx context.Context, user string) ([]store.ConnectionReq, error)
 }
 
 // BlockStore is the per-user block-list persistence. *store.Store satisfies it.

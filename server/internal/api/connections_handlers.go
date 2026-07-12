@@ -198,7 +198,15 @@ func (h *Handlers) listConnections(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not list connections")
 		return
 	}
-	outgoing, err := h.Connections.OutgoingRequests(r.Context(), uid)
+	// Default outgoing = UNRESOLVED requests only (pending/rejected) — clients
+	// treat a request leaving this list as answered. `?include=accepted` (spec
+	// 1040) additionally returns rows accepted within 24h, for the service
+	// worker's "accepted your friend request" reconcile.
+	list := h.Connections.OutgoingRequests
+	if r.URL.Query().Get("include") == "accepted" {
+		list = h.Connections.OutgoingWithRecentAccepts
+	}
+	outgoing, err := list(r.Context(), uid)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not list connections")
 		return

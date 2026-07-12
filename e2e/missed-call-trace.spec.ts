@@ -32,22 +32,30 @@ test('a call attempted while the callee was unreachable leaves a missed trace on
 
   // A dials, gets no reachability sign, and gives up (cancel-before-answer —
   // the clarification says that still logs as a missed call for the callee).
+  // The fast hangup lands before the delayed ring marker fires, so teardown
+  // sends the ring+ended pair together — no timing luck involved.
   await startCall(a, b.id, 'audio');
   await waitCallState(a, ['dialing', 'remote-ringing']);
-  await a.page.waitForTimeout(1500); // let the dial-time ring marker reach the relay queue
+  await a.page.waitForTimeout(500);
   await hangup(a);
   await waitCallState(a, ['idle', 'ended']);
 
-  // B comes back: the queued markers drain and materialize the trace.
+  // B comes back: the queued markers drain and materialize the trace. One
+  // atomic poll reads chat + row + callLog together, so no transient between
+  // separate reads can misjudge it.
   await goOnline(b);
-  await waitCallLog(b, a.id, 15_000);
-
-  // The in-chat row is a MISSED call for B.
   const bChat = await chatWith(b, a.id);
-  const row = (await messages(b, bChat)).find((m) => m.kind === 'call') as
-    | { callLog?: { missed?: boolean } }
-    | undefined;
-  expect(row?.callLog?.missed, 'callee trace is a missed call').toBe(true);
+  await expect
+    .poll(
+      async () => {
+        const row = (await messages(b, bChat)).find((m) => m.kind === 'call') as
+          | { callLog?: { missed?: boolean } }
+          | undefined;
+        return row ? (row.callLog?.missed ?? 'row-without-calllog') : 'no-row';
+      },
+      { timeout: 15_000, message: 'callee trace is a missed call' },
+    )
+    .toBe(true);
 
   // ...and the Calls tab row exists, missed and unseen (feeds the badge until viewed).
   await expect
