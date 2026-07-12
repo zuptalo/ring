@@ -169,11 +169,15 @@ type Handlers struct {
 	// GET /v1/config so clients can pre-validate before encrypting + uploading.
 	MaxBlobBytes int
 	// Calling (WebRTC). CallsEnabled gates GET /v1/turn-credentials; TurnSharedSecret
-	// mints ephemeral TURN credentials; TurnURL is the actual reachable relay URL
-	// advertised to clients (turns:<host>:443 in prod, turn:<ip>:<port> in dev).
+	// mints ephemeral TURN credentials; TurnURLs are the actually-reachable relay
+	// URLs advertised to clients (turns:<host>:443 in prod, turn:<ip>:<port> in
+	// dev). StunURLs, when the operator opted into the UDP endpoint, are the
+	// credential-less stun: entries clients use to discover their public address
+	// for direct call paths (spec 1043).
 	CallsEnabled     bool
 	TurnSharedSecret string
 	TurnURLs         []string
+	StunURLs         []string
 	// Postgres-backed cache for the self-hosted Noto emoji proxy (GET /v1/emoji/...).
 	Emoji EmojiStore
 	// RequireConnection enables the server-enforced connect-request gate: fetching a

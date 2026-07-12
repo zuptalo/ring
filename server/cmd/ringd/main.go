@@ -318,13 +318,14 @@ func run() error {
 	// Embedded TURN/STUN relay for WebRTC calls. Media is relayed opaquely (the
 	// server never sees DTLS keys). In dev it runs plaintext on TurnListen; in
 	// prod it terminates TLS (TURNS) for the SNI host the L4 proxy routes to us.
-	var turnURLs []string
+	var turnURLs, stunURLs []string
 	if cfg.EnableCalls {
 		turnCfg := turnpkg.Config{
 			Realm:        cfg.TurnRealm,
 			RelayIP:      cfg.RelayIP,
 			ListenAddr:   cfg.TurnListen,
 			SharedSecret: secs.TurnSharedSecret,
+			UDPListen:    cfg.TurnUDPListen,
 		}
 		// TURNS over TLS: static cert files win if set; else autocert (the listener
 		// also answers TLS-ALPN-01 challenges); else nil leaves it plaintext (dev).
@@ -361,6 +362,15 @@ func run() error {
 			host := firstNonEmpty(cfg.TurnPublicHost, cfg.TurnHost)
 			port := firstNonEmpty(cfg.TurnPublicPort, "443")
 			turnURLs = []string{fmt.Sprintf("turns:%s:%s?transport=tcp", host, port)}
+			// Operator-opt-in UDP endpoint (spec 1043): advertise STUN for
+			// public-address discovery (direct call paths) and TURN-over-UDP as a
+			// lower-latency relay fallback. Both ride the extra UDP listener; the
+			// STUN entry is credential-less (Binding is unauthenticated).
+			if cfg.TurnUDPListen != "" {
+				turnURLs = append(turnURLs,
+					fmt.Sprintf("turn:%s:%s?transport=udp", cfg.StunPublicHost, cfg.StunPublicPort))
+				stunURLs = []string{fmt.Sprintf("stun:%s:%s", cfg.StunPublicHost, cfg.StunPublicPort)}
+			}
 		} else {
 			host := firstNonEmpty(cfg.TurnPublicHost, cfg.RelayIP, "127.0.0.1")
 			port := firstNonEmpty(cfg.TurnPublicPort, strings.TrimPrefix(cfg.TurnListen, ":"))
@@ -371,9 +381,10 @@ func run() error {
 			}
 		}
 		slog.Info("TURN relay ready", "listen", cfg.TurnListen, "realm", cfg.TurnRealm,
-			"urls", turnURLs, "tls", turnCfg.TLSConfig != nil)
-		// Group calls are peer-to-peer mesh (native DTLS-SRTP per leg) and ride this same
-		// TURN; there is no server-side SFU. See server/docs/CALLING.md.
+			"urls", turnURLs, "stun", stunURLs, "tls", turnCfg.TLSConfig != nil)
+		// Calls are peer-to-peer (1:1 and mesh legs alike, native DTLS-SRTP):
+		// direct when the networks allow it, through this TURN otherwise. There
+		// is no server-side SFU. See server/docs/CALLING.md.
 	}
 
 	handler := api.NewRouter(&api.Handlers{
@@ -383,7 +394,7 @@ func run() error {
 		Version:      version,
 		ReleaseNotes: decodeReleaseNotes(releaseNotesB64),
 		CallsEnabled: cfg.EnableCalls, TurnSharedSecret: secs.TurnSharedSecret,
-		TurnURLs:      turnURLs,
+		TurnURLs: turnURLs, StunURLs: stunURLs,
 		Emoji:     st,
 		StaticDir: cfg.StaticDir,
 		// Dev-only hot-reload proxy: forward the app + HMR socket to the Vite dev
