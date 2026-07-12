@@ -17,7 +17,7 @@
  */
 import { sendLive } from '@/composables/useSync';
 import { getSelfUserId } from '@/services/auth';
-import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
+import { getTurnConfig, warmTurnConfig, callRtcConfig } from '@/services/call/turn';
 import { sendSealedSignal, meshSessionChatId, clearCallSession } from '@/services/call/signalling';
 import { pushDiag, setDiagSnapshot } from '@/services/call/diag';
 import {
@@ -373,11 +373,12 @@ export class MeshSession {
 
   /** Restart a leg's ICE with FRESH TURN credentials (spec 0004 FR-034): on a long call the
    *  creds the PC was built with may have expired, so re-fetch (getTurnConfig refreshes) and
-   *  setConfiguration before re-gathering — otherwise the restart re-gathers with dead creds. */
+   *  setConfiguration before re-gathering — otherwise the restart re-gathers with dead creds.
+   *  Uses the same setting-aware callRtcConfig as buildLeg so a restart can never flip the
+   *  transport policy away from what the leg was built with (spec 1043). */
   private async restartLegIce(leg: PeerLeg): Promise<void> {
     try {
-      const turn = await getTurnConfig();
-      leg.pc.setConfiguration(rtcConfig(turn));
+      leg.pc.setConfiguration(await callRtcConfig());
     } catch {
       /* couldn't refresh creds — fall through and restart with what we have */
     }
@@ -773,17 +774,17 @@ export class MeshSession {
   private async buildLeg(peerId: string): Promise<PeerLeg> {
     const existing = this.legs.get(peerId);
     if (existing) return existing;
-    // Fetch fresh TURN credentials for THIS leg (spec 0004 FR-034): getTurnConfig caches and
-    // refreshes ~30s before expiry, so a leg built late in a long call still gets valid,
-    // non-expired relay creds — a once-cached per-session snapshot would go stale and the
-    // late joiner's relay-only ICE would never gather. This await is also the only one before
-    // the leg is reserved below, so two roster updates racing to open the SAME leg could both
-    // get past the check above; re-check and hand back the winner (two PCs to one peer would
-    // glare against itself and wedge the leg).
-    const turn = await getTurnConfig();
+    // Fetch fresh TURN credentials for THIS leg (spec 0004 FR-034): callRtcConfig's
+    // getTurnConfig caches and refreshes ~30s before expiry, so a leg built late in a long
+    // call still gets valid, non-expired relay creds — a once-cached per-session snapshot
+    // would go stale and the late joiner's ICE would never gather relay candidates. This
+    // await is also the only one before the leg is reserved below, so two roster updates
+    // racing to open the SAME leg could both get past the check above; re-check and hand
+    // back the winner (two PCs to one peer would glare against itself and wedge the leg).
+    const cfg = await callRtcConfig();
     const raced = this.legs.get(peerId);
     if (raced) return raced;
-    const pc = new RTCPeerConnection(rtcConfig(turn));
+    const pc = new RTCPeerConnection(cfg);
     const leg: PeerLeg = {
       pc,
       peerId,

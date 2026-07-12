@@ -1,12 +1,17 @@
 /**
  * Fetches ephemeral ICE/TURN configuration from the server for WebRTC calls.
  *
- * All media rides the self-hosted TURNS relay on 443 (the only public path), so
- * the server returns a single short-lived `turns:` entry. We cache it until just
- * before it expires; callers refresh for long calls and ICE restarts.
+ * Media goes direct when the networks allow it and falls back to the
+ * self-hosted TURN relay when they don't (spec 1043). The server always
+ * advertises the short-lived TURNS-on-443 credential; deployments that opt
+ * into the UDP endpoint additionally advertise a credential-less `stun:`
+ * entry so peers on different networks can discover their public addresses.
+ * We cache the response until just before it expires; callers refresh for
+ * long calls and ICE restarts.
  */
 import { apiBaseUrl } from '@/services/config';
 import { getToken } from '@/services/auth';
+import { getSetting } from '@/db/queries';
 
 export interface TurnConfig {
   iceServers: RTCIceServer[];
@@ -56,14 +61,33 @@ export function warmTurnConfig(): void {
 }
 
 /**
- * Build the RTCConfiguration for a call. We force `iceTransportPolicy: 'relay'`
- * because in the 443-only deployment the only reachable candidate is the TURNS
- * relay; trying host/srflx pairs would only add gathering latency.
+ * Build the RTCConfiguration for a call. Policy is `'all'` so ICE can pick a
+ * direct pair when one works — same-LAN via mDNS host candidates, cross-network
+ * via srflx where the deployment advertises a STUN endpoint — and the TURN
+ * relay stays in the candidate set as the automatic fallback, so no network
+ * that could connect under the old forced-relay behavior gets worse. The
+ * relayOnly override exists for the "Always relay calls" privacy setting:
+ * relay-only gathering never hands the peer a direct address for this user.
  */
-export function rtcConfig(turn: TurnConfig): RTCConfiguration {
+export function rtcConfig(turn: TurnConfig, opts?: { relayOnly?: boolean }): RTCConfiguration {
   return {
     iceServers: turn.iceServers,
-    iceTransportPolicy: 'relay',
+    iceTransportPolicy: opts?.relayOnly ? 'relay' : 'all',
     bundlePolicy: 'max-bundle',
   };
+}
+
+/**
+ * The one place call setup turns user preference into an RTCConfiguration.
+ * Every peer connection — the 1:1 call, each mesh leg, and the mesh's
+ * setConfiguration on ICE restart — must come through here so a restart can
+ * never silently flip the transport policy out from under the privacy setting.
+ * The setting is read per connection, so a toggle applies from the next call.
+ */
+export async function callRtcConfig(): Promise<RTCConfiguration> {
+  const [turn, relayOnly] = await Promise.all([
+    getTurnConfig(),
+    getSetting<boolean>('privacy.relayCalls', false),
+  ]);
+  return rtcConfig(turn, { relayOnly });
 }

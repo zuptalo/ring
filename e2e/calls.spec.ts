@@ -2,9 +2,10 @@ import { test, expect } from '@playwright/test';
 import { createAccount, pair, startCall, accept, hangup, waitCallState, remoteTracks } from './helpers';
 
 /**
- * 1:1 call verification against the real, E2EE signalling + DTLS-SRTP path,
- * relayed through the embedded TURN. This both proves 1:1 calling works AND
- * validates the multi-client harness before it's used for group (SFU) calls.
+ * 1:1 call verification against the real, E2EE signalling + DTLS-SRTP path.
+ * Since spec 1043 media goes direct when it can (same-host browsers pick host
+ * candidates) with the embedded TURN as fallback. This both proves 1:1 calling
+ * works AND validates the multi-client harness before the group (mesh) specs.
  */
 test('1:1 audio call connects end-to-end and both sides receive media', async ({ browser }) => {
   const ctxA = await browser.newContext();
