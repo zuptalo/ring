@@ -9,6 +9,7 @@ import {
   applyCallTickle,
   applyCallOutcome,
   sweepStaleUnits,
+  hasFreshRing,
   type PendingCallEvent,
   type CallBadgeUnit,
 } from './call-events';
@@ -162,5 +163,40 @@ describe('badge units — FR-007/FR-008/FR-010', () => {
       { callId: 'new', ts: NOW, state: 'ringing' },
     ];
     expect(sweepStaleUnits(units, NOW)).toEqual([expect.objectContaining({ callId: 'new' })]);
+  });
+});
+
+describe('hasFreshRing — the msg-wake ring-upgrade gate (spec 2026)', () => {
+  it('a fresh ring with no outcome in the batch → true', () => {
+    expect(hasFreshRing([buildRingEvent('c1', 'audio', NOW)], NOW + 5_000)).toBe(true);
+  });
+
+  it('empty / absent batches → false', () => {
+    expect(hasFreshRing(undefined, NOW)).toBe(false);
+    expect(hasFreshRing([], NOW)).toBe(false);
+  });
+
+  it('a ring past the window is stale → false (never name a caller who stopped calling)', () => {
+    expect(hasFreshRing([buildRingEvent('c1', 'audio', NOW)], NOW + RING_WINDOW_MS + 1)).toBe(false);
+  });
+
+  it('a ring whose call also ENDED in the same batch → false (missed/cancelled owns the alert)', () => {
+    const batch = [
+      buildRingEvent('c1', 'audio', NOW),
+      buildEndedEvent('c1', 'audio', 'missed', NOW + 30_000),
+    ];
+    expect(hasFreshRing(batch, NOW + 31_000)).toBe(false);
+  });
+
+  it('an ended marker for a DIFFERENT call does not kill a fresh ring', () => {
+    const batch = [
+      buildEndedEvent('c0', 'audio', 'answered', NOW),
+      buildRingEvent('c1', 'video', NOW + 1_000),
+    ];
+    expect(hasFreshRing(batch, NOW + 2_000)).toBe(true);
+  });
+
+  it('outcome-only batches → false', () => {
+    expect(hasFreshRing([buildEndedEvent('c1', 'audio', 'missed', NOW)], NOW)).toBe(false);
   });
 });

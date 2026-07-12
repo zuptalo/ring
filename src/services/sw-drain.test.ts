@@ -207,6 +207,10 @@ describe('classifyPayload: the FR-004 eligibility table (pure)', () => {
     ['erase', { erase: { messageId: 'm', at: 1 } }, 'defer'],
     ['link-preview attach', { linkPreviewSig: { messageId: 'm', preview: { url: 'u', domain: 'd' }, at: 1 } }, 'defer'],
     ['call signal', { call: { callId: 'c', type: 'offer' } }, 'defer'],
+    // Spec 2026 regression pin: a callEvent marker persisted here becomes an empty
+    // "message" AND its ack starves the page of the missed-call trace.
+    ['call-event ring marker', { kind: 'callevent', callEvent: { phase: 'ring', callId: 'c', kind: 'audio', at: 1 } }, 'defer'],
+    ['call-event outcome marker', { kind: 'callevent', callEvent: { phase: 'ended', callId: 'c', kind: 'audio', outcome: 'missed', at: 1 } }, 'defer'],
     ['rekey control', { rekey: true }, 'defer'],
     ['ttl control', { ttl: 60_000 }, 'defer'],
     ['ttl-off control (ttl: null)', { ttl: null }, 'defer'],
@@ -327,6 +331,22 @@ describe('drain: atomic apply + exactly-once + ack discipline (T014)', () => {
     queued = [{ t: 'msg', id: 'm2', from: PEER, ciphertext: N(pay({ body: 'after' })) }];
     const r2 = await drainPersistPending();
     expect(r2.applied).toBe(1);
+  });
+
+  it('spec 2026: a call-event marker frame is deferred whole — no empty row, no unread, no ack', async () => {
+    // The regression: the drain persisted ring/ended markers as empty "messages"
+    // and ACKED them, so the page never got to log the missed call.
+    queued = [
+      { t: 'msg', id: 'cv1', from: PEER, ciphertext: N(pay({ body: '', kind: 'callevent', callEvent: { phase: 'ring', callId: 'c9', kind: 'audio', at: 1234 } })) },
+      { t: 'msg', id: 'cv2', from: PEER, ciphertext: N(pay({ body: '', kind: 'callevent', callEvent: { phase: 'ended', callId: 'c9', kind: 'audio', outcome: 'missed', at: 5678 } })) },
+    ];
+    const r = await drainPersistPending();
+    expect(r.applied).toBe(0);
+    expect(r.deferred).toBe(2);
+    expect(r.ackIds).toEqual([]);
+    expect(msgRows().length).toBe(0);
+    expect(chatRow().unread).toBe(0);
+    expect(ledger()).toEqual([]); // frames stay queued for the page's handleCallEvent
   });
 
   it('ackFrames posts exactly the committed ids to /relay/ack', async () => {

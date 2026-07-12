@@ -4446,6 +4446,34 @@ export async function sweepExpiredMessages(): Promise<number> {
   return due.length;
 }
 
+/** Repair sweep (spec 2026): the spec-1032 SW drain briefly persisted spec-1040
+ *  call-event marker frames as empty 'callevent' messages — and ACKED them, so
+ *  they are never redelivered for the page to reprocess. Remove the junk rows,
+ *  deflate the unread counts they inflated (the drain bumped `unread` once per
+ *  row; opening the chat since already zeroed it, so clamp at 0), and recompute
+ *  the chat previews they clobbered. Runs on every open rather than once: the
+ *  pre-fix service worker can stay active — and keep storing junk — until the
+ *  user accepts the app update. Cheap when clean (one indexed scan, no writes). */
+export async function sweepCallEventMessages(): Promise<number> {
+  const junk = (await getAll<Message>('messages')).filter((m) => (m.kind as string) === 'callevent');
+  if (!junk.length) return 0;
+  const perChat = new Map<string, number>();
+  for (const m of junk) {
+    await remove('messages', m.id);
+    perChat.set(m.chatId, (perChat.get(m.chatId) ?? 0) + 1);
+  }
+  for (const [chatId, n] of perChat) {
+    const chat = await getChat(chatId);
+    if (chat?.unread) {
+      chat.unread = Math.max(0, chat.unread - n);
+      chat.updatedAt = now();
+      await put('chats', chat);
+    }
+    await refreshChatPreview(chatId);
+  }
+  return junk.length;
+}
+
 /** Mute (or unmute) a chat's alerting until `until` epoch-ms (a far-future value =
  *  always; null/0 = unmute). The message still arrives and counts toward the badge;
  *  only the OS notification / in-app banner / sound are suppressed. Local only. */

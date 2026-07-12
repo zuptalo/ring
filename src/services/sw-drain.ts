@@ -13,7 +13,7 @@
  * stored as `pendingMedia` for the page to download — in an EXISTING chat from an
  * EXISTING connected contact, including group messages into an existing group.
  * First-contact X3DH, contact/group cards, reactions, edits, erases, poll votes,
- * link-preview attaches, call signals, rekey/TTL controls: deferred.
+ * link-preview attaches, call signals, call-event markers, rekey/TTL controls: deferred.
  *
  * Degrade-to-today is the spine (spec FR-008): flag off, no Web Locks, locked
  * device, fetch failure, lock timeout (a frozen page can hold a lock), transaction
@@ -131,6 +131,12 @@ export function classifyPayload(
   if (payload.erase) return { verdict: 'defer', why: 'erase' };
   if (payload.linkPreviewSig) return { verdict: 'defer', why: 'link-preview' };
   if (payload.call) return { verdict: 'defer', why: 'call-signal' };
+  // Call lifecycle markers (spec 1040, added after this classifier shipped): pure
+  // side effects — badge unit, ring naming, missed-call trace — whose handler
+  // (handleCallEvent) lives page-side. Persisting one here would store an empty
+  // "message", inflate unread, and — worse — ACK the frame so the page never logs
+  // the missed call (spec 2026's regression).
+  if (payload.callEvent) return { verdict: 'defer', why: 'call-event' };
   if (payload.rekey) return { verdict: 'defer', why: 'rekey' };
   if (payload.ttl !== undefined) return { verdict: 'defer', why: 'ttl-control' };
   if (payload.groupId) {
