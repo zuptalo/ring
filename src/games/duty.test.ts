@@ -117,7 +117,23 @@ describe('owed answers (the stall regression)', () => {
     expect(owedMove(s, 1, SEC1)).toEqual({
       t: 'answer',
       r: 'sunk',
+      ship: { r: 8, c: 3, len: 2, dir: 'h' }, // the destroyer went down with the fleet (spec 2026)
       reveal: { layout: L1, salt: S1 },
+    });
+  });
+
+  it('a sinking answer declares the sunk ship geometry (spec 2026)', () => {
+    // Sink L1's destroyer {r:8,c:3,len:2,dir:'h'} (cells 83 → 84).
+    let s = committed();
+    s = apply(s, { t: 'shot', cell: 83 }, 0);
+    s = apply(s, { t: 'answer', r: 'hit' }, 1);
+    s = apply(s, { t: 'shot', cell: 99 }, 1);
+    s = apply(s, { t: 'answer', r: 'miss' }, 0);
+    s = apply(s, { t: 'shot', cell: 84 }, 0);
+    expect(owedMove(s, 1, SEC1)).toEqual({
+      t: 'answer',
+      r: 'sunk',
+      ship: { r: 8, c: 3, len: 2, dir: 'h' },
     });
   });
 });

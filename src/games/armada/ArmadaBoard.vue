@@ -535,10 +535,12 @@ const myWreckCells = computed(() => {
 });
 const mySunkCount = computed(() => myShipsView.value.filter((s) => s.sunk).length);
 
-// Enemy ships: each 'sunk' answer closes the straight run of hits through its
-// cell (ships may touch, so a collinear pair can briefly read as one long
-// wreck — the end-of-game reveal corrects any such guess and surfaces the
-// survivors). Same derivation battleship shipped, on the 10-wide board.
+// Enemy ships: a 'sunk' answer from a current client DECLARES the wreck's
+// geometry (spec 2026) — drawn exactly, verified against the reveal at the
+// end. Answers from older clients lack it, so the straight-run-of-hits guess
+// below stays as the fallback (ships may touch, so a collinear pair could
+// read as one long wreck — the phantom-two-carriers bug this declaration
+// fixes; the end-of-game reveal corrects any leftover guess).
 const theirDerivedWrecks = computed<Ship[]>(() => {
   const shots = props.state.shots[me.value];
   const hitCells = new Set<number>();
@@ -548,6 +550,11 @@ const theirDerivedWrecks = computed<Ship[]>(() => {
   for (const rec of shots) {
     if (rec.r !== 'miss') hitCells.add(rec.cell);
     if (rec.r !== 'sunk') continue;
+    if (rec.ship) {
+      wrecks.push(rec.ship);
+      cellsOf(rec.ship).forEach((c) => assigned.add(c));
+      continue;
+    }
     const r0 = Math.floor(rec.cell / 10);
     const c0 = rec.cell % 10;
     let c1 = c0, c2 = c0, r1 = r0, r2 = r0;
