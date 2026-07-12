@@ -4446,6 +4446,32 @@ export async function sweepExpiredMessages(): Promise<number> {
   return due.length;
 }
 
+/** Repair sweep (spec 2026): group-call rows logged from a missed-call marker
+ *  briefly carried an initials avatar built from "<name> & others" — the raw
+ *  ampersand made the SVG invalid XML, so the Calls tab rendered a broken
+ *  image. Regenerate the glyph for any call row whose stored avatar decodes to
+ *  malformed XML (group rows get the people glyph the live UI uses). */
+export async function repairBrokenCallAvatars(): Promise<number> {
+  const rawAmp = /&(?!amp;|lt;|gt;|quot;|apos;|#)/;
+  let repaired = 0;
+  for (const call of await getAll<Call>('calls')) {
+    const m = (call.avatar ?? '').match(/^data:image\/svg\+xml;utf8,(.*)$/);
+    if (!m) continue;
+    let svg = '';
+    try {
+      svg = decodeURIComponent(m[1]);
+    } catch {
+      /* undecodable counts as broken too */
+    }
+    if (svg && !rawAmp.test(svg)) continue;
+    call.avatar = call.isGroup ? groupAvatar(call.roomId ?? call.contactId) : initialsAvatar(call.name);
+    call.updatedAt = now();
+    await put('calls', call);
+    repaired += 1;
+  }
+  return repaired;
+}
+
 /** Repair sweep (spec 2026): the spec-1032 SW drain briefly persisted spec-1040
  *  call-event marker frames as empty 'callevent' messages — and ACKED them, so
  *  they are never redelivered for the page to reprocess. Remove the junk rows,
@@ -6314,7 +6340,10 @@ async function logMissedFromMarker(p: PendingCallEvent, knownChatId?: string): P
       id: p.callId,
       contactId: p.roomId,
       name,
-      avatar: groupChat?.avatar ?? initialsAvatar(name),
+      // Ad-hoc rooms have no group chat: use the same people-glyph the live
+      // call UI logs for outgoing ad-hoc calls (groupAvatar), not initials —
+      // "Macbook & others" has no sensible initials.
+      avatar: groupChat?.avatar ?? groupAvatar(p.roomId),
       direction: 'incoming',
       missed: true,
       video,

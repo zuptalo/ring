@@ -136,6 +136,22 @@ sweep, verify rows gone, unread corrected, preview recomputed.
   downgrading it to the generic, an identical naming is never re-shown, and the
   signature retires with the call's outcome.
 
+### Follow-up fixes ridden on this branch (user-verified rounds)
+
+- **FR-007** (avatar): the missed-group-call row this spec's `logMissedFromMarker` writes
+  MUST use the ad-hoc group people-glyph when no group chat exists — an initials disc
+  built from "<name> & others" embeds a raw ampersand and renders as a broken image.
+  `initials()` skips tokens that don't start with a letter/digit, the SVG text is
+  XML-escaped as defense in depth, and a startup sweep regenerates already-stored rows
+  whose avatar decodes to malformed XML.
+- **FR-008** (Armada, companion hotfix to spec 1038): a `sunk` answer now DECLARES the
+  sunk ship's geometry, stored on the shot record and drawn exactly — the old
+  contiguous-hits guess merged collinear adjacent ships into phantom fleets (two
+  carriers / two destroyers) until the end-of-game reveal. Declarations are optional on
+  the wire (old clients keep the guess as fallback), structurally-invalid ones are
+  stripped rather than fatal (move compatibility across client generations), and a
+  geometry lie is caught by `answersHonest` at the reveal exactly like a result lie.
+
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes

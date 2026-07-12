@@ -23,7 +23,7 @@ import {
 } from '@/services/transport';
 import { handleIncomingFrame, drainOutbox } from '@/services/sync';
 import { kickPendingPosts } from '@/services/pending-posts';
-import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, sweepCallEventMessages, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, notifyPostActivity, pruneLocalPost, hydrateGroupMembers, reconcilePendingCallEvents } from '@/db/queries';
+import { getChat, getContact, listChats, listMessages, listMessagesOlder, listContacts, getSetting, drainPendingIncoming, listPendingInvites, resumePendingMediaJobs, refreshContactStatuses, refreshBlocks, sweepExpiredMessages, sweepCallEventMessages, repairBrokenCallAvatars, getPresenceOverrides, collectUnconfirmedOutgoing, markMessagesSeenReported, syncPosts, sweepExpiredPosts, syncEngagement, notifyNewPost, notifyPostActivity, pruneLocalPost, hydrateGroupMembers, reconcilePendingCallEvents } from '@/db/queries';
 import { checkDeliveries, checkSeen } from '@/services/api';
 import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
@@ -444,10 +444,12 @@ function start(): void {
   // vanish on both sides shortly after their timer elapses even mid-session.
   void sweepExpiredMessages();
   setInterval(() => void sweepExpiredMessages(), 30_000);
-  // Repair sweep (spec 2026): remove call-event marker rows the pre-fix SW drain
-  // stored as empty messages (and restore the unread counts/previews they broke).
+  // Repair sweeps (spec 2026): remove call-event marker rows the pre-fix SW drain
+  // stored as empty messages (and restore the unread counts/previews they broke),
+  // and regenerate call-row avatars whose SVG was malformed ("& others" initials).
   // Every open, not once — the old SW can keep writing junk until the update lands.
   void sweepCallEventMessages();
+  void repairBrokenCallAvatars();
   // Wall posts (spec 0003): pull any addressed to us, and sweep expired ones on the
   // same cadence as disappearing messages so they vanish shortly after their timer.
   void syncPosts();

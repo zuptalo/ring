@@ -17,15 +17,22 @@ function hash(s: string): number {
 function initials(name: string): string {
   return name
     .split(/\s+/)
-    .filter(Boolean)
+    // Only words that START with a letter or digit contribute an initial: a
+    // connective token like the "&" in "Macbook & others" would otherwise
+    // become a raw ampersand inside the SVG — invalid XML, broken image.
+    .filter((w) => /^[\p{L}\p{N}]/u.test(w))
     .slice(0, 2)
     .map((w) => w[0]?.toUpperCase() ?? '')
     .join('');
 }
 
+/** Escape a string for an SVG text node / attribute (same rule emojiAvatar
+ *  uses) — defense in depth behind the initials() filter above. */
+const xmlSafe = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
 export function initialsAvatar(name: string): string {
   const bg = COLORS[hash(name) % COLORS.length];
-  const text = initials(name) || '?';
+  const text = xmlSafe(initials(name) || '?');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">
 <rect width="120" height="120" rx="60" fill="${bg}"/>
 <text x="60" y="60" dy="0.35em" text-anchor="middle" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="48" font-weight="600" fill="#ffffff">${text}</text>

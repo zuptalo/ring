@@ -29,3 +29,23 @@ describe('emoji avatars (spec 0008 FR-027)', () => {
     expect(a).toBe(b); // deterministic, byte-stable (profile-change signatures rely on it)
   });
 });
+
+describe('initials avatars survive XML-hostile names (spec 2026)', () => {
+  const decode = (src: string): string => decodeURIComponent(src.replace('data:image/svg+xml;utf8,', ''));
+
+  it('"Macbook & others" yields valid SVG with letter initials (the broken Calls-tab disc)', () => {
+    const svg = decode(initialsAvatar('Macbook & others'));
+    expect(svg).toContain('>MO<'); // the "&" token contributes no initial
+    expect(svg).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;|#)/); // no raw ampersand → parseable XML
+  });
+
+  it('a name with no letter-initial tokens still renders the "?" disc', () => {
+    expect(decode(initialsAvatar('& <>'))).toContain('>?<');
+  });
+
+  it('XML-special initials are escaped, not dropped', () => {
+    const svg = decode(initialsAvatar('Alert <script>'));
+    expect(svg).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;|#)/);
+    expect(svg).not.toContain('<script');
+  });
+});
