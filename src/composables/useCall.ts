@@ -41,7 +41,7 @@ import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
 import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
-  sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth, sendJoinRoom,
+  sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth, sendCameraState, sendJoinRoom,
   sendJoinRequest, sendJoinRequestReply, sendJoinRequestCancel,
 } from '@/services/call/signalling';
 import {
@@ -84,6 +84,13 @@ export const localStream = ref<MediaStream | null>(null);
 export const remoteStream = ref<MediaStream | null>(null);
 export const muted = ref(false);
 export const cameraOff = ref(false);
+// 1:1: whether the PEER's video has gone dark (their camera-off detaches the
+// sender, so our receiver track fires mute; unmute on resume). The UI swaps
+// their slot to the avatar off this — track objects aren't reactive, so the
+// mute/unmute listeners installed in ontrack drive it (spec 2029). Starts true:
+// a receiver track is muted until the first RTP arrives, and avatar-until-
+// first-frame beats a black flash.
+export const remoteVideoMuted = ref(true);
 // Which camera the local video track is using, and whether we're sharing the screen
 // (in which case the outgoing video track is the display, not the camera).
 export const cameraFacing = ref<'user' | 'environment'>('user');
@@ -127,6 +134,9 @@ export const heldCall = ref<CallMeta | null>(null);
 export const remoteHeld = ref(false);
 // Group calls: peers who have put us on hold, so their tile shows "on hold" (mesh-reported).
 export const groupHeldPeers = ref<string[]>([]);
+// Group calls: peers whose video has gone dark (camera-off / adaptive pause detached their
+// sender → our receiver track muted); their tile shows the avatar (mesh-reported, spec 2029).
+export const groupVideoMutedPeers = ref<string[]>([]);
 // When the other side resumes a call they'd put us on hold, we don't snap our camera/mic back
 // on instantly — we count down (5→1) with a cue first, so the person isn't caught off-guard
 // becoming visible/audible again. null = not counting down (spec 0005).
@@ -341,7 +351,9 @@ let secondIce: RTCIceCandidateInit[] = [];
  *  waiting, spec 0005). Detach pauses outgoing; attach restores it from the shared stream. */
 async function set1to1Senders(target: RTCPeerConnection, stream: MediaStream | null): Promise<void> {
   const a = stream?.getAudioTracks()[0] ?? null;
-  const v = stream?.getVideoTracks()[0] ?? null;
+  // Hold/resume + PC rebuilds route through here: video honors the camera toggle so a
+  // resume (or reconnect) never resurrects video the user turned off (spec 2029).
+  const v = cameraOff.value ? null : (stream?.getVideoTracks()[0] ?? null);
   for (const tx of target.getTransceivers()) {
     const kind = tx.receiver?.track?.kind ?? tx.sender.track?.kind;
     if (kind === 'audio') await tx.sender.replaceTrack(a).catch(() => {});
@@ -785,6 +797,15 @@ async function newPeerConnection(): Promise<RTCPeerConnection> {
   conn.ontrack = (e) => {
     remoteStream.value = e.streams[0] ?? null;
     markConnect('firstRemoteMedia');
+    // Mirror the peer's video state into reactive land (spec 2029): their
+    // camera-off detaches the sending track, which surfaces here ONLY as a
+    // mute on the receiver track — no stream/track change fires, so without
+    // these listeners the UI would keep rendering a dark video forever.
+    if (e.track.kind === 'video') {
+      remoteVideoMuted.value = e.track.muted;
+      e.track.addEventListener('mute', () => (remoteVideoMuted.value = true));
+      e.track.addEventListener('unmute', () => (remoteVideoMuted.value = false));
+    }
   };
   conn.onconnectionstatechange = () => {
     if (!pc) return;
@@ -1422,6 +1443,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   localStream.value?.getTracks().forEach((t) => t.stop());
   localStream.value = null;
   remoteStream.value = null;
+  remoteVideoMuted.value = true; // next call starts avatar-until-first-frame (spec 2029)
   remoteStreams.value = [];
   groupStreamOwners.value = {};
   activeSpeakers.value = [];
@@ -1561,6 +1583,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   remoteQueued.value = false;
   remoteHeld.value = false;
   groupHeldPeers.value = [];
+  groupVideoMutedPeers.value = []; // spec 2029
   heldCall.value = null;
   incomingSecond.value = null;
   callStats.value = { durationSec: 0, kBpsUp: 0, kBpsDown: 0 };
@@ -1811,6 +1834,7 @@ async function enterGroupCall(
       onStreamMap: (m) => (groupStreamOwners.value = m),
       onActiveSpeakers: (keys) => (activeSpeakers.value = keys),
       onHeldPeers: (ids) => (groupHeldPeers.value = ids),
+      onVideoMutedPeers: (ids) => (groupVideoMutedPeers.value = ids),
       onConnectionState: (st) => {
         if (st === 'connected') {
           clearGrace();
@@ -2077,6 +2101,7 @@ async function convertActiveToRoom(
   pendingOffer = null;
   pendingIce.length = 0;
   remoteStream.value = null;
+  remoteVideoMuted.value = true; // next call starts avatar-until-first-frame (spec 2029)
   remoteHeld.value = false;
   reprimeBytes = true; // re-baseline byte counters against the new mesh session
   if (callMeta.value) callMeta.value.tornDown = true; // the old 1:1 meta is retired
@@ -2627,10 +2652,12 @@ async function parkActiveAsHeld(): Promise<void> {
   pc = null;
   groupSession = null;
   remoteStream.value = null;
+  remoteVideoMuted.value = true; // next call starts avatar-until-first-frame (spec 2029)
   remoteStreams.value = [];
   groupStreamOwners.value = {};
   activeSpeakers.value = [];
   groupHeldPeers.value = [];
+  groupVideoMutedPeers.value = []; // spec 2029
   remoteHeld.value = false;
 }
 
@@ -2654,6 +2681,7 @@ async function restoreHeldCall(): Promise<void> {
   groupStreamOwners.value = slot.owners;
   remoteHeld.value = false;
   groupHeldPeers.value = [];
+  groupVideoMutedPeers.value = []; // spec 2029
   let stream: MediaStream | null = null;
   try {
     stream = await navigator.mediaDevices.getUserMedia(gumConstraints(slot.meta.kind));
@@ -2711,6 +2739,7 @@ export async function swapCalls(): Promise<void> {
   groupStreamOwners.value = slot.owners;
   remoteHeld.value = false;
   groupHeldPeers.value = [];
+  groupVideoMutedPeers.value = []; // spec 2029
   if (slot.meta.isGroup && slot.groupSession && stream) {
     await slot.groupSession.resume(stream);
   } else if (slot.pc && stream) {
@@ -3101,9 +3130,33 @@ export function toggleMute(): void {
 export function toggleCamera(): void {
   cameraOff.value = !cameraOff.value;
   callCue(cameraOff.value ? 'cameraoff' : 'cameraon');
-  // Acts on whichever video track is live (camera, or the screen while sharing), so
-  // the user can blank/resume the outgoing video without ending the call.
+  // Local preview: the track keeps running (camera stays acquired for a fast resume)
+  // but frame delivery stops; our own tile swaps to the avatar off cameraOff.
   localStream.value?.getVideoTracks().forEach((t) => (t.enabled = !cameraOff.value));
+  // The wire (spec 2029): detach the sender(s) outright instead of streaming black
+  // frames — encoding stops entirely and the PEER's receiver track mutes, which is
+  // the only signal their UI gets to swap our tile to the avatar (no sealed message
+  // needed, so mixed app versions in a call stay compatible).
+  if (groupSession) {
+    void groupSession.setCameraOff(cameraOff.value);
+    return;
+  }
+  const sender = videoSender();
+  if (!sender) return;
+  if (cameraOff.value) {
+    if (sender.track) void sender.replaceTrack(null).catch(() => {});
+  } else if (!oneToOneVideoSuspended) {
+    // Adaptation-suspended senders stay with adaptation: it re-attaches on recovery
+    // (and its recovery honors cameraOff, so ownership never crosses).
+    const v = localStream.value?.getVideoTracks()[0];
+    if (v && v.readyState === 'live') void sender.replaceTrack(v).catch(() => {});
+  }
+  // Tell the peer deterministically (sealed camoff/camon): browsers report a gone-dark
+  // receiver track too inconsistently to carry the avatar swap on their own.
+  const meta = callMeta.value;
+  if (meta?.chatId && meta.peerUserId) {
+    void sendCameraState(!cameraOff.value, meta.chatId, meta.peerUserId, meta.callId);
+  }
 }
 
 /* ---- mid-call media changes (camera flip, screen share, video<->audio) ----
@@ -3198,11 +3251,13 @@ async function applySenderTier(sender: RTCRtpSender | null, tier: Tier): Promise
     return;
   }
   // Leaving the floor: re-attach ONLY what adaptation itself detached (never a track the
-  // user's camera toggle or a hold removed — those paths own their tracks).
+  // user's camera toggle or a hold removed — those paths own their tracks). While the
+  // camera is off, clear the flag but leave the sender detached: camera-on re-attaches
+  // (it skips only while the flag is set, so ownership hands over cleanly, spec 2029).
   if (oneToOneVideoSuspended) {
     oneToOneVideoSuspended = false;
     const v = localStream.value?.getVideoTracks()[0];
-    if (v && v.readyState === 'live') await sender.replaceTrack(v).catch(() => {});
+    if (v && v.readyState === 'live' && !cameraOff.value) await sender.replaceTrack(v).catch(() => {});
   }
   // iOS/WebKit: tier by BITRATE ONLY (`avoidEncoderScaling`) — never via scaleResolutionDownBy/
   // maxFramerate, which stall the old iPhone H.264 encoder (spec 0005). maxBitrate alone is honored
@@ -3414,6 +3469,10 @@ async function replaceOutgoingVideo(track: MediaStreamTrack): Promise<boolean> {
   }
   const sender = videoSender();
   if (!sender) return false;
+  // Camera off: accept the swap for local state only — the sender stays detached and
+  // camera-on attaches whatever track is current (flip-while-off must not silently
+  // resume sending, spec 2029). Screen share flips cameraOff false before calling.
+  if (cameraOff.value) return true;
   await sender.replaceTrack(track);
   await applySenderTier(sender, oneToOneQc.tier);
   return true;
@@ -3470,6 +3529,11 @@ export async function toggleScreenShare(): Promise<void> {
   // The OS "Stop sharing" affordance ends the track directly.
   screenTrack.addEventListener('ended', () => void stopScreenShare());
 
+  // Sharing is an explicit "show something": video goes on — and this must flip
+  // BEFORE the attach below, which (spec 2029) refuses to touch senders while the
+  // camera is off. The mesh keeps its own copy of the flag; sync it too.
+  cameraOff.value = false;
+  if (groupSession) await groupSession.setCameraOff(false);
   const meta = callMeta.value;
   if (await replaceOutgoingVideo(screenTrack)) {
     // Had a video sender already (video call) → swapped the track in place.
@@ -3488,7 +3552,6 @@ export async function toggleScreenShare(): Promise<void> {
   activeScreenTrack = screenTrack;
   setLocalVideoTrack(screenTrack, true);
   screenSharing.value = true;
-  cameraOff.value = false;
   if (audioRoute.value !== 'bluetooth') await setRoute('speaker'); // shared content → loudspeaker
 }
 
@@ -3633,6 +3696,7 @@ export async function toggleVideoMode(): Promise<void> {
   setLocalVideoTrack(track, true);
   meta.kind = 'video';
   cameraOff.value = false;
+  await groupSession!.setCameraOff(false); // upgrade = video on; sync the mesh's flag (spec 2029)
   await applyOutgoingQuality();
   void refreshCameraCount(); // surface the flip-camera button now that video is on
 }
@@ -3658,6 +3722,8 @@ async function handleMeshSignal(
   // the offer/answer/ice handling — a peer paused/resumed their leg to us.
   if (signal.type === 'hold') await gs.onPeerHold(frame.from);
   else if (signal.type === 'resume') await gs.onPeerResume(frame.from);
+  else if (signal.type === 'camoff') gs.onPeerCameraState(frame.from, false); // spec 2029
+  else if (signal.type === 'camon') gs.onPeerCameraState(frame.from, true); // spec 2029
   else if (signal.type === 'qos' && signal.qos) gs.onPeerHealth(frame.from, signal.qos); // spec 0007 US2
   else if (type === 'offer') await gs.onPeerOffer(frame.from, signal);
   else if (type === 'answer') await gs.onPeerAnswer(frame.from, signal);
@@ -3874,6 +3940,16 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       if (signal.type === 'resume' && pc) {
         remoteHeld.value = false; // their video unfreezes immediately
         beginResumeCountdown(pc); // 5s heads-up + cue before WE become visible/audible again
+        return;
+      }
+      // Camera state (spec 2029): deterministic avatar swap for the peer's slot — the
+      // track-mute listeners stay as fallback for calls with older app versions.
+      if (signal.type === 'camoff') {
+        remoteVideoMuted.value = true;
+        return;
+      }
+      if (signal.type === 'camon') {
+        remoteVideoMuted.value = false;
         return;
       }
       // (spec 1041) A join request over our own dialing/held call: consent

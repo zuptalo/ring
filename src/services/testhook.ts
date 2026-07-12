@@ -206,6 +206,7 @@ import {
   rejectCall,
   hangupCall,
   toggleMute,
+  toggleCamera,
   toggleVideoMode,
   setVideoQuality,
   type VideoQuality,
@@ -214,6 +215,7 @@ import {
   callState,
   callMeta,
   remoteStream,
+  remoteVideoMuted,
   remoteStreams,
   groupStreamOwners,
   groupAudioLevels,
@@ -1572,6 +1574,12 @@ export function installTestHook(): void {
     callInvited: () => callMeta.value?.invited ?? [],
     /** Toggle the mic (drives the mute/unmute cues). */
     toggleMute: () => toggleMute(),
+    /** Toggle the camera (spec 2029: detaches the outgoing track so the peer's
+     *  track mutes and their UI swaps to our avatar). */
+    toggleCamera: () => toggleCamera(),
+    /** Whether the peer's 1:1 video is dark (spec 2029) — the reactive state the
+     *  avatar swap keys off (sealed camoff/camon signal, with track-mute fallback). */
+    remoteVideoMuted: () => remoteVideoMuted.value,
     /** Toggle video: 1:1 audio->video sends a consent request; group is immediate. */
     toggleVideo: () => toggleVideoMode(),
     /** Set the outgoing-video quality tier (auto/medium/low). */
