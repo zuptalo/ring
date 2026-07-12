@@ -96,7 +96,15 @@ export interface CallSignal {
   // 'joinroom' (spec 1028): promote/merge — tell this peer to join a mesh room (carries only the
   // opaque `roomId` + `kind` below). Same sealed-inside-call-ice trick as hold/resume/qos, so no
   // new frame type reaches the server; it can't tell a promotion from any other sealed signal.
-  type: 'offer' | 'answer' | 'ice' | 'key' | 'streamid' | 'hold' | 'resume' | 'qos' | 'joinroom';
+  // 'joinreq'/'joinreq-accept'/'joinreq-reject'/'joinreq-cancel' (spec 1041): the CONSENT-GATED
+  // merge. A bare 'joinroom' auto-joins its receiver, which is right only for a peer already IN
+  // the call (promotion); a WAITING/HELD caller instead gets a 'joinreq' (roomId + the ongoing
+  // call's kind) and answers with accept/reject; 'joinreq-cancel' withdraws an outstanding
+  // request when the ongoing call ends. Same sealed-inside-call-ice trick: the server cannot
+  // tell any of these from an ICE candidate.
+  type:
+    | 'offer' | 'answer' | 'ice' | 'key' | 'streamid' | 'hold' | 'resume' | 'qos' | 'joinroom'
+    | 'joinreq' | 'joinreq-accept' | 'joinreq-reject' | 'joinreq-cancel';
   kind?: 'audio' | 'video'; // on offer
   sdp?: string; // offer/answer
   sdpType?: RTCSdpType; // offer/answer

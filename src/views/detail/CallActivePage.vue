@@ -75,35 +75,72 @@
           </div>
           <div class="cw-actions">
             <button class="cw-btn cw-decline" aria-label="Decline second call" @click.stop="rejectSecond">Decline</button>
-            <!-- Fold the caller into the current call — a direct second caller (spec 1028)
-                 or a whole incoming group invite (spec 1030) — when there's room under the
-                 cap. Sits alongside Hold; a group fold that doesn't fit is blocked with the
-                 cap reason on tap (the distinct combined headcount isn't known here). -->
+            <!-- Bring the caller into the current call. A direct second caller now gets a
+                 consent-gated JOIN REQUEST (spec 1041): they choose Join or Stay waiting, so
+                 the button reads as an invitation and shows "Invited" while they decide, and
+                 disappears once they said no (rejection is final for this call). A group
+                 invite still folds its people in via the server ring (spec 1030), which is
+                 its own consent surface. -->
             <button
-              v-if="callRemainingSlots() > 0"
+              v-if="incomingSecond.kind !== 'direct' ? callRemainingSlots() > 0 : secondInviteState !== 'blocked'"
               class="cw-btn cw-accept"
-              :aria-label="incomingSecond.kind === 'direct' ? 'Add caller to this call' : 'Add this group call into your call'"
+              :disabled="secondInviteState === 'invited'"
+              :aria-label="incomingSecond.kind === 'direct' ? 'Invite this caller to join your call' : 'Add this group call into your call'"
               @click.stop="mergeSecond"
-            >Add to call</button>
+            >{{ incomingSecond.kind === 'direct' ? (secondInviteState === 'invited' ? 'Invited' : 'Invite to this call') : 'Add to call' }}</button>
             <button class="cw-btn cw-accept" aria-label="Hold current call and answer" @click.stop="acceptAndHold">Accept &amp; hold</button>
+          </div>
+        </div>
+        <!-- (spec 1041) A join request over OUR outgoing/held call: the other side is in a
+             call and asks us to join it instead. Explicit consent, joining with the media
+             we already offered (an audio attempt joins mic-only). -->
+        <div
+          v-else-if="joinRequestPrompt"
+          class="cw-prompt"
+          role="alertdialog"
+          :aria-label="`${peerName} asks you to join their call`"
+          @click.stop
+        >
+          <div class="cw-prompt-head">
+            <div class="cw-text">
+              <strong>{{ peerName }}</strong>
+              <span>asks you to join their {{ joinRequestPrompt.roomKind === 'video' ? 'video ' : '' }}call</span>
+            </div>
+          </div>
+          <div class="cw-actions">
+            <button class="cw-btn cw-decline" aria-label="Stay waiting on your own call" @click.stop="rejectJoinRequest">Stay waiting</button>
+            <button class="cw-btn cw-accept" aria-label="Join their call" @click.stop="() => void acceptJoinRequest()">Join</button>
           </div>
         </div>
         <!-- The call you have parked: tap to swap back to it (the active call goes on hold). -->
         <!-- (spec 2011) Switch-calls button: this is the action to swap the active call with the one
              on hold, so make it read as a clear, prominent action (swap icon + "Switch to X") rather
              than a tiny "On hold · X" label whose tappability wasn't obvious. -->
-        <button
-          v-else-if="heldCall"
-          class="cw-held cw-swap"
-          :aria-label="`Switch to your other call with ${heldCall.name}, currently on hold.`"
-          @click.stop="swapCalls"
-        >
-          <ion-icon :icon="swapHorizontalOutline" aria-hidden="true" />
-          <span class="cw-swap-text">
-            <strong>Switch to {{ heldCall.name }}</strong>
-            <small>On hold · tap to swap calls</small>
-          </span>
-        </button>
+        <template v-else-if="heldCall">
+          <button
+            class="cw-held cw-swap"
+            :aria-label="`Switch to your other call with ${heldCall.name}, currently on hold.`"
+            @click.stop="swapCalls"
+          >
+            <ion-icon :icon="swapHorizontalOutline" aria-hidden="true" />
+            <span class="cw-swap-text">
+              <strong>Switch to {{ heldCall.name }}</strong>
+              <small>On hold · tap to swap calls</small>
+            </span>
+          </button>
+          <!-- (spec 1041 FR-002) Invite the held party into the active call — the same
+               consent-gated join request the second-incoming prompt sends. Gone once they
+               said no (rejection is final for this call); "Invited" while they decide. -->
+          <button
+            v-if="heldPeerId && heldInviteState !== 'blocked'"
+            class="cw-held cw-invite"
+            :disabled="heldInviteState === 'invited'"
+            :aria-label="`Invite ${heldCall.name} to join this call`"
+            @click.stop="() => void mergeHeld()"
+          >
+            {{ heldInviteState === 'invited' ? 'Invited' : `Ask ${heldCall.name} to join this call` }}
+          </button>
+        </template>
         <!-- (spec 2011) The small active-call "On hold" pill used to live here; it's redundant with
              the centered blurred pause overlay on the stage (held-overlay), so it was removed for
              both video and audio. The parked call-waiting bar above (cw-held) is unrelated and stays. -->
@@ -450,6 +487,7 @@ import {
   notJoining, busyMembers, recallMember, cancelInvite, addPeople, callRemainingSlots,
   acceptCall, rejectCall, declineWithMessage,
   heldCall, remoteHeld, groupHeldPeers, resumeCountdown, peerResumeCountdown, remoteQueued, incomingSecond, acceptAndHold, rejectSecond, mergeIncoming, mergeGroupInvite, swapCalls,
+  mergeHeld, canRequestJoin, joinRequestPendingFor, joinRequestPrompt, acceptJoinRequest, rejectJoinRequest,
   setGroupTileSize,
   type AudioRoute,
 } from '@/composables/useCall';
@@ -470,11 +508,31 @@ const stageEl = ref<HTMLElement | null>(null);
 // Full-screen incoming-call answer view (the consent line is shared with the banner).
 const { participantsLine } = useCallParticipants();
 
-/** "Add to call" on the second-incoming prompt: a direct caller merges (spec 1028),
- *  a group invite folds its people into the current call (spec 1030 US3). */
+/** "Invite to this call" on the second-incoming prompt: a direct caller gets a
+ *  consent-gated join request (spec 1041); a group invite folds its people into
+ *  the current call (spec 1030 US3, its own consent surface). */
 function mergeSecond(): void {
   void (incomingSecond.value?.kind === 'direct' ? mergeIncoming() : mergeGroupInvite());
 }
+
+/* (spec 1041) Merge-affordance states. 'invited' = request outstanding (button
+ * disabled), 'blocked' = they rejected this call or capacity is gone (button
+ * hidden), 'available' = may ask. joinRequestVersion inside the helpers makes
+ * these reactive to ledger changes. */
+const peerName = computed(() => callMeta.value?.name || 'They');
+const secondInviteState = computed<'available' | 'invited' | 'blocked'>(() => {
+  const from = incomingSecond.value?.kind === 'direct' ? incomingSecond.value.from : undefined;
+  if (!from) return 'blocked';
+  if (joinRequestPendingFor(from)) return 'invited';
+  return canRequestJoin(from) ? 'available' : 'blocked';
+});
+const heldPeerId = computed(() => (heldCall.value && !heldCall.value.isGroup ? heldCall.value.peerUserId ?? '' : ''));
+const heldInviteState = computed<'available' | 'invited' | 'blocked'>(() => {
+  const id = heldPeerId.value;
+  if (!id) return 'blocked';
+  if (joinRequestPendingFor(id)) return 'invited';
+  return canRequestJoin(id) ? 'available' : 'blocked';
+});
 async function incomingDeclineMenu(): Promise<void> {
   const replies = await getQuickDeclines();
   const sheet = await actionSheetController.create({
@@ -1284,6 +1342,13 @@ const diag = computed(() => {
   max-width: 96px;
   min-width: 36px;
   aspect-ratio: 1;
+  /* (spec 1041 US4) UserAvatar's own scoped style sets height:100% on its root
+     (img/.ua). With width overridden here but height left at 100% of the tile,
+     BOTH dimensions were externally determined, so aspect-ratio:1 was ignored
+     per spec and border-radius:50% rendered a 34%-wide, tile-tall ELLIPSE (the
+     stretched-avatar bug, most visible on the join/leave waving-hand tile).
+     Declaring height explicitly lets aspect-ratio govern again → a circle. */
+  height: auto;
   border-radius: 50%;
   object-fit: cover;
 }
@@ -1341,6 +1406,18 @@ const diag = computed(() => {
   -webkit-backdrop-filter: blur(14px);
   color: #fff;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+}
+/* (spec 1041) The held-party invite sits just above the swap bar: same pill,
+   its own row, disabled while their answer is pending. */
+.cw-invite {
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 158px);
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+}
+.cw-invite:disabled {
+  opacity: 0.55;
 }
 /* Column layout so the name/subtitle row and the action buttons each stay on one line
    (the old single-row layout wrapped the text on narrow phones). */

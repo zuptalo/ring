@@ -195,6 +195,12 @@ import {
   startGroupCall,
   addPeople,
   mergeIncoming,
+  mergeHeld,
+  canRequestJoin,
+  joinRequestPendingFor,
+  joinRequestPrompt,
+  acceptJoinRequest,
+  rejectJoinRequest,
   callRemainingSlots,
   acceptCall,
   rejectCall,
@@ -1536,8 +1542,19 @@ export function installTestHook(): void {
     hangup: () => hangupCall(),
     /** Add people to the ACTIVE call (spec 1028, US2): promote a 1:1 if needed, ring them in. */
     addPeople: (ids: string[]) => addPeople(ids),
-    /** Merge the pending second incoming DIRECT caller into the current call (spec 1028, US1). */
+    /** Send the pending second incoming DIRECT caller a consent-gated join request (spec 1041). */
     mergeIncoming: () => mergeIncoming(),
+    /** Send the HELD call's party a consent-gated join request (spec 1041 FR-002). */
+    mergeHeld: () => mergeHeld(),
+    /** Whether a join request could be sent to this party right now (capacity + not pending + not rejected). */
+    canRequestJoin: (partyId: string) => canRequestJoin(partyId),
+    /** Whether a join request to this party is outstanding (the "Invited" button state). */
+    joinRequestPending: (partyId: string) => joinRequestPendingFor(partyId),
+    /** The accepter-side consent prompt (spec 1041), or null. */
+    joinRequest: () => (joinRequestPrompt.value ? { from: joinRequestPrompt.value.from, roomId: joinRequestPrompt.value.roomId, roomKind: joinRequestPrompt.value.roomKind } : null),
+    /** Accept / reject the join request over our own dialing or held call. */
+    acceptJoinRequest: () => acceptJoinRequest(),
+    rejectJoinRequest: () => rejectJoinRequest(),
     /** Fold the pending second incoming GROUP INVITE into the current call (spec 1030, US3). */
     mergeGroupInvite: () => mergeGroupInvite(),
     /** The userIds announced as "{name} joined the call" this call (spec 1030, US2). */
