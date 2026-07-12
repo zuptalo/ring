@@ -2871,9 +2871,15 @@ export async function acceptJoinRequest(): Promise<void> {
   void sendJoinRequestReply('joinreq-accept', req.chatId, req.from, req.callId, req.roomId);
   if (callState.value !== 'connected') {
     // A still-ringing attempt: withdraw it (relay retention + their other
-    // devices) and settle its spec-1040 marker as handled, off the hot path.
-    void sendControl('call-cancel', req.from, req.callId, { reason: 'answered-elsewhere' });
-    setTimeout(() => settleDirectCallEvent(meta, 'answered'), RING_MARKER_DELAY_MS);
+    // devices) and settle its spec-1040 marker as handled. DEFERRED past the
+    // accept: the cancel is a plain frame while the accept still has to seal,
+    // so sending it now puts it on the wire FIRST — and the callee's cancel
+    // handling clears the waiting slot + pending request, dropping the accept
+    // that arrives a beat later (the CI-only lost-merge race).
+    setTimeout(() => {
+      void sendControl('call-cancel', req.from, req.callId, { reason: 'answered-elsewhere' });
+      settleDirectCallEvent(meta, 'answered');
+    }, RING_MARKER_DELAY_MS);
   }
   const title = await deriveGroupCallTitle([req.from]);
   await convertActiveToRoom(req.roomId, meta.kind, title, groupAvatar(req.roomId), 'incoming');
@@ -3823,6 +3829,20 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
           await handleJoinReply(heldSlot.meta.peerUserId, sig.type);
         }
         return; // other held-call signals keep today's behavior (parked calls don't process them)
+      }
+      // (spec 1041) A reply whose waiting slot is ALREADY GONE (the accepter's
+      // own attempt-cancel can land first) still resolves via the pending
+      // ledger — a consented merge must never be lost to frame ordering.
+      if (joinRequests) {
+        const party = [...joinRequests.pending.entries()].find(([, id]) => id === frame.callId)?.[0];
+        const chat = party ? joinRequestChats.get(party) : undefined;
+        if (party && chat) {
+          const sig = await openSealedSignal(chat, frame.ciphertext);
+          if (sig?.type === 'joinreq-accept' || sig?.type === 'joinreq-reject') {
+            await handleJoinReply(party, sig.type);
+          }
+          return;
+        }
       }
       const meta = callMeta.value;
       if (!meta || meta.callId !== frame.callId || !meta.chatId) return;
