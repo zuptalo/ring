@@ -30,7 +30,7 @@ One repo, two parts, shipped as a single container.
     `usePresence`, `useTheme`, `useLiveQuery`, etc.). Reactive app state lives here.
   - `src/services/` — non-UI logic: `api.ts` (HTTP), `messaging.ts` (1:1 E2EE
     orchestration), `crypto/` (X3DH + Double Ratchet + sender keys, libsodium),
-    `call/` (WebRTC: signalling, SFU, TURN, insertable-streams E2EE), media
+    `call/` (WebRTC: signalling, mesh, TURN, adaptive quality), media
     encode/transfer, push/notifications, sync.
   - `src/db/` — IndexedDB layer. `idb.ts` is a tiny promise wrapper with a
     change-notification bus; `queries.ts` is the data-layer orchestration that
@@ -41,16 +41,17 @@ One repo, two parts, shipped as a single container.
   - `src/router/index.ts` — routes + the auth gate.
 - **Server** (`server/`) — `ringd`, a Go 1.26 service on stdlib `net/http`
   (no web framework), PostgreSQL via `pgx` v5, embedded SQL migrations, an
-  embedded TURN relay + SFU for calls, and VAPID Web Push.
+  embedded TURN relay for calls (media goes peer-to-peer direct when networks
+  allow, relayed otherwise — no SFU), and VAPID Web Push.
   - `cmd/ringd/main.go` — entrypoint: config → pool → migrate → secrets → ACME
-    → TURN/SFU → router → listeners → graceful shutdown.
+    → TURN → router → listeners → graceful shutdown.
   - `internal/api/` — routing (`router.go`) + handlers (one file per area,
     each with a `_test.go`).
   - `internal/store/` — PostgreSQL repositories (one file per domain).
   - `internal/db/migrations/` — embedded, numbered SQL migrations (`NNNN_*.sql`).
   - `internal/{auth,config,httpx,push,secrets,ws,turn,sfu,call,acme}/` — auth
     tokens, env config, HTTP middleware, push, encrypted-at-rest secrets,
-    WebSocket hub, TURN, SFU, call registry, ACME cache.
+    WebSocket hub, TURN, call registry, ACME cache.
 - **`e2e/`** — Playwright multi-browser tests (real WebRTC between accounts).
 - **`server/docs/CALLING.md`** — the full calling/TLS deployment recipe.
 

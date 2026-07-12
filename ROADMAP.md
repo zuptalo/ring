@@ -68,7 +68,7 @@ Specs are grouped by category band; status moves
 | [1040](specs/1040-incoming-call-notifications/spec.md) | Incoming Call & Friend-Request Notifications — Identity, Badge, and Missed-Call Trace | 🟢 shipped |
 | [1041](specs/1041-merge-waiting-caller/spec.md) | Merge a Waiting Caller into the Ongoing Call | 🟢 shipped |
 | [1042](specs/1042-connection-indicator/spec.md) | Show when the app has lost its server connection | 🟢 shipped |
-| [1043](specs/1043-direct-peer-peer/spec.md) | Direct Peer-to-Peer Call Media with Relay Fallback | ⚪ planned |
+| [1043](specs/1043-direct-peer-peer/spec.md) | Direct Peer-to-Peer Call Media with Relay Fallback | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
