@@ -1,6 +1,10 @@
 services:
   db:
     image: postgres:18
+    # Survive Docker-engine/VM restarts (e.g. OrbStack resource changes restart
+    # the whole VM): without this, dev Postgres stays dead until a manual
+    # `make db-up`, silently breaking the dev stack and any running e2e suite.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ring
       POSTGRES_PASSWORD: ring
