@@ -73,6 +73,47 @@ test('media picked from the library can be captioned before sending (not just pa
   await ctxB.close();
 });
 
+test('a long caption wraps at the photo edge instead of stretching the bubble (spec 2027)', async ({ browser }) => {
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'LONGCAP1');
+  const b = await createAccount(ctxB, 'LONGCAP2');
+  await pair(a, b);
+
+  const aChat = (await chatWith(a, b.id)) as string;
+  await a.page.goto(`/chat/${aChat}`);
+  const composer = a.page.locator('ion-textarea.composer textarea');
+  await composer.waitFor({ state: 'visible', timeout: 30_000 });
+
+  // One photo with a caption long enough that its UNWRAPPED line far exceeds the
+  // 240px media frame — the regression made the bubble grow to the caption's
+  // line (toward the 78% column cap), leaving the photo floating in dead space.
+  await photoInput(a).setInputFiles([pngFile('long.png')]);
+  await expect(a.page.locator('.paste-thumb img')).toBeVisible({ timeout: 10_000 });
+  await composer.click();
+  await composer.pressSequentially('a genuinely long caption that would stretch the media bubble far past the photo', { delay: 5 });
+  await a.page.getByRole('button', { name: 'Send' }).click();
+
+  const bubble = a.page.locator('.bubble.bubble-media').last();
+  await expect(bubble.locator('.bubble-image')).toBeVisible({ timeout: 30_000 });
+  await expect(bubble.locator('.text')).toBeVisible();
+
+  // The media frame defines the bubble: at most the 2×3px inset + border wider
+  // than the photo, and the caption stays inside the bubble's width.
+  const bubbleBox = (await bubble.boundingBox())!;
+  const mediaBox = (await bubble.locator('.media-wrap').boundingBox())!;
+  const textBox = (await bubble.locator('.text').boundingBox())!;
+  expect(bubbleBox.width - mediaBox.width).toBeGreaterThanOrEqual(0);
+  expect(bubbleBox.width - mediaBox.width).toBeLessThanOrEqual(10);
+  expect(textBox.width).toBeLessThanOrEqual(bubbleBox.width);
+  // And the caption actually WRAPPED (more than one line high) rather than
+  // being clipped or overflowing.
+  expect(textBox.height).toBeGreaterThan(30);
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
 test('multiple picked photos can be sent individually, each carrying the shared caption', async ({ browser }) => {
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();

@@ -6,7 +6,7 @@
 
 **Created**: 2026-07-12
 
-**Status**: in-progress
+**Status**: shipped
 
 **Input**: User description: "I think we probably should have some sort of indicator when
 the connection to server is down!" (screenshot: sent messages sitting on the pending

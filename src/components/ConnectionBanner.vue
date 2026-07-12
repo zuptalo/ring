@@ -16,32 +16,30 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { IonSpinner } from '@ionic/vue';
 import { syncState } from '@/composables/useSync';
 import { isAuthenticated } from '@/services/auth';
+import { CONN_GRACE_MS, indicatorLabel, indicatorVisible, nextDownSince } from '@/services/connection-indicator';
 
-// How long the link must be CONTINUOUSLY non-online before the pill shows: long
-// enough to swallow a cold start's connect handshake and transient blips, short
-// enough that a dead server is called out while the stuck clock-icon message is
-// still on screen.
-const GRACE_MS = 3000;
-
-const lapsed = ref(false);
+// All decisions are the pure rules in services/connection-indicator.ts (unit
+// tested there); this component only feeds them state changes and schedules
+// the ONE timer that re-evaluates when the grace window elapses.
+const downSince = ref<number | null>(null);
+const now = ref(Date.now());
 let timer: ReturnType<typeof setTimeout> | null = null;
 watch(
   syncState,
   (s) => {
-    if (s === 'online') {
+    downSince.value = nextDownSince(downSince.value, s, Date.now());
+    now.value = Date.now();
+    if (downSince.value === null) {
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
-      lapsed.value = false;
-    } else if (!timer && !lapsed.value) {
-      // One window across offline↔connecting flaps: the retry loop cycles the
-      // state while disconnected, and restarting the clock per flap would keep
-      // the pill from ever appearing.
+    } else if (!timer) {
+      const wait = Math.max(0, downSince.value + CONN_GRACE_MS - Date.now());
       timer = setTimeout(() => {
-        lapsed.value = true;
         timer = null;
-      }, GRACE_MS);
+        now.value = Date.now(); // re-evaluate visibility once the window lapses
+      }, wait);
     }
   },
   { immediate: true },
@@ -63,10 +61,8 @@ onBeforeUnmount(() => {
   if (timer) clearTimeout(timer);
 });
 
-// Signed-out devices (onboarding) never show it: syncState sits at 'offline'
-// there by design, not because anything is wrong.
-const visible = computed(() => isAuthenticated.value && lapsed.value && syncState.value !== 'online');
-const label = computed(() => (netUp.value ? 'Connecting…' : 'Waiting for network…'));
+const visible = computed(() => indicatorVisible(downSince.value, isAuthenticated.value, now.value));
+const label = computed(() => indicatorLabel(netUp.value));
 </script>
 
 <style scoped>
