@@ -1137,8 +1137,15 @@ function groupCallEventState(roomId: string, kind: CallKind): { instanceId: stri
   return g;
 }
 
-/** Ring-marker one group invitee (initial ring, recall, or mid-call add) — on
- *  the same delayed timer as the 1:1 marker, and only while they haven't
+// Group invitees typically ANSWER within seconds of the ring, and joining a
+// mesh seals offers/answers/ICE over the same pairwise sessions a marker seal
+// would lock — so group markers wait long enough that a fast joiner never gets
+// one at all (the roster check skips them), while a closed device still has
+// its marker queued well inside the reminder cadence (10s rounds for 60s).
+const GROUP_RING_MARKER_DELAY_MS = 8_000;
+
+/** Ring-marker one group invitee (initial ring, recall, or mid-call add) —
+ *  delayed past the answer-and-mesh hot window, and only while they haven't
  *  joined. A recall clears any earlier outcome so the fresh ring settles again. */
 function ringGroupCallEvent(roomId: string, kind: CallKind, memberId: string): void {
   const g = groupCallEventState(roomId, kind);
@@ -1149,20 +1156,26 @@ function ringGroupCallEvent(roomId: string, kind: CallKind, memberId: string): v
     if (!live || g.outcome.has(memberId) || meta.roster.includes(memberId)) return;
     g.rung.add(memberId);
     void sendCallEvent(memberId, buildRingEvent(g.instanceId, g.kind, Date.now(), roomId));
-  }, RING_MARKER_DELAY_MS);
+  }, GROUP_RING_MARKER_DELAY_MS);
 }
 
-/** Settle one group invitee's marker (at most once per member per ring). */
+/** Settle one group invitee's marker (at most once per member per ring). The
+ *  BOOKKEEPING is synchronous (at-most-once must not race), but the sealed
+ *  sends defer: the roster-join settle fires at the exact moment the joiner's
+ *  mesh legs are sealing on the same pairwise session — a marker seal there
+ *  stalls the mesh on a slow machine (the same hot-path rule as the 1:1
+ *  markers). */
 function settleGroupCallEvent(roomId: string, memberId: string, outcome: 'missed' | 'cancelled' | 'answered'): void {
   const g = groupCallEvents.get(roomId);
   if (!g || g.outcome.has(memberId)) return;
   g.outcome.add(memberId);
   const rung = g.rung.has(memberId);
-  if (!rung && (outcome === 'missed' || outcome === 'cancelled')) {
-    g.rung.add(memberId);
-    void sendCallEvent(memberId, buildRingEvent(g.instanceId, g.kind, Date.now(), roomId));
-  }
-  void sendCallEvent(memberId, buildEndedEvent(g.instanceId, g.kind, outcome, Date.now(), roomId));
+  const sendPair = !rung && (outcome === 'missed' || outcome === 'cancelled');
+  if (sendPair) g.rung.add(memberId);
+  setTimeout(() => {
+    if (sendPair) void sendCallEvent(memberId, buildRingEvent(g.instanceId, g.kind, Date.now(), roomId));
+    void sendCallEvent(memberId, buildEndedEvent(g.instanceId, g.kind, outcome, Date.now(), roomId));
+  }, RING_MARKER_DELAY_MS);
 }
 
 /** Caller-side give-up: after `ms` with no answer, play the no-answer cue, tell the
