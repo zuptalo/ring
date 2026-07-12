@@ -5151,9 +5151,13 @@ function cancelRecording() {
   unicode-bidi: plaintext;
   text-align: start;
 }
-/* Floating quick-forward button beside incoming media/files/links. */
+/* Floating quick-forward button beside incoming media/files/links. Anchored to
+   the message column's BOTTOM edge (next to the caption/footer line) — centered
+   looked fine on short file/link bubbles but floated mid-image beside tall
+   portrait media, visually detached from the message (spec 2028). */
 .fwd-float {
-  align-self: center;
+  align-self: flex-end;
+  margin-block-end: 2px;
   flex: none;
   width: 42px;
   height: 42px;
