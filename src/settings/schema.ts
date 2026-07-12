@@ -285,6 +285,11 @@ export const SETTINGS: Record<string, SettingNode> = {
         footer:
           'When this is on, Ring stops making previews for the links you share, so those sites cannot get a peek at your IP address.',
       },
+      {
+        items: [{ type: 'toggle', title: 'Always relay calls', key: 'privacy.relayCalls', default: false }],
+        footer:
+          'Route your calls through the Ring server so people you call never see your IP address. Calls may connect slower and quality may be lower. Applies from your next call.',
+      },
     ],
   },
   'privacy-hidden-chats': {
