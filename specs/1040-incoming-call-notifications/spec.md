@@ -266,10 +266,10 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   call" text. The first ring alert MUST NOT be delayed or suppressed while
   waiting for identity resolution.
 - **FR-005**: Calls originating from chats the user has hidden (hidden-chats
-  feature) MUST always use the generic notification with no identifying
-  detail.
+  feature) MUST always use generic notifications with no identifying detail —
+  the incoming-call alert and the missed-call replacement alike.
 - **FR-006**: A raw internal identifier (user id, room id) MUST never be shown
-  as a caller name; unresolvable identity falls back to generic text.
+  in any notification; unresolvable identity falls back to generic text.
 
 **Badge lifecycle for a ringing call (US4, US5)**
 
@@ -446,3 +446,7 @@ in-app ring continues, and the badge reverts to the pre-call unread count.
   new: incoming-request notifications already name the requester from their
   public directory profile, and both parties to a request already know each
   other's identity.
+- Call-event trust model: call metadata arrives over the authenticated,
+  end-to-end-encrypted pairwise channel, so a peer can only assert calls under
+  their own identity. A fabricated "missed call" claim is nuisance-equivalent
+  to actually calling and hanging up — no identity confusion is possible.
