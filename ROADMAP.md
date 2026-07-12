@@ -67,6 +67,7 @@ Specs are grouped by category band; status moves
 | [1039](specs/1039-simultaneous-mutual-calls/spec.md) | Simultaneous mutual calls connect instead of ringing each other | 🟢 shipped |
 | [1040](specs/1040-incoming-call-notifications/spec.md) | Incoming Call & Friend-Request Notifications — Identity, Badge, and Missed-Call Trace | 🟢 shipped |
 | [1041](specs/1041-merge-waiting-caller/spec.md) | Merge a Waiting Caller into the Ongoing Call | 🟢 shipped |
+| [1042](specs/1042-connection-indicator/spec.md) | Show when the app has lost its server connection | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
