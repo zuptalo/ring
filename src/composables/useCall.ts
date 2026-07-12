@@ -42,7 +42,13 @@ import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
   sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth, sendJoinRoom,
+  sendJoinRequest, sendJoinRequestReply, sendJoinRequestCancel,
 } from '@/services/call/signalling';
+import {
+  createJoinRequests, canRequest as jrCanRequest, request as jrRequest, reject as jrReject,
+  accept as jrAccept, clearParty as jrClearParty, drainPending as jrDrainPending,
+  type JoinRequestState,
+} from '@/services/call/join-request';
 import { MeshSession } from '@/services/call/mesh';
 import { syncState } from '@/composables/useSync';
 import { startLoopTone, stopLoopTone, playTone, cue, type ToneName } from '@/services/sound';
@@ -941,6 +947,132 @@ function clearDialTimer(): void {
 
 const RING_MARKER_DELAY_MS = 2_500;
 
+/* ---- consent-gated merge (spec 1041) ----
+ *
+ * The callee may INVITE the party behind a waiting or held call into the
+ * ongoing call; nothing joins anyone without their explicit accept (the old
+ * merge sent a bare `joinroom`, which auto-joined the still-dialing caller —
+ * the consent hole). Rules live in the pure module (call/join-request.ts);
+ * this is the per-call stateful glue. Everything below dies with the call. */
+
+// Callee side: the ongoing call's request ledger (roomId pre-minted for a 1:1
+// so promotion on accept lands both sides in the same room), plus the sealed
+// channel (chatId) each requested party is reachable on.
+let joinRequests: JoinRequestState | null = null;
+const joinRequestChats = new Map<string, string>(); // partyId → 1:1 chatId
+// Reactive mirror of the ledger for the UI/testhooks (Maps/Sets inside a
+// module `let` aren't reactive): bumped on every ledger change.
+export const joinRequestVersion = ref(0);
+const touchJoinRequests = (): void => void (joinRequestVersion.value += 1);
+
+// Accepter side: the consent prompt raised by an inbound join request over
+// our own dialing/held call. Null when nothing is being asked.
+export const joinRequestPrompt = ref<{
+  from: string; // who is asking (their name resolves in the UI)
+  chatId: string; // the sealed channel the reply goes back on
+  callId: string; // OUR attempt/held call the request targets
+  roomId: string;
+  roomKind: CallKind; // the ongoing call's kind (prompt copy only)
+} | null>(null);
+
+/** The join-request ledger for the CURRENT ongoing call (created on demand;
+ *  the roomId is pre-minted for a 1:1 so a rejection never strands a room). */
+function joinRequestState(): JoinRequestState | null {
+  const meta = callMeta.value;
+  if (!meta) return null;
+  if (!joinRequests) joinRequests = createJoinRequests(meta.isGroup ? (meta.roomId ?? meta.callId) : uid());
+  return joinRequests;
+}
+
+/** May the user send `partyId` a join request right now? (UI + testhook gate:
+ *  capacity, no outstanding request, and no rejection this call — FR-008/009.) */
+export function canRequestJoin(partyId: string): boolean {
+  void joinRequestVersion.value; // reactive dependency
+  const meta = callMeta.value;
+  if (!meta) return false;
+  const self = getSelfUserId() ?? '';
+  const capacityOk = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1).ok;
+  const s = joinRequests;
+  return s ? jrCanRequest(s, partyId, capacityOk) : capacityOk;
+}
+
+/** Is a request to `partyId` outstanding? (Drives the "Invited" button state.) */
+export function joinRequestPendingFor(partyId: string): boolean {
+  void joinRequestVersion.value;
+  return joinRequests?.pending.has(partyId) ?? false;
+}
+
+/** The waiting/held party answered our request. */
+async function handleJoinReply(partyId: string, verdict: 'joinreq-accept' | 'joinreq-reject'): Promise<void> {
+  const s = joinRequests;
+  if (!s || !s.pending.has(partyId)) return; // stale/duplicate reply
+  if (verdict === 'joinreq-reject') {
+    jrReject(s, partyId);
+    touchJoinRequests();
+    const name = (await getContact(partyId))?.name?.split(' ')[0] ?? 'They';
+    void toast(`${name} will wait on the line`);
+    return;
+  }
+  jrAccept(s, partyId);
+  touchJoinRequests();
+  // They are joining s.roomId themselves (their device converts on accept).
+  // Our side: promote a 1:1 into that SAME room if needed, then track them as
+  // an invitee tile until their mesh leg lands (existing join semantics).
+  await withAddInFlight(async () => {
+    await ensureActiveIsRoom(s.roomId);
+    const meta = callMeta.value;
+    if (!meta?.isGroup) return;
+    if (!(meta.invited ?? []).includes(partyId)) meta.invited = [...(meta.invited ?? []), partyId];
+    markNotJoining(partyId, false);
+    armMemberRingTimer(partyId);
+  });
+  // Their old 1:1 leg to us dissolves as they convert: clear whichever slot
+  // held them (the waiting prompt, or the held call).
+  if (incomingSecond.value?.from === partyId) {
+    incomingSecond.value = null;
+    secondIce = [];
+  }
+  if (heldSlot && heldSlot.meta.peerUserId === partyId) freeHeldSlot();
+}
+
+/** The waiting attempt died (their cancel/end, or our decline): forget any
+ *  outstanding request silently — their prompt died with their attempt. */
+function clearJoinRequestFor(partyId: string | undefined): void {
+  if (!partyId || !joinRequests) return;
+  jrClearParty(joinRequests, partyId);
+  joinRequestChats.delete(partyId);
+  touchJoinRequests();
+}
+
+/** Same, keyed by the dead attempt's callId (a cancel can arrive after the
+ *  waiting prompt already self-dropped, when only the ledger still knows). */
+function clearJoinRequestByCallId(callId: string | undefined): void {
+  const s = joinRequests;
+  if (!callId || !s) return;
+  for (const [partyId, id] of s.pending) {
+    if (id === callId) {
+      clearJoinRequestFor(partyId);
+      return;
+    }
+  }
+}
+
+/** Ongoing call over: withdraw every outstanding request (FR-014) and drop the
+ *  ledger (rejection-final is scoped to the call, FR-011). */
+function teardownJoinRequests(): void {
+  const s = joinRequests;
+  joinRequests = null;
+  joinRequestPrompt.value = null; // an accepter's own call ending drops the prompt too
+  if (s) {
+    for (const { partyId, callId } of jrDrainPending(s)) {
+      const chatId = joinRequestChats.get(partyId);
+      if (chatId) void sendJoinRequestCancel(chatId, partyId, callId, s.roomId);
+    }
+  }
+  joinRequestChats.clear();
+  touchJoinRequests();
+}
+
 // 1:1: pending delayed ring sends, which callIds actually sent one, and which
 // already settled their outcome.
 const ringMarkerTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1391,6 +1523,9 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
     }
     meta.endedReason = reason;
   }
+  // (spec 1041) Withdraw outstanding join requests and drop the ledger — the
+  // rejection block is scoped to the call that just ended (FR-011/FR-014).
+  teardownJoinRequests();
   groupJoined.clear();
   clearAllMemberRingTimers();
 
@@ -1948,11 +2083,13 @@ async function convertActiveToRoom(
  * peer's `joinroom` handler auto-joins the same room, and the mesh rebuilds the
  * pair leg the same way a late joiner already does — no live-PC migration.
  */
-async function ensureActiveIsRoom(): Promise<void> {
+async function ensureActiveIsRoom(fixedRoomId?: string): Promise<void> {
   const meta = callMeta.value;
   if (!meta || meta.isGroup) return; // already a room (or no call)
   if (!meta.peerUserId || !meta.chatId) return;
-  const roomId = uid();
+  // (spec 1041) A consent-gated merge pre-mints the roomId at request time and
+  // promotes only on accept — pass it here so both sides land in the SAME room.
+  const roomId = fixedRoomId ?? uid();
   await sendJoinRoom(meta.chatId, meta.peerUserId, meta.callId, roomId, meta.kind);
   const title = await deriveGroupCallTitle([meta.peerUserId]);
   await convertActiveToRoom(roomId, meta.kind, title, groupAvatar(roomId), 'outgoing');
@@ -2676,34 +2813,101 @@ async function connectSecondDirect(
 export async function mergeIncoming(): Promise<void> {
   const inc = incomingSecond.value;
   if (!inc || inc.kind !== 'direct' || !inc.from || !inc.chatId) return;
-  // Gate BEFORE promoting: on a 1:1 the roster already carries the peer, so the
-  // distinct headcount is right either way, and a blocked merge leaves the active
-  // call exactly as it was (still a 1:1).
+  const meta = callMeta.value;
+  if (!meta) return;
+  // (spec 1041) The merge is now a consent-gated REQUEST: the waiting caller
+  // gets a Join / Stay-waiting prompt and nothing converts until they accept
+  // (the old flow's bare `joinroom` auto-joined them — the consent hole).
+  // Their attempt keeps ringing meanwhile, so hold/decline stay available.
+  // Gate on capacity first: a blocked request leaves everything as it was.
   {
-    const meta = callMeta.value;
-    if (!meta) return;
     const self = getSelfUserId() ?? '';
     const gate = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1);
     if (!gate.ok) {
       await toast(gate.reason);
-      return; // leave the caller in the waiting slot so the user can still hold/decline
+      return;
     }
   }
-  // The promote+ring section holds the add-in-flight guard so a swap/park can't
-  // interleave with the conversion (spec 1030 FR-010).
-  await withAddInFlight(async () => {
-    await ensureActiveIsRoom(); // promote the active 1:1 (no-op if already a room)
-    const meta = callMeta.value;
-    if (!meta?.roomId) return;
-    // Tell the caller to join our room instead of the 1:1 they dialed; they show as a
-    // "ringing" tile until their leg connects.
-    await sendJoinRoom(inc.chatId!, inc.from!, inc.callId, meta.roomId, meta.kind);
-    meta.invited = [...(meta.invited ?? []), inc.from!];
-    markNotJoining(inc.from!, false);
-    armMemberRingTimer(inc.from!);
-    incomingSecond.value = null;
-    secondIce = [];
-  });
+  const s = joinRequestState();
+  if (!s || !jrRequest(s, inc.from, inc.callId)) return; // rejected this call, or already asked
+  joinRequestChats.set(inc.from, inc.chatId);
+  touchJoinRequests();
+  // The room is only PRE-minted here (s.roomId); promotion happens on accept
+  // (never strand a solo room on a rejection — spec FR-003).
+  const sent = await sendJoinRequest(inc.chatId, inc.from, inc.callId, s.roomId, meta.kind);
+  if (!sent) {
+    // Old client or no session: degrade silently — their attempt just keeps
+    // ringing and the request clears with it (spec edge case).
+    clearJoinRequestFor(inc.from);
+  }
+}
+
+/** (spec 1041) An inbound join request (or an old client's request-less
+ *  `joinroom`) over OUR dialing/held call: raise the consent prompt. Only two
+ *  states can consent — we are the WAITING caller (still dialing them) or the
+ *  HELD/connected party; anything else ignores the signal. */
+function raiseJoinRequestPrompt(meta: CallMeta, roomId: string, roomKind: CallKind): void {
+  if (!meta.peerUserId || !meta.chatId) return;
+  const waiting = meta.direction === 'outgoing' && (callState.value === 'dialing' || callState.value === 'remote-ringing');
+  const heldOrLive = callState.value === 'connected';
+  if (!waiting && !heldOrLive) return;
+  joinRequestPrompt.value = {
+    from: meta.peerUserId,
+    chatId: meta.chatId,
+    callId: meta.callId,
+    roomId,
+    roomKind,
+  };
+}
+
+/** Accept the join request: reply, end our own 1:1 attempt cleanly, and follow
+ *  into the room with OUR OWN media kind (clarification A) reusing the capture
+ *  — an audio attempt lands mic-only even in a video room; no new getUserMedia. */
+export async function acceptJoinRequest(): Promise<void> {
+  const req = joinRequestPrompt.value;
+  const meta = callMeta.value;
+  joinRequestPrompt.value = null;
+  if (!req || !meta || meta.callId !== req.callId || meta.tornDown) return;
+  void sendJoinRequestReply('joinreq-accept', req.chatId, req.from, req.callId, req.roomId);
+  if (callState.value !== 'connected') {
+    // A still-ringing attempt: withdraw it (relay retention + their other
+    // devices) and settle its spec-1040 marker as handled, off the hot path.
+    void sendControl('call-cancel', req.from, req.callId, { reason: 'answered-elsewhere' });
+    setTimeout(() => settleDirectCallEvent(meta, 'answered'), RING_MARKER_DELAY_MS);
+  }
+  const title = await deriveGroupCallTitle([req.from]);
+  await convertActiveToRoom(req.roomId, meta.kind, title, groupAvatar(req.roomId), 'incoming');
+}
+
+/** Stay waiting: reply reject (the callee's merge affordance for us disappears
+ *  for the rest of their call) — our own attempt is untouched (FR-006). */
+export function rejectJoinRequest(): void {
+  const req = joinRequestPrompt.value;
+  joinRequestPrompt.value = null;
+  if (!req) return;
+  void sendJoinRequestReply('joinreq-reject', req.chatId, req.from, req.callId, req.roomId);
+}
+
+/** (spec 1041 FR-002) Invite the HELD call's party into the active call — the
+ *  same consent-gated request, over the held 1:1's sealed channel. */
+export async function mergeHeld(): Promise<void> {
+  const held = heldSlot;
+  const meta = callMeta.value;
+  if (!held || !meta || held.meta.isGroup || !held.meta.peerUserId || !held.meta.chatId) return;
+  {
+    const self = getSelfUserId() ?? '';
+    const gate = canAdd(meta.kind, meta.roster, meta.invited ?? [], self, 1);
+    if (!gate.ok) {
+      await toast(gate.reason);
+      return;
+    }
+  }
+  const s = joinRequestState();
+  if (!s || !jrRequest(s, held.meta.peerUserId, held.meta.callId)) return;
+  joinRequestChats.set(held.meta.peerUserId, held.meta.chatId);
+  touchJoinRequests();
+  const sent = await sendJoinRequest(held.meta.chatId, held.meta.peerUserId, held.meta.callId, s.roomId, meta.kind);
+  if (!sent) clearJoinRequestFor(held.meta.peerUserId);
 }
 
 /** Accept the pending second incoming call (US1): put the current call on hold and connect
@@ -2752,6 +2956,13 @@ export async function rejectSecond(): Promise<void> {
   if (!inc) return;
   incomingSecond.value = null;
   if (inc.kind === 'direct' && inc.from) {
+    // (spec 1041) Declining the waiting call also withdraws any outstanding
+    // join request — their prompt must not outlive their attempt.
+    const s = joinRequests;
+    if (s && s.pending.has(inc.from) && inc.chatId) {
+      void sendJoinRequestCancel(inc.chatId, inc.from, inc.callId, s.roomId);
+    }
+    clearJoinRequestFor(inc.from);
     void sendControl('call-busy', inc.from, inc.callId);
   } else if (inc.kind === 'group' && inc.from && inc.roomId) {
     void sendGroupBusy(inc.from, inc.roomId);
@@ -2796,6 +3007,7 @@ async function presentSecondDirect(
   // If unanswered within the ring window, drop the prompt (the caller's own timeout ends it).
   setTimeout(() => {
     if (incomingSecond.value?.callId === frame.callId) incomingSecond.value = null;
+    clearJoinRequestByCallId(frame.callId); // spec 1041: an expired attempt frees its pending request
   }, RING_TIMEOUT_MS);
 }
 
@@ -3596,7 +3808,21 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       if (second && second.callId === frame.callId && second.chatId) {
         const sig = await openSealedSignal(second.chatId, frame.ciphertext);
         if (sig?.type === 'ice' && sig.candidate) secondIce.push(sig.candidate);
+        // (spec 1041) The waiting caller's answer to our join request rides
+        // their attempt's own sealed channel.
+        else if ((sig?.type === 'joinreq-accept' || sig?.type === 'joinreq-reject') && second.from) {
+          await handleJoinReply(second.from, sig.type);
+        }
         return;
+      }
+      // (spec 1041) The HELD party's answer to a join request (their frames key
+      // on the held call's id, which the active-meta check below won't match).
+      if (heldSlot && heldSlot.meta.callId === frame.callId && heldSlot.meta.chatId && heldSlot.meta.peerUserId) {
+        const sig = await openSealedSignal(heldSlot.meta.chatId, frame.ciphertext);
+        if (sig?.type === 'joinreq-accept' || sig?.type === 'joinreq-reject') {
+          await handleJoinReply(heldSlot.meta.peerUserId, sig.type);
+        }
+        return; // other held-call signals keep today's behavior (parked calls don't process them)
       }
       const meta = callMeta.value;
       if (!meta || meta.callId !== frame.callId || !meta.chatId) return;
@@ -3617,11 +3843,30 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         beginResumeCountdown(pc); // 5s heads-up + cue before WE become visible/audible again
         return;
       }
+      // (spec 1041) A join request over our own dialing/held call: consent
+      // prompt, never an auto-join. Cancel withdraws an outstanding prompt.
+      if (signal.type === 'joinreq' && signal.roomId) {
+        raiseJoinRequestPrompt(meta, signal.roomId, signal.kind ?? meta.kind);
+        return;
+      }
+      if (signal.type === 'joinreq-cancel') {
+        if (joinRequestPrompt.value?.callId === meta.callId) joinRequestPrompt.value = null;
+        return;
+      }
+      if (signal.type === 'joinreq-accept' || signal.type === 'joinreq-reject') return; // replies never target the active meta
       // Promote/merge (spec 1028): the peer is turning this 1:1 into a group (or
       // merging us into their call). Follow them into the mesh room, reusing our
-      // capture — the same late-join path builds the fresh legs. Works whether we
-      // were the active peer or still dialing them (a merged-in caller).
+      // capture — the same late-join path builds the fresh legs.
       if (signal.type === 'joinroom' && signal.roomId) {
+        // (spec 1041) Consent gate: a joinroom while we are STILL DIALING this
+        // peer is an old client's request-less merge — raise the same consent
+        // prompt instead of auto-joining (a call the user never agreed to must
+        // not start). While CONNECTED it is the legitimate promote follow —
+        // being in the call together is the consent — and stays automatic.
+        if (callState.value === 'dialing' || callState.value === 'remote-ringing') {
+          raiseJoinRequestPrompt(meta, signal.roomId, signal.kind ?? meta.kind);
+          return;
+        }
         const title = await deriveGroupCallTitle([meta.peerUserId ?? '']);
         await convertActiveToRoom(signal.roomId, signal.kind ?? meta.kind, title, groupAvatar(signal.roomId), 'incoming');
         return;
@@ -3674,10 +3919,12 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // A second incoming call (call-waiting prompt) the caller gave up on before we answered →
       // dismiss the Accept-&-hold prompt; our active call is untouched (spec 0005).
       if (incomingSecond.value && incomingSecond.value.callId === frame.callId) {
+        clearJoinRequestFor(incomingSecond.value.from); // spec 1041: their attempt died — forget the request
         incomingSecond.value = null;
         secondIce = [];
         return;
       }
+      clearJoinRequestByCallId(frame.callId); // spec 1041: a cancel can trail the prompt's self-drop
       dropHeldCall(frame.callId);
       dropHeldCall(frame.roomId);
       const matchesCall = !!frame.callId && meta?.callId === frame.callId;
@@ -3695,6 +3942,7 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       // A second incoming call the caller ended before we answered → dismiss the prompt
       // (some callers send call-end rather than call-cancel on give-up); spec 0005.
       if (incomingSecond.value && incomingSecond.value.callId === frame.callId) {
+        clearJoinRequestFor(incomingSecond.value.from); // spec 1041: their attempt died — forget the request
         incomingSecond.value = null;
         secondIce = [];
         return;

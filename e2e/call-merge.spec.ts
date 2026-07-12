@@ -16,6 +16,11 @@ const mergeIncoming = (c: any): Promise<void> =>
 const isGroup = (c: any): Promise<boolean> =>
   c.page.evaluate(() => !!(window as any).__ringTest.callMeta()?.isGroup);
 
+const awaitJoinPrompt = (c: any): Promise<unknown> =>
+  c.page.waitForFunction(() => !!(window as any).__ringTest.joinRequest(), null, { timeout: 20_000 });
+const acceptJoin = (c: any): Promise<void> =>
+  c.page.evaluate(() => (window as any).__ringTest.acceptJoinRequest());
+
 test('merging an incoming caller into a 1:1 makes a three-way call (US1)', async ({ browser }) => {
   test.setTimeout(150_000);
   const a = await createAccount(await browser.newContext(), 'MERGE1');
@@ -38,8 +43,11 @@ test('merging an incoming caller into a 1:1 makes a three-way call (US1)', async
     { timeout: 30_000 },
   );
 
-  // A merges C into the call → promote A+B, ring C in.
+  // A invites C into the call (spec 1041: a consent-gated join request — nothing
+  // converts until C says yes), C accepts → promote A+B, C joins the room.
   await mergeIncoming(a);
+  await awaitJoinPrompt(c);
+  await acceptJoin(c);
 
   // All three end up meshed; A and B are now group calls.
   for (const p of [a, b, c]) await waitRemotes(p, 2);

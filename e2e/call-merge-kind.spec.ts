@@ -21,6 +21,11 @@ const callKind = (c: any): Promise<string> =>
   c.page.evaluate(() => (window as any).__ringTest.callMeta()?.kind);
 const localVideoTracks = (c: any): Promise<number> =>
   c.page.evaluate(() => (window as any).__ringTest.localVideoTracks());
+
+const awaitJoinPrompt = (c: any): Promise<unknown> =>
+  c.page.waitForFunction(() => !!(window as any).__ringTest.joinRequest(), null, { timeout: 20_000 });
+const acceptJoin = (c: any): Promise<void> =>
+  c.page.evaluate(() => (window as any).__ringTest.acceptJoinRequest());
 const setCaps = (c: any, video?: number, audio?: number): Promise<void> =>
   c.page.evaluate(([v, x]: (number | undefined)[]) => (window as any).__ringTest.setCallCaps(v, x), [video, audio]);
 const noticeSeen = (c: any, needle: string): Promise<unknown> =>
@@ -40,7 +45,9 @@ async function mergedAudioTrio(browser: any, codes: [string, string, string]) {
   await waitCallState(a, ['connected']);
   await startDial(c, a.id);
   await a.page.waitForFunction(() => !!(window as any).__ringTest.hasSecondIncoming(), null, { timeout: 30_000 });
-  await mergeIncoming(a);
+  await mergeIncoming(a); // spec 1041: now a consent-gated request…
+  await awaitJoinPrompt(c);
+  await acceptJoin(c); // …which C accepts
   for (const p of [a, b, c]) await waitRemotes(p, 2);
   return { ctx, a, b, c };
 }

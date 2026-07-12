@@ -103,6 +103,47 @@ export function sendJoinRoom(
 }
 
 /**
+ * The consent-gated merge (spec 1041): ask the party behind a waiting or held
+ * call to JOIN our ongoing call instead — they answer with accept or reject,
+ * and an outstanding request is withdrawn with 'joinreq-cancel' when the
+ * ongoing call ends. Same sealed-inside-`call-ice` trick as joinroom: no new
+ * transport frame, no server change, indistinguishable from an ICE candidate
+ * on the wire. `callId` is the RECIPIENT's attempt/held-call id (their prompt
+ * matches on it); `kind` is the ONGOING call's kind (for the prompt copy —
+ * the accepter still joins with their own attempt's media, clarification A).
+ */
+export function sendJoinRequest(
+  chatId: string,
+  peerUserId: string,
+  callId: string,
+  roomId: string,
+  kind: CallKind,
+): Promise<boolean> {
+  return sendSealedSignal('call-ice', chatId, peerUserId, callId, { callId, type: 'joinreq', roomId, kind });
+}
+
+/** The waiting/held party's answer to a join request. */
+export function sendJoinRequestReply(
+  verdict: 'joinreq-accept' | 'joinreq-reject',
+  chatId: string,
+  peerUserId: string,
+  callId: string,
+  roomId: string,
+): Promise<boolean> {
+  return sendSealedSignal('call-ice', chatId, peerUserId, callId, { callId, type: verdict, roomId });
+}
+
+/** Withdraw an outstanding join request (the ongoing call ended, FR-014). */
+export function sendJoinRequestCancel(
+  chatId: string,
+  peerUserId: string,
+  callId: string,
+  roomId: string,
+): Promise<boolean> {
+  return sendSealedSignal('call-ice', chatId, peerUserId, callId, { callId, type: 'joinreq-cancel', roomId });
+}
+
+/**
  * Send a sealed hold/resume control signal for a call (spec 0005). Carried over an EXISTING
  * `call-ice` frame so there is NO new transport frame and NO server change — the relay
  * forwards opaque ciphertext exactly as for offer/answer/ICE, and the receiver dispatches on
