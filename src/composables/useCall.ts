@@ -28,7 +28,10 @@ import {
   logCallToChat,
   sendMessage,
   getSetting,
+  sendCallEvent,
+  markGroupRingSeenLive,
 } from '@/db/queries';
+import { buildRingEvent, buildEndedEvent } from '@/services/call-events';
 import { groupAvatar } from '@/db/avatars';
 
 // Pre-answer identity for a call whose conversation is hidden (spec 1019, FR-019):
@@ -917,6 +920,57 @@ function clearDialTimer(): void {
   dialTimer = null;
 }
 
+/* ---- call-event markers (spec 1040) ----
+ *
+ * The caller/initiator sends sealed markers over the messaging ratchet so a
+ * callee whose app is closed for the whole ring still gets a NAMED notification
+ * (the SW previews the queued marker; the push tickle stays content-free) and a
+ * missed-call trace on next open. `ring` goes out at dial time; `ended` settles
+ * the outcome exactly once per callee. Everything is fire-and-forget — markers
+ * must never block or fail call setup. */
+
+// 1:1: which callIds sent a ring marker, and which already got their outcome.
+const callEventRingSent = new Set<string>();
+const callEventOutcomeSent = new Set<string>();
+// Group: the per-instance marker id (the roomId is REUSED across calls, so it
+// can't dedup one call) plus the per-member outcome ledger. Created lazily by
+// whoever rings members (initiator, or a participant adding someone later).
+const groupCallEvents = new Map<string, { instanceId: string; kind: CallKind; outcome: Set<string> }>();
+
+/** Settle the 1:1 marker for an outgoing attempt (at most once per call). */
+function settleDirectCallEvent(meta: CallMeta, outcome: 'missed' | 'cancelled' | 'answered'): void {
+  if (meta.isGroup || meta.direction !== 'outgoing' || !meta.peerUserId) return;
+  if (!callEventRingSent.has(meta.callId) || callEventOutcomeSent.has(meta.callId)) return;
+  callEventOutcomeSent.add(meta.callId);
+  void sendCallEvent(meta.peerUserId, buildEndedEvent(meta.callId, meta.kind, outcome, Date.now()));
+}
+
+/** The marker state for a room we're ringing people into (created on demand). */
+function groupCallEventState(roomId: string, kind: CallKind): { instanceId: string; kind: CallKind; outcome: Set<string> } {
+  let g = groupCallEvents.get(roomId);
+  if (!g) {
+    g = { instanceId: uid(), kind, outcome: new Set() };
+    groupCallEvents.set(roomId, g);
+  }
+  return g;
+}
+
+/** Ring-marker one group invitee (initial ring, recall, or mid-call add). A
+ *  recall clears any earlier outcome so the fresh ring can settle again. */
+function ringGroupCallEvent(roomId: string, kind: CallKind, memberId: string): void {
+  const g = groupCallEventState(roomId, kind);
+  g.outcome.delete(memberId);
+  void sendCallEvent(memberId, buildRingEvent(g.instanceId, g.kind, Date.now(), roomId));
+}
+
+/** Settle one group invitee's marker (at most once per member per ring). */
+function settleGroupCallEvent(roomId: string, memberId: string, outcome: 'missed' | 'cancelled' | 'answered'): void {
+  const g = groupCallEvents.get(roomId);
+  if (!g || g.outcome.has(memberId)) return;
+  g.outcome.add(memberId);
+  void sendCallEvent(memberId, buildEndedEvent(g.instanceId, g.kind, outcome, Date.now(), roomId));
+}
+
 /** Caller-side give-up: after `ms` with no answer, play the no-answer cue, tell the
  *  callee to stop ringing, and end. Armed short while only dialing, then re-armed to a
  *  longer window once the callee proves reachable (call-ringing). */
@@ -1254,6 +1308,25 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
         });
       }
     }
+    // (spec 1040) Settle the outgoing markers. 1:1: rang out → missed, we gave up
+    // before an answer → cancelled, everything else (answered, declined, busy,
+    // glare, answered-elsewhere) → handled, so the callee gets no false missed
+    // trace. Group: invitees whose ring we never saw settle (join/no-answer) get
+    // "cancelled" — the call ended before they ever picked up.
+    if (!meta.isGroup) {
+      settleDirectCallEvent(
+        meta,
+        wasConnected ? 'answered' : reason === 'timeout' ? 'missed' : reason === 'hangup' ? 'cancelled' : 'answered',
+      );
+      callEventRingSent.delete(meta.callId);
+      callEventOutcomeSent.delete(meta.callId);
+    } else {
+      const gRoomId = meta.roomId ?? meta.callId;
+      if (groupCallEvents.has(gRoomId)) {
+        for (const id of meta.invited ?? []) settleGroupCallEvent(gRoomId, id, 'cancelled');
+        groupCallEvents.delete(gRoomId);
+      }
+    }
     meta.endedReason = reason;
   }
   groupJoined.clear();
@@ -1431,6 +1504,10 @@ export async function startDirectCall(contactId: string, kind: CallKind): Promis
 
   setState('dialing');
   startLoopTone('calling', 2800); // "calling" ringback (not yet ringing)
+  // (spec 1040) Dial-time marker: lets the callee's closed device NAME this ring
+  // and guarantees a missed-call trace even if we die mid-ring. Fire-and-forget.
+  callEventRingSent.add(callId);
+  void sendCallEvent(contactId, buildRingEvent(callId, kind, Date.now()));
   // Caller-side timeout: the server may be buffering the offer for an offline
   // (push-woken) callee, so we can't rely on a fast "unavailable", give up
   // ourselves if nobody answers.
@@ -1550,6 +1627,10 @@ async function enterGroupCall(
     await teardown('failed');
     return;
   }
+  // (spec 1040) Ring markers for the invitees, under a fresh per-instance id
+  // (the roomId is reused across calls). Their closed devices name the ring
+  // from these; outcomes settle per member as the call progresses.
+  if (direction === 'outgoing') for (const m of members) ringGroupCallEvent(roomId, kind, m);
   armGroupIdleTimeout(); // end the call if nobody joins within the grace window
   navigateToCall();
 }
@@ -1578,6 +1659,10 @@ async function deriveGroupCallTitle(ids: string[]): Promise<string> {
 async function handleGroupInvite(frame: Extract<CallFrame, { t: 'call-group-invite' }>): Promise<void> {
   const roomId = frame.roomId;
   if (!roomId || !frame.from) return;
+  // (spec 1040) This device is handling the ring live (full ring, second-call
+  // prompt, or busy auto-decline below) — the live flows own the call trace, so
+  // any queued call-event marker for this room must stay silent.
+  void markGroupRingSeenLive(roomId);
   // Already ringing/connected for this room → ignore duplicate invites.
   if (callMeta.value?.roomId === roomId) return;
   // Already prompting for this room in the waiting slot → a server re-ring; keep the prompt.
@@ -1707,6 +1792,7 @@ export async function mergeGroupInvite(): Promise<void> {
       markNotJoining(id, false);
       armMemberRingTimer(id);
       await sendRecall(id, m.roomId, m.kind, m.invited);
+      ringGroupCallEvent(m.roomId, m.kind, id); // spec 1040: named ring + trace for their closed devices
     }
   });
   // Leave the invite's own room: we fold people into OUR call, we don't join theirs
@@ -1732,6 +1818,7 @@ export async function recallMember(memberId: string): Promise<void> {
   markNotJoining(memberId, false);
   armMemberRingTimer(memberId);
   await sendRecall(memberId, meta.roomId, meta.kind, meta.invited ?? []);
+  ringGroupCallEvent(meta.roomId, meta.kind, memberId); // spec 1040: fresh ring marker on recall
 }
 
 /** Free participant slots left in the ACTIVE call for its kind (spec 1028) — 0 when
@@ -1832,6 +1919,7 @@ export async function addPeople(ids: string[]): Promise<void> {
       markNotJoining(id, false);
       armMemberRingTimer(id);
       await sendRecall(id, meta.roomId, meta.kind, meta.invited);
+      ringGroupCallEvent(meta.roomId, meta.kind, id); // spec 1040: named ring + trace for their closed devices
     }
     return plan.dropped;
   });
@@ -3416,6 +3504,9 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         if (meta.peerUserId) {
           void sendControl('call-cancel', meta.peerUserId, meta.callId, { reason: 'answered-elsewhere' });
         }
+        // (spec 1040) Settle the marker NOW (not at teardown): the callee's other
+        // devices may be closed, and their stale ring notification retires on this.
+        settleDirectCallEvent(meta, 'answered');
       }
       return;
     }
@@ -3562,6 +3653,9 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         clearMemberRingTimer(id);
         markNotJoining(id, false);
         markMemberBusy(id, false); // a free device joined → no longer "unavailable" (US2)
+        // (spec 1040) They joined → settle their marker so no closed device of
+        // theirs logs a false missed call (and its stale ring retires).
+        settleGroupCallEvent(frame.roomId, id, 'answered');
       }
       // (spec 1030 US2) "{name} joined the call": the first roster of a call seeds
       // silently (whoever is already in the room was here before us, or is us);
@@ -3619,6 +3713,8 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
       if (frame.status === 'noanswer') {
         clearMemberRingTimer(id);
         markNotJoining(id, true);
+        // (spec 1040) Their reminder window ran out → the missed-call marker.
+        settleGroupCallEvent(frame.roomId, id, 'missed');
       } else if (frame.status === 'ringing') {
         markNotJoining(id, false);
         markMemberBusy(id, false);

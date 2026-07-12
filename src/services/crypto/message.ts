@@ -265,6 +265,30 @@ export interface GameCancelSignal {
   at: number;
 }
 
+/**
+ * Call lifecycle marker (spec 1040), carried E2EE inside a payload (like `card`)
+ * and applied as a side effect, never shown as a chat message. The caller (or
+ * group-call initiator) sends `ring` at dial time and `ended` at outcome time so
+ * the callee — even a device that was closed for the whole ring — can (a) name
+ * the caller in the OS notification (the push tickle itself stays content-free)
+ * and (b) log the missed-call trace. Fire-and-forget: call setup never blocks on
+ * it, and receivers treat it idempotently by `callId` (an existing call-log row
+ * always wins). Trust model: it rides the authenticated pairwise ratchet, so a
+ * peer can only assert calls under their own identity — a fabricated "missed
+ * call" is nuisance-equivalent to actually calling and hanging up.
+ */
+export interface CallEventSignal {
+  phase: 'ring' | 'ended';
+  // 1:1: the live callId (matches the calls-store row id, which is the dedup
+  // key). Group: a per-instance id minted by the initiator (the roomId is
+  // reused across calls, so it can't dedup a single call).
+  callId: string;
+  kind: 'audio' | 'video';
+  outcome?: 'missed' | 'cancelled' | 'answered'; // required when phase='ended'
+  roomId?: string; // group calls: resolve the group chat + name locally
+  at: number; // sender ms clock; staleness/ordering hint only, never trusted for identity
+}
+
 export interface MessagePayload {
   body: string;
   kind: string;
@@ -313,6 +337,8 @@ export interface MessagePayload {
   // @everyone) is mentioned, and escalates the notification locally.
   mentions?: string[];
   mentionsEveryone?: boolean;
+  // Call lifecycle marker (spec 1040) — side effect, never a stored message.
+  callEvent?: CallEventSignal;
 }
 
 export interface WireMessage {
