@@ -100,3 +100,4 @@ Specs are grouped by category band; status moves
 | [2025](specs/2025-video-calls-look/spec.md) | Video calls look sharp again and recover from quality dips | 🟢 shipped |
 | [2026](specs/2026-call-markers-stored/spec.md) | Call markers must never surface as messages | 🟢 shipped |
 | [2027](specs/2027-long-media-captions/spec.md) | Media captions wrap at the photo's edge | 🟢 shipped |
+| [2029](specs/2029-camera-off-shows/spec.md) | Camera Off Shows Your Picture to the Call, Not a Black Screen | 🟡 in-progress |
