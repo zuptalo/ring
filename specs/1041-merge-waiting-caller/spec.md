@@ -214,9 +214,11 @@ merge-join path.
   an alternative to accept & hold / decline.
 - **FR-002**: The same merge action MUST be available for a call already
   parked on hold.
-- **FR-003**: If the ongoing call is a 1:1, sending a join request MUST first
-  promote it to a group call using the existing add-someone-to-call
-  machinery, then invite the waiting party into the resulting room.
+- **FR-003**: If the ongoing call is a 1:1, the merge MUST promote it to a
+  group call using the existing add-someone-to-call machinery as part of
+  completing the merge. The promotion MUST NOT strand the callee: a rejected
+  or expired join request leaves the ongoing 1:1 exactly as it was (the
+  conversion may therefore be deferred until the waiting party accepts).
 - **FR-004**: The waiting party MUST receive an explicit join request they can
   accept or reject; nothing moves them into the ongoing call without their
   acceptance.
