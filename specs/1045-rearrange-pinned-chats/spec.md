@@ -176,7 +176,9 @@ use each menu action.
   and releasing MUST unpin it; the chat then sorts by recency in the list.
 - **FR-006**: A short press-and-hold on a regular list row MUST lift it as a
   round avatar (pin-shaped); dropping it over the grid MUST pin it at the
-  hovered position when fewer than nine chats are pinned.
+  hovered position when fewer than nine chats are pinned. When NO chats are
+  pinned yet (no grid exists), lifting a row MUST reveal a drop target where
+  the grid will appear, so the first pin can also be created by drag.
 - **FR-007**: When nine chats are already pinned, a lifted list row MUST show
   a forbidden badge at the top right of the floating avatar while over the
   grid, and releasing MUST NOT pin it.
