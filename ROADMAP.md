@@ -70,7 +70,7 @@ Specs are grouped by category band; status moves
 | [1042](specs/1042-connection-indicator/spec.md) | Show when the app has lost its server connection | 🟢 shipped |
 | [1043](specs/1043-direct-peer-peer/spec.md) | Direct Peer-to-Peer Call Media with Relay Fallback | 🟢 shipped |
 | [1044](specs/1044-pinned-chats-show/spec.md) | Pinned Chats Grid (iMessage-style) | 🟢 shipped |
-| [1045](specs/1045-rearrange-pinned-chats/spec.md) | Rearrange pinned chats with drag, stable manual order, and long-press chat preview | 🟡 in-progress |
+| [1045](specs/1045-rearrange-pinned-chats/spec.md) | Rearrange pinned chats with drag, stable manual order, and long-press chat preview | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
