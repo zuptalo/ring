@@ -27,7 +27,10 @@
       <ion-refresher slot="fixed" @ion-refresh="onPullRefresh">
         <ion-refresher-content pulling-text="Pull to reconnect &amp; catch up" refreshing-text="Reconnecting…" />
       </ion-refresher>
-      <ion-header collapse="condense">
+      <!-- The iOS large title yields its space to the pinned grid when pins exist
+           (spec 1044): the grid already anchors the page visually, and stacking
+           both pushed the first rows below the fold. -->
+      <ion-header v-if="!(ready && pinParts.grid.length)" collapse="condense">
         <ion-toolbar>
           <ion-title size="large">Chats</ion-title>
         </ion-toolbar>
