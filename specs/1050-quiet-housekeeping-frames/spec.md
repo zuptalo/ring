@@ -20,15 +20,21 @@
 - Q: May the client attach a one-bit "silent" hint to housekeeping frames so the server skips their push (ZK cost: the server learns "sender deems this frame not notification-worthy" — one bit, no content)? → A: **Yes** — approved with the leak documented; without it the requested behaviors are impossible on iOS (every push must end visibly).
 - Q: Friend-request acceptance while the app is closed — silent or a rich push? → A: **Rich push** ("«name» accepted your invitation"); while the app is open, in-app banner only.
 - From the report itself: reaction **removals** must produce no push and no in-app banner — the state update syncs passively (silently over the live connection, or on next open). Group **creation** must not notify members — the first message is the first notification. Group **reactions** wake only the reacted-to message's author and prior co-reactors (rich content for both); everyone else learns passively.
+- Q (follow-up, after observing that reactions-off still produced generic pushes): extend the silent bit into a coarse frame-CLASS tag (message / reaction / housekeeping) plus per-device class opt-outs stored with the push subscription, so recipient toggles control the pushes themselves? ZK cost beyond the silent bit: the server sees which sealed frames are reaction-class, and learns each device's class preferences. → A: **Yes, approved.**
+- Directive (same session): in-app notification banners must dismiss by **swiping up**, replacing the ✕ button (the swipe currently does nothing on banners; quick-reply confirmed working).
 
 ## Why this exists (the shared mechanism)
 
 The server relays sealed frames it cannot read, and it pushes a content-free tickle for
 every frame delivered to an away device. On iOS a woken service worker must end visibly.
 So every "silent" event class — a removal, a group-create card, a reaction addressed to
-someone else — degrades into a quiet generic notification on away devices. The fix is a
-sender-set, per-recipient **silent hint**: the server still relays and the recipient still
-receives (WS drain / next open), but no push fires, so no wake, so nothing to show.
+someone else — degrades into a quiet generic notification on away devices, and a recipient
+toggle (reactions off) can suppress only the rendering, never the wake — the ghost remains.
+The fix has two halves sharing one wire concept, a coarse per-frame **class tag**:
+sender-side, `housekeeping` frames are never pushed (removals, create cards, bystander
+fan-out); recipient-side, each device registers class opt-outs with its push subscription
+(reactions off ⇒ no reaction-class pushes), and held frames deliver silently on the next
+connection. The server still relays everything identically — classes gate only the tickle.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -115,12 +121,17 @@ foregrounded → banner only, nothing in the notification center; repeat with th
 - **Old clients** (no silent hint): their housekeeping frames keep pushing exactly as today — recipients degrade to current behavior, nothing breaks either direction.
 - **Silent hint on a loud frame class**: a malicious/buggy sender could mark a real message silent — the recipient still RECEIVES it (delivery is untouched); they merely aren't woken. Equivalent power to just not sending; no new abuse surface.
 - **Push-health**: fewer wakes can never create silent-wake strikes — a frame with no push causes no wake at all; the spec-1048 FR-013 invariant applies only to wakes that happen.
+- **Mixed toggles (1:1 reactions off, group reactions on or vice versa)**: the reaction class is coarser than the two toggles, so pushes stay ON and the device filters rendering — the generic ghost can still appear in exactly this mixed configuration; documented, accepted (opting out fully requires both toggles off).
+- **Swipe vs quick-reply gestures**: the banner already owns pull-down (open reply) and in-reply swipe-up (discard); the new dismiss swipe must not fight them — swipe-up on a COLLAPSED banner dismisses, in reply mode it keeps its discard meaning.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: The relay MUST accept an optional, sender-set, per-recipient-frame **silent** hint; a silent frame is stored, delivered, drained, and acked exactly like any frame, but never triggers a push tickle.
+- **FR-001**: The relay MUST accept an optional, sender-set, per-recipient-frame **class** tag — `message` (default, also for tag-less old clients), `reaction`, or `housekeeping` — stored alongside the queued frame. `housekeeping` frames never trigger a push tickle; `reaction` frames trigger one unless the recipient device opted out (FR-008); `message` frames push exactly as today. Storage, delivery, drain, ack, receipts, and blocking are identical for every class.
+- **FR-008**: A device MUST be able to register class opt-outs with its push subscription (initially: `reaction`), and the client MUST derive that opt-out from the existing toggles — both reaction toggles off ⇒ opt out; either on ⇒ pushes stay on (the class is coarser than the per-surface toggles; the device keeps filtering rendering as in spec 1048). Opt-out changes take effect without re-subscribing.
+- **FR-009**: Frames withheld by class (housekeeping, or opted-out reaction) MUST deliver silently over the next live connection or app open — never lost, never reordered, never re-pushed later.
+- **FR-010**: In-app notification banners MUST dismiss with an upward swipe; the ✕ button is removed from the visual design. Tap-to-open and the quick-reply flow are unchanged, and a non-gestural dismissal MUST remain available to assistive technology (the banner stays screen-reader dismissible).
 - **FR-002**: Reaction REMOVALS MUST be sent silent, produce no notification surface anywhere (OS, banner, sound), and converge state passively (live update when connected; on next open otherwise). Reaction ADDS keep spec-1048 behavior byte-for-byte for the reacted-to author.
 - **FR-003**: A group reaction ADD MUST be sent loud only to the reacted-to message's author and to members who currently (in the sender's view) have their own reaction on that message; every other member's copy is silent. Recipients in the loud set who are NOT the author MUST get real content ("«name» also reacted …") under the same masking rules as spec 1048; the never-escalates rule carries over.
 - **FR-004**: Group CREATION cards (auto-join) MUST be sent silent: no notification to any member; the group appears in the chat list on receipt, and the first ordinary message notifies normally. The consent-based group INVITE flow is unchanged.
@@ -130,8 +141,8 @@ foregrounded → banner only, nothing in the notification center; repeat with th
 
 ## Zero-Knowledge Impact
 
-- **What crosses the wire, new**: one plaintext boolean per relayed frame (absent = loud). Nothing else changes; payloads stay sealed.
-- **What the server learns**: "the sender considers this frame not notification-worthy" — it can partition traffic into housekeeping vs attention-worthy. It still cannot read content, and cannot distinguish a removal from a group card from a fanned-out reaction within the silent class. This is a deliberate, user-approved (clarification 2026-07-14) one-bit relaxation, comparable to what frame size and timing already suggest.
+- **What crosses the wire, new**: one plaintext coarse class per relayed frame (absent = message), and a per-push-subscription list of opted-out classes.
+- **What the server learns**: (1) which sealed frames are reaction-class vs housekeeping vs ordinary — no content, no emoji, no target message; (2) each device's class preferences (e.g. "muted reaction pushes"). Both are deliberate, user-approved relaxations (clarifications 2026-07-14), and within the silent classes the server still cannot tell a removal from a group card apart.
 - **What it cannot do**: alter delivery. The hint only gates the push tickle; a hostile server ignoring it merely restores today's noisier behavior.
 - **Why necessary**: iOS obliges every push-woken service worker to end visibly, and the zero-knowledge server pushes blindly per frame — recipient-side silence is impossible; only the sender can request it.
 
@@ -144,7 +155,9 @@ foregrounded → banner only, nothing in the notification center; repeat with th
 - **SC-003**: Group creation with 2 away members yields zero notifications; the first message then notifies both (e2e + real-device).
 - **SC-004**: Acceptance with the app visible yields banner-only (e2e asserts the SW surface stays empty); with the app away, the notification names the accepter (SW unit + real-device).
 - **SC-005**: Server: silent frames' delivery paths (store, drain, ack, receipts, blocking) are byte-identical to loud frames in unit tests; only the notify call differs.
-- **SC-006**: Old-client interop: a frame without the hint behaves exactly as before this spec (server unit + client regression suites stay green).
+- **SC-006**: Old-client interop: a frame without a class tag behaves exactly as before this spec (server unit + client regression suites stay green).
+- **SC-007**: With both reaction toggles off, a reaction to the user's message while away produces zero notification-center entries (real device), and the reaction is present on next open (e2e: the frame is held, not pushed — server unit asserts no notify call).
+- **SC-008**: A collapsed banner dismisses with one upward swipe in the e2e gesture test; no ✕ is rendered; quick-reply open/discard gestures keep passing their existing suites.
 
 ## Assumptions
 
