@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-13
 
-**Status**: in-review
+**Status**: shipped
 
 **Input**: User description: "Make pinned chats look like iMessage: large circular avatars in a grid at the top of the Chats tab, up to 9 pins." (with reference screenshot of iMessage's pinned grid)
 
