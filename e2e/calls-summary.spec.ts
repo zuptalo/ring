@@ -4,9 +4,12 @@ import { createAccount, pair } from './helpers';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * Spec 1025 (US6): the Calls tab shows ISO-style dates (YYYY-MM-DD), a usage totals summary
- * (audio minutes, video minutes, data per kind), and the call detail's Video and Message action
- * buttons are swapped (Video first). Seeds completed call records directly (no real WebRTC).
+ * Spec 1025 (US6): the Calls tab shows ISO-style dates (YYYY-MM-DD) and the call detail's
+ * Video and Message action buttons are swapped (Video first). The usage totals summary
+ * (audio minutes, video minutes, data per kind) moved to Settings → Network usage in
+ * spec 1047, so its numeric assertions live against that page now (quick-calls.spec.ts
+ * covers the rows' presence; this test covers the arithmetic). Seeds completed call
+ * records directly (no real WebRTC).
  */
 test('Calls: ISO dates, usage totals, and swapped detail buttons', async ({ browser }) => {
   const ctxA = await browser.newContext();
@@ -26,14 +29,14 @@ test('Calls: ISO dates, usage totals, and swapped detail buttons', async ({ brow
 
   await a.page.goto('/tabs/calls');
 
-  // Totals summary: audio 2 min, video 10 min, and a combined data line.
-  await expect(a.page.getByText('Totals')).toBeVisible({ timeout: 30_000 });
-  await expect(a.page.locator('ion-item', { hasText: 'Audio calls' })).toContainText('2 min');
-  await expect(a.page.locator('ion-item', { hasText: 'Video calls' })).toContainText('10 min');
-  await expect(a.page.getByText('Data used')).toBeVisible();
-
   // ISO-style date on a call row.
-  await expect(a.page.locator('ion-note', { hasText: '2026-06-19' }).first()).toBeVisible();
+  await expect(a.page.locator('ion-note', { hasText: '2026-06-19' }).first()).toBeVisible({ timeout: 30_000 });
+
+  // Totals moved to Network usage (spec 1047): audio 2 min, video 10 min, combined data line.
+  await a.page.goto('/settings/network-usage');
+  await expect(a.page.locator('ion-item', { hasText: 'Audio calls' })).toContainText('2 min', { timeout: 15_000 });
+  await expect(a.page.locator('ion-item', { hasText: 'Video calls' })).toContainText('10 min');
+  await expect(a.page.locator('ion-item', { hasText: 'Call data' })).toBeVisible();
 
   // Call detail: action buttons swapped → Video first, Message last.
   await a.page.goto(`/call/${b.id}`);

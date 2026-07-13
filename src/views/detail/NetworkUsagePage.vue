@@ -42,6 +42,16 @@
           <ion-label>Total call time</ion-label>
           <ion-note slot="end">{{ formatDuration(stats.callSeconds) }}</ion-note>
         </ion-item>
+        <!-- Per-kind split (spec 1046: moved here from the Calls tab's Totals block;
+             same window as every row on this page, so audio + video = Call data). -->
+        <ion-item>
+          <ion-label>Audio calls</ion-label>
+          <ion-note slot="end">{{ Math.round(stats.audioCallSeconds / 60) }} min · {{ formatBytes(stats.audioCallBytes) }}</ion-note>
+        </ion-item>
+        <ion-item>
+          <ion-label>Video calls</ion-label>
+          <ion-note slot="end">{{ Math.round(stats.videoCallSeconds / 60) }} min · {{ formatBytes(stats.videoCallBytes) }}</ion-note>
+        </ion-item>
         <ion-item lines="none">
           <ion-label>Call data</ion-label>
           <ion-note slot="end">{{ formatBytes(stats.callBytes) }}</ion-note>
@@ -80,7 +90,10 @@ const resetAt = () =>
 const stats = useLiveQuery(
   () => getSetting('network.resetAt', 0).then((since) => networkStats(since)),
   ['messages', 'media', 'calls', 'settings'],
-  { messagesSent: 0, messagesReceived: 0, mediaBytes: 0, calls: 0, callSeconds: 0, callBytes: 0 },
+  {
+    messagesSent: 0, messagesReceived: 0, mediaBytes: 0, calls: 0, callSeconds: 0, callBytes: 0,
+    audioCallSeconds: 0, videoCallSeconds: 0, audioCallBytes: 0, videoCallBytes: 0,
+  },
   resetAt,
 );
 
