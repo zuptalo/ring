@@ -44,6 +44,12 @@
             <p v-if="!pairVerdict.ok" class="pair-reason">{{ pairVerdict.reason }}</p>
           </ion-label>
         </ion-item>
+        <!-- Pin/Unpin lives here too (spec 1044): pinned chats render in the grid,
+             out of reach of the row swipe, so the sheet is their management surface. -->
+        <ion-item button :detail="false" @click="togglePin">
+          <ion-icon slot="start" :icon="pinOutline" />
+          <ion-label>{{ chat.pinned ? 'Unpin' : 'Pin' }}</ion-label>
+        </ion-item>
         <ion-item button :detail="false" @click="toggleFavorite">
           <ion-icon slot="start" :icon="chat.favorite ? heart : heartOutline" />
           <ion-label>{{ chat.favorite ? 'Remove from Favorites' : 'Add to Favorites' }}</ion-label>
@@ -77,15 +83,16 @@ import {
 import {
   closeOutline, notificationsOffOutline, notificationsOutline, informationCircleOutline,
   heart, heartOutline, listOutline, closeCircleOutline, exitOutline, trashOutline,
-  lockClosedOutline, lockOpenOutline, eyeOffOutline, eyeOutline,
+  lockClosedOutline, lockOpenOutline, eyeOffOutline, eyeOutline, pinOutline,
 } from 'ionicons/icons';
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   setChatMute, toggleChatFavorite, clearChat, deleteChat, leaveGroup, setChatLocked,
-  getSetting,
+  getSetting, setChatPinned, MAX_PINNED_CHATS,
 } from '@/db/queries';
 import { lockConfigured } from '@/services/chat-lock';
+import { appToast } from '@/services/toast';
 import { addHidden, removeHidden } from '@/services/hidden-chats';
 import { ensureHiddenPin } from '@/composables/hiddenPinPrompt';
 import { isHiddenId, hiddenIdsSync } from '@/services/hidden-state';
@@ -165,6 +172,19 @@ function openInfo(): void {
   emit('dismiss');
   if (c.isGroup) router.push(`/group/${c.id}`);
   else if (c.participantIds[0]) router.push(`/contact/${c.participantIds[0]}`);
+}
+
+// Pin/Unpin (spec 1044): same behavior + cap message as the row's swipe action.
+async function togglePin(): Promise<void> {
+  if (!props.chat) return;
+  const ok = await setChatPinned(props.chat.id, !props.chat.pinned);
+  if (!ok) {
+    await appToast({
+      message: `You can only pin ${MAX_PINNED_CHATS} chats.`,
+      duration: 2200,
+    });
+  }
+  emit('dismiss');
 }
 
 async function toggleFavorite(): Promise<void> {
