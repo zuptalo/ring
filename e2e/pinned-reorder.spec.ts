@@ -62,6 +62,28 @@ test('pinned order is user-owned: drag to rearrange, drag in/out to pin/unpin, h
   await a.page.goto('/tabs/chats');
   await expect(a.page.locator('ion-item-sliding')).toHaveCount(2, { timeout: 15_000 });
 
+  // First-pin drop zone: with NO pins, lifting a row summons a drop target where
+  // the grid will be; dropping there creates the first pin.
+  const row0 = await a.page.locator('ion-item-sliding').first().boundingBox();
+  if (!row0) throw new Error('row not laid out');
+  await a.page.mouse.move(row0.x + row0.width / 2, row0.y + row0.height / 2);
+  await a.page.mouse.down();
+  await expect(a.page.locator('.drag-proxy')).toBeVisible({ timeout: 5_000 });
+  // Nudge IMMEDIATELY: it kills the peek timer. Only then take the slow steps
+  // (zone lookup + boundingBox) — under CI load those can exceed the peek window.
+  await a.page.mouse.move(row0.x + row0.width / 2 + 12, row0.y + row0.height / 2 + 12, { steps: 3 });
+  await expect(a.page.locator('.pin-dropzone')).toBeVisible({ timeout: 5_000 });
+  const zone = await a.page.locator('.pin-dropzone').boundingBox();
+  if (!zone) throw new Error('drop zone not laid out');
+  await a.page.mouse.move(zone.x + zone.width / 2, zone.y + zone.height / 2, { steps: 10 });
+  await a.page.waitForTimeout(150);
+  await a.page.mouse.up();
+  await expect(a.page.locator('.pin-tile')).toHaveCount(1, { timeout: 10_000 });
+  // Reset to the no-pins baseline for the arranged-order flow below.
+  const firstPinned = await a.page.locator('.pin-tile[data-chat-id]').getAttribute('data-chat-id');
+  await a.page.evaluate((id: string) => (window as any).__ringTest.pinChat(id, false), firstPinned!);
+  await expect(a.page.locator('.pin-tile')).toHaveCount(0, { timeout: 10_000 });
+
   // Pin both; pin order (not recency) is the arrangement: B then C.
   await pinChat(a, chatB);
   await pinChat(a, chatC);

@@ -55,6 +55,20 @@
           <ion-label>Hide hidden chats</ion-label>
         </ion-item>
 
+        <!-- First-pin drop zone (spec 1045): with NO pins there is no grid to drop
+             on, so while a row is lifted this stands in where the grid would be.
+             Its element doubles as the drag controller's grid target. -->
+        <div
+          v-if="showFirstPinZone"
+          ref="dropZone"
+          class="pin-dropzone"
+          :class="{ hover: dragState.hoverIndex != null }"
+          aria-hidden="true"
+        >
+          <div class="dz-well"><ion-icon :icon="pinOutline" /></div>
+          <span class="dz-label">Drag here to pin</span>
+        </div>
+
         <!-- Pinned chats: the iMessage-style avatar grid (spec 1044), in the user's
              own order with drag-to-rearrange (spec 1045). Gated on `ready` so the
              fail-closed hidden state can't flash tiles at cold open. -->
@@ -227,7 +241,7 @@ import {
 } from '@ionic/vue';
 import {
   createOutline, personAddOutline, peopleOutline, archiveOutline, lockClosedOutline,
-  eyeOffOutline, banOutline,
+  eyeOffOutline, banOutline, pinOutline,
 } from 'ionicons/icons';
 import ChatListItem from '@/components/ChatListItem.vue';
 import PinnedChatsGrid from '@/components/PinnedChatsGrid.vue';
@@ -358,6 +372,17 @@ const listChats = computed<Chat[]>(() => {
 });
 
 const gridComp = ref<{ el: () => HTMLElement | null } | null>(null);
+// The first-pin drop zone (no pins yet): shown only while a ROW is lifted on the
+// All view — the only context where the grid (and so drag-pinning) exists.
+const dropZone = ref<HTMLElement | null>(null);
+const showFirstPinZone = computed(
+  () =>
+    dragActive.value &&
+    dragState.origin === 'list' &&
+    gridChats.value.length === 0 &&
+    activeFilter.value === 'all' &&
+    !search.value.trim(),
+);
 const contentRef = ref<{ $el: HTMLIonContentElement } | null>(null);
 const scrollEl = ref<HTMLElement | null>(null);
 onMounted(async () => {
@@ -374,7 +399,7 @@ function onPeekMore(chat: Chat): void {
 }
 
 const { state: dragState, displayIds: gridOrder, pressStart, consumeClickSwallow } = useChatDrag({
-  gridEl: () => gridComp.value?.el() ?? null,
+  gridEl: () => gridComp.value?.el() ?? dropZone.value,
   scrollEl: () => scrollEl.value,
   pinnedIds: () => optimisticGrid.value ?? pinParts.value.grid.map((c) => c.id),
   maxPins: MAX_PINNED_CHATS,
@@ -515,6 +540,39 @@ async function newGroup() {
   text-align: center;
   margin-top: 40px;
 }
+/* First-pin drop zone (spec 1045): a dashed well where the pinned grid will be,
+   shown only mid-drag when there are no pins yet. */
+.pin-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 8px 10px;
+}
+.dz-well {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 2px dashed color-mix(in srgb, var(--app-text, #000) 25%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--app-text-muted, var(--ion-color-medium));
+  font-size: 30px;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+.dz-label {
+  font-size: 13px;
+  color: var(--app-text-muted, var(--ion-color-medium));
+}
+/* The lifted avatar is over the zone: light up so the drop reads as accepted. */
+.pin-dropzone.hover .dz-well {
+  border-color: var(--ion-color-primary, #10b981);
+  background: color-mix(in srgb, var(--ion-color-primary, #10b981) 12%, transparent);
+  color: var(--ion-color-primary, #10b981);
+  transform: scale(1.06);
+}
+
 /* "Start a conversation" hint row, flush at the top like the Contacts browse row. */
 .hint-list {
   padding-top: 0;
