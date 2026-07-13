@@ -25,4 +25,7 @@ export const SYNCED_PREF_KEYS: string[] = [
   'notifications.games.followMoves', 'notifications.games.followResults',
   'notifications.inapp.enabled', 'notifications.inapp.style', 'notifications.inapp.sounds', 'notifications.inapp.vibrate',
   'chats.animEmoji', 'chats.animGifs', 'chats.tabFilters', 'chats.keepArchived',
+  // Quick Call tiles on the Calls tab (spec 1046): an organisation preference
+  // over existing contacts/groups, so it follows the user like chats.tabFilters.
+  'calls.quick',
 ];

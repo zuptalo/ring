@@ -30,26 +30,17 @@
         </ion-toolbar>
       </ion-header>
 
-      <!-- Usage totals (spec 1025 US6): minutes and data for audio, video, and combined. -->
-      <ion-list v-if="totalsCalls.length" :inset="true" class="call-totals">
-        <ion-list-header>
-          <ion-label>Totals</ion-label>
-        </ion-list-header>
-        <ion-item lines="none">
-          <ion-icon slot="start" :icon="callOutline" color="medium" />
-          <ion-label>Audio calls</ion-label>
-          <ion-note slot="end">{{ totals.audioMinutes }} min · {{ formatBytes(totals.audioBytes) }}</ion-note>
-        </ion-item>
-        <ion-item lines="none">
-          <ion-icon slot="start" :icon="videocamOutline" color="medium" />
-          <ion-label>Video calls</ion-label>
-          <ion-note slot="end">{{ totals.videoMinutes }} min · {{ formatBytes(totals.videoBytes) }}</ion-note>
-        </ion-item>
-        <ion-item lines="none">
-          <ion-label>Data used</ion-label>
-          <ion-note slot="end">{{ formatBytes(totals.combinedBytes) }}</ion-note>
-        </ion-item>
-      </ion-list>
+      <!-- Quick Calls (spec 1046): one-tap call tiles for the people and groups you
+           always call. The old Totals block moved to Settings → Storage and data →
+           Network usage, freeing this prime spot. -->
+      <QuickCallsRow
+        :entries="quickEntries"
+        :contacts="allContacts"
+        :groups="groupChats"
+        @call="quickCall"
+        @manage="manageQuick"
+        @add="addQuickOpen = true"
+      />
 
       <ion-list>
         <ion-list-header>
@@ -115,6 +106,68 @@
       </ion-list>
     </ion-content>
 
+    <!-- Add a Quick Call: pick a contact or a group, then a method the target's
+         size allows (video ≤ 4, audio ≤ 8, counting me — spec 1046 FR-004). -->
+    <ion-modal :is-open="addQuickOpen" @did-dismiss="addQuickOpen = false">
+      <ion-header :translucent="true">
+        <ion-toolbar>
+          <ion-buttons slot="start">
+            <ion-button @click="addQuickOpen = false">Cancel</ion-button>
+          </ion-buttons>
+          <ion-title>Add quick call</ion-title>
+        </ion-toolbar>
+        <ion-toolbar>
+          <ion-searchbar
+            :value="quickSearch"
+            placeholder="Search name"
+            @ion-input="quickSearch = $event.detail.value ?? ''"
+          />
+        </ion-toolbar>
+      </ion-header>
+      <ion-content>
+        <ion-list v-if="quickPickGroups.length">
+          <ion-list-header><ion-label>Groups</ion-label></ion-list-header>
+          <ion-item
+            v-for="g in quickPickGroups"
+            :key="g.id"
+            button
+            :detail="false"
+            :disabled="!g.addable"
+            @click="pickQuickTarget('group', g.chat)"
+          >
+            <ion-avatar slot="start">
+              <user-avatar :src="g.chat.avatar" :alt="g.chat.name" />
+            </ion-avatar>
+            <ion-label>
+              <h2 dir="auto">{{ g.chat.name }}</h2>
+              <!-- Why a too-big group can't be a quick call (audio is the roomier cap). -->
+              <p>{{ g.addable ? `${g.size} people` : `Audio calls are limited to ${AUDIO_MAX} people` }}</p>
+            </ion-label>
+            <ion-icon slot="end" :icon="peopleOutline" color="primary" />
+          </ion-item>
+        </ion-list>
+        <ion-list>
+          <ion-list-header><ion-label>Contacts</ion-label></ion-list-header>
+          <ion-item
+            v-for="person in quickPickContacts"
+            :key="person.id"
+            button
+            :detail="false"
+            @click="pickQuickTarget('contact', person)"
+          >
+            <ion-avatar slot="start">
+              <user-avatar :src="person.avatar" :alt="person.name" />
+            </ion-avatar>
+            <ion-label>
+              <h2 dir="auto">{{ person.name }}</h2>
+              <p>{{ person.about }}</p>
+            </ion-label>
+            <ion-icon slot="end" :icon="callOutline" color="primary" />
+          </ion-item>
+        </ion-list>
+      </ion-content>
+    </ion-modal>
+
     <!-- New call: pick a contact to open their call screen. -->
     <ion-modal :is-open="newOpen" @did-dismiss="newOpen = false">
       <ion-header :translucent="true">
@@ -166,21 +219,30 @@ import {
   IonIcon, IonSearchbar, IonContent, IonList, IonListHeader, IonItem,
   IonItemSliding, IonItemOptions, IonItemOption,
   IonAvatar, IonLabel, IonNote, onIonViewDidEnter,
-  IonInfiniteScroll, IonInfiniteScrollContent, IonModal,
+  IonInfiniteScroll, IonInfiniteScrollContent, IonModal, actionSheetController,
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
   addOutline, callOutline, videocamOutline, arrowUpOutline, arrowDownOutline,
   informationCircleOutline, trashOutline, peopleOutline,
 } from 'ionicons/icons';
-import { deleteCalls, listCallGroups, listCallsForTotals, markCallsSeen, listContacts } from '@/db/queries';
+import {
+  deleteCalls, listCallGroups, markCallsSeen, listContacts, listChats, getSetting, setSetting,
+} from '@/db/queries';
 import type { CallGroup } from '@/db/queries';
-import type { Call } from '@/db/types';
+import type { Call, Chat, Contact } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { warmCalls, warmCallsLoaded, warmWhenIdle } from '@/composables/warmStores';
 import { formatDay } from '@/utils/time';
-import { formatBytes } from '@/utils/bytes';
-import { computeCallTotals } from '@/utils/call-totals';
+import QuickCallsRow from '@/components/QuickCallsRow.vue';
+import {
+  parseQuickCalls, upsertEntry, removeEntry, entryVerdict, callSize, allowedKinds,
+  QUICK_CALLS_KEY, type QuickCallEntry, type QuickCallKind,
+} from '@/utils/quick-calls';
+import { VIDEO_MAX, AUDIO_MAX } from '@/services/call/types';
+import { startDirectCall, startGroupCall } from '@/composables/useCall';
+import { ensureProfile } from '@/composables/useProfileGate';
+import { appToast } from '@/services/toast';
 
 const PAGE = 15;
 const router = useRouter();
@@ -203,9 +265,135 @@ const loaded = calls.loaded;
 watch(search, () => (visible.value = PAGE));
 const visibleCalls = computed(() => calls.value.slice(0, visible.value));
 
-// Usage totals (spec 1025 US6): all-time, over non-hidden calls, independent of the search filter.
-const totalsCalls = useLiveQuery(() => listCallsForTotals(), ['calls'], [] as Call[]);
-const totals = computed(() => computeCallTotals(totalsCalls.value));
+/* ---- Quick Calls (spec 1046) ---- */
+
+// The synced entry list (settings ledger, like chats.tabFilters) + the records
+// the tiles resolve against. listChats is the hidden/locked/archived choke
+// point, so concealed groups can never surface as tiles or picker rows.
+const quickEntries = useLiveQuery(
+  () => getSetting<unknown>(QUICK_CALLS_KEY, []).then(parseQuickCalls),
+  ['settings'],
+  [] as QuickCallEntry[],
+);
+const allContacts = useLiveQuery(() => listContacts(), ['contacts', 'chats'], [] as Contact[]);
+const visibleChats = useLiveQuery(() => listChats(), ['chats', 'messages'], [] as Chat[]);
+const groupChats = computed(() => visibleChats.value.filter((c) => c.isGroup));
+
+async function saveQuick(next: QuickCallEntry[]): Promise<void> {
+  // Strip Vue reactivity before persisting: entries coming back out of the
+  // live-query ref are Proxies, and IndexedDB's structured clone rejects
+  // Proxies (DataCloneError) — plain literals only.
+  await setSetting(QUICK_CALLS_KEY, next.map((e) => ({ t: e.t, id: e.id, kind: e.kind })));
+}
+
+/** One tap = ring, or explain (spec 1046 SC-002): the verdict is re-derived at
+ *  tap time because groups grow after an entry is created. */
+async function quickCall(entry: QuickCallEntry): Promise<void> {
+  const target =
+    entry.t === 'contact'
+      ? allContacts.value.find((c) => c.id === entry.id)
+      : groupChats.value.find((g) => g.id === entry.id);
+  const verdict = entryVerdict(entry, target);
+  if (!verdict.ok || !target) {
+    await manageQuick(entry); // the sheet carries the reason + fix/remove actions
+    return;
+  }
+  if (entry.t === 'contact') {
+    await startDirectCall(entry.id, entry.kind);
+    return;
+  }
+  const g = target as Chat;
+  if (!(await ensureProfile())) return; // a group call sends your card
+  await startGroupCall(g.id, entry.kind, g.name, g.avatar, g.participantIds);
+}
+
+/** Manage sheet (long-press / right-click / any blocked tap): switch method
+ *  (cap-aware, with the reason when blocked) or remove. */
+async function manageQuick(entry: QuickCallEntry): Promise<void> {
+  const target =
+    entry.t === 'contact'
+      ? allContacts.value.find((c) => c.id === entry.id)
+      : groupChats.value.find((g) => g.id === entry.id);
+  const verdict = entryVerdict(entry, target);
+  const other: QuickCallKind = entry.kind === 'audio' ? 'video' : 'audio';
+  const otherAllowed = !!target && allowedKinds(callSize(entry, target)).includes(other);
+  const sheet = await actionSheetController.create({
+    header: target?.name ?? 'Quick call',
+    subHeader: verdict.ok ? undefined : verdict.reason,
+    buttons: [
+      // Switching is offered whenever a target exists; a blocked switch explains
+      // (FR-004: the reason accompanies the block) instead of silently hiding.
+      ...(target
+        ? [{
+            text: other === 'video' ? 'Switch to video' : 'Switch to voice',
+            handler: () => {
+              if (!otherAllowed) {
+                void appToast({
+                  message:
+                    other === 'video'
+                      ? `Video calls are limited to ${VIDEO_MAX} people`
+                      : `Audio calls are limited to ${AUDIO_MAX} people`,
+                  duration: 2200,
+                });
+                return;
+              }
+              void saveQuick(upsertEntry(quickEntries.value, { ...entry, kind: other }));
+            },
+          }]
+        : []),
+      {
+        text: 'Remove quick call',
+        role: 'destructive' as const,
+        handler: () => void saveQuick(removeEntry(quickEntries.value, entry)),
+      },
+      { text: 'Cancel', role: 'cancel' as const },
+    ],
+  });
+  await sheet.present();
+}
+
+/* ---- Add-quick-call picker ---- */
+const addQuickOpen = ref(false);
+const quickSearch = ref('');
+const quickPickContacts = useLiveQuery(
+  () => listContacts(quickSearch.value),
+  ['contacts', 'chats'],
+  [] as Contact[],
+  () => quickSearch.value,
+);
+// Groups list carries its call size; too-big-for-audio groups render disabled
+// with the reason (FR-004: a group beyond 8 can't be a quick call at all).
+const quickPickGroups = computed(() => {
+  const q = quickSearch.value.trim().toLowerCase();
+  return groupChats.value
+    .filter((g) => !q || g.name.toLowerCase().includes(q))
+    .map((chat) => {
+      const size = chat.participantIds.length + 1;
+      return { id: chat.id, chat, size, addable: allowedKinds(size).length > 0 };
+    });
+});
+
+async function pickQuickTarget(t: 'contact' | 'group', rec: Contact | Chat): Promise<void> {
+  const entry = { t, id: rec.id } as const;
+  const size = t === 'group' ? (rec as Chat).participantIds.length + 1 : 2;
+  const kinds = allowedKinds(size);
+  if (!kinds.length) return; // the row is disabled; defensive for a race
+  const save = (kind: QuickCallKind) => {
+    void saveQuick(upsertEntry(quickEntries.value, { ...entry, kind }));
+    addQuickOpen.value = false;
+  };
+  const sheet = await actionSheetController.create({
+    header: rec.name,
+    // Why video is missing for a 5–8 person group (FR-004).
+    subHeader: kinds.includes('video') ? undefined : `Video calls are limited to ${VIDEO_MAX} people`,
+    buttons: [
+      { text: 'Voice call', handler: () => save('audio') },
+      ...(kinds.includes('video') ? [{ text: 'Video call', handler: () => save('video') }] : []),
+      { text: 'Cancel', role: 'cancel' as const },
+    ],
+  });
+  await sheet.present();
+}
 
 /* ---- New call modal ---- */
 const newOpen = ref(false);

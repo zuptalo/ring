@@ -5157,6 +5157,12 @@ export interface NetworkStats {
   calls: number;
   callSeconds: number;
   callBytes: number; // total data sent+received across calls
+  // Per-kind split (spec 1046: the Calls-tab Totals moved here). Sums match the
+  // combined figures above (same call set, same window).
+  audioCallSeconds: number;
+  videoCallSeconds: number;
+  audioCallBytes: number;
+  videoCallBytes: number;
 }
 
 /**
@@ -5177,13 +5183,21 @@ export async function networkStats(sinceTs = 0): Promise<NetworkStats> {
     .filter((m) => since(m.updatedAt))
     .reduce((n, m) => n + m.size, 0);
   const cs = calls.filter((c) => since(c.timestamp));
+  const audio = cs.filter((c) => !c.video);
+  const video = cs.filter((c) => c.video);
+  const secs = (list: Call[]) => list.reduce((n, c) => n + (c.durationSec ?? 0), 0);
+  const bytes = (list: Call[]) => list.reduce((n, c) => n + (c.bytes ?? 0), 0);
   return {
     messagesSent: msgs.filter((m) => m.outgoing).length,
     messagesReceived: msgs.filter((m) => !m.outgoing).length,
     mediaBytes,
     calls: cs.length,
-    callSeconds: cs.reduce((n, c) => n + (c.durationSec ?? 0), 0),
-    callBytes: cs.reduce((n, c) => n + (c.bytes ?? 0), 0),
+    callSeconds: secs(cs),
+    callBytes: bytes(cs),
+    audioCallSeconds: secs(audio),
+    videoCallSeconds: secs(video),
+    audioCallBytes: bytes(audio),
+    videoCallBytes: bytes(video),
   };
 }
 
