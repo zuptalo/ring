@@ -52,8 +52,17 @@
           <ion-label>Hide hidden chats</ion-label>
         </ion-item>
 
+        <!-- Pinned chats: the iMessage-style avatar grid (spec 1044). Gated on
+             `ready` so the fail-closed hidden state can't flash tiles at cold open. -->
+        <PinnedChatsGrid
+          v-if="ready && pinParts.grid.length"
+          :chats="pinParts.grid"
+          @open="open"
+          @more="(c) => actions?.openMore(c)"
+        />
+
         <ChatListItem
-          v-for="chat in chats"
+          v-for="chat in pinParts.list"
           :key="chat.id"
           :chat="chat"
           :draft="draftFor(chat.id)"
@@ -76,7 +85,7 @@
           </ion-label>
         </ion-item>
       </ion-list>
-      <div v-else-if="ready && chats.length === 0" class="empty">
+      <div v-else-if="ready && chats.length === 0 && pinParts.grid.length === 0" class="empty">
         <ion-note>{{ emptyMessage }}</ion-note>
       </div>
 
@@ -178,6 +187,8 @@ import {
   eyeOffOutline,
 } from 'ionicons/icons';
 import ChatListItem from '@/components/ChatListItem.vue';
+import PinnedChatsGrid from '@/components/PinnedChatsGrid.vue';
+import { partitionPinned } from '@/utils/chat-pins';
 import ChatActionsHost from '@/components/ChatActionsHost.vue';
 import ChatFilterBar from '@/components/ChatFilterBar.vue';
 import ChatListsSheet from '@/components/ChatListsSheet.vue';
@@ -245,6 +256,13 @@ const { chats, activeFilter, setActive, chips, lists, tabFilters, allChats, load
 const ready = ref(false);
 watch(isUnlocked, (u) => { if (!u) ready.value = false; });
 watch(allChats, () => { if (isUnlocked.value) ready.value = true; }, { immediate: true });
+// Pinned grid vs list rows (spec 1044): on the All chip with no search, pinned chats
+// render as the avatar grid and LEAVE the list; searching or any other chip shows
+// everything as plain rows so pins stay findable. `chats` is already pinned-first
+// and hidden-fail-closed, so the grid inherits both.
+const pinParts = computed(() =>
+  partitionPinned(chats.value, { filterAll: activeFilter.value === 'all', searching: !!search.value.trim() }),
+);
 const listsSheetOpen = ref(false);
 const editTabsOpen = ref(false);
 const newListOpen = ref(false);
