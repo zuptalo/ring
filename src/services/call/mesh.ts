@@ -60,6 +60,10 @@ export interface MeshCallbacks {
   /** Call waiting (spec 0005): the set of peers who have put US on hold (their tile shows
    *  "on hold"). Empty when nobody has us held. */
   onHeldPeers?: (peerIds: string[]) => void;
+  /** Peers whose video has gone dark (their camera-off / adaptive pause detaches the
+   *  sending track, so our receiver track mutes — no stream event fires). The tile
+   *  grid swaps those peers to avatars off this (spec 2029). */
+  onVideoMutedPeers?: (peerIds: string[]) => void;
 }
 
 /** Outgoing-video encoding tier (shape matches useCall's QUALITY_ENCODING entry). */
@@ -143,6 +147,17 @@ export class MeshSession {
   private local: MediaStream | null = null;
   private legs = new Map<string, PeerLeg>(); // peerUserId → leg
   private remote = new Map<string, MediaStream>(); // peerUserId → their stream
+  // Peers whose video is dark (spec 2029), tracked from two independent sources whose
+  // UNION is emitted: the sealed camoff/camon signal (authoritative — every app version
+  // ≥2029 sends it) and the receiver track's own mute state (fallback for older senders;
+  // browsers fire it inconsistently, and it must never CLEAR a signal-set dark state).
+  private signalDark = new Set<string>();
+  private trackDark = new Set<string>();
+  // The user's camera toggle (spec 2029): while true every leg's video sender stays
+  // detached — nothing is encoded or sent, and the peers' receiver tracks mute so
+  // their tiles swap to our avatar. Owned by the user; adaptation (videoSuspended)
+  // and hold (paused/held) manage their own detaches and never re-attach past this.
+  private cameraOff = false;
   // Roster updates apply one at a time (see onRoster): a burst of joins must not interleave.
   private rosterChain: Promise<void> = Promise.resolve();
   // Per-sender setParameters is serialized (interleaving getParameters/setParameters on the
@@ -417,8 +432,11 @@ export class MeshSession {
   /* ---- outgoing video: fan out across every leg ---- */
 
   /** Replace the outgoing video track on every leg (camera flip / screen share /
-   *  quality). Returns true if at least one leg had a video sender. No renegotiation. */
+   *  quality). Returns true if at least one leg had a video sender. No renegotiation.
+   *  While the camera is off the senders stay detached — the swap is accepted for
+   *  local state only and setCameraOff(false) attaches whatever track is current. */
   async replaceVideoTrack(track: MediaStreamTrack): Promise<boolean> {
+    if (this.cameraOff) return this.legs.size > 0;
     let any = false;
     for (const leg of this.legs.values()) {
       const sender = this.videoSenderOf(leg);
@@ -429,6 +447,47 @@ export class MeshSession {
     }
     if (any) for (const leg of this.legs.values()) void this.applyLegEncoding(leg);
     return any;
+  }
+
+  /** The user's camera toggle (spec 2029): detach/re-attach the video sender on every
+   *  leg so camera-off truly stops sending (peers' tracks mute → their tiles show our
+   *  avatar) instead of streaming black frames. Camera-on skips legs adaptation has
+   *  suspended (tier 'off' owns those; it re-attaches on recovery) and does nothing
+   *  while the call is held — resume() honors the flag when it re-attaches. */
+  async setCameraOff(off: boolean): Promise<void> {
+    this.cameraOff = off;
+    // The sealed camoff/camon fans out per leg even while paused — the state must be
+    // truthful whenever the peer next renders our tile (spec 2029).
+    for (const leg of this.legs.values()) {
+      void this.send('call-ice', leg.peerId, { callId: this.roomId, type: off ? 'camoff' : 'camon', roomId: this.roomId });
+    }
+    if (this.paused) return;
+    for (const leg of this.legs.values()) {
+      const sender = this.videoSenderOf(leg);
+      if (!sender) continue;
+      if (off) {
+        if (sender.track) await sender.replaceTrack(null).catch(() => {});
+      } else if (!leg.videoSuspended && !this.heldPeers.has(leg.peerId)) {
+        const v = this.local?.getVideoTracks()[0];
+        if (v && v.readyState === 'live') await sender.replaceTrack(v).catch(() => {});
+      }
+    }
+    if (!off) for (const leg of this.legs.values()) void this.applyLegEncoding(leg);
+  }
+
+  /** A peer's sealed camera-state signal (spec 2029): authoritative for their tile's
+   *  video-vs-avatar choice; the receiver-track mute fallback covers older senders.
+   *  camon also clears any track-side dark state — the signal outranks a stale track
+   *  reading in browsers that under-report unmute. */
+  onPeerCameraState(peerId: string, on: boolean): void {
+    if (on) {
+      const changed = this.signalDark.delete(peerId) || this.trackDark.delete(peerId);
+      if (changed) this.emitVideoMuted();
+      return;
+    }
+    if (this.signalDark.has(peerId)) return;
+    this.signalDark.add(peerId);
+    this.emitVideoMuted();
   }
 
   /** Add a video track to every leg (audio→video upgrade). Triggers per-leg
@@ -544,11 +603,12 @@ export class MeshSession {
       }
       return;
     }
-    // Leaving the floor: re-attach ONLY what adaptation itself detached.
+    // Leaving the floor: re-attach ONLY what adaptation itself detached — and never
+    // while the user's camera is off (their toggle owns the sender then, spec 2029).
     if (leg.videoSuspended) {
       leg.videoSuspended = false;
       const v = this.local?.getVideoTracks()[0];
-      if (v && v.readyState === 'live' && !this.paused && !this.heldPeers.has(leg.peerId)) {
+      if (v && v.readyState === 'live' && !this.paused && !this.heldPeers.has(leg.peerId) && !this.cameraOff) {
         await sender.replaceTrack(v).catch(() => {});
       }
     }
@@ -803,6 +863,14 @@ export class MeshSession {
 
     // Publish our tracks (no E2EE transform, no codec munging — native DTLS-SRTP).
     if (this.local) for (const track of this.local.getTracks()) pc.addTrack(track, this.local);
+    // Camera off: keep the video m-line (addTrack above) but detach the sender so a
+    // late joiner gets our avatar, not video the user turned off — and tell them so
+    // their tile renders the avatar deterministically (spec 2029).
+    if (this.cameraOff) {
+      const vs = this.videoSenderOf(leg);
+      if (vs?.track) void vs.replaceTrack(null).catch(() => {});
+      void this.send('call-ice', peerId, { callId: this.roomId, type: 'camoff', roomId: this.roomId });
+    }
 
     // Perfect negotiation: either side may (re)offer; collisions resolve by polite/impolite.
     pc.onnegotiationneeded = async () => {
@@ -845,7 +913,18 @@ export class MeshSession {
       // A track being added/removed within the stream (camera on/off) must re-emit so
       // the tiles recompute (and show video vs avatar).
       stream.addEventListener('addtrack', () => this.emitRemote());
-      stream.addEventListener('removetrack', () => this.emitRemote());
+      stream.addEventListener('removetrack', () => {
+        this.refreshVideoMuted(peerId, stream);
+        this.emitRemote();
+      });
+      // The peer's camera-off/adaptive-pause reaches us ONLY as a mute on the
+      // receiver track (their sender detached; RTP stopped) — mirror it into the
+      // muted set so their tile shows the avatar instead of a dark frame.
+      if (e.track.kind === 'video') {
+        e.track.addEventListener('mute', () => this.refreshVideoMuted(peerId, stream));
+        e.track.addEventListener('unmute', () => this.refreshVideoMuted(peerId, stream));
+        this.refreshVideoMuted(peerId, stream);
+      }
       this.emitRemote();
       this.emitStreamMap();
     };
@@ -874,6 +953,8 @@ export class MeshSession {
     }
     this.legs.delete(peerId);
     this.remote.delete(peerId);
+    const hadDark = this.signalDark.delete(peerId);
+    if (this.trackDark.delete(peerId) || hadDark) this.emitVideoMuted();
     this.emitRemote();
     this.emitStreamMap();
   }
@@ -945,7 +1026,9 @@ export class MeshSession {
       const aSender = this.senderOfKind(leg, 'audio');
       if (aSender) await aSender.replaceTrack(a).catch(() => {});
       const vSender = this.senderOfKind(leg, 'video');
-      if (vSender && v) await vSender.replaceTrack(v).catch(() => {});
+      // Resume never resurrects video the user turned off (spec 2029) — camera-on
+      // re-attaches via setCameraOff(false) when they choose to.
+      if (vSender && v && !this.cameraOff) await vSender.replaceTrack(v).catch(() => {});
       leg.videoSuspended = false; // resume re-attached video; adaptation re-pauses if still needed
       void this.send('call-ice', leg.peerId, { callId: this.roomId, type: 'resume', roomId: this.roomId });
     }
@@ -1009,6 +1092,20 @@ export class MeshSession {
   ): Promise<void> {
     const chatId = await meshSessionChatId(peerId);
     await sendSealedSignal(frameType, chatId, peerId, this.roomId, signal, this.roomId);
+  }
+
+  private emitVideoMuted(): void {
+    this.cb.onVideoMutedPeers?.([...new Set([...this.signalDark, ...this.trackDark])]);
+  }
+
+  /** Recompute one peer's TRACK-side dark state from its stream and emit on change. */
+  private refreshVideoMuted(peerId: string, stream: MediaStream): void {
+    const vids = stream.getVideoTracks();
+    const dark = vids.length > 0 && vids.every((t) => t.muted);
+    if (dark === this.trackDark.has(peerId)) return;
+    if (dark) this.trackDark.add(peerId);
+    else this.trackDark.delete(peerId);
+    this.emitVideoMuted();
   }
 
   private emitRemote(): void {

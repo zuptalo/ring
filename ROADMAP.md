@@ -69,6 +69,7 @@ Specs are grouped by category band; status moves
 | [1041](specs/1041-merge-waiting-caller/spec.md) | Merge a Waiting Caller into the Ongoing Call | 🟢 shipped |
 | [1042](specs/1042-connection-indicator/spec.md) | Show when the app has lost its server connection | 🟢 shipped |
 | [1043](specs/1043-direct-peer-peer/spec.md) | Direct Peer-to-Peer Call Media with Relay Fallback | 🔵 in-review |
+| [1044](specs/1044-pinned-chats-show/spec.md) | Pinned Chats Grid (iMessage-style) | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
@@ -101,3 +102,5 @@ Specs are grouped by category band; status moves
 | [2025](specs/2025-video-calls-look/spec.md) | Video calls look sharp again and recover from quality dips | 🟢 shipped |
 | [2026](specs/2026-call-markers-stored/spec.md) | Call markers must never surface as messages | 🟢 shipped |
 | [2027](specs/2027-long-media-captions/spec.md) | Media captions wrap at the photo's edge | 🟢 shipped |
+| [2028](specs/2028-quick-forward-button/spec.md) | Quick-Forward Button Sits at the Bottom Edge of Tall Media Messages | 🔵 in-review |
+| [2029](specs/2029-camera-off-shows/spec.md) | Camera Off Shows Your Picture to the Call, Not a Black Screen | 🔵 in-review |

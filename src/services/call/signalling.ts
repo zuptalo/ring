@@ -161,6 +161,24 @@ export function sendHoldResume(
 }
 
 /**
+ * Send a sealed camera-state signal (spec 2029). Identical transport to hold/resume: sealed
+ * inside an EXISTING `call-ice` frame — no new frame type, no server change, and the relay
+ * can't tell a camera toggle from any other sealed call signal. The receiver swaps the
+ * sender's tile to their avatar (camoff) or back to live video (camon) deterministically,
+ * instead of waiting on the browser's unreliable gone-dark track reporting.
+ * 1:1: omit `roomId`; mesh: pass the leg's `roomId` (one per leg).
+ */
+export function sendCameraState(
+  on: boolean,
+  chatId: string,
+  peerUserId: string,
+  callId: string,
+  roomId?: string,
+): Promise<boolean> {
+  return sendSealedSignal('call-ice', chatId, peerUserId, callId, { callId, type: on ? 'camon' : 'camoff', roomId }, roomId);
+}
+
+/**
  * Send a sealed per-pair connection-health report (spec 0007 `qos`). Identical transport to
  * hold/resume: sealed inside an EXISTING `call-ice` frame, so no new frame, no server change —
  * the relay forwards opaque ciphertext and can't tell it from any other call signal. The payload

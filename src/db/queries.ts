@@ -69,8 +69,11 @@ import type {
   DraftMedia, DraftMediaItem,
 } from './types';
 
-// WhatsApp-style cap on pinned chats.
-export const MAX_PINNED_CHATS = 3;
+// iMessage-style cap on pinned chats (spec 1044: they render as the avatar grid).
+// Lives in the dependency-free chat-pins module so unit tests reach it without
+// pulling in this whole data layer; re-exported here for the existing importers.
+export { MAX_PINNED_CHATS } from '@/utils/chat-pins';
+import { MAX_PINNED_CHATS } from '@/utils/chat-pins';
 
 const now = () => Date.now();
 const matches = (haystack: string, q: string) =>
