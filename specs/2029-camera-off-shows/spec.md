@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-13
 
-**Status**: in-progress
+**Status**: in-review
 
 **Input**: User bug report: "when I stop my camera feed, my profile avatar is only visible to myself and not others, they see a black screen only."
 

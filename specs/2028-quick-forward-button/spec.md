@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-13
 
-**Status**: in-progress
+**Status**: in-review
 
 **Input**: User bug report with screenshots: "The forward icon is in wrong position!" — on a tall portrait photo message, the floating quick-forward button hovers vertically centered beside the image, far from the caption/footer where the eye expects it. (A second screenshot caught the swipe-to-delete affordance mid-swipe at the same height, compounding the misplaced look.)
 
