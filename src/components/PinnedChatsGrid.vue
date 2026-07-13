@@ -121,16 +121,23 @@ defineExpose({
 }
 /* The empty well left behind by (or opening up for) the floating avatar. Applied
    to the SAME tile element (CSS only — see the template note about iOS): its
-   content hides, the avatar box becomes the well. */
+   content hides, the avatar box becomes the well. Hidden via OPACITY, not
+   visibility: flipping visibility back while the tile's FLIP transform settles
+   hit a WebKit stale-paint bug — the dropped tile's NAME stayed invisible until
+   the next grid invalidation (i.e. the next drag). Opacity changes always go
+   through the compositor, and the transition forces the repaint. */
 .pin-ghost .pin-avatar {
   border-radius: 50%;
   background: color-mix(in srgb, var(--app-text, #000) 8%, transparent);
 }
-.pin-ghost .pin-avatar > * {
-  visibility: hidden;
+.pin-avatar > *,
+.pin-name {
+  opacity: 1;
+  transition: opacity 0.12s ease;
 }
+.pin-ghost .pin-avatar > *,
 .pin-ghost .pin-name {
-  visibility: hidden;
+  opacity: 0;
 }
 .pin-badge {
   position: absolute;
