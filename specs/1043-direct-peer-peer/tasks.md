@@ -108,7 +108,7 @@ No blocking prerequisites shared across stories beyond what US1 itself delivers 
 
 - [X] T021 Run all gates from quickstart.md: `npm run build`, `npx vitest run` (coverage floors hold), `cd server && go build ./... && go vet ./... && go test ./...`, and `npm run test:e2e` (needs `make db-up`) — all green.
 - [ ] T022 Regression watch (SC-004, FR-010): compare `markConnect` call-setup timings (instrumented in `src/composables/useCall.ts`, visible via the drive harness) before/after on a relay-path scenario; budget +300ms per SC-004. Also exercise mid-call direct-path loss once (e.g. drop one side's network interface or toggle Wi-Fi mid-call on a real device) and confirm the existing reconnection recovers the call on the relay. Record the numbers in the PR description.
-- [ ] T023 Bump spec `**Status**:` in `specs/1043-direct-peer-peer/spec.md` (planned → in-progress at implement start, → in-review at PR) and run `make roadmap` so the CI roadmap guard stays green.
+- [X] T023 Bump spec `**Status**:` in `specs/1043-direct-peer-peer/spec.md` (planned → in-progress at implement start, → in-review at PR) and run `make roadmap` so the CI roadmap guard stays green.
 
 ---
 
