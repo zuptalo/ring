@@ -484,22 +484,29 @@ export function noteForPayload(
       wasMessage: true,
     };
   }
-  // @mentions (spec 1020): a message that @mentions me (individually, or an @everyone
-  // from the actual group OWNER) escalates past the per-chat silencers below (mute,
-  // web-push-off, content=none), and names the mentioner — UNLESS the chat turned the
-  // "mentions even when muted" pref off. (Hidden chats above still win — a hidden chat
-  // never escalates.) The global "Show notifications" master is honored above.
+  // @mentions (spec 1020) + replies-to-me (spec 1048): a message that @mentions me
+  // (individually, or an @everyone from the actual group OWNER) OR directly replies
+  // to a message I authored (the sender snapshots the quoted author into
+  // reply.senderId, so this needs no store lookup) escalates past the per-chat
+  // silencers below (mute, web-push-off, content=none), and names the sender —
+  // UNLESS the chat turned the "mentions even when muted" pref off (ONE dial for
+  // "personally-directed pierces mute"). (Hidden chats above still win — a hidden
+  // chat never escalates.) The global "Show notifications" master is honored above.
   const selfMentioned =
     isGroup &&
     (!!payload.mentions?.includes(selfId) ||
       (!!payload.mentionsEveryone && !!chat?.createdBy && from === chat.createdBy));
-  if (selfMentioned && chat?.notifyMentions !== false) {
+  const selfReplied = isGroup && !!selfId && payload.reply?.senderId === selfId;
+  if ((selfMentioned || selfReplied) && chat?.notifyMentions !== false) {
     const showText = (chat?.notifyContent ?? 'full') === 'full' && showPreview;
+    // An explicit @mention outranks the implicit reply variant when both apply —
+    // one message, one note, the stronger wording.
+    const verb = selfMentioned ? 'mentioned you' : 'replied to you';
     return {
       note: {
         ids: [f.id as string],
         title: groupChat?.name || 'Group',
-        body: showText ? `${senderName} mentioned you: ${notifyPreview(payload)}` : `${senderName} mentioned you`,
+        body: showText ? `${senderName} ${verb}: ${notifyPreview(payload)}` : `${senderName} ${verb}`,
         url: chat?.id ? `/chat/${chat.id}` : '/tabs/chats',
         tag: chat?.id ? `ring:${chat.id}` : `ring:from:${from}`,
       },

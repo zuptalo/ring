@@ -6046,6 +6046,12 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     isGroupMsg &&
     (!!payload.mentions?.includes(selfId) ||
       (!!payload.mentionsEveryone && !!chat?.createdBy && from === chat.createdBy));
+  // Replies-to-me (spec 1048): a group message that directly replies to a message I
+  // authored is an implicit mention — the sender snapshots the quoted author into
+  // reply.senderId (types.ts ReplyRef), so this is a plain comparison, robust even
+  // when the quoted message was deleted locally. Escalates + counts exactly like a
+  // mention, gated by the same per-chat notifyMentions pref downstream.
+  const selfRepliedTo = isGroupMsg && !!selfId && payload.reply?.senderId === selfId;
   if (chat) {
     // Group previews show the sender's first name (WhatsApp-style).
     chat.lastMessage = isGroupMsg ? `${contact.name.split(' ')[0]}: ${preview}` : preview;
@@ -6056,7 +6062,8 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     // (the open chat sends the read receipt), so don't grow the unread badge.
     const active = isChatActive(targetChatId);
     chat.unread = active ? 0 : (chat.unread ?? 0) + 1;
-    if (selfMentioned && !active) chat.unreadMentions = (chat.unreadMentions ?? 0) + 1;
+    // A mention OR a reply-to-me lights the unread-mentions indicator (spec 1048).
+    if ((selfMentioned || selfRepliedTo) && !active) chat.unreadMentions = (chat.unreadMentions ?? 0) + 1;
     // A new message pulls an archived chat back to the main list, UNLESS the user has
     // "Keep chats archived" on (chats.keepArchived). Locked chats stay put regardless.
     if (chat.archived && !chat.locked && !(await getSetting<boolean>('chats.keepArchived', false))) {
@@ -6084,7 +6091,9 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     // on), unlike the terser `preview` used for the chats list above.
     body: isGroupMsg ? `${contact.name}: ${notifyPreview(payload)}` : notifyPreview(payload) || 'New message',
     // @mentions (spec 1020): a mention escalates past mute/quiet and names the mentioner.
+    // A direct reply to my message (spec 1048) escalates identically, with its own wording.
     mention: selfMentioned,
+    replied: selfRepliedTo,
     mentionName: contact.name,
     // A ring:drain push woke us to fetch this → bypass the post-unlock settle window
     // and let the SW (which already fired for that push) own the OS notification, so
