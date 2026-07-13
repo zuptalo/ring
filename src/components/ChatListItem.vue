@@ -2,7 +2,10 @@
   <!-- One chat row + its swipe actions. Reused by the Chats tab, the Archived view,
        and the filtered lists. Quick actions live on the swipe; the full set is in the
        per-chat "More" sheet (opened via the `more` emit). -->
-  <ion-item-sliding ref="sliding">
+  <!-- Swiping is disabled while this row rides the drag proxy (spec 1045): the
+       sliding gesture stays armed during a lift, and the drag's horizontal
+       wobble was opening the swipe options under the ghost row. -->
+  <ion-item-sliding ref="sliding" :disabled="lifted">
     <!-- Start side (swipe right): Mark Unread/Read + Pin/Unpin. Icon-over-label like
          WhatsApp. The label names the action: "Read" when it'll clear unread, else
          "Unread"; "Unpin" when pinned, else "Pin". -->
@@ -17,7 +20,16 @@
       </ion-item-option>
     </ion-item-options>
 
-    <ion-item button :detail="false" :class="{ 'hidden-row': isHidden }" @click="$emit('open', chat.id)">
+    <!-- pointerdown feeds the page's drag/peek controller (spec 1045): a short hold
+         lifts the row as a pin-shaped avatar, a still hold opens the peek. Movement
+         before the lift cancels the hold, so the sliding swipes and scrolling win. -->
+    <ion-item
+      button
+      :detail="false"
+      :class="{ 'hidden-row': isHidden, 'lifted-row': lifted }"
+      @click="$emit('open', chat.id)"
+      @pointerdown="$emit('press', chat, $event)"
+    >
       <div class="avatar-wrap" slot="start">
         <ion-avatar>
           <!-- Unread demands attention: the emoji picture keeps moving until read (FR-028). -->
@@ -81,7 +93,7 @@
 
 <script setup lang="ts">
 import UserAvatar from '@/components/UserAvatar.vue';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   IonItemSliding, IonItem, IonItemOptions, IonItemOption, IonAvatar, IonLabel, IonNote,
   IonBadge, IonIcon,
@@ -104,13 +116,26 @@ import { activityFor, activityKindLabel } from '@/composables/useTyping';
 import { formatTime } from '@/utils/time';
 import type { Chat } from '@/db/types';
 
-const props = defineProps<{ chat: Chat; draft?: string }>();
-const emit = defineEmits<{ (e: 'open', id: string): void; (e: 'more', chat: Chat): void }>();
+const props = defineProps<{ chat: Chat; draft?: string; lifted?: boolean }>();
+const emit = defineEmits<{
+  (e: 'open', id: string): void;
+  (e: 'more', chat: Chat): void;
+  (e: 'press', chat: Chat, ev: PointerEvent): void;
+}>();
 
 const sliding = ref<{ $el: HTMLIonItemSlidingElement } | null>(null);
 function closeSwipe(): void {
   void (sliding.value?.$el as HTMLIonItemSlidingElement | undefined)?.close?.();
 }
+// A slide can already be a few pixels open by the time the lift lands (the
+// :disabled bind stops NEW gesture input but doesn't reset an in-flight one) —
+// snap it shut so the ghost row sits flush while it's being dragged.
+watch(
+  () => props.lifted,
+  (v) => {
+    if (v) closeSwipe();
+  },
+);
 
 const PREVIEW_ICONS: Record<NonNullable<Chat['lastKind']>, string | null> = {
   image: cameraOutline, video: videocamOutline, videonote: videocamOutline, voice: micOutline,
@@ -212,6 +237,20 @@ function more(): void {
 }
 .hidden-ico {
   color: var(--ion-color-medium);
+}
+/* The row whose avatar is riding the drag proxy (spec 1045): stays in place but
+   clearly "picked up" — it either returns (cancel) or leaves for the grid (pin). */
+.lifted-row {
+  opacity: 0.35;
+}
+/* The press-and-hold gesture owns the long press (spec 1045). Without this, iOS
+   starts a TEXT SELECTION on the row's name/preview during the hold, and an
+   active selection then eats the first tap on whatever opens (the peek's menu
+   needed two taps). Matches the pinned tiles. */
+ion-item {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 .unread-dot {
   width: 11px;

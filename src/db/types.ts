@@ -126,6 +126,12 @@ export interface Chat {
   favorite?: boolean;
   // Pinned to the top of the chat list (sorted before unpinned, capped per device).
   pinned?: boolean;
+  // 0-based position in the user's pinned-grid arrangement (spec 1045). Present only
+  // while pinned; deleted on unpin/archive. Message activity NEVER touches it — only
+  // an explicit rearrange/pin does — so the grid keeps the order the user gave it.
+  // Synced like `pinned` (whole-record encrypted own-data sync, LWW on updatedAt);
+  // absent on pins that predate the feature until ensurePinRanks() stamps them.
+  pinnedRank?: number;
   // Archived: hidden from the main list into the Archived view.
   archived?: boolean;
   // Locked: hidden from the main list behind the app's auth gate (Locked chats).
