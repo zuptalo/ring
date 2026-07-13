@@ -24,7 +24,10 @@
     </ion-header>
 
     <ion-content :fullscreen="true">
-      <ion-header collapse="condense">
+      <!-- The iOS large title yields its space to the Quick Calls tiles once any
+           exist (the spec-1044 pattern from the Chats tab): the section header
+           below anchors the page, and stacking both pushed Recent below the fold. -->
+      <ion-header v-if="!hasQuickTiles" collapse="condense">
         <ion-toolbar>
           <ion-title size="large">Calls</ion-title>
         </ion-toolbar>
@@ -33,6 +36,9 @@
       <!-- Quick Calls (spec 1046): one-tap call tiles for the people and groups you
            always call. The old Totals block moved to Settings → Storage and data →
            Network usage, freeing this prime spot. -->
+      <ion-list-header class="qc-header">
+        <ion-label>Quick Calls</ion-label>
+      </ion-list-header>
       <QuickCallsRow
         :entries="quickEntries"
         :contacts="allContacts"
@@ -278,6 +284,15 @@ const quickEntries = useLiveQuery(
 const allContacts = useLiveQuery(() => listContacts(), ['contacts', 'chats'], [] as Contact[]);
 const visibleChats = useLiveQuery(() => listChats(), ['chats', 'messages'], [] as Chat[]);
 const groupChats = computed(() => visibleChats.value.filter((c) => c.isGroup));
+// Any tile actually visible (entry whose target this device knows)? Drives the
+// large-title handoff above, mirroring the pinned grid on the Chats tab.
+const hasQuickTiles = computed(() =>
+  quickEntries.value.some((e) =>
+    e.t === 'contact'
+      ? allContacts.value.some((c) => c.id === e.id)
+      : groupChats.value.some((g) => g.id === e.id),
+  ),
+);
 
 async function saveQuick(next: QuickCallEntry[]): Promise<void> {
   // Strip Vue reactivity before persisting: entries coming back out of the
