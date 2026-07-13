@@ -35,5 +35,8 @@
   precedents, not implementation prescriptions; the push-health invariant (FR-013) and zero-knowledge
   constraint (FR-014) are product/platform constraints, so naming them here is intentional.
 - No [NEEDS CLARIFICATION] markers: reasonable market-standard defaults were chosen and recorded in
-  Assumptions (reaction-change notifies, removals never, no new settings, unread counts unchanged).
-- Items all pass as of 2026-07-13; ready for `/speckit-clarify` (or directly `/speckit-plan`).
+  Assumptions (reaction-change notifies, removals never, unread state unchanged).
+- Clarify session 2026-07-13 (4 questions) confirmed the swap/unread/catch-up defaults and CHANGED
+  one decision: reactions get a dedicated sound preference with a silent option (FR-004a) instead of
+  reusing the message tone — the sole new setting this feature introduces.
+- Items all pass as of 2026-07-13; clarified and ready for `/speckit-plan`.

@@ -13,6 +13,15 @@
 
 **Input**: User description: "Notify users when someone reacts to their message (the existing reaction-notification toggles are dead controls today), and escalate direct replies to you in groups past mute the same way @mentions escalate. Hard constraint: every push delivered to a device must end in a visible outcome — after 3 hidden notifications the platform revokes the push subscription — so suppressed reaction pushes must follow the established visible-outcome pattern rather than being silently swallowed."
 
+## Clarifications
+
+### Session 2026-07-13
+
+- Q: When someone changes their reaction (👍 → ❤️), notify again? → A: Yes — a swap counts as a new reaction add; per-chat coalescing bounds the noise.
+- Q: Should reaction notifications play the normal message sound or be quiet? → A: Neither fixed choice — add a dedicated reaction-sound preference (with a silent option), separate from the message tone.
+- Q: Should reactions affect unread state (chat unread count / app badge)? → A: No — notification only; reactions are not messages and never change unread counts or increment the badge.
+- Q: How should an offline catch-up backlog of reactions/replies behave? → A: Existing settle-window rules — reactions follow the same catch-up quieting as ordinary messages; replies follow mention parity exactly (they punch through only what mentions punch through today).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Know when someone reacts to your message (Priority: P1)
@@ -80,6 +89,7 @@ Maya finds reaction notifications noisy and switches the existing "Reactions" to
 - **Reply chain**: Alex replies to Maya's reply, which quoted Sara — only the author of the *directly replied-to* message (Maya) gets escalation; Sara does not.
 - **Reply-to-you while the target chat is open on screen**: follows today's rule for messages (no notification for the chat you're actively viewing).
 - **Global "show notifications" off**: reactions and replies respect the master message-notification switch exactly as ordinary messages do; escalation for replies punches through the same suppressions mentions punch through today, and no more.
+- **Offline catch-up backlog**: when a device reconnects and syncs a backlog of reactions and replies, the existing settle-window catch-up quieting applies — reactions are quieted like ordinary backlog messages; replies-to-you behave exactly as backlog mentions do today. No new catch-up threshold is introduced.
 - **Preview privacy**: with the global "show preview" off or a per-chat generic-content preference, reaction and reply notifications must not leak message text; replies may still name the replier (mention-parity), reactions fall back to fully generic text.
 - **Older senders / mixed versions**: messages from clients that predate this feature carry no new information; devices must handle their reactions/replies with the same rules (a reaction is a reaction regardless of sender version).
 
@@ -92,8 +102,9 @@ Maya finds reaction notifications noisy and switches the existing "Reactions" to
 - **FR-001**: The system MUST notify a user when another participant adds a reaction to a message that user authored, in both 1:1 and group chats.
 - **FR-002**: The reaction notification MUST identify the reactor and the emoji and include a short preview of the reacted-to message, subject to the user's content-privacy settings: with previews disabled globally or the chat set to generic content, no message text or reactor identity leaks beyond what suppressed message notifications reveal today.
 - **FR-003**: Reaction notifications MUST coalesce with the chat's existing notification (one updating entry per chat), never a separate per-reaction stack.
-- **FR-004**: The two existing settings toggles for reactions (one for direct messages, one for groups, both defaulting to on) MUST gate this behavior and MUST be independently effective. No new settings are introduced.
-- **FR-005**: Reaction notifications MUST respect every existing suppression layer — per-chat mute, per-chat notification preferences (delivery channels and content level), hidden-chat rules, and the global message-notification switch — and MUST NOT escalate past any of them.
+- **FR-004**: The two existing settings toggles for reactions (one for direct messages, one for groups, both defaulting to on) MUST gate this behavior and MUST be independently effective.
+- **FR-004a**: Reaction notifications MUST use a dedicated, user-selectable reaction sound preference — separate from the message tone and including a silent option — added alongside the existing notification sound settings. A silent choice affects only the tone; the notification itself still shows.
+- **FR-005**: Reaction notifications MUST respect every existing suppression layer — per-chat mute, per-chat notification preferences (delivery channels and content level), hidden-chat rules, the global message-notification switch, and the existing sync catch-up quieting (settle window) — and MUST NOT escalate past any of them.
 - **FR-006**: The system MUST NOT notify for: reaction removals, reactions to messages the user did not author, the user's own reactions (including echoes from their other devices), or reactions in hidden chats beyond the existing traceless pattern.
 - **FR-007**: Reaction notifications MUST work both while the app is open (in-app banner path) and while it is closed (system notification path), with exactly one surface notifying per event, consistent with the existing one-owner notification policy.
 
@@ -128,9 +139,9 @@ Maya finds reaction notifications noisy and switches the existing "Reactions" to
 
 ## Assumptions
 
-- **Changing a reaction** (swapping one emoji for another) counts as a new reaction add and may notify again; coalescing bounds the noise. Removals never notify.
-- **Unread counts are unchanged**: reactions are not messages and do not increment the chat's unread message count; only the notification (and existing badge rules) surface them. Replies-to-you additionally light the unread-mentions indicator, as mentions do today.
-- **No new sounds or settings**: reaction notifications reuse the chat's existing sound/preference machinery; the only user-facing controls are the two existing (currently dead) toggles and the existing per-chat preferences.
+- **Changing a reaction** (swapping one emoji for another) counts as a new reaction add and may notify again; coalescing bounds the noise. Removals never notify. *(Confirmed in clarification.)*
+- **Unread state is unchanged**: reactions are not messages — they never change a chat's unread count or increment the app icon badge; the notification is the only surface. Replies-to-you additionally light the unread-mentions indicator, as mentions do today. *(Confirmed in clarification.)*
+- **One new setting only**: a dedicated reaction sound preference (with a silent option) is the single new user-facing control (per clarification); everything else reuses the two existing (currently dead) toggles and the existing per-chat preferences. The reaction sound's default is a quiet/subtle choice, distinct from the message tone, finalized at planning.
 - **"Reply" means an explicit reply reference** to a specific message; quoting or thematically responding without the reply affordance does not escalate.
 - **Escalation parity is intentional**: replies punch through exactly the suppressions mentions punch through today (per spec 1020), including the hidden-chat exception — hidden chats never escalate anything.
 - **Existing wire formats suffice**: reactions and reply references already travel in sealed payloads today; this feature changes only receiving-device behavior, so no compatibility window or server change is expected.
