@@ -19,25 +19,25 @@
 - [x] CHK008 — Is it specified that the prid is random and carries no derivable link to group name, membership roster, or content? [Clarity, Spec §Routing Model pt.2]
 - [x] CHK009 — Is each preference list's leak stated per list (muted conversations by pseudonym, class posture, followed/muted post senders)? [Completeness, Spec §ZK Impact]
 - [x] CHK010 — Does the spec justify WHY each leak is necessary (iOS visible-wake + blind server), satisfying the constitution's "why a simpler ZK-preserving option won't do"? [Traceability, Spec §Why this exists, §ZK Impact]
-- [ ] CHK011 — Is data minimization addressed for the preference lists' lifecycle — when muted prids/overrides are DELETED server-side (mute expiry, chat deletion, account deletion, subscription pruning)? [Gap → resolved: FR-011 added]
+- [x] CHK011 — Is data minimization addressed for the preference lists' lifecycle — when muted prids/overrides are DELETED server-side (mute expiry, chat deletion, account deletion, subscription pruning)? [Gap → resolved: FR-011 added]
 
 ## Hidden-Chat Exclusion
 
 - [x] CHK012 — Is the hidden-chat exclusion stated as a structural MUST (never present in any preference payload) rather than a rendering behavior? [Clarity, Spec §FR-008c]
-- [ ] CHK013 — Does the spec define what happens to a conversation's EXISTING prid mute when that chat becomes hidden (registration must be withdrawn without signalling why)? [Gap → resolved: edge case added]
+- [x] CHK013 — Does the spec define what happens to a conversation's EXISTING prid mute when that chat becomes hidden (registration must be withdrawn without signalling why)? [Gap → resolved: edge case added]
 - [x] CHK014 — Is the accepted cost of the exclusion (hidden chats keep generic ghosts) documented so it can't be re-reported as a bug? [Completeness, Spec §Routing Model]
 
 ## Sender-Controlled Tag Abuse
 
 - [x] CHK015 — Are the abuse consequences of a hostile sender mis-tagging DOWNWARD (real message marked housekeeping) bounded and stated (equivalent to not sending; delivery unaffected)? [Coverage, Spec §Edge Cases]
-- [ ] CHK016 — Are the consequences of mis-tagging UPWARD (spam marked `mention` to pierce mutes) addressed — does any requirement bound mention-class abuse from muted/blocked senders? [Gap → resolved: edge case + FR-012 added]
+- [x] CHK016 — Are the consequences of mis-tagging UPWARD (spam marked `mention` to pierce mutes) addressed — does any requirement bound mention-class abuse from muted/blocked senders? [Gap → resolved: edge case + FR-012 added]
 - [x] CHK017 — Is it specified that blocking is evaluated before any push regardless of class? [Consistency, Spec §FR-007/FR-001 "blocking identical"]
 
 ## Interop & Migration
 
 - [x] CHK018 — Are BOTH interop directions specified (old client → new server, new client → old server) with no version gate? [Completeness, Spec §FR-006]
 - [x] CHK019 — Is the tag-less frame's class default (= message) consistent everywhere it's mentioned? [Consistency, Spec §Routing Model, §FR-001]
-- [ ] CHK020 — Is prid bootstrap for PRE-EXISTING conversations specified (who mints, how members converge on one id, what happens before convergence)? [Gap → resolved: assumption expanded]
+- [x] CHK020 — Is prid bootstrap for PRE-EXISTING conversations specified (who mints, how members converge on one id, what happens before convergence)? [Gap → resolved: assumption expanded]
 
 ## Consistency With Prior Specs
 
