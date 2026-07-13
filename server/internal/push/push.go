@@ -153,6 +153,9 @@ var (
 type SubStore interface {
 	SubscriptionsFor(ctx context.Context, userID string) ([]store.PushSubscription, error)
 	DeleteSubscriptionByEndpoint(ctx context.Context, endpoint string) error
+	// PrefsFor returns the user's push routing prefs blob (spec 1050); '{}' or an
+	// error must degrade to push-everything at the caller.
+	PrefsFor(ctx context.Context, userID string) ([]byte, error)
 }
 
 // Sender signs + delivers a single Web Push request.
@@ -242,6 +245,37 @@ func NewNotifier(sender *Sender, st SubStore) *Notifier {
 // NotifyCall/NotifyConn/etc. below stay immediate.
 func (n *Notifier) Notify(ctx context.Context, userID string) { n.msgDeb.hit(userID) }
 
+// prefsFor loads + parses a user's routing prefs, degrading open (push
+// everything) on any miss so a broken blob can never silence a device.
+func (n *Notifier) prefsFor(ctx context.Context, userID string) Prefs {
+	raw, err := n.store.PrefsFor(ctx, userID)
+	if err != nil {
+		return Prefs{}
+	}
+	p, _ := ParsePrefs(raw)
+	return p
+}
+
+// NotifyFrame is the spec-1050 classed message tickle: the hub passes each
+// relayed frame's sender-set class + route id here, and the per-subscription
+// gate (AllowPush — contract rows 3–7b) decides whether the ordinary debounced
+// message tickle fires. Tag-less frames (old clients) evaluate as class
+// "message", which pushes exactly as before unless the recipient muted the
+// conversation. The gate runs per HIT, before the debouncer, so a burst mixing
+// suppressed and loud frames still tickles for the loud ones.
+func (n *Notifier) NotifyFrame(ctx context.Context, userID, class, prid string) {
+	if !n.allowFrame(ctx, userID, class, prid) {
+		return
+	}
+	n.msgDeb.hit(userID)
+}
+
+// allowFrame is NotifyFrame's gate, split out so tests can assert the decision
+// without racing the debounced network send.
+func (n *Notifier) allowFrame(ctx context.Context, userID, class, prid string) bool {
+	return AllowPush(class, prid, "", n.prefsFor(ctx, userID))
+}
+
 // NotifyCall pushes a content-free CALL tickle: short-lived (a stale ring is
 // useless), high-urgency, and never collapsed, so it always wakes the device
 // promptly for the live ring that follows over the WebSocket.
@@ -262,7 +296,12 @@ func (n *Notifier) NotifyConn(ctx context.Context, userID string) {
 // then shows a generic "new post" notification (closed) or nudges a live page to pull
 // + show the rich in-app banner. Carries no identity. Since spec 1031 this tickle
 // means NEW POST (or revocation) only — engagement rides NotifyPostActivity instead.
-func (n *Notifier) NotifyPost(ctx context.Context, userID string) {
+// The author feeds the recipient's per-sender post overrides (spec 1050: a muted
+// friend's posts stay quiet; an "always" friend pierces a global post opt-out).
+func (n *Notifier) NotifyPost(ctx context.Context, userID, author string) {
+	if !AllowPush("post", "", author, n.prefsFor(ctx, userID)) {
+		return
+	}
 	n.notify(ctx, userID, postParams())
 }
 
@@ -284,6 +323,11 @@ func postActivityTopic(postID string) string {
 // pull exactly that post's engagement and decide locally what to show; the reaction
 // add-vs-remove flag stays sealed under K_post, so that judgement NEVER happens here.
 func (n *Notifier) NotifyPostActivity(ctx context.Context, userID, postID string) {
+	// spec 1050: engagement-on-your-post is the `activity` class; the owner can
+	// opt out (wall "Activity on your posts" off) and stop the wakes themselves.
+	if !AllowPush("activity", "", "", n.prefsFor(ctx, userID)) {
+		return
+	}
 	payload, err := json.Marshal(map[string]string{"t": "post-activity", "post": postID})
 	if err != nil {
 		return
