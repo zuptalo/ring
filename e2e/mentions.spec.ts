@@ -105,7 +105,16 @@ test('replies to your message escalate a muted group like a mention', async ({ b
     );
   }
 
-  // A posts, C posts, everyone receives both; then A mutes the group.
+  // A posts, C posts, everyone receives both; then A mutes the group. B also says
+  // one thing FIRST and A receives it — B's replies below must be immediately
+  // decryptable by A, which needs B's sender key to have landed (a first-ever group
+  // frame can race the key distribution in a seconds-old group).
+  await b.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'bob is here'), gid);
+  await a.page.waitForFunction(
+    (id) => (window as any).__ringTest.messages(id).then((ms: any[]) => ms.some((m: any) => m.body === 'bob is here')),
+    gid,
+    { timeout: 30_000 },
+  );
   await a.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'planning dinner'), gid);
   await c.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'count me in'), gid);
   const msgIdOf = async (body: string): Promise<string> => {
@@ -131,15 +140,18 @@ test('replies to your message escalate a muted group like a mention', async ({ b
   await a.page.evaluate((id) => (window as any).__ringTest.muteChat(id, Date.now() + 3_600_000), gid);
 
   // 1) B replies to A's message → the reply pierces A's mute (banner) and counts.
-  await b.page.evaluate(
-    ([id, q]: [string, string]) => (window as any).__ringTest.sendReply(id, 'on my way to you', q),
-    [gid, ids.mine] as [string, string],
-  );
-  await a.page.waitForFunction(
+  // Arm the banner wait BEFORE sending: banners auto-dismiss after ~4.5s, so a wait
+  // started after the trigger can miss one under a loaded runner.
+  const replySeen = a.page.waitForFunction(
     () => (window as any).__ringTest.notices().some((n: { body: string }) => String(n.body).includes('on my way to you')),
     undefined,
     { timeout: 30_000 },
   );
+  await b.page.evaluate(
+    ([id, q]: [string, string]) => (window as any).__ringTest.sendReply(id, 'on my way to you', q),
+    [gid, ids.mine] as [string, string],
+  );
+  await replySeen;
   await waitMentions(a, gid, 1);
 
   // 2) B replies to CAROL's message → muted noise for A: no new count, no banner.

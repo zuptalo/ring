@@ -15,8 +15,10 @@ const react = (p: any, messageId: string, emoji: string) =>
 const banners = (p: any): Promise<string[]> =>
   p.page.evaluate(() => (window as any).__ringTest.notices().map((n: any) => n.body));
 
-/** Wait until a banner whose body contains `text` is showing. */
-const waitBanner = (p: any, text: string) =>
+/** Arm a wait for a banner whose body contains `text`. ARM BEFORE triggering the
+ *  event: banners auto-dismiss after ~4.5s, so a wait started after the trigger can
+ *  miss a banner that came and went while the (loaded) runner was elsewhere. */
+const bannerSeen = (p: any, text: string) =>
   p.page.waitForFunction(
     (t: string) => (window as any).__ringTest.notices().some((n: any) => String(n.body).includes(t)),
     text,
@@ -26,6 +28,32 @@ const waitBanner = (p: any, text: string) =>
 /** Wait until no banner is showing (they auto-dismiss after ~4.5s). */
 const waitQuiet = (p: any) =>
   p.page.waitForFunction(() => (window as any).__ringTest.notices().length === 0, undefined, { timeout: 30_000 });
+
+/** Wait until `predicate` holds over the target message's reaction emojis on `who`'s
+ *  device. The e2e relay occasionally leaves a half-open socket that stalls delivery
+ *  for tens of seconds (the app's own keepalive recovers it eventually); after ~12s
+ *  of nothing we compress that recovery by force-reconnecting both sides, exactly the
+ *  lever the app itself pulls. 60s hard budget. */
+async function reactionState(who: any, other: any, messageId: string, predicate: (emojis: string[]) => boolean): Promise<void> {
+  const read = (): Promise<string[]> =>
+    who.page.evaluate(
+      (id: string) => (window as any).__ringTest.getReactions(id).then((rs: any[]) => rs.map((r: any) => r.emoji)),
+      messageId,
+    );
+  const t0 = Date.now();
+  let kicked = false;
+  for (;;) {
+    const emojis = await read();
+    if (predicate(emojis)) return;
+    if (Date.now() - t0 > 60_000) throw new Error(`reaction state not reached in 60s (have: ${emojis.join(' ') || 'none'})`);
+    if (!kicked && Date.now() - t0 > 12_000) {
+      kicked = true;
+      await who.page.evaluate(() => (window as any).__ringTest.forceReconnect());
+      await other.page.evaluate(() => (window as any).__ringTest.forceReconnect());
+    }
+    await who.page.waitForTimeout(400);
+  }
+}
 
 /**
  * Spec 1048 (US1/US3): a reaction to YOUR message notifies you — and only you —
@@ -62,15 +90,24 @@ test('reaction notifications: author-only, viewing suppresses, toggle gates', as
     { timeout: 30_000 },
   );
 
+  // A's post-unlock settle window (2.5s after registration) damps non-escalated
+  // banners BY DESIGN — and reactions never escalate. On a warm runner the whole
+  // setup can finish inside it, so wait it out before asserting banners.
+  await a.page.waitForFunction(() => (window as any).__ringTest.settleMsLeft() === 0, undefined, { timeout: 30_000 });
+
   // 1) B reacts ❤️ → A (on the Chats tab, not in the chat) gets the reaction banner.
+  const first = bannerSeen(a, 'Reacted ❤️ to: my painting is done');
   await react(b, msgId, '❤️');
-  await waitBanner(a, 'Reacted ❤️ to: my painting is done');
+  // Split diagnosis: the reaction must LAND on A (delivery, reconnect-hardened)…
+  await reactionState(a, b, msgId, (e) => e.includes('❤️'));
+  // …and the armed wait must have caught the banner (alerting).
+  await first;
 
   // 2) Removal is silent: B toggles the same emoji off → no new banner appears.
   await waitQuiet(a);
   await react(b, msgId, '❤️'); // second tap = remove
-  await a.page.waitForTimeout(2500);
-  expect(await banners(a)).toEqual([]);
+  await reactionState(a, b, msgId, (e) => !e.includes('❤️')); // the removal has landed…
+  expect(await banners(a)).toEqual([]); // …and produced no banner
 
   // 3) Viewing the chat suppresses the banner (the reaction is visible inline).
   //    Wait until the chat page has actually registered itself as active — the
@@ -78,8 +115,8 @@ test('reaction notifications: author-only, viewing suppresses, toggle gates', as
   await a.page.evaluate((id) => (window as any).__ringTest.navigate(`/chat/${id}`), aChat);
   await a.page.waitForFunction((id: string) => (window as any).__ringTest.isChatActive(id), aChat, { timeout: 30_000 });
   await react(b, msgId, '👍');
-  await a.page.waitForTimeout(2500);
-  expect(await banners(a)).toEqual([]);
+  await reactionState(a, b, msgId, (e) => e.includes('👍')); // landed while viewing…
+  expect(await banners(a)).toEqual([]); // …with no banner (active-chat suppress)
   await a.page.evaluate(() => (window as any).__ringTest.navigate('/tabs/chats'));
   await a.page.waitForFunction((id: string) => !(window as any).__ringTest.isChatActive(id), aChat, { timeout: 30_000 });
 
@@ -87,12 +124,7 @@ test('reaction notifications: author-only, viewing suppresses, toggle gates', as
   //    reaction still syncs and the chat list still shows the "reacted" preview.
   await a.page.evaluate(() => (window as any).__ringTest.setGlobalSetting('notifications.message.reactions', false));
   await react(b, msgId, '😂');
-  await expect
-    .poll(
-      () => a.page.evaluate((id: string) => (window as any).__ringTest.getReactions(id).then((rs: any[]) => rs.map((r: any) => r.emoji)), msgId),
-      { timeout: 30_000 },
-    )
-    .toContain('😂');
+  await reactionState(a, b, msgId, (e) => e.includes('😂'));
   expect(await banners(a)).toEqual([]);
   const preview = await a.page.evaluate((id) => (window as any).__ringTest.chatPreview(id), aChat);
   expect(preview?.lastMessage ?? '').toContain('reacted');
@@ -100,8 +132,10 @@ test('reaction notifications: author-only, viewing suppresses, toggle gates', as
 
   // 5) Toggle back ON → notifications resume.
   await a.page.evaluate(() => (window as any).__ringTest.setGlobalSetting('notifications.message.reactions', true));
+  const resumed = bannerSeen(a, 'Reacted 🎉 to: my painting is done');
   await react(b, msgId, '🎉');
-  await waitBanner(a, 'Reacted 🎉 to: my painting is done');
+  await reactionState(a, b, msgId, (e) => e.includes('🎉'));
+  await resumed;
 
   await ctxA.close();
   await ctxB.close();
@@ -147,13 +181,32 @@ test('group reactions notify only the message author', async ({ browser }) => {
     { timeout: 30_000 },
   );
 
-  // Let Bob's ordinary "new message" banner for Alice's post dismiss first, so the
-  // assertion below isolates the REACTION's effect.
+  // Carol's first group SEND is about to happen. Make it a plain message first and
+  // wait for Alice to receive it: that proves Carol's sender key reached Alice, so
+  // the reaction that follows is decryptable immediately (otherwise the reaction —
+  // Carol's first-ever frame in a seconds-old group — can race the key distribution
+  // and arrive undecryptable, flaking the banner wait).
+  await c.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'carol is here'), gid);
+  await a.page.waitForFunction(
+    (id) => (window as any).__ringTest.messages(id).then((ms: any[]) => ms.some((m: any) => m.body === 'carol is here')),
+    gid,
+    { timeout: 30_000 },
+  );
+
+  // Let the ordinary "new message" banners dismiss first, so the assertions below
+  // isolate the REACTION's effect.
   await waitQuiet(b);
+  await waitQuiet(a);
+
+  // Alice's settle window must have lapsed before a banner can be asserted
+  // (reactions never pierce it — by design).
+  await a.page.waitForFunction(() => (window as any).__ringTest.settleMsLeft() === 0, undefined, { timeout: 30_000 });
 
   // Carol reacts to ALICE's message → Alice gets the banner naming Carol…
+  const carolSeen = bannerSeen(a, 'Carol reacted 🔥 to: sketch for the mural');
   await react(c, msgId, '🔥');
-  await waitBanner(a, 'Carol reacted 🔥 to: sketch for the mural');
+  await reactionState(a, c, msgId, (e) => e.includes('🔥'));
+  await carolSeen;
 
   // …and Bob (a member, but not the author) sees nothing for it.
   await b.page.waitForTimeout(1500);

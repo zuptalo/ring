@@ -352,6 +352,9 @@ export function installTestHook(): void {
     /** Reconnect the WebSocket (drains the queue for real). */
     reconnect: () => nudgeReconnect(),
     forceReconnect: () => forceReconnect(),
+    /** Remaining post-unlock settle suppression in ms (spec 1048 e2e: banner
+     *  assertions must wait this out — non-escalated alerts are damped inside it). */
+    settleMsLeft: () => settleMsLeft(),
     /** Lock memory (to test re-unlock on reload). */
     lockNow: () => lockIdentity(),
     /** Whether this device auto-unlocks (no passcode lock). */
