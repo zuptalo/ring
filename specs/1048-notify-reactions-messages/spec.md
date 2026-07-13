@@ -137,6 +137,22 @@ Maya finds reaction notifications noisy and switches the existing "Reactions" to
 - **SC-005**: Both reaction toggles observably change behavior from the settings screen — the app no longer ships dead controls (verified by toggling each and confirming the corresponding behavior change).
 - **SC-006**: No content leak: with previews off or generic content set, reaction and reply notifications reveal no message text in any tested scenario.
 
+## Zero-Knowledge Impact
+
+- **What crosses the wire**: nothing new. Reactions and reply references already travel
+  inside sealed envelopes today; this feature adds no payload field, no message type, and
+  no server endpoint or behavior change.
+- **What is encrypted**: everything relevant already is — the reaction (emoji, target
+  message id, add/remove) and the reply reference (quoted id, author, preview snapshot)
+  are E2EE payload content the server never sees.
+- **Unavoidably visible metadata**: unchanged — the server continues to see only that a
+  sealed frame was relayed to a recipient and the content-free push tickle it already
+  sends. It cannot distinguish a reaction from a message, which is precisely why all
+  notification decisions (including suppression) are made on the receiving device (FR-014)
+  and why suppressed deliveries must still end visibly on the device (FR-013).
+- **Why**: notifying about reactions/replies requires reading their plaintext, which only
+  the recipient's device can do. No server-side assistance is possible or introduced.
+
 ## Assumptions
 
 - **Changing a reaction** (swapping one emoji for another) counts as a new reaction add and may notify again; coalescing bounds the noise. Removals never notify. *(Confirmed in clarification.)*
