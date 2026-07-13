@@ -102,6 +102,23 @@ describe('settings schema — spec 1048 (reaction notifications)', () => {
   });
 });
 
+describe('settings schema — spec 1049 (richer alert tones: list stays byte-identical)', () => {
+  it('the tone list still offers exactly the same 8 values with unchanged defaults', () => {
+    const soundChoice = (nodeId: string) => {
+      const node = settingNode(nodeId);
+      return node?.groups.flatMap((g) => g.items).find((i) => i.type === 'choice');
+    };
+    const expected = ['none', 'note', 'chime', 'ping', 'pop', 'pulse', 'glow', 'beacon'];
+    for (const id of ['notifications-message-sound', 'notifications-group-sound', 'notifications-reactions-sound']) {
+      const c = soundChoice(id);
+      expect(c && 'options' in c && c.options.map((o) => o.value), id).toEqual(expected);
+    }
+    expect(soundChoice('notifications-message-sound')?.default).toBe('note');
+    expect(soundChoice('notifications-group-sound')?.default).toBe('note');
+    expect(soundChoice('notifications-reactions-sound')?.default).toBe('pop');
+  });
+});
+
 describe('settings schema — spec 1026 (friends-only & refinements)', () => {
   it('US2: no "Advanced" sub-page and nothing links to it (FR-006)', () => {
     expect(settingNode('privacy-advanced')).toBeUndefined();

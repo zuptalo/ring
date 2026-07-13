@@ -18,13 +18,13 @@
 
 ### Tests first (MUST fail before the engine lands) ⚠️
 
-- [ ] T001 [P] [US1] Add the spec-1049 structural suite to src/services/sound.test.ts against the exported `ALERT_TONES` / `TIMBRES` / `ALERT_TONE_NAMES` / tail-budget constant, enforcing contract rules 1–5 and 7 of specs/1049-richer-higher-quality/contracts/tone-structure.md (coverage of every audible `TONES` value + `none` absent, ≥2 partials per timbre, ≤1.2 s incl. tail, gain bounds, character contours: chime descending pair / glow ascending pair / beacon ascending triple / pulse equal pair / note-ping-pop single strikes with pop lowest, playTone never throws with audio unavailable)
+- [x] T001 [P] [US1] Add the spec-1049 structural suite to src/services/sound.test.ts against the exported `ALERT_TONES` / `TIMBRES` / `ALERT_TONE_NAMES` / tail-budget constant, enforcing contract rules 1–5 and 7 of specs/1049-richer-higher-quality/contracts/tone-structure.md (coverage of every audible `TONES` value + `none` absent, ≥2 partials per timbre, ≤1.2 s incl. tail, gain bounds, character contours: chime descending pair / glow ascending pair / beacon ascending triple / pulse equal pair / note-ping-pop single strikes with pop lowest, playTone never throws with audio unavailable)
 
 ### Implementation
 
-- [ ] T002 [US1] Build the alert-voice engine in src/services/sound.ts: `TIMBRES` partial tables (marimba, bell, glass, wood), a `strike()` renderer (detuned oscillator pair per partial ±4 cents, soft attack, ~30 ms pitch settle on the fundamental, independent partial decays), and the lazy alert bus (`GainNode → DynamicsCompressorNode → destination`) with the procedurally generated ~0.45 s stereo impulse-response `ConvolverNode` at ~18% wet
-- [ ] T003 [US1] Define `ALERT_TONES` (7 redesigns per plan.md decision 6: Note marimba A5 + octave shimmer, Chime glass E6→B5, Ping glass tick, Pop low wood thump, Pulse two wood taps, Glow bell pair A4→E5 swelled, Beacon bell arpeggio C5-E5-G5), remove those 7 entries from `RECIPES`, and route `playTone` through `ALERT_TONES` first with the existing FX/recipe fallthrough; keep module doc comments telling the why (match file style)
-- [ ] T004 [US1] Loudness pass: tune strike gains within the contract band so the 7 tones sit at consistent perceived loudness (by ear via `previewTone` in the running dev app; adjust data only)
+- [x] T002 [US1] Build the alert-voice engine in src/services/sound.ts: `TIMBRES` partial tables (marimba, bell, glass, wood), a `strike()` renderer (detuned oscillator pair per partial ±4 cents, soft attack, ~30 ms pitch settle on the fundamental, independent partial decays), and the lazy alert bus (`GainNode → DynamicsCompressorNode → destination`) with the procedurally generated ~0.45 s stereo impulse-response `ConvolverNode` at ~18% wet
+- [x] T003 [US1] Define `ALERT_TONES` (7 redesigns per plan.md decision 6: Note marimba A5 + octave shimmer, Chime glass E6→B5, Ping glass tick, Pop low wood thump, Pulse two wood taps, Glow bell pair A4→E5 swelled, Beacon bell arpeggio C5-E5-G5), remove those 7 entries from `RECIPES`, and route `playTone` through `ALERT_TONES` first with the existing FX/recipe fallthrough; keep module doc comments telling the why (match file style)
+- [x] T004 [US1] Loudness pass: tune strike gains within the contract band so the 7 tones sit at consistent perceived loudness (by ear via `previewTone` in the running dev app; adjust data only)
 
 **Checkpoint**: structural suite green; `npx vitest run` + `npm run build` green
 
@@ -36,8 +36,8 @@
 
 ### Tests
 
-- [ ] T005 [P] [US2] Extend src/services/sound.test.ts with the fence assertions (contract rule 6 + FR-003): every call/game cue name still in `RECIPE_NAMES`, none of the 7 alert names in `RECIPE_NAMES` anymore, and the settings `TONES` list still offers exactly the same 8 values with unchanged defaults (cross-check against src/settings/schema.ts exports or the schema test if the list is not exported)
-- [ ] T006 [US2] Verify: `git diff` shows zero edits to `RECIPES` cue entries / `FX` / `playNote` wiring beyond the 7 alert-entry removals; `npm run build` then `find dist -name '*.mp3' -o -name '*.wav' -o -name '*.ogg' -o -name '*.m4a'` returns nothing (SC-004)
+- [x] T005 [P] [US2] Extend src/services/sound.test.ts with the fence assertions (contract rule 6 + FR-003): every call/game cue name still in `RECIPE_NAMES`, none of the 7 alert names in `RECIPE_NAMES` anymore, and the settings `TONES` list still offers exactly the same 8 values with unchanged defaults (cross-check against src/settings/schema.ts exports or the schema test if the list is not exported)
+- [x] T006 [US2] Verify: `git diff` shows zero edits to `RECIPES` cue entries / `FX` / `playNote` wiring beyond the 7 alert-entry removals; `npm run build` then `find dist -name '*.mp3' -o -name '*.wav' -o -name '*.ogg' -o -name '*.m4a'` returns nothing (SC-004)
 
 **Checkpoint**: full `npx vitest run` green; both stories demonstrable
 
