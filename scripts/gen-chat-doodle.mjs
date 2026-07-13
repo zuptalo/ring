@@ -17,10 +17,10 @@ const OUT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/a
 // ---- knobs ----
 const SEED = 20260713;
 const TILE = 480; // bigger tile = repetition is harder to spot
-const CELL = 47; // big-glyph spacing (≈10x10 cells)
+const CELL = 34; // big-glyph spacing (≈14x14 cells — doubled density)
 const SKIP = 0.08; // fraction of big cells left empty (breaks the lattice)
-const JITTER = 15; // px of positional scatter per big glyph
-const FILLERS = 44; // tiny sprinkles between the big glyphs
+const JITTER = 11; // px of positional scatter per big glyph
+const FILLERS = 88; // tiny sprinkles between the big glyphs
 const STROKE = '#8a8a8a';
 const OPACITY = 0.34;
 
@@ -91,7 +91,7 @@ for (let j = 0; j < cols; j++) {
     let id = pick(BIG);
     if (id === prev) id = pick(BIG); // avoid immediate twins side by side
     prev = id;
-    const scale = between(0.62, 1.12);
+    const scale = between(0.5, 0.92); // smaller glyphs so double density still breathes
     const size = 24 * scale;
     const cx = i * CELL + CELL / 2 + between(-JITTER, JITTER);
     const cy = j * CELL + CELL / 2 + between(-JITTER, JITTER);
