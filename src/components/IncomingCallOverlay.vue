@@ -8,7 +8,7 @@
       <user-avatar :src="callMeta.avatar" :alt="callMeta.name" />
     </ion-avatar>
     <div class="ring-text">
-      <div class="ring-name">{{ callMeta.name }}</div>
+      <div class="ring-name" dir="auto">{{ callMeta.name }}</div>
       <div class="ring-kind">
         {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
       </div>

@@ -43,7 +43,7 @@
             <user-avatar :src="chat.avatar" :alt="chat.name" />
           </ion-avatar>
           <span class="chat-header-text">
-            <span class="chat-header-name">{{ chat.name }}</span>
+            <span class="chat-header-name" dir="auto">{{ chat.name }}</span>
             <span v-if="statusLine" class="chat-header-status">{{ statusLine }}</span>
           </span>
         </button>

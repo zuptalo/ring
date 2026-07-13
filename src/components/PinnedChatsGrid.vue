@@ -23,7 +23,7 @@
         <ion-badge v-if="chat.unread" color="primary" class="pin-badge">{{ chat.unread }}</ion-badge>
         <span v-else-if="chat.manualUnread" class="pin-dot" aria-hidden="true" />
       </div>
-      <span class="pin-name">{{ chat.name }}</span>
+      <span class="pin-name" dir="auto">{{ chat.name }}</span>
     </button>
   </div>
 </template>

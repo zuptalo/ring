@@ -8,7 +8,7 @@
       <div v-if="callState === 'incoming' && callMeta" class="incoming-fs">
         <div class="incoming-info">
           <ion-avatar class="incoming-avatar"><user-avatar :src="callMeta.avatar" :alt="callMeta.name" /></ion-avatar>
-          <h2 class="incoming-name">{{ callMeta.name }}</h2>
+          <h2 class="incoming-name" dir="auto">{{ callMeta.name }}</h2>
           <p class="incoming-kind">
             {{ callMeta.isGroup ? 'Group · ' : '' }}Incoming {{ callMeta.kind === 'video' ? 'video' : 'voice' }} call…
           </p>
@@ -69,7 +69,7 @@
               <ion-icon v-else :icon="personOutline" />
             </ion-avatar>
             <div class="cw-text">
-              <strong>{{ incomingSecond.name }}</strong>
+              <strong dir="auto">{{ incomingSecond.name }}</strong>
               <span>Incoming {{ incomingSecond.callKind === 'video' ? 'video ' : '' }}call</span>
             </div>
           </div>
@@ -124,7 +124,7 @@
           >
             <ion-icon :icon="swapHorizontalOutline" aria-hidden="true" />
             <span class="cw-swap-text">
-              <strong>Switch to {{ heldCall.name }}</strong>
+              <strong dir="auto">Switch to {{ heldCall.name }}</strong>
               <small>On hold · tap to swap calls</small>
             </span>
           </button>
@@ -172,7 +172,7 @@
                   <ion-icon v-else :icon="personOutline" />
                 </div>
                 <span class="leave-wave"><emoji emoji="👋" /></span>
-                <span v-if="t.name" class="tile-label">{{ t.name }}</span>
+                <span v-if="t.name" class="tile-label" dir="auto">{{ t.name }}</span>
               </template>
               <template v-else>
                 <!-- All tiles are MUTED here: remote audio plays through the persistent
@@ -320,7 +320,7 @@
           <button class="minimize-btn" aria-label="Minimize call" @click.stop="minimizeCall">
             <ion-icon :icon="chevronDownOutline" />
           </button>
-          <h2 class="name">{{ callMeta?.name }}</h2>
+          <h2 class="name" dir="auto">{{ callMeta?.name }}</h2>
           <p class="status">{{ statusText }}</p>
           <!-- Calling someone already in a call who can take a second one: reassure the caller
                they're queued, not ignored (spec 0005). -->
