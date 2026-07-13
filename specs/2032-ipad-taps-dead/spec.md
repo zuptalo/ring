@@ -37,13 +37,14 @@ On an iPad, tapping Send delivers the typed message and tapping the react afford
 4. `spaHandler`'s SPA fallback answered the missing `/assets/*.js` with **`index.html`, HTTP 200** (proven by live probe: `status=200 type=text/html` for a nonexistent chunk). The module loader received HTML as JavaScript, the chunk's features never wired up: dead Send, dead react button, no visible error.
 5. No update prompt appeared because every new-worker install attempted DURING the rebuild storm hit a half-written `dist/` (precache fetch fails → the whole SW install aborts → no waiting worker → nothing to prompt about).
 
-The iPhone escaped only because its precache was intact. H2 (pointerdown/click pipeline) is **withdrawn**: Chromium+touch reproduces nothing (harness kept on the branch), and the confirmed mechanism explains every observation including the missing prompt.
+The iPhone escaped only because its precache was intact. H2 (pointerdown/click pipeline) was briefly withdrawn — then **reinstated and confirmed as a second, independent bug** by the post-heal field report: with a fresh shell, everything gesture-driven works on the iPad (hold-to-record audio, video notes, calls, long-press action menu — all pointer/gesture handlers) while exactly the click-actions behind a bare `@pointerdown.prevent` stay dead (composer Send, both react buttons, and by inspection the @mention picker rows and the banner quick-reply send). iPadOS's desktop-class pipeline honors the spec: canceling `pointerdown` for a touch pointer suppresses the synthesized `click`; iPhone Safari's legacy touch path forgives it, and so does Chromium (which is why the touch repro passed).
 
 ## Fix (this branch)
 
 - **Server**: a missing `/assets/*` path now returns an honest **404** instead of the app shell — a dead fingerprinted chunk is never a client-side route. Regression test first (`static_test.go`: "missing hashed asset 404s", red → green).
 - **Client self-heal**: `useAppUpdate` now listens for Vite's `vite:preloadError` (a lazy chunk failed to load) and pulls the waiting update / reloads through the existing `applyUpdate` machinery — one attempt per tab, never mid-call. A future stale device un-strands itself instead of sitting with dead buttons.
 - **Stranded-device remedy (no code)**: with `dist/` stable again, one full close-and-reopen lets the new worker install cleanly and the normal prompt appears; failing that, reinstalling the PWA is the hard reset.
+- **Input fix (bug #2)**: every BARE `@pointerdown.prevent` focus-guard paired with a `@click` action is now `@mousedown.prevent` (five sites: Send, 2× react, mention picker, banner quick-reply) — synthetic mouse events fire after the touch sequence, so the focus shift is still blocked on every platform and the click can never be cancelled. Regression pinned by a source-level guard test (`src/components/pointer-tap-guard.test.ts`, red with the five offenders → green), since the failing engine (iPadOS WebKit) cannot run in CI. `@pointerdown.prevent="handler"` (acting ON the down, e.g. PinPad) remains legal.
 
 ## Requirements *(mandatory)*
 
