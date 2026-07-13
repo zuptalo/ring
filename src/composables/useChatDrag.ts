@@ -138,10 +138,27 @@ export function useChatDrag(opts: ChatDragOptions) {
   function lockPage(): void {
     document.addEventListener('touchmove', blockTouchMove, { passive: false });
     document.addEventListener('contextmenu', blockContextMenu, true);
+    // iOS can have started a text selection during the hold (rows are full of
+    // text); an active selection eats the next tap, so kill it and keep
+    // selection off for the rest of the gesture.
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      /* selection API quirks are non-fatal */
+    }
+    document.documentElement.style.setProperty('-webkit-user-select', 'none');
+    document.documentElement.style.setProperty('user-select', 'none');
   }
   function unlockPage(): void {
     document.removeEventListener('touchmove', blockTouchMove);
     document.removeEventListener('contextmenu', blockContextMenu, true);
+    document.documentElement.style.removeProperty('-webkit-user-select');
+    document.documentElement.style.removeProperty('user-select');
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      /* ditto */
+    }
   }
 
   function cleanup(): void {

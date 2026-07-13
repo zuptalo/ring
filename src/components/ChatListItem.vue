@@ -231,6 +231,15 @@ function more(): void {
 .lifted-row {
   opacity: 0.35;
 }
+/* The press-and-hold gesture owns the long press (spec 1045). Without this, iOS
+   starts a TEXT SELECTION on the row's name/preview during the hold, and an
+   active selection then eats the first tap on whatever opens (the peek's menu
+   needed two taps). Matches the pinned tiles. */
+ion-item {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 .unread-dot {
   width: 11px;
   height: 11px;

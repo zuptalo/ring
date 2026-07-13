@@ -142,20 +142,26 @@ function kindLabel(m: Message): string {
   }
 }
 
+// Every action dismisses the peek FIRST. The overlay teleports to <body> above
+// ion-app, so anything Ionic presents (action sheets, toasts) while it's still
+// open renders BEHIND it — Delete's confirmation was invisible until the user
+// closed the peek by hand.
 async function togglePin(): Promise<void> {
-  if (!props.chat) return;
-  const ok = await setChatPinned(props.chat.id, !props.chat.pinned);
+  const c = props.chat;
+  if (!c) return;
+  emit('dismiss');
+  const ok = await setChatPinned(c.id, !c.pinned);
   if (!ok) {
     await appToast({ message: `You can only pin ${MAX_PINNED_CHATS} chats.`, duration: 2200 });
   }
-  emit('dismiss');
 }
 
 async function toggleUnread(): Promise<void> {
-  if (!props.chat) return;
-  if (unread.value) await markChatRead(props.chat.id);
-  else await markChatUnread(props.chat.id);
+  const c = props.chat;
+  if (!c) return;
   emit('dismiss');
+  if (unread.value) await markChatRead(c.id);
+  else await markChatUnread(c.id);
 }
 
 function openMore(): void {
@@ -165,6 +171,9 @@ function openMore(): void {
 async function confirmRemove(): Promise<void> {
   const c = props.chat;
   if (!c) return;
+  emit('dismiss');
+  // Let the peek's leave transition finish so the sheet's enter isn't swallowed.
+  await new Promise((r) => setTimeout(r, 220));
   const sheet = await actionSheetController.create({
     header: c.isGroup ? `Leave "${c.name}"?` : 'Delete this chat?',
     buttons: [
@@ -177,8 +186,6 @@ async function confirmRemove(): Promise<void> {
     ],
   });
   await sheet.present();
-  await sheet.onDidDismiss();
-  emit('dismiss');
 }
 </script>
 
