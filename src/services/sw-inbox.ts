@@ -209,6 +209,15 @@ export function noteForPayload(
     prefs?: { turn: boolean; challenges: boolean; followMoves: boolean; followResults: boolean };
     follows?: Record<string, number>;
   },
+  // Reaction context (spec 1048), prefetched by previewPending: the reacted-to
+  // message's stored row (to tell "reaction to MY message" and quote it) plus the
+  // gating toggles and the dedicated reaction tone. Absent (e.g. a caller that
+  // defers reactions, like the authoritative drain) → the reaction stays the
+  // silent side effect it was before spec 1048.
+  reactionCtx?: {
+    row?: Message;
+    prefs?: { dm: boolean; group: boolean; tone: string };
+  },
 ): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
@@ -388,11 +397,64 @@ export function noteForPayload(
     };
   }
 
-  // Reactions / poll votes / edits / delete-for-everyone / link-preview attach, and
-  // the session re-key + disappearing-message TTL controls, are silent side effects
-  // with nothing to show.
+  // Reactions (spec 1048): a reaction ADD to one of MY OWN messages notifies the
+  // author (the two settings toggles gate it per surface) — everything else about a
+  // reaction stays the silent side effect it always was. Critically for push health
+  // (FR-013): every suppressed case below returns the EXACT pre-1048 shape
+  // `{note:null, wasMessage:false}`, so sw.ts's established visible-wake fallback
+  // (specs 2016/2017/2023) applies unchanged — no new class of silent wake exists.
+  // Reactions NEVER escalate (unlike mentions): mute, web-push-off, content='none',
+  // hidden, and the global master all silence them. wasMessage stays false — a
+  // reaction is not a message and must not badge or count unread (spec 1048
+  // clarification).
+  if (payload.reaction) {
+    const sig = payload.reaction;
+    const row = reactionCtx?.row;
+    const rChat = payload.groupId
+      ? chats.find((c) => c.id === payload.groupId && c.isGroup)
+      : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
+    const mine = !!row && (row.outgoing || row.senderId === 'me');
+    const enabled = rChat?.isGroup ? reactionCtx?.prefs?.group === true : reactionCtx?.prefs?.dm === true;
+    const suppressedByChat =
+      !rChat ||
+      hidden.has(rChat.id) ||
+      (rChat.mutedUntil !== undefined && rChat.mutedUntil > Date.now()) ||
+      rChat.notifyWebPush === false ||
+      (rChat.notifyContent ?? 'full') === 'none';
+    if (sig.remove || !mine || from === selfId || !enabled || !showMessages || suppressedByChat) {
+      return { note: null, wasMessage: false };
+    }
+    const showText = (rChat.notifyContent ?? 'full') === 'full' && showPreview;
+    const name = known || 'Someone';
+    const first = name.split(' ')[0];
+    // A short quote of the reacted-to message; media/empty bodies read naturally.
+    const raw = (row.body || '').replace(/\s+/g, ' ').trim();
+    const quote = raw.length > 80 ? `${raw.slice(0, 79)}…` : raw;
+    const line = rChat.isGroup
+      ? quote ? `${first} reacted ${sig.emoji} to: ${quote}` : `${first} reacted ${sig.emoji} to your message`
+      : quote ? `Reacted ${sig.emoji} to: ${quote}` : `Reacted ${sig.emoji} to your message`;
+    return {
+      note: {
+        ids: [f.id as string],
+        // Same masking rules as a plain message: preview off hides WHO as well.
+        title: showPreview ? (rChat.isGroup ? rChat.name || 'Group' : name) : 'Ring',
+        body: showText ? line : 'New message',
+        url: `/chat/${rChat.id}`,
+        // The chat's own tag: reactions coalesce into the ONE per-chat notification
+        // (spec 2017 summary machinery included) instead of stacking (FR-003).
+        tag: `ring:${rChat.id}`,
+        // Tone 'none' = visible but quiet; a SW can't play the app's synthesized tones.
+        silent: reactionCtx?.prefs?.tone === 'none',
+      },
+      wasMessage: false,
+    };
+  }
+
+  // Poll votes / edits / delete-for-everyone / link-preview attach, and the session
+  // re-key + disappearing-message TTL controls, are silent side effects with
+  // nothing to show.
   if (
-    payload.reaction || payload.pollVote || payload.edit || payload.erase ||
+    payload.pollVote || payload.edit || payload.erase ||
     payload.linkPreviewSig || payload.rekey || payload.ttl !== undefined
   ) {
     return { note: null, wasMessage: false };
@@ -891,7 +953,21 @@ export async function previewPending(): Promise<PreviewResult> {
           follows: await setting<Record<string, number>>('games.follows', {}),
         }
       : undefined;
-    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx);
+    // Reaction context (spec 1048): the reacted-to message's stored row (tells
+    // "is it MINE?" + provides the quote) and the gates/tone. The row read is the
+    // same read-only pattern as the game context above; an unresolvable target
+    // (deleted, or the reaction outran its message) keeps the reaction silent.
+    const reactionCtx = payload.reaction
+      ? {
+          row: await get<Message>('messages', payload.reaction.messageId),
+          prefs: {
+            dm: await setting<boolean>('notifications.message.reactions', true),
+            group: await setting<boolean>('notifications.group.reactions', true),
+            tone: await setting<string>('notifications.reactions.sound', 'pop'),
+          },
+        }
+      : undefined;
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx, reactionCtx);
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;

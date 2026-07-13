@@ -363,10 +363,13 @@ function targetUrl(n: IncomingNotice): string {
   return '/tabs/contacts'; // request
 }
 
-async function inAppSound(): Promise<void> {
+/** Play the in-app tone for a notice. Reactions carry their own dedicated tone
+ *  (spec 1048) so a burst of hearts never sounds like a burst of messages;
+ *  everything else uses the message tone. playTone no-ops on 'none'. */
+async function inAppSound(tone?: string): Promise<void> {
   const p = await ensurePrefs();
   if (p.inappSounds) {
-    playTone(p.messageSound);
+    playTone(tone ?? p.messageSound);
   }
 }
 
@@ -415,11 +418,20 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
       inAppGloballyEnabled(),
     ]);
     const content = chatPrefs?.content ?? 'full';
-    // @mentions (spec 1020): escalate only when this message mentions me AND the chat's
-    // "mentions even when muted" pref is on. The global master (p.showMessages, checked
-    // above) + OS DND still gate everything.
-    const isMention = !!n.mention && (chatPrefs?.mentions ?? true);
-    const mentionBody = `${n.mentionName ?? 'Someone'} mentioned you`;
+    // @mentions (spec 1020) + replies-to-you (spec 1048): escalate only when this
+    // message is personally directed at me AND the chat's "mentions even when muted"
+    // pref is on — a direct reply to my message is an implicit mention, gated by the
+    // SAME pref so there is one dial for "personally-directed pierces mute". The
+    // global master (p.showMessages, checked above) + OS DND still gate everything.
+    // A reaction notice never sets mention/replied, so it can never escalate.
+    const isMention = !!(n.mention || n.replied) && (chatPrefs?.mentions ?? true);
+    // Wording: an explicit @mention wins over the implicit reply variant when a
+    // message is both (one notification either way — it's one message).
+    const mentionBody = n.mention
+      ? `${n.mentionName ?? 'Someone'} mentioned you`
+      : `${n.mentionName ?? 'Someone'} replied to you`;
+    // The reaction tone (spec 1048): dedicated + subtle; undefined = message tone.
+    const noticeTone = n.reaction ? p.reactionSound : undefined;
     const owner = notificationOwner({
       appVisible: appVisible(),
       unlocked: true, // isUnlockedNow() was checked above
@@ -440,7 +452,7 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
       // Viewing this chat while visible → still give a subtle sound (the user sees
       // the message inline). Every other suppress reason (muted / content=none /
       // in-app off / settle-swallowed) is fully silent.
-      if (n.chatId && n.chatId === activeChatId && appVisible()) await inAppSound();
+      if (n.chatId && n.chatId === activeChatId && appVisible()) await inAppSound(noticeTone);
       return false;
     }
     if (owner === 'sw-notification') {
@@ -484,7 +496,7 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
 
     // owner === 'page-banner': show the in-app banner/alert.
     const showFull = content === 'full' && p.showPreview;
-    await inAppSound();
+    await inAppSound(noticeTone);
     if (p.inappStyle === 'none') return false; // sound only; no visible surface
     const url = targetUrl(n);
     const bodyText = showFull ? n.body : isMention ? mentionBody : 'New message';

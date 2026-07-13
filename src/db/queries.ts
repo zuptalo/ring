@@ -701,7 +701,11 @@ export async function reactToMessage(
 }
 
 /** Apply an inbound reaction from `from` to the target message (side effect,
- *  never a stored message). */
+ *  never a stored message). A reaction ADD to one of MY OWN messages also alerts
+ *  me (spec 1048) — gated by the per-surface toggles, dispatched through
+ *  notifyIncoming so mute / per-chat prefs / hidden / settle all apply and the
+ *  alert can NEVER escalate (a reaction is not a mention). Deliberately no unread
+ *  or badge change: a reaction is not a message (spec 1048 clarification). */
 async function handleReaction(from: string, signal: ReactionSignal): Promise<void> {
   const message = await getMessage(signal.messageId);
   if (!message) return; // we don't have that message (yet), drop it
@@ -717,6 +721,35 @@ async function handleReaction(from: string, signal: ReactionSignal): Promise<voi
       chat.lastMessageTime = signal.at;
       chat.updatedAt = signal.at;
       await put('chats', chat);
+
+      const selfId = getSelfUserId() ?? '';
+      const mine = message.outgoing || message.senderId === 'me';
+      if (mine && from !== selfId) {
+        const enabled = await getSetting<boolean>(
+          chat.isGroup ? 'notifications.group.reactions' : 'notifications.message.reactions',
+          true,
+        );
+        if (enabled) {
+          const first = name.split(' ')[0];
+          const quote = previewText(message);
+          // 1:1: the title already names the reactor, so the body starts at the verb;
+          // groups: the title is the group, so the body names who reacted.
+          const line = chat.isGroup
+            ? quote ? `${first} reacted ${signal.emoji} to: ${quote}` : `${first} reacted ${signal.emoji} to your message`
+            : quote ? `Reacted ${signal.emoji} to: ${quote}` : `Reacted ${signal.emoji} to your message`;
+          // Same awaited-but-swallowed contract as the message dispatch (spec 1015):
+          // a notify error must never block the ack/dedup that follow.
+          await notifyIncoming({
+            kind: 'message',
+            reaction: true,
+            chatId: chat.id,
+            msgId: message.id,
+            name: chat.isGroup ? chat.name : name,
+            body: line,
+            pushWoken: pushWakeActive(),
+          }).catch(() => {});
+        }
+      }
     }
   }
 }
