@@ -110,6 +110,12 @@ defineExpose({
      touches on a tile belong to the drag; scrolls still start anywhere else. */
   touch-action: none;
 }
+/* The avatar <img> must never start a NATIVE image drag under the mouse — the
+   browser pointercancels our gesture when it does (belt to the dragstart block
+   in useChatDrag). */
+.pin-tile img {
+  -webkit-user-drag: none;
+}
 /* FLIP: tiles glide to their new slot as the drag gap moves. */
 .pin-move {
   transition: transform 0.2s ease;

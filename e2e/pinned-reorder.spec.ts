@@ -16,12 +16,15 @@ const sendIn = (p: any, chatId: string, body: string) =>
 const gridOrder = (page: Page) =>
   page.locator('.pin-tile[data-chat-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-chat-id')));
 
-/** Press-and-hold until the lift (spec 1045: 350ms), drag to (x,y), release. */
+/** Press-and-hold until the lift (spec 1045: 350ms), drag to (x,y), release.
+ *  The lift is awaited via its OBSERVABLE signal — the floating proxy appearing —
+ *  not a fixed sleep: under parallel-test CPU load the page's lift timer can lag,
+ *  and moving before it fires legitimately cancels the hold (scroll wins). */
 async function dragTile(page: Page, from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> {
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
-  await page.waitForTimeout(550); // past the lift, before the peek
-  // First a small nudge to commit to dragging (kills the peek timer), then glide.
+  await expect(page.locator('.drag-proxy')).toBeVisible({ timeout: 5_000 });
+  // A small nudge to commit to dragging (kills the peek timer), then glide.
   await page.mouse.move(from.x + 12, from.y + 12, { steps: 3 });
   await page.mouse.move(to.x, to.y, { steps: 12 });
   await page.waitForTimeout(150); // let hover/FLIP settle
