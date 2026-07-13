@@ -71,7 +71,8 @@ Specs are grouped by category band; status moves
 | [1043](specs/1043-direct-peer-peer/spec.md) | Direct Peer-to-Peer Call Media with Relay Fallback | 🟢 shipped |
 | [1044](specs/1044-pinned-chats-show/spec.md) | Pinned Chats Grid (iMessage-style) | 🟢 shipped |
 | [1045](specs/1045-rearrange-pinned-chats/spec.md) | Rearrange pinned chats with drag, stable manual order, and long-press chat preview | 🟢 shipped |
-| [1046](specs/1046-quick-call-tiles/spec.md) | Quick Call tiles on the Calls tab, usage totals move to Network usage | 🟡 in-progress |
+| [1046](specs/1046-quick-call-tiles/spec.md) | Quick Call tiles on the Calls tab, usage totals move to Network usage | 🔵 in-review |
+| [1047](specs/1047-chat-background-contrast/spec.md) | Chat background pattern reads clearly in both themes | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
