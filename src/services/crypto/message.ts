@@ -102,9 +102,14 @@ export interface CallSignal {
   // call's kind) and answers with accept/reject; 'joinreq-cancel' withdraws an outstanding
   // request when the ongoing call ends. Same sealed-inside-call-ice trick: the server cannot
   // tell any of these from an ICE candidate.
+  // 'camoff'/'camon' (spec 2029): the sender turned their camera off/on. Their video sender
+  // detaches (no black-frame stream), and because browsers report a gone-dark receiver track
+  // inconsistently (some never fire mute), this sealed signal is what deterministically swaps
+  // their tile to the avatar on every receiver. Same sealed-inside-call-ice trick as
+  // hold/resume: the server cannot tell a camera toggle from an ICE candidate.
   type:
     | 'offer' | 'answer' | 'ice' | 'key' | 'streamid' | 'hold' | 'resume' | 'qos' | 'joinroom'
-    | 'joinreq' | 'joinreq-accept' | 'joinreq-reject' | 'joinreq-cancel';
+    | 'joinreq' | 'joinreq-accept' | 'joinreq-reject' | 'joinreq-cancel' | 'camoff' | 'camon';
   kind?: 'audio' | 'video'; // on offer
   sdp?: string; // offer/answer
   sdpType?: RTCSdpType; // offer/answer

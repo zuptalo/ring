@@ -177,9 +177,12 @@
               <template v-else>
                 <!-- All tiles are MUTED here: remote audio plays through the persistent
                      global CallMediaSink so it survives minimising. The <video> stays
-                     mounted (for video display) even with the camera off; the camera-off
-                     icon just overlays it. -->
+                     MOUNTED even with the camera off (attach/teardown churn is what
+                     causes black flashes) but is HIDDEN then: a detached remote sender
+                     (spec 2029) freezes the element on the peer's last decoded frame,
+                     which would otherwise peek out around the avatar overlay. -->
                 <video
+                  v-show="tileHasVideo(t)"
                   :ref="(el) => attach(el as HTMLVideoElement | null, t.stream)"
                   class="tile-video"
                   :class="{ mirror: t.isSelf && localMirror, 'held-frozen': groupHeldPeers.includes(t.key) }"
@@ -477,7 +480,7 @@ import {
 import router from '@/router';
 import { getSelfUserId } from '@/services/auth';
 import {
-  callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, callStats,
+  callState, callMeta, localStream, remoteStream, remoteStreams, groupStreamOwners, activeSpeakers, muted, cameraOff, remoteVideoMuted, groupVideoMutedPeers, callStats,
   connectionWarning, hangupCall, toggleMute, toggleCamera, cameraFacing, screenSharing,
   switchCamera, toggleScreenShare, toggleVideoMode, canScreenShare, minimizeCall, hasMultipleCameras,
   videoQuality, setVideoQuality, type VideoQuality,
@@ -559,12 +562,22 @@ const mainStream = computed(() => (mainIsLocal.value ? localStream.value : remot
 const pipStream = computed(() => (mainIsLocal.value ? remoteStream.value : localStream.value));
 const isVideoCall = computed(() => callMeta.value?.kind === 'video' && !callMeta.value?.isGroup);
 // A slot shows live video only for a video call, when its stream exists and isn't a
-// camera-off local preview (otherwise we fall back to the avatar / hide the PiP).
+// camera-off local preview — or the PEER's gone-dark video: their camera-off (or an
+// adaptive video pause) detaches their sender, our receiver track mutes, and the slot
+// must fall back to their avatar just like our own preview does (spec 2029).
 const mainHasVideo = computed(
-  () => isVideoCall.value && !!mainStream.value && !(mainIsLocal.value && cameraOff.value),
+  () =>
+    isVideoCall.value &&
+    !!mainStream.value &&
+    !(mainIsLocal.value && cameraOff.value) &&
+    !(!mainIsLocal.value && remoteVideoMuted.value),
 );
 const pipHasVideo = computed(
-  () => isVideoCall.value && !!pipStream.value && !(pipIsLocal.value && cameraOff.value),
+  () =>
+    isVideoCall.value &&
+    !!pipStream.value &&
+    !(pipIsLocal.value && cameraOff.value) &&
+    !(!pipIsLocal.value && remoteVideoMuted.value),
 );
 
 // kind === 'video' for ANY video call (1:1 or group); distinct from isVideoCall, which
@@ -838,12 +851,15 @@ async function openRecall(t: Tile): Promise<void> {
 }
 
 /** Whether a tile is showing live video. When not, we overlay a camera-off icon but
- *  keep the <video> mounted so the participant's AUDIO keeps playing. (A peer's video
- *  track is removed from its stream when they turn the camera off, so the track count
- *  is a reliable signal and recomputes when remoteStreams is rebuilt.) */
+ *  keep the <video> mounted so the participant's AUDIO keeps playing. A remote tile
+ *  goes dark two ways: the track leaves the stream (removeVideoTrack renegotiation —
+ *  the track count catches it), or the peer's sender detaches (camera-off / adaptive
+ *  pause) which only mutes our receiver track — groupVideoMutedPeers carries that
+ *  (mesh-reported, keyed by user id = the tile key; spec 2029). */
 function tileHasVideo(t: Tile): boolean {
   if (t.leaving) return false;
   if (t.isSelf) return !cameraOff.value && !!t.stream?.getVideoTracks().length;
+  if (groupVideoMutedPeers.value.includes(t.key)) return false;
   return !!t.stream && t.stream.getVideoTracks().length > 0;
 }
 
