@@ -73,6 +73,7 @@ Specs are grouped by category band; status moves
 | [1045](specs/1045-rearrange-pinned-chats/spec.md) | Rearrange pinned chats with drag, stable manual order, and long-press chat preview | 🟢 shipped |
 | [1046](specs/1046-quick-call-tiles/spec.md) | Quick Call tiles on the Calls tab, usage totals move to Network usage | 🔵 in-review |
 | [1047](specs/1047-chat-background-contrast/spec.md) | Chat background pattern reads clearly in both themes | 🔵 in-review |
+| [1048](specs/1048-notify-reactions-messages/spec.md) | Reaction Notifications & Group Reply Escalation | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
