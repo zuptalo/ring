@@ -26,7 +26,7 @@
         <span v-if="isOnline" class="presence-dot" aria-hidden="true" />
       </div>
       <ion-label>
-        <h2>{{ chat.name }}</h2>
+        <h2 dir="auto">{{ chat.name }}</h2>
         <p class="preview-row">
           <template v-if="activityLabel">
             <span class="preview activity">{{ activityLabel }}</span>

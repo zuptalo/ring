@@ -19,7 +19,7 @@
         <user-avatar v-if="callMeta" :src="callMeta.avatar" :alt="callMeta.name" />
       </ion-avatar>
       <div class="mini-info">
-        <div class="mini-name">{{ callMeta?.name }}</div>
+        <div class="mini-name" dir="auto">{{ callMeta?.name }}</div>
         <div class="mini-status">{{ statusText }}</div>
       </div>
     </template>
