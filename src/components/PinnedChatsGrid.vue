@@ -7,17 +7,19 @@
        The TransitionGroup FLIP-animates tiles as the drag's preview gap moves. -->
   <TransitionGroup ref="root" tag="div" name="pin" class="pin-grid" role="list" aria-label="Pinned chats">
     <template v-for="id in displayIds" :key="id">
-      <!-- The dragged chat's slot: an empty well under the floating proxy. Keyed as
-           the chat so the gap itself is what FLIP moves around the grid. -->
-      <div v-if="id === dragId" class="pin-tile pin-ghost" role="listitem" aria-hidden="true">
-        <div class="pin-avatar pin-well" />
-      </div>
+      <!-- A member tile. While it's the one riding the drag proxy it renders as the
+           ghost well via CSS ONLY — the BUTTON MUST STAY MOUNTED: iOS stops
+           delivering the gesture's touch/pointer events the moment their original
+           target leaves the DOM, which froze the drag (and let the peek timer fire
+           mid-drag). Keyed as the chat so FLIP moves the gap around the grid. -->
       <button
-        v-else-if="byId[id]"
+        v-if="byId[id]"
         type="button"
         class="pin-tile"
+        :class="{ 'pin-ghost': id === dragId }"
         role="listitem"
         :aria-label="byId[id].name"
+        :aria-hidden="id === dragId ? 'true' : undefined"
         :data-chat-id="id"
         @click="$emit('open', id)"
         @pointerdown="$emit('press', byId[id], $event)"
@@ -30,6 +32,12 @@
         </div>
         <span class="pin-name" dir="auto">{{ byId[id].name }}</span>
       </button>
+      <!-- A FOREIGN drag (a list row hovering in): no chat data here, so the well is
+           its own element. It's never the gesture's touch target, so (un)mounting
+           it mid-drag is safe. -->
+      <div v-else-if="id === dragId" class="pin-tile pin-ghost" role="listitem" aria-hidden="true">
+        <div class="pin-avatar" />
+      </div>
     </template>
   </TransitionGroup>
 </template>
@@ -96,6 +104,11 @@ defineExpose({
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+  /* Ionic's global css puts touch-action: manipulation on every <button>, which
+     lets the browser claim a vertical touch drag as a page scroll and KILL the
+     gesture with pointercancel — drag-a-tile-out-to-unpin died on iOS. none =
+     touches on a tile belong to the drag; scrolls still start anywhere else. */
+  touch-action: none;
 }
 /* FLIP: tiles glide to their new slot as the drag gap moves. */
 .pin-move {
@@ -106,10 +119,15 @@ defineExpose({
   width: 88px;
   height: 88px;
 }
-/* The empty well left behind by (or opening up for) the floating avatar. */
-.pin-well {
+/* The empty well left behind by (or opening up for) the floating avatar. Applied
+   to the SAME tile element (CSS only — see the template note about iOS): its
+   content hides, the avatar box becomes the well. */
+.pin-ghost .pin-avatar {
   border-radius: 50%;
   background: color-mix(in srgb, var(--app-text, #000) 8%, transparent);
+}
+.pin-ghost .pin-avatar > * {
+  visibility: hidden;
 }
 .pin-ghost .pin-name {
   visibility: hidden;
