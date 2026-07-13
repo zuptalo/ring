@@ -38,7 +38,7 @@ import { groupAvatar } from '@/db/avatars';
 // the incoming surface must reveal nothing identifying. A neutral name + avatar.
 import { getSelfUserId } from '@/services/auth';
 import { isUnlockedNow, isUnlocked } from '@/services/crypto/identity';
-import { getTurnConfig, warmTurnConfig, rtcConfig } from '@/services/call/turn';
+import { warmTurnConfig, callRtcConfig } from '@/services/call/turn';
 import {
   sendSealedSignal, openSealedSignal, sendControl, meshSessionChatId, sendRecall, sendGroupInviteeCancel,
   sendGroupLeave, sendGroupBusy, sendHoldResume, sendHealth, sendCameraState, sendJoinRoom,
@@ -790,8 +790,7 @@ function gumConstraints(kind: CallKind): MediaStreamConstraints {
 }
 
 async function newPeerConnection(): Promise<RTCPeerConnection> {
-  const turn = await getTurnConfig();
-  const conn = new RTCPeerConnection(rtcConfig(turn));
+  const conn = new RTCPeerConnection(await callRtcConfig());
   markConnect('pcCreated');
 
   conn.ontrack = (e) => {

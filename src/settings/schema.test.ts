@@ -31,8 +31,11 @@ describe('settings schema', () => {
 
   it('carries no dead/removed setting keys', () => {
     // Settings removed in the cleanup: backed nothing (no Status/Stories feature,
-    // camera effects, reminder infra) or were redundant (calls always relay, so
-    // "protect IP" was a no-op). Re-adding any of these should fail this guard.
+    // camera effects, reminder infra) or were redundant at the time. protectIp in
+    // particular must STAY dead even now that calls can go direct (spec 1043):
+    // old encrypted own-sync snapshots may still carry a stale protectIp value
+    // that would silently apply if the key were reused — the replacement is the
+    // new privacy.relayCalls key. Re-adding any of these should fail this guard.
     const DEAD = [
       'privacy.status', 'privacy.statusSharing', 'privacy.protectIp', 'privacy.cameraEffects',
       'notifications.status.show', 'notifications.status.reactions', 'notifications.status.sound',
@@ -50,6 +53,15 @@ describe('settings schema', () => {
     expect(searchSettings('hidden chats').length).toBeGreaterThan(0);
     expect(searchSettings('passkeys')).toHaveLength(0);
     expect(searchSettings('chat backup')).toHaveLength(0);
+  });
+});
+
+describe('settings schema — spec 1043 (direct call media)', () => {
+  it('has the "Always relay calls" toggle on the Privacy page, default off', () => {
+    const items = SETTINGS.privacy.groups.flatMap((g) => g.items);
+    const toggle = items.find((i) => 'key' in i && i.key === 'privacy.relayCalls');
+    expect(toggle?.type).toBe('toggle');
+    expect(toggle && 'default' in toggle && toggle.default).toBe(false);
   });
 });
 

@@ -89,3 +89,95 @@ func TestProdCallsWithAcmeOK(t *testing.T) {
 		t.Fatalf("acme config not populated: %+v", c)
 	}
 }
+
+/* ---- optional UDP endpoint for direct call paths (spec 1043) ---- */
+
+func TestTurnUDPListenDerivesStunDefaults(t *testing.T) {
+	t.Setenv("ENV", "dev")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("PUBLIC_URL", "https://ring.example")
+	t.Setenv("TURN_UDP_LISTEN", ":3478")
+	t.Setenv("STUN_PUBLIC_HOST", "")
+	t.Setenv("STUN_PUBLIC_PORT", "")
+	t.Setenv("TURN_PUBLIC_HOST", "")
+	t.Setenv("TURN_HOST", "")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.TurnUDPListen != ":3478" {
+		t.Fatalf("TurnUDPListen = %q", c.TurnUDPListen)
+	}
+	// Port defaults from the listen address; host from the derived TURN host
+	// (turn.<PUBLIC_URL host> when nothing more specific is set).
+	if c.StunPublicPort != "3478" {
+		t.Fatalf("StunPublicPort = %q, want 3478", c.StunPublicPort)
+	}
+	if c.StunPublicHost != "turn.ring.example" {
+		t.Fatalf("StunPublicHost = %q, want turn.ring.example", c.StunPublicHost)
+	}
+}
+
+func TestTurnUDPListenExplicitStunOverrides(t *testing.T) {
+	t.Setenv("ENV", "dev")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("PUBLIC_URL", "https://ring.example")
+	t.Setenv("TURN_UDP_LISTEN", "0.0.0.0:3999")
+	t.Setenv("STUN_PUBLIC_HOST", "media.ring.example")
+	t.Setenv("STUN_PUBLIC_PORT", "443")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.StunPublicHost != "media.ring.example" || c.StunPublicPort != "443" {
+		t.Fatalf("explicit stun advertisement not honored: %+v", c)
+	}
+}
+
+func TestTurnUDPListenPrefersTurnPublicHost(t *testing.T) {
+	t.Setenv("ENV", "dev")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("PUBLIC_URL", "https://ring.example")
+	t.Setenv("TURN_UDP_LISTEN", ":3478")
+	t.Setenv("TURN_PUBLIC_HOST", "edge.ring.example")
+	t.Setenv("STUN_PUBLIC_HOST", "")
+	t.Setenv("STUN_PUBLIC_PORT", "")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.StunPublicHost != "edge.ring.example" {
+		t.Fatalf("StunPublicHost = %q, want edge.ring.example (TURN_PUBLIC_HOST wins)", c.StunPublicHost)
+	}
+}
+
+func TestTurnUDPListenInvalidFailsFast(t *testing.T) {
+	t.Setenv("ENV", "dev")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("PUBLIC_URL", "https://ring.example")
+	t.Setenv("TURN_UDP_LISTEN", "not-a-bind-address")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("an unparseable TURN_UDP_LISTEN must fail fast (a listener that silently never opened)")
+	}
+}
+
+func TestNoTurnUDPListenLeavesStunUnset(t *testing.T) {
+	t.Setenv("ENV", "dev")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("PUBLIC_URL", "https://ring.example")
+	t.Setenv("TURN_UDP_LISTEN", "")
+	t.Setenv("STUN_PUBLIC_HOST", "")
+	t.Setenv("STUN_PUBLIC_PORT", "")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.TurnUDPListen != "" || c.StunPublicHost != "" || c.StunPublicPort != "" {
+		t.Fatalf("zero-config deployment must not grow stun settings: %+v", c)
+	}
+}

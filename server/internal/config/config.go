@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -59,9 +60,11 @@ type Config struct {
 	RequireConnection bool
 
 	// --- Calling (WebRTC) ---
-	// EnableCalls turns on the embedded TURN relay + SFU. Off unless explicitly
-	// enabled in prod (calls need a public relay IP and a TLS cert); on by
-	// default in dev so the signalling/credentials path can be exercised.
+	// EnableCalls turns on the embedded TURN relay. Calls are peer-to-peer
+	// (direct when the networks allow it, relayed otherwise); there is no
+	// server-side media component. Off unless explicitly enabled in prod (calls
+	// need a public relay IP and a TLS cert); on by default in dev so the
+	// signalling/credentials path can be exercised.
 	EnableCalls bool
 	// TurnRealm is the TURN authentication realm (defaults to PublicURL's host).
 	TurnRealm string
@@ -93,6 +96,20 @@ type Config struct {
 	// unless Acme is on (autocert provisions the cert instead).
 	TurnTLSCert string
 	TurnTLSKey  string
+	// TurnUDPListen (TURN_UDP_LISTEN, e.g. ":3478") opens an ADDITIONAL plaintext
+	// UDP listener in TLS mode, serving STUN Binding (public-address discovery
+	// for direct call paths, spec 1043) and TURN-over-UDP with the same ephemeral
+	// credentials. Operator opt-in: empty (the default) opens no listener and no
+	// port, so upgrading changes nothing until the operator asks for it. The
+	// deployment must forward the matching public UDP port. Ignored in plaintext
+	// (dev) mode, which already listens on UDP.
+	TurnUDPListen string
+	// StunPublicHost / StunPublicPort are the publicly reachable host:port
+	// advertised to clients as the stun:/turn-udp endpoint when TurnUDPListen is
+	// set. Host defaults to the advertised TURN host (TurnPublicHost or
+	// TurnHost); port defaults to TurnUDPListen's port.
+	StunPublicHost string
+	StunPublicPort string
 
 	// --- Built-in TLS (ACME / Let's Encrypt) ---
 	// Acme (ACME=true) makes ringd provision + renew its own TLS certs via autocert
@@ -149,6 +166,9 @@ func Load() (Config, error) {
 		TurnPublicTransport: env("TURN_PUBLIC_TRANSPORT", "udp"),
 		TurnTLSCert:         os.Getenv("TURN_TLS_CERT"),
 		TurnTLSKey:          os.Getenv("TURN_TLS_KEY"),
+		TurnUDPListen:       os.Getenv("TURN_UDP_LISTEN"),
+		StunPublicHost:      os.Getenv("STUN_PUBLIC_HOST"),
+		StunPublicPort:      os.Getenv("STUN_PUBLIC_PORT"),
 		Acme:                envBool("ACME", false),
 		AcmeEmail:           os.Getenv("ACME_EMAIL"),
 		AcmeDirectoryURL:    os.Getenv("ACME_DIRECTORY_URL"),
@@ -216,8 +236,36 @@ func Load() (Config, error) {
 				"automatic certs, or ENABLE_CALLS=false")
 	}
 
+	// The optional UDP endpoint (direct call paths, spec 1043) must be a
+	// bindable host:port; derive the advertised port from it when unset. Fail
+	// fast on a malformed value (consistent with the cert check above) rather
+	// than booting with a listener that silently never opened.
+	if c.TurnUDPListen != "" {
+		_, port, err := net.SplitHostPort(c.TurnUDPListen)
+		if err != nil || port == "" {
+			return Config{}, fmt.Errorf(
+				"invalid TURN_UDP_LISTEN %q: want a bind address like \":3478\"", c.TurnUDPListen)
+		}
+		if c.StunPublicPort == "" {
+			c.StunPublicPort = port
+		}
+		if c.StunPublicHost == "" {
+			c.StunPublicHost = firstNonEmptyStr(c.TurnPublicHost, c.TurnHost)
+		}
+	}
+
 	c.VapidSubject = env("VAPID_SUBJECT", defaultVapidSubject(c.PublicURL))
 	return c, nil
+}
+
+// firstNonEmptyStr returns the first non-empty string (config derivation helper).
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // defaultVapidSubject builds a mailto: from PUBLIC_URL's host (Apple Web Push

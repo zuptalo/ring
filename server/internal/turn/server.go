@@ -36,6 +36,14 @@ type Config struct {
 	// answers ACME TLS-ALPN-01 challenges). When nil (dev), a plaintext UDP + TCP
 	// relay is started instead so local browsers can reach it.
 	TLSConfig *tls.Config
+	// UDPListen, when non-empty in TLS mode, additionally opens a plaintext UDP
+	// listener (e.g. ":3478"). pion answers STUN Binding on it - the
+	// public-address discovery that lets calls connect directly across networks
+	// (spec 1043) - and serves TURN-over-UDP with the same ephemeral credentials
+	// (a lower-latency relay fallback than TURNS-over-TCP when UDP is reachable).
+	// Operator opt-in: the deployment must forward the matching public UDP port.
+	// Ignored in plaintext mode, which already listens on UDP.
+	UDPListen string
 }
 
 // Server wraps the pion TURN server plus the listeners it owns.
@@ -45,11 +53,7 @@ type Server struct {
 	conns     []net.PacketConn
 }
 
-// Start brings up the relay. Caller must Close it on shutdown. It returns the
-// loopback plaintext UDP address (host:port) the co-located SFU should use to
-// reach this TURN - so the SFU can gather relay candidates at RelayIP that
-// relay-only clients can reach, without the TLS/cert complications of dialing
-// the public TURNS endpoint over loopback.
+// Start brings up the relay. Caller must Close it on shutdown.
 func Start(cfg Config) (srv *Server, err error) {
 	relayIP := cfg.RelayIP
 	if relayIP == "" {
@@ -86,9 +90,26 @@ func Start(cfg Config) (srv *Server, err error) {
 			Listener:              ln,
 			RelayAddressGenerator: relayGen,
 		})
+
+		// Optional plaintext UDP alongside TURNS (spec 1043): STUN Binding for
+		// srflx discovery + TURN-over-UDP relay, both fine to expose publicly -
+		// Binding is unauthenticated by design and relay allocations still
+		// require the ephemeral credentials.
+		if cfg.UDPListen != "" {
+			pc, perr := net.ListenPacket("udp4", cfg.UDPListen)
+			if perr != nil {
+				s.closeListeners()
+				return nil, fmt.Errorf("turn: udp listen %s: %w", cfg.UDPListen, perr)
+			}
+			s.conns = append(s.conns, pc)
+			srvCfg.PacketConnConfigs = append(srvCfg.PacketConnConfigs, turn.PacketConnConfig{
+				PacketConn:            pc,
+				RelayAddressGenerator: relayGen,
+			})
+		}
 	} else {
 		// Dev/local: plaintext UDP + TCP so localhost browsers can relay without
-		// a certificate. Never expose these publicly.
+		// a certificate.
 		pc, perr := net.ListenPacket("udp4", cfg.ListenAddr)
 		if perr != nil {
 			s.closeListeners()

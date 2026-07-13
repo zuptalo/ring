@@ -12,6 +12,10 @@ export const SYNCED_PREF_KEYS: string[] = [
   'privacy.lastSeen', 'privacy.online', 'privacy.profilePhoto', 'privacy.about',
   'privacy.groups', 'privacy.messageTimer',
   'privacy.disableLinkPreviews',
+  // "Always relay calls" (spec 1043): a threat-model preference, so it follows
+  // the user to every device. NEVER re-add the retired privacy.protectIp here —
+  // old encrypted snapshots may still carry a stale value for it.
+  'privacy.relayCalls',
   'notifications.message.show', 'notifications.message.reactions', 'notifications.message.sound',
   'notifications.group.show', 'notifications.group.reactions', 'notifications.group.sound',
   'notifications.wall.show', 'notifications.wall.activity', 'notifications.showPreview', 'notifications.badge',

@@ -28,15 +28,23 @@ solves this by sending **all** call media over **TURN-over-TLS (TURNS) on 443**:
               (app + /v1 API)          internal :3478
 ```
 
-- **1:1 calls** are peer-to-peer (DTLS-SRTP, natively E2EE); media is relayed
-  through the TURN only when a direct path is blocked.
+- **1:1 calls** are peer-to-peer (DTLS-SRTP, natively E2EE). Media flows
+  **directly between the two devices whenever the networks allow it** — same-LAN
+  peers connect via (mDNS-masked) local candidates with no server involvement,
+  and cross-network peers connect directly when the optional UDP endpoint below
+  is enabled and both NATs cooperate. The TURN relay stays in every candidate
+  set as the automatic fallback, so a blocked direct path never costs a call.
 - **Group calls** are a **full mesh**: each participant holds one direct,
   DTLS-SRTP-encrypted connection to every other participant (N simultaneous 1:1
-  calls), all riding the same TURN. There is no SFU and no server-side media; the
-  server only relays sealed signalling and tracks room membership. Because media is
-  native DTLS-SRTP, group calls work in **every** browser (including Safari/iOS) and
-  the codec is whatever the pair negotiates (e.g. hardware H.264). Mesh uplink grows
-  with participant count, so group calls are capped at **4 (video) / 8 (audio)**.
+  calls); each leg independently goes direct or falls back to the same TURN.
+  There is no SFU and no server-side media; the server only relays sealed
+  signalling and tracks room membership. Because media is native DTLS-SRTP,
+  group calls work in **every** browser (including Safari/iOS) and the codec is
+  whatever the pair negotiates (e.g. hardware H.264). Mesh uplink grows with
+  participant count, so group calls are capped at **4 (video) / 8 (audio)**.
+- Users who don't want call peers to ever see their IP address can switch on
+  **Settings → Privacy → Always relay calls**, which forces their media through
+  the relay (the pre-spec-1043 behavior, per user).
 
 Because TURNS is TLS, it carries an **SNI** the L4 router can switch on. The
 router must do **SNI-based TLS passthrough**: forward `turn.<host>:443` to
@@ -151,6 +159,54 @@ On boot you'll see:
 ```
 INFO TURN relay ready   listen=:3478 ... url="turns:turn.ring-dev.zuptalo.com:443?transport=tcp" tls=true
 ```
+
+---
+
+## 2b. Direct media paths (optional UDP endpoint)
+
+Out of the box, calls already connect **directly on the same network** (mDNS
+host candidates need no server support) and relay everything else through
+TURNS:443. To let calls between *different* networks connect directly too —
+cutting the server's media bandwidth to zero for those calls and shaving the
+double-hop latency — expose one UDP port:
+
+```bash
+TURN_UDP_LISTEN=:3478          # opens a plaintext UDP listener next to the TLS one
+# STUN_PUBLIC_HOST=turn.ring-dev.zuptalo.com   # default: TURN_PUBLIC_HOST/TURN_HOST
+# STUN_PUBLIC_PORT=3478                        # default: TURN_UDP_LISTEN's port
+```
+
+and forward `3478/udp` (or your chosen port) from the public edge to ringd.
+The credentials endpoint then advertises two extra entries:
+
+- `stun:<host>:3478` — credential-less address discovery (STUN Binding), which
+  is what lets clients learn their public address and try direct candidate pairs;
+- `turn:<host>:3478?transport=udp` — the same relay over UDP, a lower-latency
+  fallback than TURNS-over-TCP when UDP is reachable (same ephemeral credentials).
+
+What each exposure level buys:
+
+| Deployment | Same-LAN calls | Cross-network calls |
+|---|---|---|
+| nothing new (default) | direct | relayed via TURNS:443 (as before spec 1043) |
+| `TURN_UDP_LISTEN` + UDP port forwarded | direct | direct when both NATs allow; relayed otherwise |
+
+Notes:
+
+- **Zero-change safety**: without `TURN_UDP_LISTEN`, no listener starts and no
+  port opens; upgrading ringd changes nothing about your network posture.
+- **Forgot the firewall?** Clients simply never find a working direct pair and
+  fall back to the relay — calls keep working, you just don't get the benefit.
+- **Censorship trade-off**: STUN/TURN over UDP is protocol-fingerprintable in a
+  way TURNS-on-443 (indistinguishable from HTTPS) is not. In censored networks
+  the UDP path may be dropped; the client falls back to TURNS:443 automatically,
+  so enabling UDP never makes things worse than today.
+- **`RELAY_IP` (optional tuning)**: with the default loopback `RELAY_IP`, relay
+  allocations are only reachable via the co-located relay itself, so *mixed*
+  pairs (one side direct-capable, the other relay-only) show failed checks in
+  `webrtc-internals` — harmless, relay↔relay still connects. Operators who
+  expose UDP may set `RELAY_IP` to the server's public IP to let one-sided
+  relay pairs connect too.
 
 ---
 
