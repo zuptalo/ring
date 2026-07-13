@@ -12,11 +12,11 @@ const pinChat = (p: any, chatId: string, pinned = true) =>
   );
 
 /**
- * Spec 1044: pinned chats render as an iMessage-style avatar grid above the chat
- * list (up to 9); while gridded they leave the list rows; tapping a tile opens the
- * chat; long-press opens the actions sheet whose new Unpin returns them to the
- * list; search shows pinned chats as plain rows again. Chat rows are
- * ion-item-sliding (the swipeable ChatListItem root); tiles carry data-chat-id.
+ * Spec 1044 (+1045): pinned chats render as an iMessage-style avatar grid above the
+ * chat list (up to 9); while gridded they leave the list rows; tapping a tile opens
+ * the chat; a STILL long-press (~1s, spec 1045) opens the peek overlay whose Unpin
+ * returns them to the list; search shows pinned chats as plain rows again. Chat rows
+ * are ion-item-sliding (the swipeable ChatListItem root); tiles carry data-chat-id.
  */
 test('pinned chats form the avatar grid, leave the list, and manage via long-press', async ({
   browser,
@@ -63,15 +63,17 @@ test('pinned chats form the avatar grid, leave the list, and manage via long-pre
   await a.page.locator('ion-searchbar input').fill('');
   await expect(tiles()).toHaveCount(2, { timeout: 10_000 });
 
-  // Long-press a tile → actions sheet → Unpin returns the chat to the list.
+  // STILL long-press a tile (spec 1045: lift at ~350ms, peek at ~900ms with no
+  // movement) → the peek overlay → its Unpin returns the chat to the list.
   // hover() auto-waits for the tile to be stable/visible so the press can't land
   // on empty space while the grid reflows after the search clear.
   const tileC = a.page.locator(`.pin-tile[data-chat-id="${chatC}"]`);
   await tileC.hover();
   await a.page.mouse.down();
-  await a.page.waitForTimeout(700);
+  await a.page.waitForTimeout(1200);
   await a.page.mouse.up();
-  const unpin = a.page.locator('ion-item', { hasText: 'Unpin' });
+  await expect(a.page.locator('.peek-card')).toBeVisible({ timeout: 10_000 });
+  const unpin = a.page.locator('.peek-menu ion-item', { hasText: 'Unpin' });
   await expect(unpin).toBeVisible({ timeout: 10_000 });
   await unpin.click();
   await expect(tiles()).toHaveCount(1, { timeout: 10_000 });

@@ -73,7 +73,7 @@ import type {
 // Lives in the dependency-free chat-pins module so unit tests reach it without
 // pulling in this whole data layer; re-exported here for the existing importers.
 export { MAX_PINNED_CHATS } from '@/utils/chat-pins';
-import { MAX_PINNED_CHATS } from '@/utils/chat-pins';
+import { MAX_PINNED_CHATS, pinnedOrder, nextPinRank } from '@/utils/chat-pins';
 
 const now = () => Date.now();
 const matches = (haystack: string, q: string) =>
@@ -81,10 +81,13 @@ const matches = (haystack: string, q: string) =>
 
 /* ---- chats ---- */
 
-// Pinned chats sort above the rest; within each group, newest activity first. Used
-// by both the main list and any filtered view so pins stay on top everywhere.
+// Pinned chats sort above the rest. Among pinned chats the USER'S arrangement wins
+// (spec 1045: `pinnedRank`, recency only as the legacy/tie fallback); among the rest,
+// newest activity first. Used by both the main list and any filtered view so pins
+// stay on top everywhere.
 function chatOrder(a: Chat, b: Chat): number {
   if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+  if (a.pinned && b.pinned) return pinnedOrder(a, b);
   return b.lastMessageTime - a.lastMessageTime;
 }
 
@@ -181,19 +184,72 @@ export async function toggleChatFavorite(chatId: string): Promise<boolean> {
 }
 
 /** Pin/unpin a chat. Returns false (and makes no change) if pinning would exceed
- *  MAX_PINNED_CHATS, so the caller can surface a toast. */
-export async function setChatPinned(chatId: string, pinned: boolean): Promise<boolean> {
+ *  MAX_PINNED_CHATS, so the caller can surface a toast. A new pin appends at the
+ *  END of the user's arrangement (spec 1045 FR-002) unless `atRank` places it
+ *  (drag-into-grid); unpinning drops its rank with it. */
+export async function setChatPinned(chatId: string, pinned: boolean, atRank?: number): Promise<boolean> {
   const chat = await getChat(chatId);
   if (!chat) return false;
   if (pinned && !chat.pinned) {
-    const count = (await getAll<Chat>('chats')).filter((c) => c.pinned && !c.archived).length;
+    const all = await getAll<Chat>('chats');
+    const count = all.filter((c) => c.pinned && !c.archived).length;
     if (count >= MAX_PINNED_CHATS) return false;
+    chat.pinned = true;
+    if (atRank == null) {
+      chat.pinnedRank = nextPinRank(all.filter((c) => !c.archived));
+      chat.updatedAt = now();
+      await put('chats', chat);
+    } else {
+      // Insert at the dropped slot: splice into the current arrangement and
+      // renumber the whole (≤9) set so ranks stay dense.
+      chat.updatedAt = now();
+      await put('chats', chat);
+      const orderedIds = all
+        .filter((c) => c.pinned && !c.archived && c.id !== chatId)
+        .sort(pinnedOrder)
+        .map((c) => c.id);
+      orderedIds.splice(Math.max(0, Math.min(atRank, orderedIds.length)), 0, chatId);
+      await setPinnedOrder(orderedIds);
+    }
+    return true;
   }
   if (pinned) chat.pinned = true;
-  else delete chat.pinned;
+  else {
+    delete chat.pinned;
+    delete chat.pinnedRank;
+  }
   chat.updatedAt = now();
   await put('chats', chat);
   return true;
+}
+
+/** Commit a full pinned arrangement (spec 1045): `orderedIds` is the pinned set in
+ *  the user's order; ranks are renumbered 0..n-1. Only records whose rank actually
+ *  changes are written (each write bumps updatedAt → rides own-data sync). */
+export async function setPinnedOrder(orderedIds: string[]): Promise<void> {
+  for (let i = 0; i < orderedIds.length; i++) {
+    const chat = await getChat(orderedIds[i]);
+    if (!chat || !chat.pinned || chat.pinnedRank === i) continue;
+    chat.pinnedRank = i;
+    chat.updatedAt = now();
+    await put('chats', chat);
+  }
+}
+
+/** One-time normalisation for pins that predate spec 1045: if any visible pinned
+ *  chat lacks a rank, stamp the WHOLE pinned set in its current visual order
+ *  (rank-first, then recency — pinnedOrder), so the grid's order is stable from
+ *  the first run of this build. Idempotent; cheap when nothing is missing. */
+export async function ensurePinRanks(): Promise<void> {
+  const pinned = (await getAll<Chat>('chats')).filter((c) => c.pinned && !c.archived);
+  if (!pinned.some((c) => c.pinnedRank == null)) return;
+  pinned.sort(pinnedOrder);
+  for (let i = 0; i < pinned.length; i++) {
+    if (pinned[i].pinnedRank === i) continue;
+    pinned[i].pinnedRank = i;
+    pinned[i].updatedAt = now();
+    await put('chats', pinned[i]);
+  }
 }
 
 /** Archive/unarchive a chat (moves it in/out of the Archived view). Unarchiving on a
@@ -204,6 +260,7 @@ export async function setChatArchived(chatId: string, archived: boolean): Promis
   if (archived) {
     chat.archived = true;
     delete chat.pinned; // archived chats aren't pinned in the main list
+    delete chat.pinnedRank;
   } else delete chat.archived;
   chat.updatedAt = now();
   await put('chats', chat);
@@ -220,6 +277,7 @@ export async function archiveAllChats(): Promise<number> {
     if (chat.pending || chat.archived || chat.locked || hidden.has(chat.id)) continue;
     chat.archived = true;
     delete chat.pinned;
+    delete chat.pinnedRank;
     chat.updatedAt = now();
     await put('chats', chat);
     n += 1;

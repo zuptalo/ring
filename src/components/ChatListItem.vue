@@ -17,7 +17,16 @@
       </ion-item-option>
     </ion-item-options>
 
-    <ion-item button :detail="false" :class="{ 'hidden-row': isHidden }" @click="$emit('open', chat.id)">
+    <!-- pointerdown feeds the page's drag/peek controller (spec 1045): a short hold
+         lifts the row as a pin-shaped avatar, a still hold opens the peek. Movement
+         before the lift cancels the hold, so the sliding swipes and scrolling win. -->
+    <ion-item
+      button
+      :detail="false"
+      :class="{ 'hidden-row': isHidden, 'lifted-row': lifted }"
+      @click="$emit('open', chat.id)"
+      @pointerdown="$emit('press', chat, $event)"
+    >
       <div class="avatar-wrap" slot="start">
         <ion-avatar>
           <!-- Unread demands attention: the emoji picture keeps moving until read (FR-028). -->
@@ -104,8 +113,12 @@ import { activityFor, activityKindLabel } from '@/composables/useTyping';
 import { formatTime } from '@/utils/time';
 import type { Chat } from '@/db/types';
 
-const props = defineProps<{ chat: Chat; draft?: string }>();
-const emit = defineEmits<{ (e: 'open', id: string): void; (e: 'more', chat: Chat): void }>();
+const props = defineProps<{ chat: Chat; draft?: string; lifted?: boolean }>();
+const emit = defineEmits<{
+  (e: 'open', id: string): void;
+  (e: 'more', chat: Chat): void;
+  (e: 'press', chat: Chat, ev: PointerEvent): void;
+}>();
 
 const sliding = ref<{ $el: HTMLIonItemSlidingElement } | null>(null);
 function closeSwipe(): void {
@@ -212,6 +225,11 @@ function more(): void {
 }
 .hidden-ico {
   color: var(--ion-color-medium);
+}
+/* The row whose avatar is riding the drag proxy (spec 1045): stays in place but
+   clearly "picked up" — it either returns (cancel) or leaves for the grid (pin). */
+.lifted-row {
+  opacity: 0.35;
 }
 .unread-dot {
   width: 11px;
