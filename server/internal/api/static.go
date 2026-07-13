@@ -61,6 +61,19 @@ func spaHandler(dir string) http.Handler {
 			return
 		}
 
+		// A missing fingerprinted asset is NEVER a client-side route — it's a chunk
+		// from a superseded deploy that this dist no longer carries. Falling back to
+		// index.html here (the pre-spec-2032 behavior) served HTML as JavaScript with
+		// a 200: a stale installed PWA (old shell served cache-first by its SW, its
+		// precache partially evicted by the OS, dist since rebuilt) would import an
+		// old-hash chunk, receive the app shell instead, and every feature in that
+		// chunk died silently — dead buttons, no error, no update prompt. A 404 makes
+		// the failure honest so the client's chunk-error handling can recover.
+		if strings.HasPrefix(clean, "/assets/") {
+			http.NotFound(w, r)
+			return
+		}
+
 		// SPA fallback: hand the route to index.html. It must always revalidate so
 		// a fresh deploy (new asset hashes) is picked up on the next load.
 		w.Header().Set("Cache-Control", "no-cache")

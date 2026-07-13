@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-13
 
-**Status**: planned
+**Status**: in-progress
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
@@ -27,14 +27,23 @@ On an iPad, tapping Send delivers the typed message and tapping the react afford
 2. **Given** a received message on iPad, **When** the react affordance is tapped, **Then** the quick-react bar opens and picking an emoji applies it.
 3. **Given** the fix, **Then** iPhone and desktop behavior is unchanged (including the keyboard staying open while reacting, which is what the current pointerdown-prevent idiom protects).
 
-## Diagnosis state (from the initial investigation, 2026-07-13)
+## Root cause (CONFIRMED 2026-07-14, server logs + live probe)
 
-Two live hypotheses; the discriminating test needs the physical iPad:
+**H1 was right, and it is a real server bug, not just a stale cache.** The chain:
 
-- **H1 — stale installed-PWA shell (most likely given context)**: the iPad points at the dev deployment whose `dist/` was rebuilt many times that evening; an installed app that never accepted the update prompt can hold a precached shell referencing renamed hashed chunks. Symptom signature matches: the controls whose code-split chunk fails to load go dead while the rest of the app works, and the freshly-updated iPhone is fine. **Discriminator**: compare Settings → About version on iPad vs iPhone; accept any pending update / close-and-reopen; if versions match and taps still fail → H2. A remote-inspector console (Safari on a Mac) showing failed chunk loads confirms H1 outright.
-- **H2 — iPadOS input-pipeline difference**: both dead controls (composer Send, bubble react button) carry `@pointerdown.prevent` (the spec-1045 keyboard/selection-protection idiom) + `@click`. Canceling `pointerdown` for a touch pointer suppresses compatibility mouse events per the Pointer Events spec; iPhone Safari's legacy touch→click synthesis still delivers the click, and Chromium+touch demonstrably works (drive/scenarios/ipad-send-repro-2032.mjs → touch tap sends). iPadOS desktop-mode Safari may follow the stricter path. **Not reproducible headless here** (Playwright WebKit unsupported on this macOS); needs the device or a newer Mac.
+1. An installed PWA's service worker serves the app shell cache-first (deliberate — iOS cold-start), so a long-lived install keeps running its old shell until an update is *applied*.
+2. iPadOS evicted part of the old shell's precache (routine storage pressure), so lazily-loaded chunks went to the network with their OLD fingerprinted names.
+3. The dev server's `dist/` had been rebuilt several times since — those names no longer exist.
+4. `spaHandler`'s SPA fallback answered the missing `/assets/*.js` with **`index.html`, HTTP 200** (proven by live probe: `status=200 type=text/html` for a nonexistent chunk). The module loader received HTML as JavaScript, the chunk's features never wired up: dead Send, dead react button, no visible error.
+5. No update prompt appeared because every new-worker install attempted DURING the rebuild storm hit a half-written `dist/` (precache fetch fails → the whole SW install aborts → no waiting worker → nothing to prompt about).
 
-If H2: the candidate fix is replacing `@pointerdown.prevent` with `@mousedown.prevent` on the affected controls (protects focus/selection on all pointer types without ever being able to cancel a touch click), verified on iPad + iPhone + desktop. If H1: no code change — but consider whether the install-gate auto-update behavior should extend to installed-PWA dev channels.
+The iPhone escaped only because its precache was intact. H2 (pointerdown/click pipeline) is **withdrawn**: Chromium+touch reproduces nothing (harness kept on the branch), and the confirmed mechanism explains every observation including the missing prompt.
+
+## Fix (this branch)
+
+- **Server**: a missing `/assets/*` path now returns an honest **404** instead of the app shell — a dead fingerprinted chunk is never a client-side route. Regression test first (`static_test.go`: "missing hashed asset 404s", red → green).
+- **Client self-heal**: `useAppUpdate` now listens for Vite's `vite:preloadError` (a lazy chunk failed to load) and pulls the waiting update / reloads through the existing `applyUpdate` machinery — one attempt per tab, never mid-call. A future stale device un-strands itself instead of sitting with dead buttons.
+- **Stranded-device remedy (no code)**: with `dist/` stable again, one full close-and-reopen lets the new worker install cleanly and the normal prompt appears; failing that, reinstalling the PWA is the hard reset.
 
 ## Requirements *(mandatory)*
 
