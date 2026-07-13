@@ -2,7 +2,10 @@
   <!-- One chat row + its swipe actions. Reused by the Chats tab, the Archived view,
        and the filtered lists. Quick actions live on the swipe; the full set is in the
        per-chat "More" sheet (opened via the `more` emit). -->
-  <ion-item-sliding ref="sliding">
+  <!-- Swiping is disabled while this row rides the drag proxy (spec 1045): the
+       sliding gesture stays armed during a lift, and the drag's horizontal
+       wobble was opening the swipe options under the ghost row. -->
+  <ion-item-sliding ref="sliding" :disabled="lifted">
     <!-- Start side (swipe right): Mark Unread/Read + Pin/Unpin. Icon-over-label like
          WhatsApp. The label names the action: "Read" when it'll clear unread, else
          "Unread"; "Unpin" when pinned, else "Pin". -->
@@ -90,7 +93,7 @@
 
 <script setup lang="ts">
 import UserAvatar from '@/components/UserAvatar.vue';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   IonItemSliding, IonItem, IonItemOptions, IonItemOption, IonAvatar, IonLabel, IonNote,
   IonBadge, IonIcon,
@@ -124,6 +127,15 @@ const sliding = ref<{ $el: HTMLIonItemSlidingElement } | null>(null);
 function closeSwipe(): void {
   void (sliding.value?.$el as HTMLIonItemSlidingElement | undefined)?.close?.();
 }
+// A slide can already be a few pixels open by the time the lift lands (the
+// :disabled bind stops NEW gesture input but doesn't reset an in-flight one) —
+// snap it shut so the ghost row sits flush while it's being dragged.
+watch(
+  () => props.lifted,
+  (v) => {
+    if (v) closeSwipe();
+  },
+);
 
 const PREVIEW_ICONS: Record<NonNullable<Chat['lastKind']>, string | null> = {
   image: cameraOutline, video: videocamOutline, videonote: videocamOutline, voice: micOutline,
