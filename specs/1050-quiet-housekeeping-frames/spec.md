@@ -1,4 +1,4 @@
-# Feature Specification: Quiet Housekeeping Frames & Smarter Notification Fan-out
+# Feature Specification: Push Classes, Conversation Mutes & Notification Routing
 
 **Feature Branch**: `feat/1050-quiet-housekeeping-frames`
 
@@ -22,19 +22,45 @@
 - From the report itself: reaction **removals** must produce no push and no in-app banner — the state update syncs passively (silently over the live connection, or on next open). Group **creation** must not notify members — the first message is the first notification. Group **reactions** wake only the reacted-to message's author and prior co-reactors (rich content for both); everyone else learns passively.
 - Q (follow-up, after observing that reactions-off still produced generic pushes): extend the silent bit into a coarse frame-CLASS tag (message / reaction / housekeeping) plus per-device class opt-outs stored with the push subscription, so recipient toggles control the pushes themselves? ZK cost beyond the silent bit: the server sees which sealed frames are reaction-class, and learns each device's class preferences. → A: **Yes, approved.**
 - Directive (same session): in-app notification banners must dismiss by **swiping up**, replacing the ✕ button (the swipe currently does nothing on banners; quick-reply confirmed working).
+- Directive (same session): expand the model to every notify-or-hold scenario in one wire change — per-chat and per-group mutes, following a friend's posts / per-friend new-post alerts, and any analogous toggles (games, global master). Accepted; the additional wire concept this requires (an opaque conversation routing id, below) and its leak are documented in the ZK Impact section for veto.
 
 ## Why this exists (the shared mechanism)
 
-The server relays sealed frames it cannot read, and it pushes a content-free tickle for
-every frame delivered to an away device. On iOS a woken service worker must end visibly.
-So every "silent" event class — a removal, a group-create card, a reaction addressed to
-someone else — degrades into a quiet generic notification on away devices, and a recipient
-toggle (reactions off) can suppress only the rendering, never the wake — the ghost remains.
-The fix has two halves sharing one wire concept, a coarse per-frame **class tag**:
-sender-side, `housekeeping` frames are never pushed (removals, create cards, bystander
-fan-out); recipient-side, each device registers class opt-outs with its push subscription
-(reactions off ⇒ no reaction-class pushes), and held frames deliver silently on the next
-connection. The server still relays everything identically — classes gate only the tickle.
+The server relays sealed frames it cannot read and pushes a content-free tickle for every
+frame delivered to an away device; on iOS a woken service worker must end visibly. So every
+event a device would rather not be woken for — a removal, a bystander's reaction, a muted
+group's chatter — degrades into a quiet generic ghost, because recipient preferences today
+never reach the push decision. This spec gives the push decision exactly the metadata it
+needs and no more.
+
+## The routing model (three concepts, one wire change)
+
+1. **Class** — a sender-set, per-recipient-frame coarse tag:
+   `message` (default; also every tag-less old-client frame) · `mention` (personally
+   directed: an @mention of, or a direct reply to, that recipient — sender computes this
+   per recipient) · `reaction` · `activity` (engagement on your wall post) · `game` ·
+   `post` (a new wall post) · `housekeeping` (never pushed: removals, group-create cards,
+   bystander reaction fan-out, edits/votes/receipts-class signals).
+2. **Route id (prid)** — an opaque random id minted per conversation and shared among its
+   members inside the sealed channel; frames carry it in plaintext. It lets a recipient
+   mute a *conversation* server-side without the server learning anything readable about
+   it. Calls keep their existing dedicated push path (never filtered).
+3. **Subscription preferences** — each device registers, alongside its push subscription:
+   opted-out classes; muted prids (from the existing per-chat mute and per-chat
+   "web push off" controls); per-sender `post` overrides (mute this friend's posts /
+   always alert this friend's posts).
+
+Server rule, evaluated per frame at push time: `housekeeping` never pushes; `mention`
+always pushes (it pierces prid mutes exactly as mentions pierce mutes on-device today —
+spec 1020/1048 parity); everything else pushes unless its class is opted out or its prid
+is muted. Filtering gates ONLY the tickle: storage, delivery, drain, ack, receipts, and
+blocking are identical for every frame, and held frames arrive silently on the next
+connection or open.
+
+**Deliberately excluded: hidden chats** (spec 1019). Registering a hidden chat's prid or
+muting it server-side would tell the server "this conversation is special to this user" —
+the traceless guarantee outranks ghost-avoidance, so hidden chats keep today's generic
+behavior and are never referenced in subscription preferences.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -128,9 +154,12 @@ foregrounded → banner only, nothing in the notification center; repeat with th
 
 ### Functional Requirements
 
-- **FR-001**: The relay MUST accept an optional, sender-set, per-recipient-frame **class** tag — `message` (default, also for tag-less old clients), `reaction`, or `housekeeping` — stored alongside the queued frame. `housekeeping` frames never trigger a push tickle; `reaction` frames trigger one unless the recipient device opted out (FR-008); `message` frames push exactly as today. Storage, delivery, drain, ack, receipts, and blocking are identical for every class.
-- **FR-008**: A device MUST be able to register class opt-outs with its push subscription (initially: `reaction`), and the client MUST derive that opt-out from the existing toggles — both reaction toggles off ⇒ opt out; either on ⇒ pushes stay on (the class is coarser than the per-surface toggles; the device keeps filtering rendering as in spec 1048). Opt-out changes take effect without re-subscribing.
-- **FR-009**: Frames withheld by class (housekeeping, or opted-out reaction) MUST deliver silently over the next live connection or app open — never lost, never reordered, never re-pushed later.
+- **FR-001**: The relay MUST accept the optional, sender-set, per-recipient-frame **class** tag and **route id** per the routing model; storage, delivery, drain, ack, receipts, and blocking are identical for every class, and the server's push rule is exactly the model's (housekeeping never; mention always; others gated by class opt-outs and prid mutes).
+- **FR-008**: A device MUST be able to register and update, without re-subscribing: opted-out classes, muted prids, and per-sender post overrides. The client MUST derive these from the EXISTING controls — no new settings screens: both reaction toggles off ⇒ `reaction` opt-out; all four game alert toggles off ⇒ `game` opt-out; wall "Show notifications" off ⇒ `post` opt-out; wall "Activity on your posts" off ⇒ `activity` opt-out; global "Show notifications" off ⇒ `message` (+`mention`) opt-out; per-chat mute / per-chat web-push-off ⇒ that chat's prid in the mute list (mute expiry unregisters it); the wall's existing per-person mute ⇒ a per-sender post override. Partially-off toggle groups keep pushes on and the device filters rendering, exactly as today (documented coarseness).
+- **FR-008a**: A NEW per-friend "Notify me about new posts" control (contact/wall surface) MUST register an always-alert per-sender post override that wins over the global `post` opt-out — the Telegram-style per-friend follow the reporter asked for. Default off for every contact (current behavior preserved: the global wall toggle governs).
+- **FR-008b**: Mention-class frames MUST pierce prid mutes server-side, mirroring on-device escalation (spec 1020/1048). The device's `notifyMentions=false` per-chat pref keeps its rendering-side meaning; that rare mixed configuration may still ghost and is documented.
+- **FR-008c**: Hidden chats MUST never appear in subscription preferences (no prid registration, no mutes) — spec 1019's traceless guarantee outranks ghost-avoidance.
+- **FR-009**: Frames withheld by any rule (class, prid mute, per-sender override) MUST deliver silently over the next live connection or app open — never lost, never reordered, never re-pushed later.
 - **FR-010**: In-app notification banners MUST dismiss with an upward swipe; the ✕ button is removed from the visual design. Tap-to-open and the quick-reply flow are unchanged, and a non-gestural dismissal MUST remain available to assistive technology (the banner stays screen-reader dismissible).
 - **FR-002**: Reaction REMOVALS MUST be sent silent, produce no notification surface anywhere (OS, banner, sound), and converge state passively (live update when connected; on next open otherwise). Reaction ADDS keep spec-1048 behavior byte-for-byte for the reacted-to author.
 - **FR-003**: A group reaction ADD MUST be sent loud only to the reacted-to message's author and to members who currently (in the sender's view) have their own reaction on that message; every other member's copy is silent. Recipients in the loud set who are NOT the author MUST get real content ("«name» also reacted …") under the same masking rules as spec 1048; the never-escalates rule carries over.
@@ -141,8 +170,9 @@ foregrounded → banner only, nothing in the notification center; repeat with th
 
 ## Zero-Knowledge Impact
 
-- **What crosses the wire, new**: one plaintext coarse class per relayed frame (absent = message), and a per-push-subscription list of opted-out classes.
-- **What the server learns**: (1) which sealed frames are reaction-class vs housekeeping vs ordinary — no content, no emoji, no target message; (2) each device's class preferences (e.g. "muted reaction pushes"). Both are deliberate, user-approved relaxations (clarifications 2026-07-14), and within the silent classes the server still cannot tell a removal from a group card apart.
+- **What crosses the wire, new**: a plaintext coarse class per relayed frame (7 values, absent = message); an opaque random route id per frame; per-subscription preference lists (classes, muted prids, per-sender post overrides).
+- **What the server learns**: (1) coarse frame kinds — including that a frame personally addresses its recipient (`mention`) — but never content, emoji, targets, or names; (2) a persistent pseudonymous clustering of frames into conversations (prid). Timing and fan-out already reveal conversation clustering statistically; prid makes that correlation explicit and durable, which is the largest single relaxation in this spec and the reason it is listed for veto; the id itself is random and carries no membership roster — the server still never sees a group's name, subject, or list; (3) each device's notification posture: muted conversations (by pseudonym only), muted classes, and which senders' posts a user follows closely or has muted — preference metadata comparable to what any push-filtering messenger stores, now held by a server that can read nothing else. Hidden chats are structurally absent from all of it.
+- **All approved in the 2026-07-14 clarification sessions**, with the prid clustering explicitly called out.
 - **What it cannot do**: alter delivery. The hint only gates the push tickle; a hostile server ignoring it merely restores today's noisier behavior.
 - **Why necessary**: iOS obliges every push-woken service worker to end visibly, and the zero-knowledge server pushes blindly per frame — recipient-side silence is impossible; only the sender can request it.
 
@@ -158,6 +188,9 @@ foregrounded → banner only, nothing in the notification center; repeat with th
 - **SC-006**: Old-client interop: a frame without a class tag behaves exactly as before this spec (server unit + client regression suites stay green).
 - **SC-007**: With both reaction toggles off, a reaction to the user's message while away produces zero notification-center entries (real device), and the reaction is present on next open (e2e: the frame is held, not pushed — server unit asserts no notify call).
 - **SC-008**: A collapsed banner dismisses with one upward swipe in the e2e gesture test; no ✕ is rendered; quick-reply open/discard gestures keep passing their existing suites.
+- **SC-009**: A muted group produces zero pushes for ordinary member messages (server unit: no notify call for muted-prid frames) while an @mention or reply-to-you in that group still pushes (mention pierce) — and unmuting restores pushes without re-subscribing.
+- **SC-010**: With the global wall toggle off but one friend's "Notify me about new posts" on, only that friend's posts push (server unit + e2e prefs round-trip).
+- **SC-011**: Hidden-chat conversations never appear in any subscription preference payload (client unit asserting the registration path filters them; ZK guard test in the spec-1019 style).
 
 ## Assumptions
 
