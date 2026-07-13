@@ -82,6 +82,26 @@ describe('settings schema — spec 1025 cleanup', () => {
 
 });
 
+describe('settings schema — spec 1048 (reaction notifications)', () => {
+  it('has a dedicated reaction tone with a silent option, default pop', () => {
+    const node = settingNode('notifications-reactions-sound');
+    expect(node).toBeDefined();
+    const choice = node!.groups.flatMap((g) => g.items).find((i) => 'key' in i && i.key === 'notifications.reactions.sound');
+    expect(choice?.type).toBe('choice');
+    expect(choice && 'default' in choice && choice.default).toBe('pop');
+    expect(choice && 'options' in choice && choice.options.some((o) => o.value === 'none')).toBe(true);
+  });
+
+  it('the Notifications page links to the reaction tone beside the per-surface gates', () => {
+    const items = SETTINGS.notifications.groups.flatMap((g) => g.items);
+    expect(items.some((i) => i.type === 'link' && i.id === 'notifications-reactions-sound')).toBe(true);
+    // The existing gates this spec wires up must stay present (they become live controls).
+    const keys = new Set(items.filter((i): i is Extract<SettingItem, { key: string }> => 'key' in i).map((i) => i.key));
+    expect(keys.has('notifications.message.reactions')).toBe(true);
+    expect(keys.has('notifications.group.reactions')).toBe(true);
+  });
+});
+
 describe('settings schema — spec 1026 (friends-only & refinements)', () => {
   it('US2: no "Advanced" sub-page and nothing links to it (FR-006)', () => {
     expect(settingNode('privacy-advanced')).toBeUndefined();

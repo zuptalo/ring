@@ -72,6 +72,10 @@ export interface SwNote {
   // so the show path can make it CUMULATIVE across overlapping burst wakes (via the persisted
   // per-chat summary) instead of a per-pass slice. Defaults to ids.length when unset.
   count?: number;
+  // (spec 1048) Show without the platform alert sound. A SW can't play the app's
+  // synthesized tones, so the reaction tone 'none' maps to this — the note is still
+  // VISIBLE (the wake ends visibly either way); only the sound is dropped.
+  silent?: boolean;
 }
 
 /** Background-preview result. `notes` are the displayable notifications, `pending`

@@ -40,6 +40,7 @@ interface NotifyPrefs {
   showPreview: boolean;
   inappSounds: boolean;
   messageSound: string;
+  reactionSound: string; // dedicated reaction tone (spec 1048); 'none' = visible but silent
   inappStyle: string;
 }
 const PREF_DEFAULTS: NotifyPrefs = {
@@ -47,20 +48,22 @@ const PREF_DEFAULTS: NotifyPrefs = {
   showPreview: true,
   inappSounds: false,
   messageSound: 'note',
+  reactionSound: 'pop',
   inappStyle: 'banners',
 };
 let prefs: NotifyPrefs = { ...PREF_DEFAULTS };
 let prefsHydrated = false;
 
 async function loadPrefs(): Promise<void> {
-  const [showMessages, showPreview, inappSounds, messageSound, inappStyle] = await Promise.all([
+  const [showMessages, showPreview, inappSounds, messageSound, reactionSound, inappStyle] = await Promise.all([
     getSetting<boolean>('notifications.message.show', PREF_DEFAULTS.showMessages),
     getSetting<boolean>('notifications.showPreview', PREF_DEFAULTS.showPreview),
     getSetting<boolean>('notifications.inapp.sounds', PREF_DEFAULTS.inappSounds),
     getSetting<string>('notifications.message.sound', PREF_DEFAULTS.messageSound),
+    getSetting<string>('notifications.reactions.sound', PREF_DEFAULTS.reactionSound),
     getSetting<string>('notifications.inapp.style', PREF_DEFAULTS.inappStyle),
   ]);
-  prefs = { showMessages, showPreview, inappSounds, messageSound, inappStyle };
+  prefs = { showMessages, showPreview, inappSounds, messageSound, reactionSound, inappStyle };
 }
 
 async function ensurePrefs(): Promise<NotifyPrefs> {
@@ -104,6 +107,16 @@ export interface IncomingNotice {
   // mute/quiet, and the banner names the mentioner even under a masked content level.
   mention?: boolean;
   mentionName?: string; // who mentioned me (the sender's display name)
+  // Reaction alert (spec 1048): someone reacted to MY message. Plays the dedicated
+  // reaction tone instead of the message tone, NEVER escalates (unlike a mention),
+  // and masks to a fully generic body under restricted content (the reactor is not
+  // named — reactions carry no opt-in escalation the way mentions do).
+  reaction?: boolean;
+  // Reply-to-me (spec 1048): a group message that directly replies to one of MY
+  // messages. Escalates exactly like a mention (same per-chat pref, same silencer
+  // set) with "replied to you" wording; `mentionName` names the replier. When a
+  // message both mentions AND replies, mention wording wins (one notification).
+  replied?: boolean;
 }
 
 /* ---- in-app notification banners (custom green overlay; see NotificationBanners.vue) ---- */

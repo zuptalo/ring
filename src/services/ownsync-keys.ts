@@ -18,6 +18,8 @@ export const SYNCED_PREF_KEYS: string[] = [
   'privacy.relayCalls',
   'notifications.message.show', 'notifications.message.reactions', 'notifications.message.sound',
   'notifications.group.show', 'notifications.group.reactions', 'notifications.group.sound',
+  // Reaction alert tone (spec 1048): a preference like its siblings, follows the user.
+  'notifications.reactions.sound',
   'notifications.wall.show', 'notifications.wall.activity', 'notifications.showPreview', 'notifications.badge',
   // Game notifications (spec 0009). Deliberately NOT games.follows — the follow
   // set is device-local and private by spec FR-006.
