@@ -132,7 +132,7 @@ Maya finds reaction notifications noisy and switches the existing "Reactions" to
 
 - **SC-001**: When someone reacts to a user's message, the author sees a notification within 5 seconds of delivery while online, in both open-app and closed-app states.
 - **SC-002**: A direct reply to the user's message in a muted group produces a notification in 100% of attempts (mentions preference on); a reply to someone else's message in the same muted group produces none.
-- **SC-003**: With a reactions toggle off, zero reaction notifications are shown across at least 10 consecutive suppressed reaction deliveries to a closed app, and the device's push subscription remains active afterwards (no platform revocation).
+- **SC-003**: With a reactions toggle off, zero reaction notifications are shown across at least 10 consecutive suppressed reaction deliveries to a closed app, and the device's push subscription remains active afterwards (no platform revocation). *Verification is split: automated tests prove every suppressed delivery produces one of the pre-existing, platform-tolerated outcome shapes; the subscription-survival half is confirmed manually on a real device (see quickstart).*
 - **SC-004**: A burst of 5+ reactions to the same chat results in at most one visible notification entry for that chat.
 - **SC-005**: Both reaction toggles observably change behavior from the settings screen — the app no longer ships dead controls (verified by toggling each and confirming the corresponding behavior change).
 - **SC-006**: No content leak: with previews off or generic content set, reaction and reply notifications reveal no message text in any tested scenario.
