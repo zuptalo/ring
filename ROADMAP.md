@@ -74,6 +74,7 @@ Specs are grouped by category band; status moves
 | [1046](specs/1046-quick-call-tiles/spec.md) | Quick Call tiles on the Calls tab, usage totals move to Network usage | 🟢 shipped |
 | [1047](specs/1047-chat-background-contrast/spec.md) | Chat background pattern reads clearly in both themes | 🟢 shipped |
 | [1048](specs/1048-notify-reactions-messages/spec.md) | Reaction Notifications & Group Reply Escalation | 🟡 in-progress |
+| [1049](specs/1049-richer-higher-quality/spec.md) | Richer Notification Alert Tones | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
