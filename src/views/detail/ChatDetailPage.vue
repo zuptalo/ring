@@ -4996,12 +4996,20 @@ function cancelRecording() {
    flexbox sized shrink-to-fit, so without the cap a LONG caption's unwrapped
    line — not the photo — set the bubble width (up to the 78% column cap),
    leaving the photo floating against dead bubble background. With it, captions,
-   sender lines, quotes, and the footer all wrap at the photo's edge. min() keeps
-   narrow viewports consistent: media and bubble shrink together. */
+   sender lines, quotes, and the footer all wrap at the photo's edge.
+   A definite `width: 246px` (NOT max-width, NOT min(100%, 246px)) on purpose:
+   only a definite width caps the bubble's INTRINSIC max-content contribution.
+   max-width caps just the used width, and any percentage (even inside min())
+   counts as auto during intrinsic sizing — either way the long caption's
+   unwrapped line inflated the ancestors' shrink-to-fit widths (.swipe-wrap /
+   .bubble-col grew toward the 78% cap), an invisible dead zone that pushed the
+   floating quick-forward button ~100px off the bubble (spec 2028). The separate
+   max-width keeps narrow viewports working: media and bubble shrink together. */
 .bubble-media {
   padding: 3px;
   gap: 0;
-  max-width: min(100%, 246px);
+  width: 246px;
+  max-width: 100%;
 }
 .bubble-media .bubble-image {
   border-radius: 13px;
@@ -5151,9 +5159,13 @@ function cancelRecording() {
   unicode-bidi: plaintext;
   text-align: start;
 }
-/* Floating quick-forward button beside incoming media/files/links. */
+/* Floating quick-forward button beside incoming media/files/links. Anchored to
+   the message column's BOTTOM edge (next to the caption/footer line) — centered
+   looked fine on short file/link bubbles but floated mid-image beside tall
+   portrait media, visually detached from the message (spec 2028). */
 .fwd-float {
-  align-self: center;
+  align-self: flex-end;
+  margin-block-end: 2px;
   flex: none;
   width: 42px;
   height: 42px;
