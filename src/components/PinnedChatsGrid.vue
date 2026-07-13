@@ -82,8 +82,8 @@ function onTap(chat: Chat): void {
 }
 .pin-avatar {
   position: relative;
-  width: 72px;
-  height: 72px;
+  width: 88px;
+  height: 88px;
 }
 .pin-badge {
   position: absolute;
