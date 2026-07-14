@@ -73,7 +73,9 @@ Specs are grouped by category band; status moves
 | [1045](specs/1045-rearrange-pinned-chats/spec.md) | Rearrange pinned chats with drag, stable manual order, and long-press chat preview | 🟢 shipped |
 | [1046](specs/1046-quick-call-tiles/spec.md) | Quick Call tiles on the Calls tab, usage totals move to Network usage | 🟢 shipped |
 | [1047](specs/1047-chat-background-contrast/spec.md) | Chat background pattern reads clearly in both themes | 🟢 shipped |
-| [1048](specs/1048-notify-reactions-messages/spec.md) | Reaction Notifications & Group Reply Escalation | 🟡 in-progress |
+| [1048](specs/1048-notify-reactions-messages/spec.md) | Reaction Notifications & Group Reply Escalation | 🔵 in-review |
+| [1049](specs/1049-richer-higher-quality/spec.md) | Richer Notification Alert Tones | 🔵 in-review |
+| [1050](specs/1050-quiet-housekeeping-frames/spec.md) | Push Classes, Conversation Mutes & Notification Routing | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

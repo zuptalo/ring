@@ -5,6 +5,13 @@
  */
 import { bulkPut, clearStore, get, getAll, getByIndex, put, remove } from './idb';
 import { enqueue, removeOutboxByFrameId } from './outbox';
+import {
+  adoptPrid,
+  classifyGroupMessage,
+  classifyReactionRecipient,
+  mintPrid,
+  type FrameClass,
+} from '@/utils/frame-class';
 import { recordTombstone, isTombstoned, hasTombstone, clearTombstone, clearHiddenPeerBlock } from './tombstones';
 import { callLogPreview } from './calllog';
 import { uid } from '@/utils/uid';
@@ -501,19 +508,34 @@ async function stampExpiry(
   await put('messages', m);
 }
 
-/** Seal a payload for the chat's peer and enqueue it for relay, if possible. */
+/** The chat's conversation route id (spec 1050), minting + persisting one when
+ *  absent. Shared with peers INSIDE sealed payloads (adopt-on-receive); carried
+ *  in plaintext on frames so the recipient's server-side mutes can match. */
+async function pridFor(chat: Chat): Promise<string> {
+  if (chat.prid) return chat.prid;
+  const fresh = mintPrid();
+  chat.prid = fresh;
+  await put('chats', { ...chat, prid: fresh, updatedAt: now() });
+  return fresh;
+}
+
+/** Seal a payload for the chat's peer and enqueue it for relay, if possible.
+ *  `cls` is the spec-1050 push class for this recipient (absent = 'message' on
+ *  the server — the old-client default). */
 async function sealAndEnqueue(
   chat: Chat | undefined,
   messageId: string,
   payload: MessagePayload,
   ttlOverrideMs?: number | null,
+  cls?: FrameClass,
 ): Promise<void> {
   const peerUserId = chat?.participantIds[0];
   if (!chat || !peerUserId) return;
   await stampExpiry(chat, messageId, payload, ttlOverrideMs);
   try {
-    const sealed = await sealForChat(chat.id, peerUserId, chat.isGroup, payload);
-    if (sealed) await enqueue({ t: 'msg', id: messageId, to: sealed.to, ciphertext: sealed.packet });
+    const prid = await pridFor(chat);
+    const sealed = await sealForChat(chat.id, peerUserId, chat.isGroup, { ...payload, prid });
+    if (sealed) await enqueue({ t: 'msg', id: messageId, to: sealed.to, ciphertext: sealed.packet, class: cls, prid });
     else if (!chat.isGroup) await detectTerminated(peerUserId); // no bundle → maybe deleted
   } catch (e) {
     console.warn('[messaging] seal/enqueue failed; message stays pending', e);
@@ -581,8 +603,12 @@ async function sealAndEnqueueGroup(
   messageId: string,
   payload: MessagePayload,
   ttlOverrideMs?: number | null,
+  classFor?: (member: string) => FrameClass,
 ): Promise<void> {
   await stampExpiry(chat, messageId, payload, ttlOverrideMs); // disappearing messages: one stamp, fanned out
+  // spec 1050: the GROUP's route id rides every member copy (the per-member
+  // session chat is just the carrier), so muting the group mutes exactly this.
+  const prid = await pridFor(chat);
   for (const member of chat.participantIds) {
     try {
       // Don't seal to a member who has left the network (ghosted) or whom we've
@@ -590,8 +616,16 @@ async function sealAndEnqueueGroup(
       if ((await isContactGhosted(member)) || (await isPeerBlocked(member))) continue;
       const memberChat = await memberSessionChat(member);
       if (!memberChat) continue;
-      const sealed = await sealForChat(memberChat, member, false, { ...payload, groupId: chat.id });
-      if (sealed) await enqueue({ t: 'msg', id: messageId, to: sealed.to, ciphertext: sealed.packet });
+      const sealed = await sealForChat(memberChat, member, false, { ...payload, groupId: chat.id, prid });
+      if (sealed) {
+        await enqueue({
+          t: 'msg', id: messageId, to: sealed.to, ciphertext: sealed.packet,
+          // Per-recipient class (spec 1050): mentions/replies stay loud for their
+          // targets, bystander fan-out goes quiet — default 'message' otherwise.
+          class: classFor ? classFor(member) : classifyGroupMessage(member, payload),
+          prid,
+        });
+      }
     } catch (e) {
       console.warn('[group] seal/enqueue to member failed', member, e);
     }
@@ -611,7 +645,15 @@ async function sendGroupCard(members: string[], card: GroupCard): Promise<void> 
         timestamp: now(),
         group: card,
       });
-      if (sealed) await enqueue({ t: 'msg', id: uid(), to: sealed.to, ciphertext: sealed.packet });
+      if (sealed) {
+        await enqueue({
+          t: 'msg', id: uid(), to: sealed.to, ciphertext: sealed.packet,
+          // spec 1050 (US3): a group INVITE demands attention; every other
+          // membership card (create/update/leave/…) is housekeeping — the first
+          // real message is the group's first notification.
+          class: card.t === 'invite' ? 'message' : 'housekeeping',
+        });
+      }
     } catch (e) {
       console.warn('[group] send card to member failed', member, e);
     }
@@ -695,8 +737,17 @@ export async function reactToMessage(
   }
   const reaction: ReactionSignal = { messageId, emoji, remove, at };
   const payload: MessagePayload = { body: '', kind: 'reaction', timestamp: at, reaction };
-  if (chat.isGroup) await sealAndEnqueueGroup(chat, uid(), payload);
-  else await sealAndEnqueue(chat, uid(), payload);
+  // spec 1050: per-recipient push class — the reacted-to author and prior
+  // co-reactors are loud on an ADD; bystanders and every REMOVE are
+  // housekeeping (state syncs passively, nobody is woken for an un-heart).
+  if (chat.isGroup) {
+    await sealAndEnqueueGroup(chat, uid(), payload, undefined, (member) =>
+      classifyReactionRecipient(member, message, remove, self),
+    );
+  } else {
+    await sealAndEnqueue(chat, uid(), payload, undefined,
+      classifyReactionRecipient(chat.participantIds[0], message, remove, self));
+  }
   return remove ? 'removed' : 'added';
 }
 
@@ -724,7 +775,10 @@ async function handleReaction(from: string, signal: ReactionSignal): Promise<voi
 
       const selfId = getSelfUserId() ?? '';
       const mine = message.outgoing || message.senderId === 'me';
-      if (mine && from !== selfId) {
+      // spec 1050 (US2): a recipient with their OWN reaction on the target is a
+      // co-reactor and hears about later reactions too ("also reacted").
+      const coReactor = !mine && (message.reactions ?? []).some((r) => r.userId === selfId && r.userId !== from);
+      if ((mine || coReactor) && from !== selfId) {
         const enabled = await getSetting<boolean>(
           chat.isGroup ? 'notifications.group.reactions' : 'notifications.message.reactions',
           true,
@@ -732,16 +786,19 @@ async function handleReaction(from: string, signal: ReactionSignal): Promise<voi
         if (enabled) {
           const first = name.split(' ')[0];
           const quote = previewText(message);
+          const verb = coReactor ? `also reacted ${signal.emoji}` : `reacted ${signal.emoji}`;
+          const fallback = coReactor ? 'a message you reacted to' : 'your message';
           // 1:1: the title already names the reactor, so the body starts at the verb;
           // groups: the title is the group, so the body names who reacted.
           const line = chat.isGroup
-            ? quote ? `${first} reacted ${signal.emoji} to: ${quote}` : `${first} reacted ${signal.emoji} to your message`
-            : quote ? `Reacted ${signal.emoji} to: ${quote}` : `Reacted ${signal.emoji} to your message`;
+            ? quote ? `${first} ${verb} to: ${quote}` : `${first} ${verb} to ${fallback}`
+            : quote ? `${coReactor ? 'Also reacted' : 'Reacted'} ${signal.emoji} to: ${quote}` : `${coReactor ? 'Also reacted' : 'Reacted'} ${signal.emoji} to ${fallback}`;
           // Same awaited-but-swallowed contract as the message dispatch (spec 1015):
           // a notify error must never block the ack/dedup that follow.
           await notifyIncoming({
             kind: 'message',
             reaction: true,
+            group: chat.isGroup,
             chatId: chat.id,
             msgId: message.id,
             name: chat.isGroup ? chat.name : name,
@@ -3610,6 +3667,17 @@ export async function setWallUserHidden(id: string, hidden: boolean): Promise<vo
 export async function setWallUserMuted(id: string, muted: boolean): Promise<void> {
   await setWallLedgerEntry('wall.mutedUsers', id, muted);
 }
+/** Friends whose NEW POSTS should always push this device (spec 1050, FR-008a) —
+ *  the per-friend follow that beats a global wall opt-out. Feeds push-prefs. */
+export async function getWallAlwaysUsers(): Promise<Record<string, boolean>> {
+  return getWallLedger('wall.alwaysUsers');
+}
+export async function setWallUserAlwaysAlert(id: string, always: boolean): Promise<void> {
+  await setWallLedgerEntry('wall.alwaysUsers', id, always);
+}
+export async function isWallUserAlwaysAlert(id: string): Promise<boolean> {
+  return !!(await getWallAlwaysUsers())[id];
+}
 export async function isWallUserHidden(id: string): Promise<boolean> {
   return !!(await getWallHiddenUsers())[id];
 }
@@ -5798,7 +5866,10 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   try {
     payload = await openPacket(chatId, ciphertext);
   } catch (e) {
-    console.warn('[messaging] failed to open incoming message', e);
+    // Name the sender + packet type: a bare "cannot be decrypted" is undiagnosable
+    // in field logs (which session broke? was it a prekey re-init or a normal frame?).
+    const ptype = (ciphertext as { type?: string } | null)?.type ?? 'unknown';
+    console.warn('[messaging] failed to open incoming message', { from, packet: ptype }, e);
     // Undecryptable most often means we deleted the chat (losing our ratchet) while
     // the peer kept theirs and sent a NORMAL packet, so we have no session and no
     // prekey to establish one. Don't silently lose it: ask the peer to re-key (and
@@ -6053,6 +6124,10 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   // mention, gated by the same per-chat notifyMentions pref downstream.
   const selfRepliedTo = isGroupMsg && !!selfId && payload.reply?.senderId === selfId;
   if (chat) {
+    // spec 1050: adopt the conversation's route id shared inside the sealed
+    // payload (lexicographically smaller wins, so a 1:1 double-mint converges).
+    const adopted = adoptPrid(chat.prid, payload.prid);
+    if (adopted !== chat.prid) chat.prid = adopted;
     // Group previews show the sender's first name (WhatsApp-style).
     chat.lastMessage = isGroupMsg ? `${contact.name.split(' ')[0]}: ${preview}` : preview;
     chat.lastKind = previewKind(kind, payload.albumName, payload.videoNote);
@@ -6086,6 +6161,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     kind: 'message',
     chatId: targetChatId,
     msgId: message.id,
+    group: isGroupMsg, // group tone (spec 1050)
     name: chat?.isGroup ? chat.name : contact.name,
     // The notification spells out shared location / contact / poll (no icon to lean
     // on), unlike the terser `preview` used for the chats list above.

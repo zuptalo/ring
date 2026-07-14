@@ -93,6 +93,8 @@ type SyncStore interface {
 // PushStore is the Web Push subscription persistence.
 type PushStore interface {
 	SaveSubscription(ctx context.Context, userID string, sub store.PushSubscription, installedVersion *string, tzOffsetMinutes *int) error
+	// SavePrefs replaces the user's push routing prefs whole (spec 1050).
+	SavePrefs(ctx context.Context, userID string, prefs []byte) error
 	DeleteSubscription(ctx context.Context, userID, endpoint string) error
 }
 
@@ -315,6 +317,8 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 
 	// Web Push subscriptions (7f).
 	mux.Handle("POST /v1/push/subscribe", authMW(http.HandlerFunc(h.subscribePush)))
+	// Push routing prefs (spec 1050): full-state replace of the caller's blob.
+	mux.Handle("PUT /v1/push/prefs", authMW(http.HandlerFunc(h.savePushPrefs)))
 	mux.Handle("POST /v1/push/unsubscribe", authMW(http.HandlerFunc(h.unsubscribePush)))
 
 	// User-generated invitations (7g): create, list, extend (+24h), cancel.

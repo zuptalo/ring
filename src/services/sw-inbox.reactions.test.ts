@@ -93,6 +93,27 @@ describe('spec 1048 US1 — reaction notes (SW path, contract Table 1)', () => {
   });
 });
 
+describe('spec 1050 US2 — co-reactors are loud with "also reacted" wording', () => {
+  it("a reaction to SOMEONE ELSE's message is loud when I have my own reaction on it", () => {
+    const row = myMsg({ senderId: 'peer-9', outgoing: false, reactions: [{ userId: SELF, emoji: '👍', at: 1 }] });
+    const r = run(reaction(), [dmChat], ctx({ row }));
+    expect(r.note).not.toBeNull();
+    expect(r.note?.body).toBe('Also reacted ❤️ to: hi there');
+  });
+
+  it('group co-reactor wording names the reactor', () => {
+    const row = myMsg({ chatId: 'g1', senderId: 'peer-9', outgoing: false, reactions: [{ userId: SELF, emoji: '👍', at: 1 }] });
+    const r = run(reaction({ groupId: 'g1' }), [groupChat], ctx({ row }));
+    expect(r.note?.body).toBe('Alice also reacted ❤️ to: hi there');
+    expect(r.note?.tag).toBe('ring:g1');
+  });
+
+  it('no own reaction on the target → still the silent bystander shape', () => {
+    const row = myMsg({ senderId: 'peer-9', outgoing: false, reactions: [{ userId: 'someone-else', emoji: '🔥', at: 1 }] });
+    expect(run(reaction(), [dmChat], ctx({ row }))).toEqual(SILENT_SIDE_EFFECT);
+  });
+});
+
 describe('spec 1048 US1 — never-notify set (FR-006): silent side effects keep the pre-1048 shape', () => {
   it('reaction REMOVAL stays silent', () => {
     const p = reaction();
@@ -167,6 +188,25 @@ describe('spec 1048 US1/US3 — suppression layers (FR-005): reactions NEVER esc
 
   it('global "Show notifications" off → silent', () => {
     expect(run(reaction(), [dmChat], ctx(), { showMessages: false })).toEqual(SILENT_SIDE_EFFECT);
+  });
+});
+
+describe("spec 1050 — group 'Show notifications' master in the SW", () => {
+  it('group.show off silences group messages, mentions, and reactions (pre-1048 shapes)', () => {
+    const off = { showGroups: false };
+    const gm = { body: 'hi', kind: 'text', timestamp: 2, groupId: 'g1' } as never;
+    const r1 = noteForPayload(frame, gm, [groupChat], contacts, true, true, new Set(), SELF, undefined, undefined, off);
+    expect(r1.note).toBeNull();
+    const men = { body: 'yo', kind: 'text', timestamp: 2, groupId: 'g1', mentions: [SELF] } as never;
+    const r2 = noteForPayload(frame, men, [groupChat], contacts, true, true, new Set(), SELF, undefined, undefined, off);
+    expect(r2.note).toBeNull();
+    const r3 = noteForPayload(frame, reaction({ groupId: 'g1' }), [groupChat], contacts, true, true, new Set(), SELF, undefined, ctx({ row: myMsg({ chatId: 'g1' }) }), off);
+    expect(r3).toEqual(SILENT_SIDE_EFFECT);
+  });
+
+  it('group.show off leaves 1:1 notes untouched', () => {
+    const r = noteForPayload(frame, reaction(), [dmChat], contacts, true, true, new Set(), SELF, undefined, ctx(), { showGroups: false });
+    expect(r.note).not.toBeNull();
   });
 });
 

@@ -37,6 +37,28 @@ func (s *Store) SaveSubscription(ctx context.Context, userID string, sub PushSub
 	return err
 }
 
+// SavePrefs replaces the user's push routing preferences whole (spec 1050,
+// FR-011: full-state replace, never a diff). Prefs live on the subscription row,
+// so they die with it; with no subscription row there is nothing to push and the
+// write is a deliberate no-op.
+func (s *Store) SavePrefs(ctx context.Context, userID string, prefs []byte) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE push_subscriptions SET prefs = $2::jsonb WHERE user_id = $1`, userID, prefs)
+	return err
+}
+
+// PrefsFor returns the user's push routing prefs blob ('{}' when none / no row —
+// both mean "push everything", the pre-1050 behavior).
+func (s *Store) PrefsFor(ctx context.Context, userID string) ([]byte, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx,
+		`SELECT prefs FROM push_subscriptions WHERE user_id = $1`, userID).Scan(&raw)
+	if err != nil {
+		return []byte("{}"), nil //nolint:nilerr // no row / transient read → degrade open, never silence
+	}
+	return raw, nil
+}
+
 // DeleteSubscription removes one of a user's subscriptions (on unsubscribe).
 func (s *Store) DeleteSubscription(ctx context.Context, userID, endpoint string) error {
 	_, err := s.pool.Exec(ctx,

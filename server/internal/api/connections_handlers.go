@@ -44,6 +44,12 @@ func (h *Handlers) wakeConn(ctx context.Context, userID string) {
 	if h.Notifier == nil {
 		return
 	}
+	// spec 1050 (US4): a foregrounded, provably-live user already got the live
+	// notifyConn frame — a simultaneous OS push is the double the field report
+	// caught. Same presence signal the message tickle uses.
+	if h.Hub != nil && h.Hub.IsActiveFresh(userID) {
+		return
+	}
 	h.Notifier.NotifyConn(ctx, userID)
 }
 

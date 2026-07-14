@@ -306,6 +306,10 @@ export interface MessagePayload {
   body: string;
   kind: string;
   timestamp: number;
+  // spec 1050: the conversation's route id, shared INSIDE the sealed payload so
+  // members adopt one id without the server seeing the linkage being made.
+  // Opaque passthrough — nothing in the crypto layer reads it.
+  prid?: string;
   mediaRef?: MediaRef;
   card?: ContactCard;
   call?: CallSignal;

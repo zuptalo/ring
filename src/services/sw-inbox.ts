@@ -218,7 +218,12 @@ export function noteForPayload(
     row?: Message;
     prefs?: { dm: boolean; group: boolean; tone: string };
   },
+  // Surface masters (spec 1050): the group "Show notifications" toggle finally
+  // gates group frames here too. Like the global master, escalation does NOT
+  // pierce it. Absent = on (old callers).
+  surfaces?: { showGroups?: boolean },
 ): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
+  const showGroups = surfaces?.showGroups !== false;
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
 
@@ -414,6 +419,12 @@ export function noteForPayload(
       ? chats.find((c) => c.id === payload.groupId && c.isGroup)
       : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
     const mine = !!row && (row.outgoing || row.senderId === 'me');
+    // Group-surface master (spec 1050): a group reaction is a group notice.
+    if (payload.groupId && !showGroups) return { note: null, wasMessage: false };
+    // spec 1050 (US2): a member with their OWN reaction on the target is a
+    // co-reactor — loud too, with "also reacted" wording. selfId is never the
+    // incoming reactor here (own devices are filtered below).
+    const coReactor = !!row && !mine && !!selfId && (row.reactions ?? []).some((r) => r.userId === selfId);
     const enabled = rChat?.isGroup ? reactionCtx?.prefs?.group === true : reactionCtx?.prefs?.dm === true;
     const suppressedByChat =
       !rChat ||
@@ -421,7 +432,7 @@ export function noteForPayload(
       (rChat.mutedUntil !== undefined && rChat.mutedUntil > Date.now()) ||
       rChat.notifyWebPush === false ||
       (rChat.notifyContent ?? 'full') === 'none';
-    if (sig.remove || !mine || from === selfId || !enabled || !showMessages || suppressedByChat) {
+    if (sig.remove || (!mine && !coReactor) || from === selfId || !enabled || !showMessages || suppressedByChat) {
       return { note: null, wasMessage: false };
     }
     const showText = (rChat.notifyContent ?? 'full') === 'full' && showPreview;
@@ -430,9 +441,12 @@ export function noteForPayload(
     // A short quote of the reacted-to message; media/empty bodies read naturally.
     const raw = (row.body || '').replace(/\s+/g, ' ').trim();
     const quote = raw.length > 80 ? `${raw.slice(0, 79)}…` : raw;
+    // Co-reactor wording says "also" and drops the "your message" claim — the
+    // target is someone else's message the recipient happened to react to.
+    const verb = coReactor ? `also reacted ${sig.emoji}` : `reacted ${sig.emoji}`;
     const line = rChat.isGroup
-      ? quote ? `${first} reacted ${sig.emoji} to: ${quote}` : `${first} reacted ${sig.emoji} to your message`
-      : quote ? `Reacted ${sig.emoji} to: ${quote}` : `Reacted ${sig.emoji} to your message`;
+      ? quote ? `${first} ${verb} to: ${quote}` : `${first} ${verb} to ${coReactor ? 'a message you reacted to' : 'your message'}`
+      : quote ? `${coReactor ? 'Also reacted' : 'Reacted'} ${sig.emoji} to: ${quote}` : `${coReactor ? 'Also reacted' : 'Reacted'} ${sig.emoji} to ${coReactor ? 'a message you reacted to' : 'your message'}`;
     return {
       note: {
         ids: [f.id as string],
@@ -464,6 +478,9 @@ export function noteForPayload(
   if (!showMessages) return { note: null, wasMessage: true };
 
   const isGroup = !!payload.groupId;
+  // Group-surface master (spec 1050): off = off for the whole surface — plain
+  // messages AND the mention/reply escalation below (parity with the page path).
+  if (isGroup && !showGroups) return { note: null, wasMessage: true };
   const groupChat = isGroup ? chats.find((c) => c.id === payload.groupId) : undefined;
   const senderName = known || 'Someone';
   const chat = isGroup
@@ -886,6 +903,7 @@ export async function previewPending(): Promise<PreviewResult> {
   const badgeAll = badgeMode === 'always';
 
   const showMessages = await setting<boolean>('notifications.message.show', true);
+  const showGroups = await setting<boolean>('notifications.group.show', true);
 
   // Now decrypt for the rich preview. PIN/passkey-locked (no device key) → generic
   // (the frames were still fetched above, so the sender already got "delivered").
@@ -974,7 +992,7 @@ export async function previewPending(): Promise<PreviewResult> {
           },
         }
       : undefined;
-    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx, reactionCtx);
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx, reactionCtx, { showGroups });
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;
