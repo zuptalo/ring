@@ -526,6 +526,15 @@ export const SETTINGS: Record<string, SettingNode> = {
         ],
       },
       {
+        // Reactions get their OWN tone (spec 1048): the on/off gates live per surface
+        // above (message/group "Reaction notifications"), but the sound is one shared,
+        // deliberately subtler choice so a burst of hearts never sounds like a burst
+        // of messages. "None" keeps reaction alerts visible but silent.
+        header: 'Reactions',
+        items: [{ type: 'link', id: 'notifications-reactions-sound', title: 'Sound', icon: 'music' }],
+        footer: 'Reactions to your messages play their own tone. Pick None to keep them quiet.',
+      },
+      {
         header: 'Wall notifications',
         items: [
           { type: 'toggle', title: 'Show notifications', key: 'notifications.wall.show', default: true },
@@ -572,6 +581,13 @@ export const SETTINGS: Record<string, SettingNode> = {
     id: 'notifications-group-sound',
     title: 'Sound',
     groups: [{ header: 'Alert tones', items: [{ type: 'choice', key: 'notifications.group.sound', default: 'note', options: TONES }] }],
+  },
+  // Reaction alert tone (spec 1048). Default 'pop' — subtle and distinct from the
+  // message default 'note', so a reaction never masquerades as a new message.
+  'notifications-reactions-sound': {
+    id: 'notifications-reactions-sound',
+    title: 'Sound',
+    groups: [{ header: 'Alert tones', items: [{ type: 'choice', key: 'notifications.reactions.sound', default: 'pop', options: TONES }] }],
   },
   'notifications-badge': {
     id: 'notifications-badge',

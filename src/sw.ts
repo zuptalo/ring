@@ -283,6 +283,9 @@ async function showNotes(notes: SwNote[]): Promise<number> {
         tag: n.tag,
         renotify: true, // a genuinely-new message on this tag should re-alert (a silent re-assert
         // for "nothing new" uses reassertFromSummary below, which sets renotify:false)
+        // (spec 1048) A reaction note with the tone set to None shows without the
+        // platform sound — visible (the wake still ends visibly), just quiet.
+        silent: n.silent === true,
         data: { url: n.url },
       });
     } catch (e) {
