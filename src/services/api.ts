@@ -342,6 +342,18 @@ export async function claimUsername(username: string): Promise<void> {
   if (!res.ok) throw new Error(`claim username failed: ${res.status}`);
 }
 
+/** Replace this device's push routing prefs whole (spec 1050, FR-011). The blob
+ *  is plaintext BY DESIGN — it exists so the blind relay can gate push tickles;
+ *  hidden chats are structurally excluded before this is ever called. */
+export async function savePushPrefs(prefs: unknown): Promise<void> {
+  const res = await fetch(`${apiBaseUrl()}/v1/push/prefs`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(prefs),
+  });
+  if (!res.ok) throw new Error(`push prefs failed: ${res.status}`);
+}
+
 /* ---- encrypted own-data sync (7e) ---- */
 
 export interface SyncRecord {

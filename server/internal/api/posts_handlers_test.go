@@ -23,10 +23,11 @@ type recordingNotifier struct {
 	activity []string // "<userID>:<postID>" per NotifyPostActivity call
 }
 
-func (n *recordingNotifier) Notify(context.Context, string)     {}
+func (n *recordingNotifier) Notify(context.Context, string)                      {}
+func (n *recordingNotifier) NotifyFrame(context.Context, string, string, string) {}
 func (n *recordingNotifier) NotifyCall(context.Context, string) {}
 func (n *recordingNotifier) NotifyConn(context.Context, string) {}
-func (n *recordingNotifier) NotifyPost(_ context.Context, userID string) {
+func (n *recordingNotifier) NotifyPost(_ context.Context, userID, _ string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.posts = append(n.posts, userID)

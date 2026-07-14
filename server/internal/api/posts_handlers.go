@@ -59,7 +59,7 @@ func (h *Handlers) notifyPost(ctx context.Context, recipient, author string) {
 		}
 	}
 	if h.Notifier != nil {
-		h.Notifier.NotifyPost(ctx, recipient)
+		h.Notifier.NotifyPost(ctx, recipient, author)
 	}
 }
 
@@ -207,7 +207,9 @@ func (h *Handlers) removePostRecipient(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if h.Notifier != nil {
-		h.Notifier.NotifyPost(r.Context(), recipient)
+		// A revocation rides the same post class: a recipient who muted this
+		// author's posts simply reconciles the removal on next open (spec 1050).
+		h.Notifier.NotifyPost(r.Context(), recipient, uid)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

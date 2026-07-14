@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-13
 
-**Status**: in-review
+**Status**: shipped
 
 **Input**: User description: "Make the chat background lines a bit brighter on the dark theme and darker on the bright theme." (An earlier richer-wallpaper direction was explored and reverted by request — the original artwork stays; only its per-theme contrast changes.)
 
