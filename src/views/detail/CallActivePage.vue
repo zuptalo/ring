@@ -130,15 +130,20 @@
           </button>
           <!-- (spec 1041 FR-002) Invite the held party into the active call — the same
                consent-gated join request the second-incoming prompt sends. Gone once they
-               said no (rejection is final for this call); "Invited" while they decide. -->
+               said no (rejection is final for this call); "Invited" while they decide.
+               (spec 2031 US2) Styled as a REAL action in the swap pill's family — the plain
+               dark pill it used to be was indistinguishable from its passive "Invited"
+               state and users found it tappable only by accident. -->
           <button
             v-if="heldPeerId && heldInviteState !== 'blocked'"
             class="cw-held cw-invite"
+            :class="{ sent: heldInviteState === 'invited' }"
             :disabled="heldInviteState === 'invited'"
             :aria-label="`Invite ${heldCall.name} to join this call`"
             @click.stop="() => void mergeHeld()"
           >
-            {{ heldInviteState === 'invited' ? 'Invited' : `Ask ${heldCall.name} to join this call` }}
+            <ion-icon :icon="heldInviteState === 'invited' ? checkmarkCircleOutline : personAddOutline" aria-hidden="true" />
+            {{ heldInviteState === 'invited' ? 'Invited · waiting for them to join' : `Ask ${heldCall.name} to join this call` }}
           </button>
         </template>
         <!-- (spec 2011) The small active-call "On hold" pill used to live here; it's redundant with
@@ -475,7 +480,7 @@ import {
   volumeHighOutline, bluetoothOutline, warningOutline,
   phonePortraitOutline, cameraReverseOutline, desktopOutline, chevronDownOutline,
   cellularOutline, informationCircleOutline, personOutline, personAddOutline, refreshOutline,
-  chatbubbleEllipsesOutline, pauseOutline, swapHorizontalOutline,
+  chatbubbleEllipsesOutline, pauseOutline, swapHorizontalOutline, checkmarkCircleOutline,
 } from 'ionicons/icons';
 import router from '@/router';
 import { getSelfUserId } from '@/services/auth';
@@ -1423,17 +1428,29 @@ const diag = computed(() => {
   color: #fff;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
 }
-/* (spec 1041) The held-party invite sits just above the swap bar: same pill,
-   its own row, disabled while their answer is pending. */
+/* (spec 1041) The held-party invite sits just above the swap bar, its own row.
+   (spec 2031 US2) It reads as an ACTION in the swap pill's family — green-tinted
+   fill + person-add icon + press feedback — clearly distinct from the passive
+   "Invited" status chip it turns into after the tap (.sent). */
 .cw-invite {
   bottom: calc(env(safe-area-inset-bottom, 0px) + 158px);
   padding: 10px 16px;
   font-size: 13px;
   font-weight: 600;
-  border: none;
+  gap: 8px;
+  border: 1.5px solid rgba(16, 185, 129, 0.85);
+  background: rgba(16, 185, 129, 0.3);
 }
-.cw-invite:disabled {
-  opacity: 0.55;
+.cw-invite ion-icon {
+  font-size: 18px;
+  flex: 0 0 auto;
+}
+/* Sent → a quiet status chip: no action tint, no border, no press affordance. */
+.cw-invite.sent {
+  border-color: transparent;
+  background: rgba(28, 28, 30, 0.92);
+  opacity: 0.8;
+  cursor: default;
 }
 /* Column layout so the name/subtitle row and the action buttons each stay on one line
    (the old single-row layout wrapped the text on narrow phones). */
