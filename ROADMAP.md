@@ -117,3 +117,4 @@ Specs are grouped by category band; status moves
 | [2032](specs/2032-ipad-taps-dead/spec.md) | iPad Taps Dead on Send & Quick-React | 🟡 in-progress |
 | [2033](specs/2033-second-consecutive-frame/spec.md) | Second Consecutive Frame on a Fresh Carrier Session Is Lost | 🔵 in-review |
 | [2034](specs/2034-wall-video-posts/spec.md) | Wall Video Posts — Honest Progress, Real Avatar, Media That Fits | 🔵 in-review |
+| [2036](specs/2036-video-posts-finish/spec.md) | Video Posts Finish Cleanly | 🟡 in-progress |

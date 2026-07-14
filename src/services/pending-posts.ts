@@ -7,10 +7,12 @@
  * writes the real Post and the outbox record (+ blobs) is dropped; an in-session failure flips it to
  * `failed` (Retry / Cancel).
  *
- * IMPORTANT: the upload is an IN-SESSION job. We do NOT try to resume it across a full app close — an
- * iOS library File handle doesn't survive a cold start, so a "resumed" upload just stalls forever on
- * unreadable bytes. Instead {@link recoverInterruptedPosts} runs once at startup and turns any
- * leftover post into a draft (caption + in-app voice notes kept; library media dropped to re-add).
+ * Uploads RESUME across a full app close (spec 2036): every item's bytes ride
+ * inline in the outbox record, so a leftover 'uploading' post is finished by
+ * the next session's drain from a fresh in-memory Blob. (The pre-1024 design
+ * couldn't do this — an iOS library File handle doesn't survive a cold start —
+ * which is why {@link recoverInterruptedPosts} used to draft-ify everything; it
+ * now only drafts legacy records whose items lack inline bytes.)
  */
 import {
   createPost,
@@ -159,15 +161,27 @@ export async function cancelPendingPost(id: string): Promise<void> {
 
 let recovered = false;
 
+/** Test-only: allow the once-per-session recovery to run again in vitest. */
+export function __resetRecoveryForTest(): void {
+  recovered = false;
+}
+
 /**
- * Run ONCE at app start (after unlock). Any pending post still around is left over from a previous
- * session — its in-flight upload died when the app was fully closed. We can't reliably finish it
- * (library File handles don't survive a cold start), so rather than stall:
- *   • if the upload had actually completed before the app died (the real Post already exists), just
- *     clean the leftover outbox row — no duplicate, no draft;
- *   • else keep the caption + any in-app VOICE recordings (memory-backed → they survive) and flip the
- *     record to `interrupted`, so the Wall offers "Finish" (reopen composer) + re-add the media;
- *   • a post with nothing worth keeping (library media only, no caption) is discarded.
+ * Run ONCE at app start (after unlock). A pending post still around is left over
+ * from a previous session. Since spec 1024 every item's bytes ride INLINE in the
+ * record, a leftover 'uploading' post is fully RESUMABLE — the drain rebuilds
+ * fresh Blobs and finishes it — so recovery deliberately leaves those alone
+ * (spec 2036: it used to flip them to 'interrupted' while the WS-online drain
+ * was already re-uploading the same record, and its late write resurrected the
+ * row as a zombie draft AFTER the successful post deleted it). Recovery now only:
+ *   • cleans up a leftover whose real Post already exists (cleanup was lost);
+ *   • drafts records with genuinely unresumable LEGACY items (a stored Blob and
+ *     no bytes — unreadable after a restart), keeping caption + byte-backed items;
+ *   • discards records with nothing readable to keep;
+ *   • kicks the drain for the resumable ones it left behind (the unlock can
+ *     come after the WS-online kick already ran and found the keys locked).
+ * Every write is re-checked against the record's CURRENT state so a racing
+ * completed upload can never be resurrected (FR-002).
  * Returns counts so the caller can let the user know.
  */
 export async function recoverInterruptedPosts(): Promise<{ recovered: number; discarded: number }> {
@@ -175,6 +189,7 @@ export async function recoverInterruptedPosts(): Promise<{ recovered: number; di
   recovered = true;
   let recoveredN = 0;
   let discarded = 0;
+  let resumable = 0;
   for (const rec of await listPendingPosts()) {
     if (rec.status === 'interrupted' || rec.status === 'canceled') continue;
     if (await getPost(rec.id)) {
@@ -182,17 +197,26 @@ export async function recoverInterruptedPosts(): Promise<{ recovered: number; di
       await deletePendingPost(rec.id);
       continue;
     }
-    // Everything is stored as inline bytes, so keep the WHOLE post — caption, voice, photos and
-    // videos all survive — and hand it back as a draft to finish. Older records that only have a
-    // legacy Blob (no bytes) for photos/videos can't be re-read after the restart, so those items
-    // are dropped; the caption and any voice (which always had bytes) still come back.
+    if (rec.items.every((it) => !!it.bytes)) {
+      // Fully byte-backed (every post the current composer creates): the drain
+      // resumes it as-is. Don't touch the record — two writers on one row was
+      // exactly the reported zombie-draft bug.
+      resumable += 1;
+      continue;
+    }
+    // Legacy items without inline bytes can't be re-read after a restart: draft
+    // what survives (caption + byte-backed items) for the user to finish.
     const usable = rec.items.filter((it) => !!it.bytes);
+    // FR-002: re-read before writing — the record may have completed (and been
+    // deleted) or changed since the list snapshot; never write over that.
+    const fresh = await getPendingPost(rec.id);
+    if (!fresh || fresh.status !== rec.status) continue;
     if (rec.body?.trim() || usable.length) {
-      rec.items = usable;
-      rec.status = 'interrupted';
-      rec.error = undefined;
-      rec.attempts = 0;
-      await updatePendingPost(rec);
+      fresh.items = usable;
+      fresh.status = 'interrupted';
+      fresh.error = undefined;
+      fresh.attempts = 0;
+      await updatePendingPost(fresh);
       recoveredN += 1;
     } else {
       await deletePendingPost(rec.id); // nothing readable to keep
@@ -200,6 +224,7 @@ export async function recoverInterruptedPosts(): Promise<{ recovered: number; di
     }
     lastProgressWrite.delete(rec.id);
   }
+  if (resumable > 0) kickPendingPosts(); // finish them now if the keys are already unlocked
   return { recovered: recoveredN, discarded };
 }
 
