@@ -74,7 +74,7 @@
             :class="{ ready: draft.trim() }"
             :disabled="!draft.trim()"
             aria-label="Send"
-            @pointerdown.prevent
+            @mousedown.prevent
             @click="sendReply(b)"
           >
             <ion-icon :icon="sendOutline" />
