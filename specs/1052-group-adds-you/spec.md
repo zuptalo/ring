@@ -56,6 +56,19 @@ None new on the wire: cards, invitations, accepts, leaves, and messages are the 
 - **SC-004**: Unit — parked-frame queue is bounded and expiring; dead-key guard contains `privacy.groups`.
 - **SC-005**: Full existing group/invite/game-group suites stay green.
 
+## Addendum: chat-list riders (user-directed, same branch)
+
+- **Hidden chats above the pinned area**: while revealed, hidden chats render as
+  their own block directly under the "Hide hidden chats" affordance — ABOVE the
+  pinned grid — and leave the grid/plain rows for the duration (the hidden
+  section reads as one unit). e2e: document-order assertion in hidden-chats.spec.
+- **Pinned grid scrolls the list**: tiles move from `touch-action: none` to
+  `pan-y` — a vertical swipe starting on a tile now scrolls the list (the
+  browser claims the pan; the drag controller's pointercancel path drops the
+  pending press cleanly), while press-and-hold still lifts because the post-lift
+  non-passive touchmove blocker owns the finger from LIFT_MS on. The 1045 drag
+  suites stay green; real-device scroll feel is on the manual matrix.
+
 ## Assumptions
 
 - `/speckit-checklist` not required: no wire change, no crypto change; the hardening tightens receiver-side authorization only (spec-1020 @everyone-validation precedent).
