@@ -115,4 +115,5 @@ Specs are grouped by category band; status moves
 | [2030](specs/2030-rtl-names-truncate/spec.md) | RTL Names Truncate at the Correct End | 🔵 in-review |
 | [2031](specs/2031-join-call-invite/spec.md) | Join-Call Invite Affordance & Redundant Held Call | 🔵 in-review |
 | [2032](specs/2032-ipad-taps-dead/spec.md) | iPad Taps Dead on Send & Quick-React | 🟡 in-progress |
+| [2033](specs/2033-second-consecutive-frame/spec.md) | Second Consecutive Frame on a Fresh Carrier Session Is Lost | 🔵 in-review |
 | [2034](specs/2034-wall-video-posts/spec.md) | Wall Video Posts — Honest Progress, Real Avatar, Media That Fits | 🔵 in-review |
