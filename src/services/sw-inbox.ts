@@ -72,6 +72,10 @@ export interface SwNote {
   // so the show path can make it CUMULATIVE across overlapping burst wakes (via the persisted
   // per-chat summary) instead of a per-pass slice. Defaults to ids.length when unset.
   count?: number;
+  // (spec 1048) Show without the platform alert sound. A SW can't play the app's
+  // synthesized tones, so the reaction tone 'none' maps to this — the note is still
+  // VISIBLE (the wake ends visibly either way); only the sound is dropped.
+  silent?: boolean;
 }
 
 /** Background-preview result. `notes` are the displayable notifications, `pending`
@@ -205,7 +209,21 @@ export function noteForPayload(
     prefs?: { turn: boolean; challenges: boolean; followMoves: boolean; followResults: boolean };
     follows?: Record<string, number>;
   },
+  // Reaction context (spec 1048), prefetched by previewPending: the reacted-to
+  // message's stored row (to tell "reaction to MY message" and quote it) plus the
+  // gating toggles and the dedicated reaction tone. Absent (e.g. a caller that
+  // defers reactions, like the authoritative drain) → the reaction stays the
+  // silent side effect it was before spec 1048.
+  reactionCtx?: {
+    row?: Message;
+    prefs?: { dm: boolean; group: boolean; tone: string };
+  },
+  // Surface masters (spec 1050): the group "Show notifications" toggle finally
+  // gates group frames here too. Like the global master, escalation does NOT
+  // pierce it. Absent = on (old callers).
+  surfaces?: { showGroups?: boolean },
 ): { note: SwNote | null; wasMessage: boolean; silenced?: boolean } {
+  const showGroups = surfaces?.showGroups !== false;
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
 
@@ -384,11 +402,73 @@ export function noteForPayload(
     };
   }
 
-  // Reactions / poll votes / edits / delete-for-everyone / link-preview attach, and
-  // the session re-key + disappearing-message TTL controls, are silent side effects
-  // with nothing to show.
+  // Reactions (spec 1048): a reaction ADD to one of MY OWN messages notifies the
+  // author (the two settings toggles gate it per surface) — everything else about a
+  // reaction stays the silent side effect it always was. Critically for push health
+  // (FR-013): every suppressed case below returns the EXACT pre-1048 shape
+  // `{note:null, wasMessage:false}`, so sw.ts's established visible-wake fallback
+  // (specs 2016/2017/2023) applies unchanged — no new class of silent wake exists.
+  // Reactions NEVER escalate (unlike mentions): mute, web-push-off, content='none',
+  // hidden, and the global master all silence them. wasMessage stays false — a
+  // reaction is not a message and must not badge or count unread (spec 1048
+  // clarification).
+  if (payload.reaction) {
+    const sig = payload.reaction;
+    const row = reactionCtx?.row;
+    const rChat = payload.groupId
+      ? chats.find((c) => c.id === payload.groupId && c.isGroup)
+      : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
+    const mine = !!row && (row.outgoing || row.senderId === 'me');
+    // Group-surface master (spec 1050): a group reaction is a group notice.
+    if (payload.groupId && !showGroups) return { note: null, wasMessage: false };
+    // spec 1050 (US2): a member with their OWN reaction on the target is a
+    // co-reactor — loud too, with "also reacted" wording. selfId is never the
+    // incoming reactor here (own devices are filtered below).
+    const coReactor = !!row && !mine && !!selfId && (row.reactions ?? []).some((r) => r.userId === selfId);
+    const enabled = rChat?.isGroup ? reactionCtx?.prefs?.group === true : reactionCtx?.prefs?.dm === true;
+    const suppressedByChat =
+      !rChat ||
+      hidden.has(rChat.id) ||
+      (rChat.mutedUntil !== undefined && rChat.mutedUntil > Date.now()) ||
+      rChat.notifyWebPush === false ||
+      (rChat.notifyContent ?? 'full') === 'none';
+    if (sig.remove || (!mine && !coReactor) || from === selfId || !enabled || !showMessages || suppressedByChat) {
+      return { note: null, wasMessage: false };
+    }
+    const showText = (rChat.notifyContent ?? 'full') === 'full' && showPreview;
+    const name = known || 'Someone';
+    const first = name.split(' ')[0];
+    // A short quote of the reacted-to message; media/empty bodies read naturally.
+    const raw = (row.body || '').replace(/\s+/g, ' ').trim();
+    const quote = raw.length > 80 ? `${raw.slice(0, 79)}…` : raw;
+    // Co-reactor wording says "also" and drops the "your message" claim — the
+    // target is someone else's message the recipient happened to react to.
+    const verb = coReactor ? `also reacted ${sig.emoji}` : `reacted ${sig.emoji}`;
+    const line = rChat.isGroup
+      ? quote ? `${first} ${verb} to: ${quote}` : `${first} ${verb} to ${coReactor ? 'a message you reacted to' : 'your message'}`
+      : quote ? `${coReactor ? 'Also reacted' : 'Reacted'} ${sig.emoji} to: ${quote}` : `${coReactor ? 'Also reacted' : 'Reacted'} ${sig.emoji} to ${coReactor ? 'a message you reacted to' : 'your message'}`;
+    return {
+      note: {
+        ids: [f.id as string],
+        // Same masking rules as a plain message: preview off hides WHO as well.
+        title: showPreview ? (rChat.isGroup ? rChat.name || 'Group' : name) : 'Ring',
+        body: showText ? line : 'New message',
+        url: `/chat/${rChat.id}`,
+        // The chat's own tag: reactions coalesce into the ONE per-chat notification
+        // (spec 2017 summary machinery included) instead of stacking (FR-003).
+        tag: `ring:${rChat.id}`,
+        // Tone 'none' = visible but quiet; a SW can't play the app's synthesized tones.
+        silent: reactionCtx?.prefs?.tone === 'none',
+      },
+      wasMessage: false,
+    };
+  }
+
+  // Poll votes / edits / delete-for-everyone / link-preview attach, and the session
+  // re-key + disappearing-message TTL controls, are silent side effects with
+  // nothing to show.
   if (
-    payload.reaction || payload.pollVote || payload.edit || payload.erase ||
+    payload.pollVote || payload.edit || payload.erase ||
     payload.linkPreviewSig || payload.rekey || payload.ttl !== undefined
   ) {
     return { note: null, wasMessage: false };
@@ -398,6 +478,9 @@ export function noteForPayload(
   if (!showMessages) return { note: null, wasMessage: true };
 
   const isGroup = !!payload.groupId;
+  // Group-surface master (spec 1050): off = off for the whole surface — plain
+  // messages AND the mention/reply escalation below (parity with the page path).
+  if (isGroup && !showGroups) return { note: null, wasMessage: true };
   const groupChat = isGroup ? chats.find((c) => c.id === payload.groupId) : undefined;
   const senderName = known || 'Someone';
   const chat = isGroup
@@ -418,22 +501,29 @@ export function noteForPayload(
       wasMessage: true,
     };
   }
-  // @mentions (spec 1020): a message that @mentions me (individually, or an @everyone
-  // from the actual group OWNER) escalates past the per-chat silencers below (mute,
-  // web-push-off, content=none), and names the mentioner — UNLESS the chat turned the
-  // "mentions even when muted" pref off. (Hidden chats above still win — a hidden chat
-  // never escalates.) The global "Show notifications" master is honored above.
+  // @mentions (spec 1020) + replies-to-me (spec 1048): a message that @mentions me
+  // (individually, or an @everyone from the actual group OWNER) OR directly replies
+  // to a message I authored (the sender snapshots the quoted author into
+  // reply.senderId, so this needs no store lookup) escalates past the per-chat
+  // silencers below (mute, web-push-off, content=none), and names the sender —
+  // UNLESS the chat turned the "mentions even when muted" pref off (ONE dial for
+  // "personally-directed pierces mute"). (Hidden chats above still win — a hidden
+  // chat never escalates.) The global "Show notifications" master is honored above.
   const selfMentioned =
     isGroup &&
     (!!payload.mentions?.includes(selfId) ||
       (!!payload.mentionsEveryone && !!chat?.createdBy && from === chat.createdBy));
-  if (selfMentioned && chat?.notifyMentions !== false) {
+  const selfReplied = isGroup && !!selfId && payload.reply?.senderId === selfId;
+  if ((selfMentioned || selfReplied) && chat?.notifyMentions !== false) {
     const showText = (chat?.notifyContent ?? 'full') === 'full' && showPreview;
+    // An explicit @mention outranks the implicit reply variant when both apply —
+    // one message, one note, the stronger wording.
+    const verb = selfMentioned ? 'mentioned you' : 'replied to you';
     return {
       note: {
         ids: [f.id as string],
         title: groupChat?.name || 'Group',
-        body: showText ? `${senderName} mentioned you: ${notifyPreview(payload)}` : `${senderName} mentioned you`,
+        body: showText ? `${senderName} ${verb}: ${notifyPreview(payload)}` : `${senderName} ${verb}`,
         url: chat?.id ? `/chat/${chat.id}` : '/tabs/chats',
         tag: chat?.id ? `ring:${chat.id}` : `ring:from:${from}`,
       },
@@ -813,6 +903,7 @@ export async function previewPending(): Promise<PreviewResult> {
   const badgeAll = badgeMode === 'always';
 
   const showMessages = await setting<boolean>('notifications.message.show', true);
+  const showGroups = await setting<boolean>('notifications.group.show', true);
 
   // Now decrypt for the rich preview. PIN/passkey-locked (no device key) → generic
   // (the frames were still fetched above, so the sender already got "delivered").
@@ -887,7 +978,21 @@ export async function previewPending(): Promise<PreviewResult> {
           follows: await setting<Record<string, number>>('games.follows', {}),
         }
       : undefined;
-    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx);
+    // Reaction context (spec 1048): the reacted-to message's stored row (tells
+    // "is it MINE?" + provides the quote) and the gates/tone. The row read is the
+    // same read-only pattern as the game context above; an unresolvable target
+    // (deleted, or the reaction outran its message) keeps the reaction silent.
+    const reactionCtx = payload.reaction
+      ? {
+          row: await get<Message>('messages', payload.reaction.messageId),
+          prefs: {
+            dm: await setting<boolean>('notifications.message.reactions', true),
+            group: await setting<boolean>('notifications.group.reactions', true),
+            tone: await setting<string>('notifications.reactions.sound', 'pop'),
+          },
+        }
+      : undefined;
+    const { note, wasMessage, silenced } = noteForPayload(f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx, reactionCtx, { showGroups });
     if (note) raw.push(note);
     else if (silenced) silencedMessage = true;
     else if (wasMessage && !showMessages) withheldMessage = true;

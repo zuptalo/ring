@@ -30,6 +30,10 @@ func (m *memSubStore) SubscriptionsFor(_ context.Context, userID string) ([]stor
 	return append([]store.PushSubscription(nil), m.subs[userID]...), nil
 }
 
+func (m *memSubStore) PrefsFor(_ context.Context, _ string) ([]byte, error) {
+	return []byte("{}"), nil
+}
+
 func (m *memSubStore) AllSubscriptions(_ context.Context) ([]store.PushSubscription, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -275,6 +279,7 @@ func (panicSubStore) AllSubscriptions(context.Context) ([]store.PushSubscription
 	panic("boom: AllSubscriptions")
 }
 func (panicSubStore) DeleteSubscriptionByEndpoint(context.Context, string) error { return nil }
+func (panicSubStore) PrefsFor(context.Context, string) ([]byte, error) { return []byte("{}"), nil }
 
 // A panic in push delivery must never escape Notify - it runs in a bare goroutine
 // off the WS handler, so an unrecovered panic would crash the whole process and

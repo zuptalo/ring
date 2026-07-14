@@ -53,6 +53,10 @@ export interface Chat {
   avatar: string;
   isGroup: boolean;
   participantIds: string[];
+  // spec 1050: opaque conversation route id (random, minted by the first
+  // up-to-date sender, converged via the sealed payload). Feeds server-side
+  // mute routing; hidden chats never register theirs.
+  prid?: string;
   lastMessage: string;
   // Kind of the last message, so the chats list can show an Ionic icon (camera,
   // video, mic, …) instead of an emoji in front of the preview text.

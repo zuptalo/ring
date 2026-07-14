@@ -85,9 +85,13 @@ type AuthFunc func(ctx context.Context, token string) (userID string, ok bool, e
 // by the push package; nil disables push.
 type Notifier interface {
 	Notify(ctx context.Context, userID string)
+	// NotifyFrame is the classed message tickle (spec 1050): class+prid feed the
+	// recipient's per-subscription routing gate; tag-less frames behave as Notify.
+	NotifyFrame(ctx context.Context, userID, class, prid string)
 	NotifyCall(ctx context.Context, userID string)
 	NotifyConn(ctx context.Context, userID string)
-	NotifyPost(ctx context.Context, userID string)
+	// NotifyPost carries the post's author so per-friend post overrides apply (spec 1050).
+	NotifyPost(ctx context.Context, userID, author string)
 	// NotifyPostActivity wakes the POST OWNER's devices for engagement (a reaction or
 	// comment) on their post (spec 1031). Unlike the other tickles it carries the post
 	// id — still zero-knowledge (routing metadata the server already holds, sealed
@@ -105,6 +109,10 @@ type frame struct {
 	From       string          `json:"from,omitempty"`
 	Ciphertext json.RawMessage `json:"ciphertext,omitempty"`
 	MessageID  string          `json:"messageId,omitempty"`
+	// spec 1050: sender-set coarse push class + opaque conversation route id.
+	// Read once at enqueue time to gate the tickle; never persisted.
+	Class string `json:"class,omitempty"`
+	Prid  string `json:"prid,omitempty"`
 	Status     string          `json:"status,omitempty"`
 	At         int64           `json:"at,omitempty"`
 	RefID      string          `json:"refId,omitempty"`
@@ -838,6 +846,13 @@ func (h *Hub) isActiveFresh(userID string) bool {
 // so it is always recovered here; one device's push problem can never become an
 // outage. No-op when this connection has no notifier (push disabled).
 func (c *Client) notifyAsync(userID string, call bool) {
+	c.notifyAsyncFrame(userID, call, "", "")
+}
+
+// notifyAsyncFrame is notifyAsync carrying the frame's spec-1050 class/prid so
+// the recipient's routing prefs can gate the tickle. Empty class/prid = the
+// untagged (pre-1050 / non-msg) behavior.
+func (c *Client) notifyAsyncFrame(userID string, call bool, class, prid string) {
 	if c.notifier == nil {
 		return
 	}
@@ -852,10 +867,16 @@ func (c *Client) notifyAsync(userID string, call bool) {
 		if call {
 			c.notifier.NotifyCall(ctx, userID)
 		} else {
-			c.notifier.Notify(ctx, userID)
+			c.notifier.NotifyFrame(ctx, userID, class, prid)
 		}
 	}()
 }
+
+// IsActiveFresh reports whether the user has a foregrounded, provably-live
+// connection right now — the same signal the message push decision uses.
+// Exported for spec 1050: connection-event tickles are presence-gated too, so
+// an in-app user gets the live WS frame and no simultaneous OS push.
+func (h *Hub) IsActiveFresh(userID string) bool { return h.isActiveFresh(userID) }
 
 // markPong records that a client's socket is alive (a pong arrived).
 func (h *Hub) markPong(c *Client) {
@@ -1266,7 +1287,9 @@ func (c *Client) handleFrame(data []byte) {
 			// responsive recipient gets it in-app and needs no push.
 			sent := c.hub.Send(f.To, payload)
 			if !c.hub.isActiveFresh(f.To) || !sent {
-				c.notifyAsync(f.To, false)
+				// spec 1050: the frame's class/prid gate the tickle against the
+				// recipient's routing prefs (delivery above is already done).
+				c.notifyAsyncFrame(f.To, false, f.Class, f.Prid)
 			}
 		}
 		// Tell the sender the server accepted it.

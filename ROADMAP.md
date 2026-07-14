@@ -71,8 +71,11 @@ Specs are grouped by category band; status moves
 | [1043](specs/1043-direct-peer-peer/spec.md) | Direct Peer-to-Peer Call Media with Relay Fallback | 🟢 shipped |
 | [1044](specs/1044-pinned-chats-show/spec.md) | Pinned Chats Grid (iMessage-style) | 🟢 shipped |
 | [1045](specs/1045-rearrange-pinned-chats/spec.md) | Rearrange pinned chats with drag, stable manual order, and long-press chat preview | 🟢 shipped |
-| [1046](specs/1046-quick-call-tiles/spec.md) | Quick Call tiles on the Calls tab, usage totals move to Network usage | 🔵 in-review |
-| [1047](specs/1047-chat-background-contrast/spec.md) | Chat background pattern reads clearly in both themes | 🔵 in-review |
+| [1046](specs/1046-quick-call-tiles/spec.md) | Quick Call tiles on the Calls tab, usage totals move to Network usage | 🟢 shipped |
+| [1047](specs/1047-chat-background-contrast/spec.md) | Chat background pattern reads clearly in both themes | 🟢 shipped |
+| [1048](specs/1048-notify-reactions-messages/spec.md) | Reaction Notifications & Group Reply Escalation | 🔵 in-review |
+| [1049](specs/1049-richer-higher-quality/spec.md) | Richer Notification Alert Tones | 🔵 in-review |
+| [1050](specs/1050-quiet-housekeeping-frames/spec.md) | Push Classes, Conversation Mutes & Notification Routing | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
@@ -108,4 +111,5 @@ Specs are grouped by category band; status moves
 | [2028](specs/2028-quick-forward-button/spec.md) | Quick-Forward Button Sits at the Bottom Edge of Tall Media Messages | 🟢 shipped |
 | [2029](specs/2029-camera-off-shows/spec.md) | Camera Off Shows Your Picture to the Call, Not a Black Screen | 🟢 shipped |
 | [2030](specs/2030-rtl-names-truncate/spec.md) | RTL Names Truncate at the Correct End | 🔵 in-review |
+| [2032](specs/2032-ipad-taps-dead/spec.md) | iPad Taps Dead on Send & Quick-React | 🟡 in-progress |
 | [2033](specs/2033-second-consecutive-frame/spec.md) | Second Consecutive Frame on a Fresh Carrier Session Is Lost | 🔵 in-review |

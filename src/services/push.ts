@@ -9,9 +9,11 @@
  * Requires notification permission to already be granted (the onboarding wizard
  * handles the prompt); these functions are safe no-ops otherwise.
  */
-import { fetchServerConfig, subscribePush, unsubscribePushServer } from './api';
-import { get, put, remove } from '@/db/idb';
-import type { Setting } from '@/db/types';
+import { fetchServerConfig, savePushPrefs, subscribePush, unsubscribePushServer } from './api';
+import { get, getAll, put, remove, subscribe as subscribeBus } from '@/db/idb';
+import { readHiddenSetOrNull } from './hidden-chats';
+import { derivePushPrefs, type PrefsChatSnap } from './push-prefs';
+import type { Chat, Setting } from '@/db/types';
 
 function urlBase64ToUint8Array(base64: string): Uint8Array {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4);
@@ -261,6 +263,10 @@ export async function ensurePushSubscription(): Promise<boolean> {
       // anywhere above leaves the device below the epoch, so it retries the
       // forced rotation on the next open.
       await put<Setting<number>>('settings', { key: EPOCH_KEY, value: ROTATE_EPOCH });
+      // spec 1050: a fresh subscription row starts with empty prefs — register
+      // this device's routing posture now, and keep it live from here on.
+      startPushPrefsSync();
+      void refreshPushPrefs();
       return true;
     }
     return false;
@@ -410,6 +416,50 @@ export async function revalidatePushSubscription(): Promise<void> {
   if (now - lastRevalidate < REVALIDATE_THROTTLE_MS) return;
   lastRevalidate = now;
   await applyPushPreference(true);
+}
+
+/* ---- push routing prefs (spec 1050) ---- */
+
+let prefsSyncStarted = false;
+let prefsTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Keep the server-side routing prefs live: any chats/settings write (mutes,
+ *  toggles, prid adoption, wall ledgers, the per-friend post flags — all land in
+ *  those two stores) schedules a debounced full-state re-registration. */
+export function startPushPrefsSync(): void {
+  if (prefsSyncStarted) return;
+  prefsSyncStarted = true;
+  subscribeBus(['chats', 'settings'], () => {
+    if (prefsTimer) clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(() => void refreshPushPrefs(), 2000);
+  });
+}
+
+/** Derive + register the device's push routing prefs (full-state replace).
+ *  Fails CLOSED on a locked hidden set: rather than risk registering a hidden
+ *  chat's route id, skip this round — the next unlock writes settings/chats and
+ *  re-triggers. Transient network failures just wait for the next change. */
+export async function refreshPushPrefs(): Promise<void> {
+  try {
+    const hidden = await readHiddenSetOrNull();
+    if (hidden === null) return; // keystore locked → cannot prove hidden exclusion → skip
+    const [chats, settings] = await Promise.all([getAll<Chat>('chats'), getAll<Setting<unknown>>('settings')]);
+    const settingsMap: Record<string, unknown> = {};
+    for (const s of settings) settingsMap[s.key] = s.value;
+    const wallMuted = Object.entries((settingsMap['wall.mutedUsers'] as Record<string, boolean>) ?? {})
+      .filter(([, v]) => v).map(([k]) => k);
+    const wallAlways = Object.entries((settingsMap['wall.alwaysUsers'] as Record<string, boolean>) ?? {})
+      .filter(([, v]) => v).map(([k]) => k);
+    const snaps: PrefsChatSnap[] = chats.map((c) => ({
+      id: c.id, prid: c.prid, mutedUntil: c.mutedUntil, notifyWebPush: c.notifyWebPush,
+    }));
+    await savePushPrefs(derivePushPrefs({
+      settings: settingsMap, chats: snaps, hiddenIds: hidden,
+      wall: { muted: wallMuted, always: wallAlways }, now: Date.now(),
+    }));
+  } catch {
+    /* transient — the next relevant change re-schedules */
+  }
 }
 
 /** Remove this device's push subscription (on sign-out). */

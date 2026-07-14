@@ -23,6 +23,11 @@ export interface MsgFrame {
   to?: string; // recipient user id (set when sending)
   from?: string; // sender user id (set by the server on delivery)
   ciphertext?: unknown; // sealed wire packet, opaque to the transport
+  // spec 1050: sender-set coarse push class + opaque conversation route id.
+  // Plaintext BY DESIGN (the user-approved routing leak): they exist so the
+  // blind relay can gate the push tickle; they never affect delivery.
+  class?: string;
+  prid?: string;
 }
 export interface ReceiptFrame {
   t: 'receipt';

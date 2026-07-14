@@ -54,7 +54,10 @@ export interface NotifyInput {
      *  alert escalates past the per-chat silencers — mute, in-app-off, content=none,
      *  web-push-off, and the settle window — while the structural gates (locked,
      *  active-chat) and the GLOBAL "Show notifications" master + OS DND (enforced by
-     *  the caller before this runs) still hold. Computed by each caller (page + SW). */
+     *  the caller before this runs) still hold. Computed by each caller (page + SW).
+     *  Spec 1048 widened what FEEDS this flag: a direct reply to a message the user
+     *  authored is an implicit mention (same pref, same silencer set) — the callers
+     *  pass mention-or-replied here, so this predicate stays byte-identical. */
     isMention?: boolean;
   };
 }
