@@ -113,6 +113,13 @@ describe('spec 1048 US1 — reaction alerts on the page path', () => {
     expect(h.tones).toHaveBeenCalledWith('pop');
   });
 
+  it('in-app sounds are ON by default — a banner tones without any setting touched', async () => {
+    h.settings.clear(); // no inapp.sounds key at all → the default must play
+    await refreshPrefs();
+    await notifyIncoming(reactionNotice());
+    expect(h.tones).toHaveBeenCalledWith('pop');
+  });
+
   it("reaction tone 'none': the banner still shows, silently", async () => {
     h.settings.set('notifications.reactions.sound', 'none');
     await refreshPrefs();

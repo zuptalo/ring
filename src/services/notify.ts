@@ -46,7 +46,10 @@ interface NotifyPrefs {
 const PREF_DEFAULTS: NotifyPrefs = {
   showMessages: true,
   showPreview: true,
-  inappSounds: false,
+  // Default ON (spec 1050 field report): every major messenger plays in-app
+  // sounds out of the box, and a silent default made the per-surface tones
+  // (message/group/reaction) look broken on devices that never found the toggle.
+  inappSounds: true,
   messageSound: 'note',
   reactionSound: 'pop',
   inappStyle: 'banners',
