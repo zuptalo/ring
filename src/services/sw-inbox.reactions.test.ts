@@ -191,6 +191,25 @@ describe('spec 1048 US1/US3 — suppression layers (FR-005): reactions NEVER esc
   });
 });
 
+describe("spec 1050 — group 'Show notifications' master in the SW", () => {
+  it('group.show off silences group messages, mentions, and reactions (pre-1048 shapes)', () => {
+    const off = { showGroups: false };
+    const gm = { body: 'hi', kind: 'text', timestamp: 2, groupId: 'g1' } as never;
+    const r1 = noteForPayload(frame, gm, [groupChat], contacts, true, true, new Set(), SELF, undefined, undefined, off);
+    expect(r1.note).toBeNull();
+    const men = { body: 'yo', kind: 'text', timestamp: 2, groupId: 'g1', mentions: [SELF] } as never;
+    const r2 = noteForPayload(frame, men, [groupChat], contacts, true, true, new Set(), SELF, undefined, undefined, off);
+    expect(r2.note).toBeNull();
+    const r3 = noteForPayload(frame, reaction({ groupId: 'g1' }), [groupChat], contacts, true, true, new Set(), SELF, undefined, ctx({ row: myMsg({ chatId: 'g1' }) }), off);
+    expect(r3).toEqual(SILENT_SIDE_EFFECT);
+  });
+
+  it('group.show off leaves 1:1 notes untouched', () => {
+    const r = noteForPayload(frame, reaction(), [dmChat], contacts, true, true, new Set(), SELF, undefined, ctx(), { showGroups: false });
+    expect(r.note).not.toBeNull();
+  });
+});
+
 describe('spec 1048 US1 — content masking (FR-002/SC-006)', () => {
   it("per-chat content 'generic' → generic body, chat still named", () => {
     const generic = { ...dmChat, notifyContent: 'generic' } as Chat;

@@ -113,6 +113,13 @@ describe('spec 1048 US1 — reaction alerts on the page path', () => {
     expect(h.tones).toHaveBeenCalledWith('pop');
   });
 
+  it('in-app sounds are ON by default — a banner tones without any setting touched', async () => {
+    h.settings.clear(); // no inapp.sounds key at all → the default must play
+    await refreshPrefs();
+    await notifyIncoming(reactionNotice());
+    expect(h.tones).toHaveBeenCalledWith('pop');
+  });
+
   it("reaction tone 'none': the banner still shows, silently", async () => {
     h.settings.set('notifications.reactions.sound', 'none');
     await refreshPrefs();
@@ -158,6 +165,55 @@ describe('spec 1048 US1 — reaction alerts on the page path', () => {
     expect(presented).toBe(false);
     expect(h.notifyLocal).toHaveBeenCalled();
     expect(h.notifyLocal.mock.calls[0][1]).toContain('Reacted ❤️');
+  });
+});
+
+describe('spec 1050 — the group tone is finally a real setting', () => {
+  it('a group message notice plays notifications.group.sound, not the message tone', async () => {
+    h.settings.set('notifications.message.sound', 'note');
+    h.settings.set('notifications.group.sound', 'beacon');
+    await refreshPrefs();
+    await notifyIncoming({ kind: 'message', group: true, chatId: 'g9', msgId: 'm9', name: 'Team', body: 'Ann: hi all' } as never);
+    expect(h.tones).toHaveBeenCalledWith('beacon');
+    expect(h.tones).not.toHaveBeenCalledWith('note');
+  });
+
+  it('a 1:1 message keeps the message tone', async () => {
+    h.settings.set('notifications.message.sound', 'note');
+    h.settings.set('notifications.group.sound', 'beacon');
+    await refreshPrefs();
+    await notifyIncoming({ kind: 'message', chatId: 'c9', msgId: 'm8', name: 'Ann', body: 'hi' } as never);
+    expect(h.tones).toHaveBeenCalledWith('note');
+  });
+
+  it('a group REACTION still uses the dedicated reaction tone (most specific wins)', async () => {
+    h.settings.set('notifications.group.sound', 'beacon');
+    await refreshPrefs();
+    await notifyIncoming(reactionNotice({ group: true, chatId: 'g9' }));
+    expect(h.tones).toHaveBeenCalledWith('pop');
+    expect(h.tones).not.toHaveBeenCalledWith('beacon');
+  });
+});
+
+describe("spec 1050 — the group 'Show notifications' master is finally real", () => {
+  it('group.show off silences a group message notice; 1:1 still banners', async () => {
+    h.settings.set('notifications.group.show', false);
+    await refreshPrefs();
+    const g = await notifyIncoming({ kind: 'message', group: true, chatId: 'g1', msgId: 'm1', name: 'Team', body: 'Ann: hi' } as never);
+    expect(g).toBe(false);
+    expect(notifyBanners.value).toHaveLength(0);
+    const dm = await notifyIncoming({ kind: 'message', chatId: 'c1', msgId: 'm2', name: 'Ann', body: 'hi' } as never);
+    expect(dm).toBe(true);
+  });
+
+  it('group.show is a surface MASTER: mentions and reactions in groups are silenced too', async () => {
+    h.settings.set('notifications.group.show', false);
+    await refreshPrefs();
+    const m = await notifyIncoming({ kind: 'message', group: true, mention: true, mentionName: 'Ann', chatId: 'g1', msgId: 'm3', name: 'Team', body: 'Ann: @you' } as never);
+    expect(m).toBe(false);
+    const r = await notifyIncoming(reactionNotice({ group: true, chatId: 'g1' }));
+    expect(r).toBe(false);
+    expect(notifyBanners.value).toHaveLength(0);
   });
 });
 

@@ -58,6 +58,9 @@ let lastCheck = 0;
 const CHECK_THROTTLE_MS = 10_000;
 // One silent install-gate auto-update per tab session (loop guard — see maybePrompt).
 const GATE_UPDATED_KEY = 'ring.installGateAutoUpdated';
+// Spec 2032: one chunk-failure self-heal per tab, so a heal that doesn't take
+// (e.g. the server is mid-deploy) can't reload-loop.
+const CHUNK_HEAL_KEY = 'ring.chunkHealApplied';
 
 /**
  * Ask the service worker to check for a newer deployed build. Safe to call on app
@@ -159,6 +162,25 @@ export function useAppUpdate(): void {
       }
     },
   });
+
+  // Spec 2032: a lazily-loaded chunk that fails to arrive means THIS shell is
+  // stale — its fingerprinted assets no longer exist on the server (which now
+  // answers them with an honest 404 instead of index.html). Left alone, that is
+  // the "some buttons just do nothing" failure: the feature whose chunk died
+  // never wires up and no error surfaces. Vite emits vite:preloadError exactly
+  // for this, so pull the waiting update (or force the check + reload) instead
+  // of letting the user sit in a half-dead app. One attempt per tab; never
+  // mid-call (the next failure after the call re-triggers, guard permitting).
+  if (typeof window !== 'undefined') {
+    window.addEventListener('vite:preloadError', (e) => {
+      let already = false;
+      try { already = sessionStorage.getItem(CHUNK_HEAL_KEY) === '1'; } catch { /* ignore */ }
+      if (already || isInCall()) return;
+      try { sessionStorage.setItem(CHUNK_HEAL_KEY, '1'); } catch { /* ignore */ }
+      e.preventDefault(); // recovery is ours; don't also throw the raw import error
+      void applyUpdate(updateServiceWorker);
+    });
+  }
 
   let prompting = false;
 

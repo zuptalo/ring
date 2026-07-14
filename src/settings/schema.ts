@@ -635,7 +635,7 @@ export const SETTINGS: Record<string, SettingNode> = {
       },
       {
         items: [
-          { type: 'toggle', title: 'Sounds', key: 'notifications.inapp.sounds', default: false },
+          { type: 'toggle', title: 'Sounds', key: 'notifications.inapp.sounds', default: true },
         ],
       },
     ],
