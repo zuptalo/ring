@@ -2065,18 +2065,34 @@ export async function acceptGroupInvite(groupId: string): Promise<void> {
     await sendGroupCard([r.inviter], { t: 'accept', groupId, name: '', members: roster, at: ts });
   }
   await dropRequest(reqId);
+  // Spec 1052: group traffic that arrived before this acceptance was parked —
+  // the chat exists now, so replay it into place.
+  await drainParkedGroupFrames(groupId);
 }
 
 /** Decline a group invitation: tell the inviter (so they drop us from the pending
- *  set) and clear the local invitation. No group chat is created. */
+ *  set) and clear the local invitation. No group chat is created.
+ *  Spec 1052: ALSO broadcast a leave to the invitation's roster — a converted
+ *  auto-add means the sender (and co-members) already counted us as a member,
+ *  and the leave removes us there; for an ordinary invitation we were never in
+ *  anyone's participant list, so the leave is a no-op everywhere (idempotent).
+ *  Any frames parked for this group are dropped with the invitation. */
 export async function declineGroupInvite(groupId: string): Promise<void> {
   const reqId = `ginv:${groupId}`;
   const r = await get<FriendRequest>('requests', reqId);
   const ts = now();
+  const self = getSelfUserId() ?? '';
   if (r?.inviter) {
     await sendGroupCard([r.inviter], { t: 'decline', groupId, name: '', members: [], at: ts });
   }
+  const others = (r?.roster ?? []).map((m) => m.id).filter((id) => id && id !== self);
+  if (others.length) {
+    await sendGroupCard(others, { t: 'leave', groupId, name: '', members: [], at: ts });
+  }
   await dropRequest(reqId);
+  for (const row of await listParkedGroupFrames()) {
+    if (row.value.groupId === groupId) await remove('settings', row.key);
+  }
 }
 
 /** Incoming, still-pending group invitations (drive the Contacts "Invitations"
@@ -5533,6 +5549,61 @@ interface PendingIncoming {
   ciphertext: unknown;
 }
 
+/* ---- parked group frames (spec 1052 FR-006) ----
+ * A group-scoped frame for a group this device doesn't have must NOT
+ * materialize the chat (that would bypass the add-approval toggle and the
+ * connected-sender hardening). Park it durably instead and replay it through
+ * the normal receive path once the group legitimately exists (card honored or
+ * invitation accepted). Replaying the ciphertext is safe: the ratchet's
+ * skipped-key cache makes a second open of the same packet idempotent — the
+ * exact property the SW preview already relies on (spec 1032). Bounded + TTL'd
+ * so a group that never materializes can't grow residue. */
+const PARKED_GROUP_PREFIX = 'parkedGroup:';
+const PARKED_GROUP_CAP = 200;
+const PARKED_GROUP_TTL_MS = 48 * 3600_000;
+interface ParkedGroupFrame {
+  groupId: string;
+  from: string;
+  id: string;
+  ciphertext: unknown;
+  at: number;
+}
+
+async function listParkedGroupFrames(): Promise<Array<Setting<ParkedGroupFrame>>> {
+  const rows = await getAll<Setting<ParkedGroupFrame>>('settings');
+  return rows.filter((r) => r.key.startsWith(PARKED_GROUP_PREFIX));
+}
+
+async function parkGroupFrame(groupId: string, from: string, id: string, ciphertext: unknown): Promise<void> {
+  const rows = await listParkedGroupFrames();
+  const cutoff = now() - PARKED_GROUP_TTL_MS;
+  // Expiry + cap in one pass: drop the stale, and if still at the cap, the oldest.
+  const live = [];
+  for (const r of rows) {
+    if (r.value.at < cutoff) await remove('settings', r.key);
+    else live.push(r);
+  }
+  if (live.length >= PARKED_GROUP_CAP) {
+    live.sort((a, b) => a.value.at - b.value.at);
+    for (const r of live.slice(0, live.length - PARKED_GROUP_CAP + 1)) await remove('settings', r.key);
+  }
+  await setSetting<ParkedGroupFrame>(`${PARKED_GROUP_PREFIX}${id}`, { groupId, from, id, ciphertext, at: now() });
+}
+
+/** Replay every parked frame for `groupId` through the normal receive path —
+ *  called the moment the group chat materializes. Exported for the invite flow. */
+export async function drainParkedGroupFrames(groupId: string): Promise<void> {
+  for (const r of await listParkedGroupFrames()) {
+    if (r.value.groupId !== groupId) continue;
+    await remove('settings', r.key); // remove first: a failing frame must not loop forever
+    try {
+      await receiveIncoming(r.value.from, r.value.id, r.value.ciphertext);
+    } catch (e) {
+      console.warn('[group] parked frame replay failed', e);
+    }
+  }
+}
+
 async function queuePendingIncoming(from: string, id: string, ciphertext: unknown): Promise<void> {
   await setSetting<PendingIncoming>(`${PENDING_INCOMING_PREFIX}${id}`, { from, id, ciphertext });
 }
@@ -5555,6 +5626,52 @@ export async function drainPendingIncoming(): Promise<void> {
 
 /** Apply an inbound group membership card (create/update/leave). Mirrors
  *  handleContactCard: a side effect, never a stored message. */
+/** Dev/e2e only (spec 1052): send a raw auto-join create card to one recipient,
+ *  bypassing the picker — simulates a modified client so the connected-sender
+ *  hardening is testable. Reached only through the dev test hook (stripped from
+ *  production builds). */
+export async function devSendRawGroupCreate(to: string, groupId: string, name: string): Promise<void> {
+  const self = getSelfUserId() ?? '';
+  await sendGroupCard([to], {
+    t: 'create',
+    groupId,
+    name,
+    members: [
+      { id: self, name: 'Raw Sender' },
+      { id: to, name: '' },
+    ],
+    at: now(),
+  });
+}
+
+/** Record a group invitation request row + surface it (shared by the real invite
+ *  card and spec 1052's converted auto-adds). Upserts the roster's contacts so
+ *  names render; deliberately writes NO chat (pre-join history stays out). */
+async function stashGroupInvitation(from: string, card: GroupCard, self: string): Promise<void> {
+  for (const m of card.members) {
+    if (!m.id || m.id === self) continue;
+    if (!(await getContact(m.id))) await addContactWithId(m.id, m.name);
+  }
+  const inviterId = card.inviter ?? from;
+  const displayName = card.name || autoDisplayName(card.members, self);
+  const others = card.members.filter((m) => m.id !== self && m.id !== inviterId).map((m) => firstName(m.name));
+  await put<FriendRequest>('requests', {
+    id: `ginv:${card.groupId}`,
+    kind: 'group-invite',
+    groupId: card.groupId,
+    inviter: inviterId,
+    name: card.name, // raw (may be ''); UI falls back to memberPreview
+    avatar: card.avatar || groupAvatar(card.groupId),
+    memberPreview: others.join(', '),
+    roster: card.members,
+    createdAt: now(),
+    status: 'pending',
+    direction: 'incoming',
+  });
+  const inviterName = (await getContact(inviterId))?.name ?? 'Someone';
+  void notifyIncoming({ kind: 'request', name: inviterName, body: `invited you to "${displayName}"` });
+}
+
 async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
   const self = getSelfUserId() ?? '';
   const existing = await getChat(card.groupId);
@@ -5568,30 +5685,7 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
     // Already a member (have the group) → stale invite, ignore. The group chat is
     // deliberately NOT created here; that's what keeps pre-join history out.
     if (existing?.isGroup) return;
-    // Upsert the inviter + co-members so names render in the invite (and later the
-    // group). Does NOT write any chat.
-    for (const m of card.members) {
-      if (!m.id || m.id === self) continue;
-      if (!(await getContact(m.id))) await addContactWithId(m.id, m.name);
-    }
-    const inviterId = card.inviter ?? from;
-    const displayName = card.name || autoDisplayName(card.members, self);
-    const others = card.members.filter((m) => m.id !== self && m.id !== inviterId).map((m) => firstName(m.name));
-    await put<FriendRequest>('requests', {
-      id: `ginv:${card.groupId}`,
-      kind: 'group-invite',
-      groupId: card.groupId,
-      inviter: inviterId,
-      name: card.name, // raw (may be ''); UI falls back to memberPreview
-      avatar: card.avatar || groupAvatar(card.groupId),
-      memberPreview: others.join(', '),
-      roster: card.members,
-      createdAt: now(),
-      status: 'pending',
-      direction: 'incoming',
-    });
-    const inviterName = (await getContact(inviterId))?.name ?? 'Someone';
-    void notifyIncoming({ kind: 'request', name: inviterName, body: `invited you to "${displayName}"` });
+    await stashGroupInvitation(from, card, self);
     return;
   }
 
@@ -5688,6 +5782,22 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
   // so it wins over any card timestamp). A fresh INVITE still reaches the user —
   // accepting it is the deliberate re-engagement that ends the block.
   if (!existing && (await isTombstoned('chats', card.groupId, card.at || now()))) return;
+  // Spec 1052: a card that would MATERIALIZE a group on this device is an
+  // auto-add. Two gates, receiver-side (the sender can't know either — ZK):
+  //   hardening (unconditional): only a CONNECTED sender may auto-add — anyone
+  //   else's add arrives as an invitation at most (the honest UI can't even
+  //   produce this case; a modified client could, spec-1020-style validation);
+  //   approval toggle: with "Ask before adding me to groups" on, even a
+  //   friend's add converts to the invitation flow.
+  // Roster updates for a group we already have are membership maintenance
+  // among existing members and stay untouched.
+  if (!existing?.isGroup) {
+    const approval = await getSetting<boolean>('privacy.groupAddApproval', false);
+    if (approval || !(await isPeerConnected(from))) {
+      await stashGroupInvitation(from, { ...card, inviter: from }, self);
+      return;
+    }
+  }
   // Empty card.name → auto-derive a display name from the other members.
   const autoName = !card.name;
   const displayName = card.name || autoDisplayName(card.members, self);
@@ -5719,6 +5829,9 @@ async function handleGroupCard(from: string, card: GroupCard): Promise<void> {
       createdBy: card.createdBy, // owner, for @everyone validation (spec 1020)
       updatedAt: now(),
     });
+    // Spec 1052: traffic that raced ahead of this card was parked — replay it
+    // now that the group exists (message-before-card ordering stays lossless).
+    await drainParkedGroupFrames(card.groupId);
   }
 }
 
@@ -5899,6 +6012,23 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   // effect (the stored message / applied side effect), not here. Marking after the
   // ratchet advanced but BEFORE the row is stored would, on a crash in that window,
   // skip the redelivery that could otherwise re-establish + recover a first message.
+
+  // Spec 1052 (FR-006): any group-SCOPED frame (message, reaction, ttl, game…)
+  // for a group this device doesn't have parks instead of materializing the
+  // chat — a group may only come into being through an honored card or an
+  // accepted invitation. Group CARDS (payload.group) pass through: they ARE the
+  // membership machinery. Tombstoned ids keep today's silent drop.
+  if (payload.groupId && !payload.group && !(await getChat(payload.groupId))) {
+    if (await isTombstoned('chats', payload.groupId, now())) {
+      if (remoteId) await markInboundSeen(remoteId); // deliberate drop, as today
+      return;
+    }
+    // Deliberately NOT marked seen: the replay re-enters receiveIncoming and the
+    // seen-guard would skip it. A server redelivery before the ack just re-parks
+    // onto the same key (idempotent).
+    await parkGroupFrame(payload.groupId, from, remoteId, ciphertext);
+    return;
+  }
 
   // Contact cards (friend request / accept / profile update) are applied as a
   // side effect, never stored or shown as a chat message.

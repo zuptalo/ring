@@ -37,6 +37,9 @@ describe('settings schema', () => {
     // that would silently apply if the key were reused — the replacement is the
     // new privacy.relayCalls key. Re-adding any of these should fail this guard.
     const DEAD = [
+      // privacy.groups (spec 1052): the unenforceable Everyone/Contacts chooser —
+      // retired for privacy.groupAddApproval; stale synced values may exist.
+      'privacy.groups',
       'privacy.status', 'privacy.statusSharing', 'privacy.protectIp', 'privacy.cameraEffects',
       'notifications.status.show', 'notifications.status.reactions', 'notifications.status.sound',
       'notifications.reminders',

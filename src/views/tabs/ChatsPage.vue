@@ -54,6 +54,19 @@
           <ion-icon slot="start" :icon="eyeOffOutline" color="medium" />
           <ion-label>Hide hidden chats</ion-label>
         </ion-item>
+        <!-- Revealed hidden chats: their own block right under the reveal
+             affordance, ABOVE the pinned grid (spec 1052 rider) — the hidden
+             section reads as one unit while it exists. -->
+        <ChatListItem
+          v-for="chat in hiddenRows"
+          :key="'hidden-' + chat.id"
+          :chat="chat"
+          :draft="draftFor(chat.id)"
+          :lifted="dragActive && dragState.origin === 'list' && dragState.chat?.id === chat.id"
+          @open="open"
+          @more="(c) => actions?.openMore(c)"
+          @press="(c, e) => pressStart(e, c, 'list')"
+        />
 
         <!-- First-pin drop zone (spec 1045): with NO pins there is no grid to drop
              on, so while a row is lifted this stands in where the grid would be.
@@ -263,6 +276,7 @@ import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useConnect } from '@/composables/useConnect';
 import { useHiddenChats } from '@/composables/useHiddenChats';
 import { hiddenPinLength } from '@/services/hidden-chats';
+import { isHiddenId } from '@/services/hidden-state';
 import { isUnlocked } from '@/services/crypto/identity';
 import type { Chat, Contact, ChatDraft } from '@/db/types';
 
@@ -359,16 +373,22 @@ const chatById = computed(() => {
   for (const c of chats.value) m.set(c.id, c);
   return m;
 });
+// Revealed hidden chats surface as their OWN block above the pinned area
+// (spec 1052 rider): hidden things live in the hidden section, so they leave
+// the grid and the plain rows while revealed. isHiddenId reads the reveal
+// session's cache — `revealed` in each computed provides the reactivity edge.
+const hiddenRows = computed<Chat[]>(() =>
+  revealed.value ? chats.value.filter((c) => isHiddenId(c.id)) : [],
+);
 const gridChats = computed<Chat[]>(() => {
   const o = optimisticGrid.value;
-  if (!o) return pinParts.value.grid;
-  return o.map((id) => chatById.value.get(id)).filter((c): c is Chat => !!c);
+  const grid = !o ? pinParts.value.grid : o.map((id) => chatById.value.get(id)).filter((c): c is Chat => !!c);
+  return revealed.value ? grid.filter((c) => !isHiddenId(c.id)) : grid;
 });
 const listChats = computed<Chat[]>(() => {
   const o = optimisticGrid.value;
-  if (!o) return pinParts.value.list;
-  const inGrid = new Set(o);
-  return pinParts.value.list.filter((c) => !inGrid.has(c.id));
+  const base = !o ? pinParts.value.list : pinParts.value.list.filter((c) => !new Set(o).has(c.id));
+  return revealed.value ? base.filter((c) => !isHiddenId(c.id)) : base;
 });
 
 const gridComp = ref<{ el: () => HTMLElement | null } | null>(null);

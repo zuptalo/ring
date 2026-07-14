@@ -112,3 +112,55 @@ test('PIN reset wipes hidden chats and blocks re-sync (US7)', async ({ browser }
   await expect.poll(() => visibleIds(a)).not.toContain(chat); // wiped, not merely hidden
   expect(await ev(a, (p: string) => (window as any).__ringTest.hiddenReveal(p), '1357')).toBe(false);
 });
+
+/**
+ * Spec 1052 rider: while revealed, hidden chats form their own block ABOVE the
+ * pinned grid — and they leave the grid/plain rows for the duration.
+ */
+test('revealed hidden chats sit above the pinned grid', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const ctxC = await browser.newContext();
+  const a = await createAccount(ctxA, 'HORD01');
+  const b = await createAccount(ctxB, 'HORD02');
+  const c = await createAccount(ctxC, 'HORD03');
+  await pair(a, b);
+  await pair(a, c);
+
+  // Two chats: one pinned (with C), one hidden (with B).
+  const withB = await a.page.evaluate((id) => (window as any).__ringTest.chatWith(id), b.id);
+  const withC = await a.page.evaluate((id) => (window as any).__ringTest.chatWith(id), c.id);
+  await a.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'to b'), withB);
+  await a.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'to c'), withC);
+  await a.page.evaluate(
+    ({ id, v }: { id: string; v: boolean }) => (window as any).__ringTest.pinChat(id, v),
+    { id: withC, v: true },
+  );
+  await a.page.evaluate(() => (window as any).__ringTest.hiddenSetPin('1234'));
+  await a.page.evaluate((id) => (window as any).__ringTest.hiddenAdd(id), withB);
+
+  await a.page.evaluate(() => (window as any).__ringTest.navigate('/tabs/chats'));
+  await a.page.evaluate(() => (window as any).__ringTest.hiddenReveal('1234'));
+
+  // Stepwise: reveal ref took, hidden row rendered, grid rendered, then ORDER.
+  const probe = () =>
+    a.page.evaluate(() => {
+      const grid = document.querySelector('.pin-grid');
+      const rows = Array.from(document.querySelectorAll('ion-item-sliding'));
+      const hiddenRow = rows.find((r) => (r.textContent ?? '').includes('to b')) ?? null;
+      return {
+        grid: !!grid,
+        hiddenRow: !!hiddenRow,
+        above: !!(grid && hiddenRow && grid.compareDocumentPosition(hiddenRow) & Node.DOCUMENT_POSITION_PRECEDING),
+        rowTexts: rows.slice(0, 8).map((r) => (r.textContent ?? '').slice(0, 30)),
+      };
+    });
+  await expect.poll(async () => (await probe()).grid, { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await probe()).hiddenRow, { timeout: 30_000 }).toBe(true);
+  expect((await probe()).above).toBe(true);
+
+  await ctxA.close();
+  await ctxB.close();
+  await ctxC.close();
+});
