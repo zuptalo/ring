@@ -38,13 +38,15 @@ describe('compressVideoAdaptive fallback ladder', () => {
     expect(out).toBe(small);
   });
 
-  it('falls through to ffmpeg when WebCodecs output is not smaller', async () => {
+  it('sends the ORIGINAL (no ffmpeg detour) when a completed WebCodecs pass is not smaller (spec 2034 FR-001)', async () => {
+    // A hardware re-encode that can't shrink the clip means the source is already
+    // efficient for the preset. The old ffmpeg fallback here cost a silent ~30 MB
+    // wasm download + a slow second transcode while the posting bar sat near 0%.
     const src = mp4(1000);
-    const small = mp4(450);
     vi.mocked(webcodecsTranscode).mockResolvedValue(mp4(1000)); // not smaller
-    vi.mocked(ffmpegTranscode).mockResolvedValue(small);
     const out = await compressVideoAdaptive(src, 'sd');
-    expect(out).toBe(small);
+    expect(out).toBe(src);
+    expect(ffmpegTranscode).not.toHaveBeenCalled();
   });
 
   it('never blocks the send: returns the ORIGINAL blob when both engines fail (FR-006)', async () => {
