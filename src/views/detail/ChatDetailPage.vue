@@ -190,7 +190,7 @@
           >
             <ion-icon :icon="refreshOutline" />
           </button>
-          <div class="bubble-col">
+          <div class="bubble-col" :class="{ 'with-reactions': m.reactions?.length }">
             <div class="swipe-wrap">
               <span class="swipe-ico reply" v-show="swipeId === m.id && swipeDx > 4">
                 <ion-icon :icon="arrowUndoOutline" />
@@ -4909,16 +4909,19 @@ function cancelRecording() {
 .bubble-row.out .bubble-col {
   align-items: flex-end;
 }
-/* Spec 1051: the column already sizes to its WIDEST child, so stretching the
-   bubble's wrapper (the swipe-wrap is the actual flex child) makes a short
-   message grow to hold a wide reaction row — the chips then straddle the
-   bubble's edge instead of spilling over the wallpaper. With no reactions, or
-   text wider than the chips, the column IS the bubble's natural width and this
-   is a no-op. The 78% cap and chip wrapping are unchanged. */
-.bubble-col > .swipe-wrap {
+/* Spec 1051: the column already sizes to its WIDEST child (the reaction row is
+   the swipe-wrap's sibling), so stretching the wrapper and filling the bubble
+   makes a short message grow to hold a wide chip row — the chips straddle the
+   bubble's edge instead of spilling over the wallpaper. Gated by the template's
+   with-reactions class (a :has() version silently failed under scoped-CSS
+   compilation), and scoped away from media/video-note bubbles: a captioned
+   photo must keep wrapping its caption at the photo's own edge (spec 2027) —
+   an unconditional width:100% regressed exactly that (CI caught it, PR #995).
+   The 78% cap and chip wrapping are unchanged. */
+.bubble-col.with-reactions > .swipe-wrap {
   align-self: stretch;
 }
-.bubble-col > .swipe-wrap > .bubble {
+.bubble-col.with-reactions > .swipe-wrap > .bubble:not(.bubble-media):not(.bubble-plain) {
   width: 100%;
 }
 .bubble {

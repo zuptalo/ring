@@ -220,7 +220,9 @@ test('group reactions notify only the message author', async ({ browser }) => {
 /**
  * Spec 1051: a short message with many reactions WIDENS so the chips sit on the
  * bubble instead of spilling over the wallpaper. Bounding-box proof: the
- * reactions row stays horizontally inside the bubble (±2px).
+ * reactions row stays horizontally inside the bubble (±2px). Uses the sender's
+ * OWN reactions (applied locally, no wire round-trips) so the layout assertion
+ * can't inherit delivery flakiness (spec 2033).
  */
 test('a short bubble grows to hold its reaction row', async ({ browser }) => {
   const ctxA = await browser.newContext();
@@ -238,35 +240,20 @@ test('a short bubble grows to hold its reaction row', async ({ browser }) => {
       { timeout: 30_000 },
     )
     .then((h) => h.jsonValue())) as string;
-  await b.page.waitForFunction(
-    async (aid) => {
-      const id = await (window as any).__ringTest.chatWith(aid);
-      return id ? (await (window as any).__ringTest.messages(id)).some((m: any) => m.body === 'ok') : false;
-    },
-    a.id,
-    { timeout: 30_000 },
-  );
 
-  // Five distinct emojis (per-user cap 3 + message cap 5), INTERLEAVED so no
-  // side ever sends twice in a row on the fresh session (spec-2033 dodge: the
-  // responder's consecutive sends are the lost-frame trigger).
-  await react(b, msgId, '👍');
-  await reactionState(a, b, msgId, (e) => e.includes('👍'));
-  await react(a, msgId, '😂');
-  await reactionState(b, a, msgId, (e) => e.includes('😂'));
-  await react(b, msgId, '😮');
-  await reactionState(a, b, msgId, (e) => e.includes('😮'));
-  await react(a, msgId, '😢');
-  await reactionState(b, a, msgId, (e) => e.includes('😢'));
-  await react(b, msgId, '❤️');
-  await reactionState(a, b, msgId, (e) => e.length >= 5);
+  // Three distinct own-reactions (the per-user cap) — enough chip width to
+  // exceed a two-letter bubble, all applied locally.
+  for (const e of ['👍', '😮', '❤️']) await react(a, msgId, e);
+  await expect
+    .poll(() => a.page.evaluate((id: string) => (window as any).__ringTest.getReactions(id).then((rs: any[]) => rs.length), msgId), { timeout: 15_000 })
+    .toBe(3);
 
-  // Open the chat and measure: chips must sit within the bubble's horizontal box.
   await a.page.evaluate((id) => (window as any).__ringTest.navigate(`/chat/${id}`), aChat);
   await a.page.waitForFunction((id: string) => (window as any).__ringTest.isChatActive(id), aChat, { timeout: 30_000 });
   const row = a.page.locator('.bubble-col', { has: a.page.locator('.reactions') }).last();
   const bubble = (await row.locator('.bubble').first().boundingBox())!;
   const chips = (await row.locator('.reactions').first().boundingBox())!;
+  expect(chips.width).toBeGreaterThan(100); // sanity: the row really is wide
   expect(chips.x).toBeGreaterThanOrEqual(bubble.x - 2);
   expect(chips.x + chips.width).toBeLessThanOrEqual(bubble.x + bubble.width + 2);
 
