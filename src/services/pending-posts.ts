@@ -213,7 +213,10 @@ async function writeProgress(
   lastProgressWrite.set(id, t);
   const rec = await getPendingPost(id);
   if (!rec || rec.status !== 'uploading' || !rec.items[p.index]) return;
-  // encode is the first half of an item, upload the second half.
-  rec.items[p.index].progress = p.phase === 'encoding' ? p.value * 0.5 : 0.5 + p.value * 0.5;
+  // encode is the first half of an item, upload the second half. High-water mark:
+  // an engine fallback (WebCodecs → ffmpeg) restarts the encode band from 0, and
+  // a bar that winds BACKWARDS reads as a broken upload — never regress it.
+  const next = p.phase === 'encoding' ? p.value * 0.5 : 0.5 + p.value * 0.5;
+  rec.items[p.index].progress = Math.max(rec.items[p.index].progress ?? 0, next);
   await updatePendingPost(rec);
 }
