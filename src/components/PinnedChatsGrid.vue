@@ -105,10 +105,14 @@ defineExpose({
   user-select: none;
   -webkit-touch-callout: none;
   /* Ionic's global css puts touch-action: manipulation on every <button>, which
-     lets the browser claim a vertical touch drag as a page scroll and KILL the
-     gesture with pointercancel — drag-a-tile-out-to-unpin died on iOS. none =
-     touches on a tile belong to the drag; scrolls still start anywhere else. */
-  touch-action: none;
+     let the browser pointercancel the drag gesture (spec 1045). `none` fixed the
+     drag but ate vertical SCROLLS started on a tile — the list only scrolled from
+     the gaps (spec 1052 rider). pan-y is the balance: a vertical swipe scrolls
+     (the browser claims it; onPointerCancel cleanly drops the pending press),
+     while a held press still lifts — after LIFT_MS the controller's non-passive
+     document touchmove blocker owns the finger, so the drag and the
+     drag-out-to-unpin keep working on iOS. */
+  touch-action: pan-y;
 }
 /* The avatar <img> must never start a NATIVE image drag under the mouse — the
    browser pointercancels our gesture when it does (belt to the dragstart block

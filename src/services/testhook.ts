@@ -73,6 +73,7 @@ import {
   setChatTtl as dbSetChatTtl,
   setChatNotifyPrefs as dbSetChatNotifyPrefs,
   setChatMute as dbSetChatMute,
+  devSendRawGroupCreate as dbDevSendRawGroupCreate,
   type ChatNotifyPrefs,
   sweepExpiredMessages as dbSweepExpired,
   getChat as dbGetChat,
@@ -443,6 +444,11 @@ export function installTestHook(): void {
     setChatNotify: (chatId: string, patch: Partial<ChatNotifyPrefs>) => dbSetChatNotifyPrefs(chatId, patch),
     /** Mute a chat's alerting until `until` epoch-ms (null = unmute) — spec 1048 e2e. */
     muteChat: (chatId: string, until: number | null) => dbSetChatMute(chatId, until),
+    /** Spec 1052 e2e: emit a RAW group create card to `to` — what a modified
+     *  client could do — so the connected-sender hardening can be exercised
+     *  (the honest UI can never produce an add from a non-contact). */
+    devSendRawGroupCreate: (to: string, groupId: string, name: string) =>
+      dbDevSendRawGroupCreate(to, groupId, name),
     /** Write a global setting (e.g. notifications.inapp.enabled) for assertions. */
     setGlobalSetting: (key: string, value: unknown) => dbSetSetting(key, value),
     sweepExpired: () => dbSweepExpired(),
