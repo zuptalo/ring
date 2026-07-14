@@ -20,20 +20,26 @@ export interface JoinRequestState {
   roomId: string; // pre-minted for a 1:1 ongoing call; the real roomId for a group
   pending: Map<string, string>; // partyId → their waiting attempt's callId
   rejected: Set<string>; // rejection-final for THIS call
+  // (spec 2031) Parties who ACCEPTED and are on their way into the room. Kept so
+  // (a) the invite affordance stays "Invited" (not re-askable) while they join,
+  // and (b) the roster-join retire of a redundant held 1:1 can prove the join
+  // came from OUR invite — even when the sealed accept reply itself was lost
+  // (the roster broadcast is the authoritative join signal).
+  accepted: Set<string>;
 }
 
 export function createJoinRequests(roomId: string): JoinRequestState {
-  return { roomId, pending: new Map(), rejected: new Set() };
+  return { roomId, pending: new Map(), rejected: new Set(), accepted: new Set() };
 }
 
 /** May the callee send this party a join request right now? */
 export function canRequest(s: JoinRequestState, partyId: string, capacityOk: boolean): boolean {
-  return capacityOk && !s.rejected.has(partyId) && !s.pending.has(partyId);
+  return capacityOk && !s.rejected.has(partyId) && !s.pending.has(partyId) && !s.accepted.has(partyId);
 }
 
 /** Register an outgoing request. Returns false when the state forbids it. */
 export function request(s: JoinRequestState, partyId: string, callId: string): boolean {
-  if (s.rejected.has(partyId) || s.pending.has(partyId)) return false;
+  if (s.rejected.has(partyId) || s.pending.has(partyId) || s.accepted.has(partyId)) return false;
   s.pending.set(partyId, callId);
   return true;
 }
@@ -44,10 +50,11 @@ export function reject(s: JoinRequestState, partyId: string): void {
   s.rejected.add(partyId);
 }
 
-/** The party accepted: clear pending, hand back their attempt's callId. */
+/** The party accepted: pending → accepted, hand back their attempt's callId. */
 export function accept(s: JoinRequestState, partyId: string): string | undefined {
   const callId = s.pending.get(partyId);
   s.pending.delete(partyId);
+  s.accepted.add(partyId);
   return callId;
 }
 
