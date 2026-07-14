@@ -551,6 +551,10 @@ export function installTestHook(): void {
         contact: m.contact ?? null,
         audio: m.audio ?? null,
         callLog: m.callLog ?? null, // spec 1040: missed-trace assertions
+        // spec 2035: link-preview quality assertions (image presence + natural width).
+        linkPreview: m.linkPreview
+          ? { hasImage: !!m.linkPreview.image, imageWidth: m.linkPreview.imageWidth ?? null, domain: m.linkPreview.domain }
+          : null,
       })),
     /* ---- media blob lifecycle (server cleanup tests) ---- */
     /** A message's media state: whether the bytes are on-device (mediaId), still pending,
