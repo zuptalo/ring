@@ -931,7 +931,9 @@
         <!-- Normal mode -->
         <template v-else>
           <ion-buttons slot="start">
-            <ion-button color="primary" @click="openAttach">
+            <!-- (spec 1053) Neutral bare glyph, like WhatsApp's + (only the action
+                 circle carries the accent color). -->
+            <ion-button class="wa-plus" @click="openAttach">
               <ion-icon slot="icon-only" :icon="addOutline" />
             </ion-button>
           </ion-buttons>
@@ -977,33 +979,37 @@
                 <span v-if="effectiveTtlMs" class="ttl-badge">{{ msgTtlShort }}</span>
               </span>
             </ion-button>
-            <!-- @mousedown.prevent (NOT pointerdown): keeps the tap from stealing focus
+            <!-- (spec 1053) WhatsApp-style action cluster: the camera is a bare glyph
+                 that COLLAPSES when there is content (the input widens smoothly), and
+                 the filled primary circle persists across states — its glyph crossfades
+                 mic ↔ send instead of the buttons popping in and out.
+                 @mousedown.prevent (NOT pointerdown): keeps the tap from stealing focus
                  (keyboard stays open) without cancelling the click. Cancelling pointerdown
                  suppresses the synthesized click entirely on iPadOS — dead button (spec 2032). -->
-            <ion-button
-              v-if="draft.trim() || pendingMedia.length"
-              color="primary"
-              aria-label="Send"
-              @click="send"
+            <!-- Tap = camera; hold ~0.6s = round video note. -->
+            <button
+              type="button"
+              class="wa-cam"
+              :class="{ collapsed: composerHasContent }"
+              aria-label="Camera"
+              :tabindex="composerHasContent ? -1 : 0"
+              :aria-hidden="composerHasContent"
+              @pointerdown="camDown"
+              @pointerup="camUp"
+              @pointerleave="camCancel"
+            >
+              <ion-icon :icon="cameraOutline" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              class="wa-circle"
+              :aria-label="composerHasContent ? 'Send' : 'Record voice'"
+              @click="composerHasContent ? send() : startRecording()"
               @mousedown.prevent
             >
-              <ion-icon slot="icon-only" :icon="sendOutline" />
-            </ion-button>
-            <template v-else>
-              <!-- Tap = camera; hold ~0.6s = round video note. -->
-              <ion-button
-                color="primary"
-                aria-label="Camera"
-                @pointerdown="camDown"
-                @pointerup="camUp"
-                @pointerleave="camCancel"
-              >
-                <ion-icon slot="icon-only" :icon="cameraOutline" />
-              </ion-button>
-              <ion-button color="primary" aria-label="Record voice" @click="startRecording">
-                <ion-icon slot="icon-only" :icon="micOutline" />
-              </ion-button>
-            </template>
+              <ion-icon class="wa-glyph" :class="{ on: !composerHasContent }" :icon="micFilled" aria-hidden="true" />
+              <ion-icon class="wa-glyph wa-glyph-send" :class="{ on: composerHasContent }" :icon="sendFilled" aria-hidden="true" />
+            </button>
           </ion-buttons>
         </template>
       </ion-toolbar>
@@ -1145,7 +1151,7 @@ import {
 } from '@ionic/vue';
 import type { InfiniteScrollCustomEvent } from '@ionic/vue';
 import {
-  callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline,
+  callOutline, videocamOutline, documentOutline, playCircle, play, sendOutline, send as sendFilled, mic as micFilled,
   timeOutline, checkmark, checkmarkDone, addOutline, happyOutline, cameraOutline, megaphoneOutline, atOutline,
   micOutline, trashOutline, closeOutline, pause, banOutline, arrowRedoOutline, arrowUndoOutline, globeOutline,
   locationOutline, barChartOutline, personOutline, refreshOutline, downloadOutline,
@@ -2725,6 +2731,9 @@ interface PendingMedia {
 // can't be limited, so onPick trims the overflow to this.
 const MAX_STAGED_MEDIA = 10;
 const pendingMedia = ref<PendingMedia[]>([]);
+// (spec 1053) One boolean drives the composer's action-cluster transition:
+// any content — text or staged media/caption — shows the send glyph.
+const composerHasContent = computed(() => !!draft.value.trim() || pendingMedia.value.length > 0);
 // Multiple photos/videos: send as one album (default) or as separate messages.
 const sendAsAlbum = ref(true);
 
@@ -5949,6 +5958,81 @@ function cancelRecording() {
 }
 /* Auto-growing message composer: wrap long text and grow vertically, but cap the
    height (~5 lines) and scroll beyond that so the keypad/footer stay sane. */
+/* (spec 1053) WhatsApp-style composer actions. The camera is a bare glyph that
+   collapses (width + fade) when content appears, so the input widens smoothly;
+   the filled primary circle persists and only its glyph crossfades mic ↔ send.
+   All colors ride theme variables — dark and light both render natively. */
+.wa-plus {
+  --color: var(--ion-text-color);
+  opacity: 0.72;
+  --padding-start: 4px;
+  --padding-end: 4px;
+}
+.wa-plus ion-icon {
+  font-size: 28px;
+}
+.wa-cam {
+  border: none;
+  background: transparent;
+  padding: 0;
+  width: 38px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ion-text-color);
+  opacity: 0.72;
+  font-size: 24px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: width 0.2s ease, opacity 0.16s ease, transform 0.2s ease;
+}
+.wa-cam ion-icon {
+  font-size: 24px;
+  flex: 0 0 auto;
+}
+.wa-cam.collapsed {
+  width: 0;
+  opacity: 0;
+  transform: scale(0.55);
+  pointer-events: none;
+}
+.wa-circle {
+  border: none;
+  width: 37px;
+  height: 37px;
+  border-radius: 50%;
+  background: var(--ion-color-primary);
+  /* White glyph on the accent circle in BOTH themes (WhatsApp's look) — Ring's
+     primary-contrast variable resolves dark, which reads muddy on the green. */
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  margin: 0 2px 0 4px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: transform 0.12s ease;
+}
+.wa-circle:active {
+  transform: scale(0.9);
+}
+.wa-glyph {
+  position: absolute;
+  font-size: 19px;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.wa-glyph.on {
+  opacity: 1;
+  transform: scale(1);
+}
+/* The paper plane leans left — nudge for optical centering, like WhatsApp's. */
+.wa-glyph-send {
+  margin-left: 2px;
+}
 .composer {
   --padding-top: 6px;
   --padding-bottom: 6px;

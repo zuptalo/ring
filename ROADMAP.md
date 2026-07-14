@@ -78,6 +78,7 @@ Specs are grouped by category band; status moves
 | [1050](specs/1050-quiet-housekeeping-frames/spec.md) | Push Classes, Conversation Mutes & Notification Routing | 🔵 in-review |
 | [1051](specs/1051-message-bubble-grows/spec.md) | Message Bubble Grows to Hold Its Reactions | 🟡 in-progress |
 | [1052](specs/1052-group-adds-you/spec.md) | Group Adds You Can Trust | 🟡 in-progress |
+| [1053](specs/1053-composer-buttons-transition/spec.md) | Composer Buttons Transition Like WhatsApp | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
