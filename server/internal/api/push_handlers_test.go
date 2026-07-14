@@ -19,12 +19,20 @@ type fakePushRecord struct {
 }
 
 type fakePushStore struct {
-	mu   sync.Mutex
-	recs map[string][]*fakePushRecord // userID -> records
+	mu    sync.Mutex
+	recs  map[string][]*fakePushRecord // userID -> records
+	prefs map[string][]byte            // userID -> spec-1050 routing prefs blob
 }
 
 func newFakePushStore() *fakePushStore {
-	return &fakePushStore{recs: map[string][]*fakePushRecord{}}
+	return &fakePushStore{recs: map[string][]*fakePushRecord{}, prefs: map[string][]byte{}}
+}
+
+func (f *fakePushStore) SavePrefs(_ context.Context, userID string, prefs []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prefs[userID] = append([]byte(nil), prefs...)
+	return nil
 }
 
 // SaveSubscription stores ONE subscription per user, overwriting any previous one (mirrors

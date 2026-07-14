@@ -72,6 +72,7 @@ import {
   sendMediaMessage as dbSendMediaMessage,
   setChatTtl as dbSetChatTtl,
   setChatNotifyPrefs as dbSetChatNotifyPrefs,
+  setChatMute as dbSetChatMute,
   type ChatNotifyPrefs,
   sweepExpiredMessages as dbSweepExpired,
   getChat as dbGetChat,
@@ -351,6 +352,9 @@ export function installTestHook(): void {
     /** Reconnect the WebSocket (drains the queue for real). */
     reconnect: () => nudgeReconnect(),
     forceReconnect: () => forceReconnect(),
+    /** Remaining post-unlock settle suppression in ms (spec 1048 e2e: banner
+     *  assertions must wait this out — non-escalated alerts are damped inside it). */
+    settleMsLeft: () => settleMsLeft(),
     /** Lock memory (to test re-unlock on reload). */
     lockNow: () => lockIdentity(),
     /** Whether this device auto-unlocks (no passcode lock). */
@@ -437,6 +441,8 @@ export function installTestHook(): void {
     setChatTtl: (chatId: string, ms: number | null) => dbSetChatTtl(chatId, ms),
     /** Set per-chat notification controls (spec 1015): { webPush?, inApp?, content? }. */
     setChatNotify: (chatId: string, patch: Partial<ChatNotifyPrefs>) => dbSetChatNotifyPrefs(chatId, patch),
+    /** Mute a chat's alerting until `until` epoch-ms (null = unmute) — spec 1048 e2e. */
+    muteChat: (chatId: string, until: number | null) => dbSetChatMute(chatId, until),
     /** Write a global setting (e.g. notifications.inapp.enabled) for assertions. */
     setGlobalSetting: (key: string, value: unknown) => dbSetSetting(key, value),
     sweepExpired: () => dbSweepExpired(),

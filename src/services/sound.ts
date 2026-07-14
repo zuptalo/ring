@@ -91,10 +91,116 @@ interface Note {
   gain?: number; // peak gain (0..1)
 }
 
+/* ---- spec 1049: the alert-voice engine ----
+ *
+ * The 7 audible ALERT tones (the settings TONES list) no longer play as bare
+ * oscillator beeps. Each is a sequence of STRIKES rendered like a small struck
+ * instrument: several harmonically-related partials with independent decays
+ * (bell / marimba / glass / wood spectra), each partial a ±4-cent detuned pair
+ * for warmth, a soft attack with a tiny pitch settle so the note sounds struck
+ * rather than switched on, and a shared bus that adds a subtle generated
+ * reverb tail and compresses overlapping tones so bursts can't clip.
+ *
+ * Still zero audio files: the "reverb" impulse response is exponentially
+ * decaying noise built on the fly — math, not a sample. The call/game cues and
+ * the foley below deliberately keep their original engines and wiring, so they
+ * sound byte-identical (spec 1049 FR-007). */
+
+export type AlertToneName = 'note' | 'chime' | 'ping' | 'pop' | 'pulse' | 'glow' | 'beacon';
+
+/** One component of a struck spectrum: a frequency ratio against the strike's
+ *  fundamental, its relative level, and how fast it dies compared to the body
+ *  (high partials decay quicker on real instruments — that's most of the realism). */
+export interface AlertPartial {
+  ratio: number;
+  gain: number; // relative to the strike gain (0..1]
+  durScale: number; // fraction of the strike's dur this partial rings for
+}
+
+export type TimbreName = 'marimba' | 'bell' | 'glass' | 'wood';
+
+/** Struck-instrument spectra. Ratios: marimba ≈ harmonic-ish bar modes, bell =
+ *  the classic inharmonic minor-third stack, glass = bright stretched partials,
+ *  wood = a damped knock. Exported for the spec 1049 structural tests. */
+export const TIMBRES: Record<TimbreName, AlertPartial[]> = {
+  marimba: [
+    { ratio: 1, gain: 1, durScale: 1 },
+    { ratio: 4, gain: 0.24, durScale: 0.4 },
+    { ratio: 9.2, gain: 0.07, durScale: 0.22 },
+  ],
+  bell: [
+    { ratio: 1, gain: 1, durScale: 1 },
+    { ratio: 2.0, gain: 0.34, durScale: 0.75 },
+    { ratio: 2.74, gain: 0.2, durScale: 0.55 },
+    { ratio: 5.4, gain: 0.08, durScale: 0.3 },
+  ],
+  glass: [
+    { ratio: 1, gain: 1, durScale: 1 },
+    { ratio: 2.32, gain: 0.38, durScale: 0.65 },
+    { ratio: 4.25, gain: 0.16, durScale: 0.45 },
+    { ratio: 6.63, gain: 0.06, durScale: 0.25 },
+  ],
+  wood: [
+    { ratio: 1, gain: 1, durScale: 1 },
+    { ratio: 2.8, gain: 0.16, durScale: 0.3 },
+  ],
+};
+
+/** One struck note of an alert tone. */
+export interface AlertStrike {
+  freq: number; // fundamental (Hz)
+  start: number; // seconds from now
+  dur: number; // body decay (s); partials scale off this
+  gain: number; // peak level of the fundamental pair
+  timbre: TimbreName;
+  attack?: number; // seconds; default 0.008 — 'glow' swells slower on purpose
+}
+
+/** The generated reverb tail's length — part of every tone's duration budget
+ *  (structural test: max strike end + this ≤ 1.2 s). */
+export const ALERT_TAIL_S = 0.45;
+
+/** The 7 alert-tone redesigns (spec 1049). Same names, same recognizable
+ *  characters as the old recipes — Note is still one soft note, Chime still its
+ *  high falling pair, Beacon still a rising triple — they just sound like small
+ *  instruments now instead of oscillators. 'pop' stays the LOWEST voice of the
+ *  set (it is the default reaction tone, spec 1048, and must read as subtle). */
+export const ALERT_TONES: Record<AlertToneName, AlertStrike[]> = {
+  // A single warm marimba note — the default; the octave shimmer is the timbre's 4× partial.
+  note: [{ freq: 880.0, start: 0, dur: 0.5, gain: 0.3, timbre: 'marimba' }],
+  // Two small glass bells, the familiar high E6→B5 pair.
+  chime: [
+    { freq: 1318.51, start: 0, dur: 0.38, gain: 0.24, timbre: 'glass' },
+    { freq: 987.77, start: 0.14, dur: 0.55, gain: 0.26, timbre: 'glass' },
+  ],
+  // One bright glass tick — short and light.
+  ping: [{ freq: 1318.51, start: 0, dur: 0.28, gain: 0.24, timbre: 'glass' }],
+  // A rounded low wooden thump — quick, quiet-friendly.
+  pop: [{ freq: 330, start: 0, dur: 0.22, gain: 0.3, timbre: 'wood' }],
+  // Two equal muted wood taps.
+  pulse: [
+    { freq: 720, start: 0, dur: 0.16, gain: 0.2, timbre: 'wood' },
+    { freq: 720, start: 0.18, dur: 0.18, gain: 0.2, timbre: 'wood' },
+  ],
+  // A soft rising bell pair with a slower swell — keeps the old "gentle sweep" feel.
+  glow: [
+    { freq: 440.0, start: 0, dur: 0.34, gain: 0.22, timbre: 'bell', attack: 0.05 },
+    { freq: 659.25, start: 0.12, dur: 0.5, gain: 0.24, timbre: 'bell', attack: 0.06 },
+  ],
+  // Three ascending bells — the arpeggio it has always been.
+  beacon: [
+    { freq: 523.25, start: 0, dur: 0.3, gain: 0.22, timbre: 'bell' },
+    { freq: 659.25, start: 0.11, dur: 0.3, gain: 0.22, timbre: 'bell' },
+    { freq: 783.99, start: 0.22, dur: 0.45, gain: 0.24, timbre: 'bell' },
+  ],
+};
+
+/** All alert-tone names (spec 1049 structural tests). */
+export const ALERT_TONE_NAMES: string[] = Object.keys(ALERT_TONES);
+
 // Note frequencies (equal-tempered).
 const E6 = 1318.51;
 const C6 = 1046.5;
-const B5 = 987.77;
 const G5 = 783.99;
 const E5 = 659.25;
 const D5 = 587.33;
@@ -104,34 +210,9 @@ const A4 = 440.0;
 const F4 = 349.23;
 const Bb4 = 466.16;
 
-const RECIPES: Record<Exclude<ToneName, 'none' | FxName>, Note[]> = {
-  // Soft single blip, the default.
-  note: [{ freq: A5, start: 0, dur: 0.18, type: 'sine' }],
-  // Two ascending bell-like notes.
-  chime: [
-    { freq: E6, start: 0, dur: 0.16, type: 'triangle' },
-    { freq: B5, start: 0.12, dur: 0.22, type: 'triangle' },
-  ],
-  // Bright, short ping.
-  ping: [{ freq: E6, start: 0, dur: 0.14, type: 'sine', gain: 0.5 }],
-  // Quick low pop.
-  pop: [{ freq: 600, start: 0, dur: 0.08, type: 'sine' }],
-  // Two equal beeps.
-  pulse: [
-    { freq: 720, start: 0, dur: 0.1, type: 'square', gain: 0.25 },
-    { freq: 720, start: 0.16, dur: 0.1, type: 'square', gain: 0.25 },
-  ],
-  // Gentle rising sweep.
-  glow: [
-    { freq: 440, start: 0, dur: 0.12, type: 'sine' },
-    { freq: 660, start: 0.1, dur: 0.2, type: 'sine' },
-  ],
-  // Three-note arpeggio.
-  beacon: [
-    { freq: C5, start: 0, dur: 0.12, type: 'triangle' },
-    { freq: E5, start: 0.1, dur: 0.12, type: 'triangle' },
-    { freq: G5, start: 0.2, dur: 0.22, type: 'triangle' },
-  ],
+// The 7 user-facing alert tones moved to ALERT_TONES above (spec 1049); RECIPES
+// now carries only the call/game cues, whose sound is deliberately untouched.
+const RECIPES: Record<Exclude<ToneName, 'none' | FxName | AlertToneName>, Note[]> = {
   // Caller "calling" ringback: a mellow low double-beep, looped before the callee
   // acknowledges.
   calling: [
@@ -271,6 +352,92 @@ function audioCtx(): AudioContext | null {
     return ctx;
   } catch {
     return null;
+  }
+}
+
+/* ---- spec 1049: alert bus + strike renderer ---- */
+
+// The shared output chain for alert tones: input → compressor → destination, with
+// a parallel generated-reverb send. The compressor is the clip-guard — overlapping
+// tones (a message burst, mashed previews) sum into it and get gently squashed
+// instead of distorting. Built lazily once per context; cue/foley paths keep their
+// original direct wiring (FR-007).
+let alertBusInput: GainNode | null = null;
+let alertBusCtx: AudioContext | null = null;
+
+/** A tiny procedural room: stereo exponentially-decaying noise. An impulse
+ *  response made of math — nothing sampled, keeping the module's no-assets rule. */
+function generatedImpulse(ac: AudioContext): AudioBuffer {
+  const len = Math.max(1, Math.floor(ac.sampleRate * ALERT_TAIL_S));
+  const buf = ac.createBuffer(2, len, ac.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    // Slight per-channel level + phase difference decorrelates L/R into "space".
+    const lvl = ch ? 0.86 : 1;
+    for (let i = 0; i < len; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.8) * lvl;
+    }
+  }
+  return buf;
+}
+
+function alertBus(ac: AudioContext): GainNode {
+  if (alertBusInput && alertBusCtx === ac) return alertBusInput;
+  const input = ac.createGain();
+  input.gain.value = 0.9;
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -18;
+  comp.knee.value = 24;
+  comp.ratio.value = 4;
+  comp.attack.value = 0.003;
+  comp.release.value = 0.25;
+  input.connect(comp); // dry
+  const conv = ac.createConvolver();
+  conv.buffer = generatedImpulse(ac);
+  const wet = ac.createGain();
+  wet.gain.value = 0.18; // a suggestion of a room, not a cathedral
+  input.connect(conv);
+  conv.connect(wet);
+  wet.connect(comp);
+  comp.connect(ac.destination);
+  alertBusInput = input;
+  alertBusCtx = ac;
+  return input;
+}
+
+const CENT = Math.pow(2, 1 / 1200);
+
+/** Render one struck note: each partial as a ±4-cent detuned oscillator pair with
+ *  its own faster decay, a soft attack, and a tiny pitch settle on the fundamental
+ *  so it reads as STRUCK, not switched on. All one-shot nodes with scheduled stops
+ *  — nothing accumulates. */
+function strike(ac: AudioContext, out: GainNode, s: AlertStrike): void {
+  const t0 = ac.currentTime + s.start;
+  const attack = s.attack ?? 0.008;
+  for (const p of TIMBRES[s.timbre]) {
+    const dur = Math.max(0.05, s.dur * p.durScale);
+    for (const det of [-4, 4]) {
+      const o = ac.createOscillator();
+      o.type = 'sine';
+      const f = s.freq * p.ratio * Math.pow(CENT, det);
+      if (p.ratio === 1) {
+        // The settle: land on pitch ~30ms after the hit.
+        o.frequency.setValueAtTime(f * Math.pow(CENT, 8), t0);
+        o.frequency.exponentialRampToValueAtTime(f, t0 + 0.03);
+      } else {
+        o.frequency.value = f;
+      }
+      const g = ac.createGain();
+      // Halved: the detuned pair sums back to the strike/partial level.
+      const peak = (s.gain * p.gain) / 2;
+      g.gain.setValueAtTime(EPS, t0);
+      g.gain.linearRampToValueAtTime(peak, t0 + attack);
+      g.gain.exponentialRampToValueAtTime(EPS, t0 + dur);
+      o.connect(g);
+      g.connect(out);
+      o.start(t0);
+      o.stop(t0 + dur + 0.03);
+    }
   }
 }
 
@@ -531,12 +698,22 @@ export const FX_NAMES = Object.keys(FX);
 
 export function playTone(name: string): void {
   if (!name || name === 'none') return;
+  // Alert tones (spec 1049) render on the strike engine through the shared bus;
+  // everything else stays on its original engine + wiring.
+  const alert = ALERT_TONES[name as AlertToneName];
+  if (alert) {
+    const acA = audioCtx();
+    if (!acA) return;
+    const out = alertBus(acA);
+    for (const s of alert) strike(acA, out, s);
+    return;
+  }
   const ac0 = FX[name] ? audioCtx() : null;
   if (FX[name]) {
     if (ac0) FX[name](ac0, ac0.currentTime);
     return;
   }
-  const recipe = RECIPES[name as Exclude<ToneName, 'none' | FxName>];
+  const recipe = RECIPES[name as Exclude<ToneName, 'none' | FxName | AlertToneName>];
   if (!recipe) return;
   const ac = audioCtx();
   if (!ac) return;
