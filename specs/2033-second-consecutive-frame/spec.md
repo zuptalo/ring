@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-14
 
-**Status**: in-progress
+**Status**: in-review
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: Found while building spec 1050's fan-out e2e (2026-07-14): in a fresh 3-member group, a member's SECOND consecutive sealed frame to a co-member who has not written back since fails to decrypt ("ciphertext cannot be decrypted using that key", ratchetDecrypt normal packet) and — because the relay already dropped the sender's outbox copy — is permanently lost for that recipient. Reproduced identically on the pre-1050 client (bisect via `git stash push src/`), so this is a live bug in the shipped ratchet/session layer, not a 1050 regression.
