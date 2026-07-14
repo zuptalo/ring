@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
-  createAccount, pair, startCall, accept, hangup, waitCallState, waitRemotes, roster,
+  createAccount, pair, startCall, accept, hangup, waitCallState, waitRemotes,
   acceptAndHold, heldCallId, type RingClient,
 } from './helpers';
 
@@ -28,6 +28,17 @@ const awaitJoinPrompt = (c: RingClient): Promise<unknown> =>
   c.page.waitForFunction(() => !!(window as any).__ringTest.joinRequest(), null, { timeout: 20_000 });
 const awaitHeldGone = (c: RingClient): Promise<unknown> =>
   c.page.waitForFunction(() => (window as any).__ringTest.heldCallId() === null, null, { timeout: 15_000 });
+// Mesh streams can land a beat BEFORE the server's roster broadcast updates the
+// local roster array — poll for membership instead of asserting a snapshot.
+const awaitRoster = (c: RingClient, ids: string[]): Promise<unknown> =>
+  c.page.waitForFunction(
+    (want: string[]) => {
+      const r = (window as any).__ringTest.callRoster() as string[];
+      return want.every((id) => r.includes(id));
+    },
+    ids,
+    { timeout: 15_000 },
+  );
 
 /** A and B connected 1:1 (the call that will be parked); C calls A and A
  *  accepts-and-holds → active A↔C, held A↔B (B sees "on hold"). */
@@ -60,10 +71,7 @@ test('held party accepting the invite retires the redundant 1:1 on both sides (U
 
   // Everyone lands in one merged 3-way call…
   for (const p of [a, b, c]) await waitRemotes(p, 2);
-  for (const p of [a, b, c]) {
-    const r = await roster(p);
-    for (const id of [a.id, b.id, c.id]) expect(r).toContain(id);
-  }
+  for (const p of [a, b, c]) await awaitRoster(p, [a.id, b.id, c.id]);
 
   // …and the redundant held 1:1 is gone from A (no swap pill), while B has only
   // the merged call (his old 1:1 dissolved into it on accept).
