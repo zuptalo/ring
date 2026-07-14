@@ -73,6 +73,7 @@ import {
   setChatTtl as dbSetChatTtl,
   setChatNotifyPrefs as dbSetChatNotifyPrefs,
   setChatMute as dbSetChatMute,
+  devSendRawGroupCreate as dbDevSendRawGroupCreate,
   type ChatNotifyPrefs,
   sweepExpiredMessages as dbSweepExpired,
   getChat as dbGetChat,
@@ -443,6 +444,11 @@ export function installTestHook(): void {
     setChatNotify: (chatId: string, patch: Partial<ChatNotifyPrefs>) => dbSetChatNotifyPrefs(chatId, patch),
     /** Mute a chat's alerting until `until` epoch-ms (null = unmute) — spec 1048 e2e. */
     muteChat: (chatId: string, until: number | null) => dbSetChatMute(chatId, until),
+    /** Spec 1052 e2e: emit a RAW group create card to `to` — what a modified
+     *  client could do — so the connected-sender hardening can be exercised
+     *  (the honest UI can never produce an add from a non-contact). */
+    devSendRawGroupCreate: (to: string, groupId: string, name: string) =>
+      dbDevSendRawGroupCreate(to, groupId, name),
     /** Write a global setting (e.g. notifications.inapp.enabled) for assertions. */
     setGlobalSetting: (key: string, value: unknown) => dbSetSetting(key, value),
     sweepExpired: () => dbSweepExpired(),
@@ -1452,6 +1458,33 @@ export function installTestHook(): void {
         lifetime: '24h',
         media: { blob, kind: 'video', name: 'clip.mp4' },
       });
+      return p.id;
+    },
+    /** (spec 2034) A TALL (9:16-ish) single-media post — image or real video — so the
+     *  feed's capped 4:5 letterbox presentation can be checked visually/e2e. The image
+     *  carries a full-edge white border: fully visible ⇔ shown whole (contain). */
+    postTallMedia: async (kind: 'image' | 'video'): Promise<string> => {
+      if (kind === 'video') {
+        const blob = await makeTestVideo(360, 640, 2);
+        const p = await dbCreatePost({ audience: 'friends', lifetime: '24h', media: { blob, kind: 'video', name: 'tall.mp4' } });
+        return p.id;
+      }
+      const c = document.createElement('canvas');
+      c.width = 600;
+      c.height = 1200;
+      const ctx = c.getContext('2d')!;
+      ctx.fillStyle = '#8b5cf6';
+      ctx.fillRect(0, 0, 600, 1200);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 50;
+      ctx.strokeRect(25, 25, 550, 1150);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.font = '80px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('TALL', 300, 600);
+      const blob = await new Promise<Blob>((res) => c.toBlob((b) => res(b!), 'image/png'));
+      const p = await dbCreatePost({ audience: 'friends', lifetime: '24h', media: { blob, kind: 'image', name: 'tall.png' } });
       return p.id;
     },
     /** Post an album of 2 real videos + 2 images through createPost, timing each progress

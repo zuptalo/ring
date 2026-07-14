@@ -10,7 +10,9 @@
  */
 export const SYNCED_PREF_KEYS: string[] = [
   'privacy.lastSeen', 'privacy.online', 'privacy.profilePhoto', 'privacy.about',
-  'privacy.groups', 'privacy.messageTimer',
+  // Spec 1052: privacy.groups is RETIRED (placebo chooser) — never re-add it;
+  // old encrypted snapshots may still carry a stale value. Its replacement:
+  'privacy.groupAddApproval', 'privacy.messageTimer',
   'privacy.disableLinkPreviews',
   // "Always relay calls" (spec 1043): a threat-model preference, so it follows
   // the user to every device. NEVER re-add the retired privacy.protectIp here —

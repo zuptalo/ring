@@ -111,10 +111,6 @@ const AUDIENCE: ChoiceOption[] = [
   { value: 'contacts', label: 'My contacts' },
   { value: 'nobody', label: 'Nobody' },
 ];
-const AUDIENCE_NO_NOBODY: ChoiceOption[] = [
-  { value: 'everyone', label: 'Everyone' },
-  { value: 'contacts', label: 'My contacts' },
-];
 const QUALITY: ChoiceOption[] = [
   { value: 'standard', label: 'Standard quality', note: 'Faster to send, smaller file size' },
   { value: 'hd', label: 'HD quality', note: 'Slower to send, can be 6 times larger' },
@@ -363,15 +359,17 @@ export const SETTINGS: Record<string, SettingNode> = {
     title: 'About',
     groups: [{ header: 'Who can see my About', items: [{ type: 'choice', key: 'privacy.about', default: 'everyone', options: AUDIENCE }] }],
   },
+  // Spec 1052: the old "Who can add me to groups" chooser was a placebo — pickers
+  // are contacts-only and contacts are mutual, so its "Everyone" tier described an
+  // adder that cannot exist. Replaced by one honest, enforced control.
   'privacy-groups': {
     id: 'privacy-groups',
     title: 'Groups',
     groups: [
       {
-        header: 'Who can add me to groups',
-        items: [{ type: 'choice', key: 'privacy.groups', default: 'everyone', options: AUDIENCE_NO_NOBODY }],
+        items: [{ type: 'toggle', title: 'Ask before adding me to groups', key: 'privacy.groupAddApproval', default: false }],
         footer:
-          'Admins who can’t add you to a group will have the option of inviting you privately instead.',
+          'When this is on, joining a group always starts as an invitation you can accept or decline. People you have not connected with can never add you directly, no matter how this is set.',
       },
     ],
   },
