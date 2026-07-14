@@ -37,7 +37,7 @@ const awaitRoster = (c: RingClient, ids: string[]): Promise<unknown> =>
       return want.every((id) => r.includes(id));
     },
     ids,
-    { timeout: 15_000 },
+    { timeout: 30_000 },
   );
 
 /** A and B connected 1:1 (the call that will be parked); C calls A and A

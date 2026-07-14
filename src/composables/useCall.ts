@@ -4141,7 +4141,11 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         settleGroupCallEvent(frame.roomId, id, 'answered');
         // (spec 2031) An invited held party landing in the room retires the
         // now-redundant parked 1:1 with them, on the JOIN (not the accept).
-        await retireRedundantHeld(id);
+        // DETACHED and non-fatal: the retire does IndexedDB writes, and roster
+        // processing (the state assignments below) must never wait on it or die
+        // with it — a stalled retire once left the roster stale for good,
+        // because a roster frame is never redelivered.
+        void retireRedundantHeld(id).catch((e) => console.warn('[call] held-call retire failed', e));
       }
       // (spec 1030 US2) "{name} joined the call": the first roster of a call seeds
       // silently (whoever is already in the room was here before us, or is us);
