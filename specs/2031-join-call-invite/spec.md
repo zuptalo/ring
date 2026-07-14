@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-13
 
-**Status**: planned
+**Status**: in-progress
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
@@ -85,5 +85,6 @@ The "Ask Kambiz to join this call" control currently renders as a plain dark tex
 ## Assumptions
 
 - The stated behavior ("their existing call should terminate automatically") is the requirement — no clarification needed on the P1 outcome; the retire fires on JOIN (media established), not on mere accept, to satisfy the stranding edge case.
+- Root cause found during implementation (2026-07-14): the pre-2031 retire ran only on receipt of the sealed `joinreq-accept` reply — a single lossable frame (see spec 2033); when it was lost while the active call was already a group, the invitee still meshed into the room via the room signaling and the held 1:1 survived, exactly as reported. The retire is therefore keyed on the server's roster broadcast (the authoritative join signal), which also satisfies the join-not-accept requirement. A second latent defect fell out of the red test: any CONNECTED 1:1 dissolving into a room (merge-accept or ordinary promotion) never closed its Calls-tab record, leaving the callee's provisional "missed" row permanently — a phantom missed call from someone they actually talked to (FR-003 now covers it).
 - Real-device verification is required for the final sign-off (the reporter's two-phone setup), since the join flow involves real WebRTC renegotiation; e2e covers the state machine per the established call-suite patterns.
 - Scope excludes any redesign of the broader add-people/merge flows beyond the two reported items.

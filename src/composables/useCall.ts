@@ -1016,10 +1016,14 @@ export function canRequestJoin(partyId: string): boolean {
   return s ? jrCanRequest(s, partyId, capacityOk) : capacityOk;
 }
 
-/** Is a request to `partyId` outstanding? (Drives the "Invited" button state.) */
+/** Is a request to `partyId` outstanding or accepted-and-joining? (Drives the
+ *  "Invited" button state — it stays passive from the tap until they either
+ *  land in the room, which retires the held call and the whole affordance, or
+ *  the call ends. Spec 2031 FR-005: never re-askable mid-flight.) */
 export function joinRequestPendingFor(partyId: string): boolean {
   void joinRequestVersion.value;
-  return joinRequests?.pending.has(partyId) ?? false;
+  const s = joinRequests;
+  return s ? s.pending.has(partyId) || s.accepted.has(partyId) : false;
 }
 
 /** The waiting/held party answered our request. */
@@ -1046,13 +1050,49 @@ async function handleJoinReply(partyId: string, verdict: 'joinreq-accept' | 'joi
     markNotJoining(partyId, false);
     armMemberRingTimer(partyId);
   });
-  // Their old 1:1 leg to us dissolves as they convert: clear whichever slot
-  // held them (the waiting prompt, or the held call).
+  // Their old 1:1 leg to us dissolves as they convert: clear a waiting prompt
+  // for them. A HELD 1:1 with them is NOT retired here (spec 2031 FR-001): the
+  // accept is only a promise to join — tearing the parked call down before
+  // their media lands would strand both parties if the join dies mid-flight.
+  // The retire happens in the roster handler the moment they actually arrive
+  // (retireRedundantHeld), which also survives a lost accept reply.
   if (incomingSecond.value?.from === partyId) {
     incomingSecond.value = null;
     secondIce = [];
   }
-  if (heldSlot && heldSlot.meta.peerUserId === partyId) freeHeldSlot();
+}
+
+/** (spec 2031 FR-001) A party WE invited out of a parked call actually LANDED
+ *  in the room (the server's roster broadcast — authoritative, unlike the
+ *  sealed accept reply, which is one lossable frame): the old held 1:1 with
+ *  them is now redundant. End it locally as a normally-completed call
+ *  (FR-003: real duration, never "missed") and free the slot. No signal is
+ *  sent — their side already dissolved its leg into the room when it accepted
+ *  — and a held call with anyone we did NOT invite is never touched (FR-002):
+ *  a deliberately parked 1:1 with someone who happens to be in the group
+ *  stays swappable. */
+async function retireRedundantHeld(joinerId: string): Promise<void> {
+  const slot = heldSlot;
+  const s = joinRequests;
+  if (!slot || slot.meta.isGroup || slot.meta.peerUserId !== joinerId) return;
+  if (!s || !(s.pending.has(joinerId) || s.accepted.has(joinerId))) return;
+  if (s.pending.has(joinerId)) {
+    // The accept reply never made it, but they're in the room — their join IS
+    // the acceptance. Settle the ledger so the "Invited" chip resolves.
+    jrAccept(s, joinerId);
+    touchJoinRequests();
+  }
+  const durationSec = callDurationSec(slot.meta);
+  freeHeldSlot();
+  await finishCall(slot.meta.callId, durationSec);
+  if (slot.meta.chatId) {
+    await logCallToChat(slot.meta.chatId, {
+      direction: slot.meta.direction,
+      video: slot.meta.kind === 'video',
+      missed: false,
+      durationSec,
+    });
+  }
 }
 
 /** The waiting attempt died (their cancel/end, or our decline): forget any
@@ -2103,6 +2143,17 @@ async function convertActiveToRoom(
   remoteVideoMuted.value = true; // next call starts avatar-until-first-frame (spec 2029)
   remoteHeld.value = false;
   reprimeBytes = true; // re-baseline byte counters against the new mesh session
+  // (spec 2031 FR-003) A CONNECTED 1:1 dissolving into the room was a real,
+  // answered call — close out its Calls-tab record here, because no teardown
+  // will ever run for it. Without this, an incoming call's provisional
+  // "missed" row (createCall) stayed missed forever: a phantom missed call
+  // from someone you actually talked to, left behind by every promotion and
+  // merge-accept. A still-ringing attempt converting (the waiting-caller
+  // accept) keeps today's behavior — it never connected, and its record
+  // settles through the answered-elsewhere cancel machinery.
+  if (callMeta.value && !callMeta.value.isGroup && callState.value === 'connected') {
+    await finishCall(callMeta.value.callId, callDurationSec(callMeta.value), lastBytes.up + lastBytes.down);
+  }
   if (callMeta.value) callMeta.value.tornDown = true; // the old 1:1 meta is retired
   await enterGroupCall(roomId, kind, name, avatar, direction, [], stream);
   // (spec 1030 US2) The 1:1 peer following us into the promoted room isn't a new
@@ -4088,6 +4139,9 @@ export async function handleCallFrame(frame: CallFrame): Promise<void> {
         // (spec 1040) They joined → settle their marker so no closed device of
         // theirs logs a false missed call (and its stale ring retires).
         settleGroupCallEvent(frame.roomId, id, 'answered');
+        // (spec 2031) An invited held party landing in the room retires the
+        // now-redundant parked 1:1 with them, on the JOIN (not the accept).
+        await retireRedundantHeld(id);
       }
       // (spec 1030 US2) "{name} joined the call": the first roster of a call seeds
       // silently (whoever is already in the room was here before us, or is us);

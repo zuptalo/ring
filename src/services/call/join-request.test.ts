@@ -42,13 +42,27 @@ describe('join-request state (spec 1041)', () => {
     expect(canRequest(s, 'kamran', true)).toBe(true);
   });
 
-  it('accept clears the pending entry and returns the attempt callId', () => {
+  it('accept moves the party pending → accepted and returns the attempt callId', () => {
     const s = fresh();
     request(s, 'sara', 'call-1');
     expect(accept(s, 'sara')).toBe('call-1');
     expect(accept(s, 'sara')).toBeUndefined(); // idempotent
-    // an accepted party could in principle be requested again (they left the call later)
-    expect(canRequest(s, 'sara', true)).toBe(true);
+    expect(s.accepted.has('sara')).toBe(true);
+    // (spec 2031 FR-005) An accepted party is on their way into the room: no
+    // re-request while they join — the affordance stays "Invited" until their
+    // roster arrival retires it (or the call ends).
+    expect(canRequest(s, 'sara', true)).toBe(false);
+    expect(request(s, 'sara', 'call-2')).toBe(false);
+  });
+
+  it('a lost accept reply still resolves through accept() at roster time (spec 2031)', () => {
+    const s = fresh();
+    request(s, 'sara', 'call-1');
+    // No reply ever arrives; their roster join calls accept() late.
+    expect(s.pending.has('sara')).toBe(true);
+    accept(s, 'sara');
+    expect(s.pending.has('sara')).toBe(false);
+    expect(s.accepted.has('sara')).toBe(true);
   });
 
   it('a waiting attempt dying clears its pending entry silently (FR-013)', () => {
