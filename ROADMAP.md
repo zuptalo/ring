@@ -76,6 +76,7 @@ Specs are grouped by category band; status moves
 | [1048](specs/1048-notify-reactions-messages/spec.md) | Reaction Notifications & Group Reply Escalation | 🔵 in-review |
 | [1049](specs/1049-richer-higher-quality/spec.md) | Richer Notification Alert Tones | 🔵 in-review |
 | [1050](specs/1050-quiet-housekeeping-frames/spec.md) | Push Classes, Conversation Mutes & Notification Routing | 🔵 in-review |
+| [1051](specs/1051-message-bubble-grows/spec.md) | Message Bubble Grows to Hold Its Reactions | 🟡 in-progress |
 | [1052](specs/1052-group-adds-you/spec.md) | Group Adds You Can Trust | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
