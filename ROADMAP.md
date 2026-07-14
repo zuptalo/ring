@@ -108,4 +108,4 @@ Specs are grouped by category band; status moves
 | [2028](specs/2028-quick-forward-button/spec.md) | Quick-Forward Button Sits at the Bottom Edge of Tall Media Messages | 🟢 shipped |
 | [2029](specs/2029-camera-off-shows/spec.md) | Camera Off Shows Your Picture to the Call, Not a Black Screen | 🟢 shipped |
 | [2030](specs/2030-rtl-names-truncate/spec.md) | RTL Names Truncate at the Correct End | 🔵 in-review |
-| [2034](specs/2034-wall-video-posts/spec.md) | Wall Video Posts — Honest Progress, Real Avatar, Media That Fits | 🟡 in-progress |
+| [2034](specs/2034-wall-video-posts/spec.md) | Wall Video Posts — Honest Progress, Real Avatar, Media That Fits | 🔵 in-review |
