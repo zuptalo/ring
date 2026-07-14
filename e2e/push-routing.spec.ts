@@ -88,20 +88,6 @@ test('group fan-out: author + co-reactors loud, bystanders silent; creation is q
       { timeout: 30_000 },
     );
   }
-  // KNOWN BUG DODGE (filed as spec 2033): on a fresh carrier session, a SECOND
-  // consecutive frame to a member who never wrote back is undecryptable (the
-  // pre-1050 client fails identically — see the spec's repro notes). Bob
-  // interjecting resets every sender's chain so the reactions below ride the
-  // proven send-after-receive path. Remove once 2033 lands.
-  await b.page.evaluate((id) => (window as any).__ringTest.sendChatMessage(id, 'ok'), gid);
-  for (const p of [a, c]) {
-    await p.page.waitForFunction(
-      (id) => (window as any).__ringTest.messages(id).then((ms: any[]) => ms.some((m: any) => m.body === 'ok')),
-      gid,
-      { timeout: 30_000 },
-    );
-  }
-
   // Let the message banners clear so the reaction assertions start clean.
   for (const p of [a, b, c]) {
     await p.page.waitForFunction(() => (window as any).__ringTest.notices().length === 0, undefined, { timeout: 30_000 });

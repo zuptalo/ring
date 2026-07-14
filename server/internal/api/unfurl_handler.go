@@ -32,10 +32,15 @@ import (
 // blocked at dial time.
 
 const (
-	unfurlTimeout   = 10 * time.Second
-	unfurlMaxHTML   = 512 << 10 // 512 KiB - og tags live in <head>, so truncation is safe
-	unfurlMaxImage  = 2 << 20   // 2 MiB cap on a preview image
-	unfurlMaxHops   = 5         // redirect cap
+	unfurlTimeout = 10 * time.Second
+	// HTML cap (spec 2035): og tags nominally live in <head>, but heavyweight pages
+	// push them deep — YouTube's watch pages carry og:image around byte ~641K, so the
+	// old 512 KiB cap silently starved the client of the real thumbnail and it fell
+	// back to a favicon (rendered as a blurry stretched hero). 1.5 MiB covers the
+	// major offenders with headroom while staying firmly bounded.
+	unfurlMaxHTML   = 1536 << 10 // 1.5 MiB
+	unfurlMaxImage  = 2 << 20    // 2 MiB cap on a preview image
+	unfurlMaxHops   = 5          // redirect cap
 	unfurlUserAgent = "RingLinkPreview/1.0 (+https://github.com/zuptalo/ring)"
 )
 

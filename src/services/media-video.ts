@@ -48,7 +48,15 @@ export async function compressVideoAdaptive(
         const out = await webcodecsTranscode(blob, preset, onProgress);
         console.info('[video] webcodecs output', { bytes: out.size, vs: blob.size });
         if (out.size > 0 && out.size < blob.size) return out;
-        console.warn('[video] webcodecs output not smaller; trying ffmpeg');
+        // A COMPLETED hardware re-encode that isn't smaller means the source is
+        // already efficiently compressed for this preset — the honest result is
+        // the original (achievedQuality labels it so). Falling into ffmpeg here
+        // cost a silent ~30 MB wasm download plus a slow single-threaded second
+        // transcode that almost never shrinks such a clip either, and the
+        // posting progress bar sat near 0% for the whole detour. ffmpeg remains
+        // the fallback for webcodecs FAILURES only.
+        console.info('[video] webcodecs output not smaller — source already efficient, sending original');
+        return blob;
       }
     } catch (e) {
       console.warn('[video] WebCodecs transcode FAILED; trying ffmpeg', e);

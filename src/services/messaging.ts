@@ -101,6 +101,7 @@ async function setSessionMeta(chatId: string, meta: SessionMeta): Promise<void> 
  *  the call ends (a later call simply re-runs X3DH). A no-op if nothing is stored. */
 export async function clearSession(chatId: string): Promise<void> {
   await remove('sessions', chatId);
+  await remove('sessions', `${chatId}#x3dh-collision`); // spec 2033 side session, if any
   await remove('settings', `smeta:${chatId}`);
 }
 
@@ -190,6 +191,14 @@ function establishResponderSession(p: PreKeyPreamble): RatchetState {
   return ratchetInitBob(sk, spk.keypair);
 }
 
+/** The sessions-store row holding the COLLISION side session (spec 2033): when a
+ *  simultaneous-initiation tie-break declares OUR X3DH the winner, the loser's
+ *  in-flight frames (sealed on their doomed initiation) are decrypted with a
+ *  responder session persisted under this id. It is receive-only — the send path
+ *  never touches it — and is dropped the moment the peer proves convergence by
+ *  sending on OUR session. */
+const collisionSessionId = (chatId: string) => `${chatId}#x3dh-collision`;
+
 /**
  * Decrypt an incoming wire packet for a (local) chat, advancing/establishing
  * the session. Returns the plaintext payload. The caller (db/queries) persists
@@ -202,6 +211,7 @@ export async function openPacket(chatId: string, raw: unknown): Promise<MessageP
   }
   // Serialize per chat with the matching seals — see withSessionLock.
   return withSessionLock(chatId, async () => {
+  const sideId = collisionSessionId(chatId);
   let session = await loadSession(chatId);
   const hadExistingSession = !!session;
   if (!session) {
@@ -211,33 +221,101 @@ export async function openPacket(chatId: string, raw: unknown): Promise<MessageP
     session = establishResponderSession(packet);
   }
 
+  // Which state actually opened the packet decides ALL the bookkeeping below:
+  //   main    — our existing/fresh-first-contact session worked.
+  //   adopted — the peer's initiation replaced ours (re-init, or we lost the tie-break).
+  //   side    — WE won a simultaneous-initiation tie-break; their frame was read
+  //             with the receive-only collision session and our own initiation stands.
+  let openedWith: 'main' | 'adopted' | 'side' = 'main';
   let payload: MessagePayload;
   try {
     payload = openMessage(session, packet.msg);
   } catch (e) {
-    // The existing session couldn't open this. If it's a prekey packet, the peer
-    // RE-INITIATED a fresh session, most commonly because they deleted the chat
-    // (which tears down their ratchet) and started a new one, so the new chat
-    // re-runs X3DH. Establish a new responder session from this preamble and
-    // decrypt with it, replacing the stale ratchet. (A replayed old prekey could
-    // also land here; it can only reset our state, never decrypt our traffic.)
-    if (hadExistingSession && packet.type === 'prekey') {
+    const meta0 = await getSessionMeta(chatId);
+    // (spec 2033) SIMULTANEOUS INITIATION: the failing packet is a DIFFERENT
+    // X3DH initiation while our own initiation is still unconfirmed (we hold a
+    // live preamble). Pre-2033 both sides ADOPTED the other's session here — a
+    // criss-cross (each sending on the session the other just abandoned) whose
+    // every later normal frame was undecryptable, and whose rekey recoveries
+    // re-raced the same collision. The fix is a deterministic tie-break BOTH
+    // sides compute identically from values both possess (each side sees its
+    // own preamble and the peer's): compare the two X3DH ephemeral keys; the
+    // larger b64url string wins. The loser adopts the winner's session; the
+    // winner keeps its initiation and reads the loser's in-flight frames via
+    // the persisted receive-only side session.
+    const collision =
+      hadExistingSession && packet.type === 'prekey' && !!meta0?.sendPreamble && !!meta0.preamble;
+    if (collision && (meta0.preamble as PreKeyPreamble).eph > (packet as PreKeyPreamble & { type: 'prekey' }).eph) {
+      // WE WIN: our session + preamble stay untouched. Their colliding frames
+      // (all prekey-wrapped — the loser keeps its preamble until it hears back,
+      // and by then it has adopted OURS) decrypt with the side session.
+      let side = await loadSession(sideId);
+      if (side) {
+        try {
+          payload = openMessage(side, packet.msg);
+        } catch {
+          // A DIFFERENT initiation than the side session's (e.g. the peer rekeyed
+          // mid-collision): re-establish from THIS preamble. Throws if bad.
+          side = establishResponderSession(packet);
+          payload = openMessage(side, packet.msg);
+        }
+      } else {
+        side = establishResponderSession(packet);
+        payload = openMessage(side, packet.msg); // throws if this also fails
+      }
+      await saveSession(sideId, side);
+      openedWith = 'side';
+    } else if (hadExistingSession && packet.type === 'prekey') {
+      // The peer RE-INITIATED (they deleted the chat and re-ran X3DH), or this
+      // is a collision WE LOSE: establish a responder session from the preamble
+      // and decrypt with it, replacing our ratchet. (A replayed old prekey could
+      // also land here; it can only reset our state, never decrypt our traffic —
+      // and with the tie-break an unconfirmed initiator is no longer resettable
+      // by a losing replay at all.)
       const fresh = establishResponderSession(packet);
       payload = openMessage(fresh, packet.msg); // throws if this also fails
       session = fresh;
+      openedWith = 'adopted';
+    } else if (packet.type === 'normal') {
+      // Belt-and-braces: a loser's straggler that arrives as a NORMAL packet
+      // (possible if their preamble cleared early) still opens on the side
+      // session when a collision is pending.
+      const side = await loadSession(sideId);
+      if (!side) throw e;
+      try {
+        payload = openMessage(side, packet.msg);
+      } catch {
+        throw e; // surface the MAIN session's failure, not the side probe's
+      }
+      await saveSession(sideId, side);
+      openedWith = 'side';
     } else {
       throw e;
     }
   }
-  await saveSession(chatId, session);
+  if (openedWith !== 'side') await saveSession(chatId, session);
 
-  // If we were the initiator awaiting the peer, the session is now confirmed,
-  // so stop prepending the prekey preamble to our outgoing messages.
   const meta = await getSessionMeta(chatId);
-  if (meta?.sendPreamble) {
-    meta.sendPreamble = false;
-    await setSessionMeta(chatId, meta);
+  if (openedWith === 'main') {
+    // The peer sent on OUR session — it is confirmed. Stop prepending the
+    // preamble, and drop any collision side state: the loser has converged.
+    if (meta?.sendPreamble) {
+      meta.sendPreamble = false;
+      await setSessionMeta(chatId, meta);
+    }
+    await remove('sessions', sideId);
+  } else if (openedWith === 'adopted') {
+    // We are the responder of THEIR session now; our own initiation (if any)
+    // is dead — never advertise its preamble again. Any side state belonged
+    // to an abandoned collision.
+    if (meta?.sendPreamble) {
+      await setSessionMeta(chatId, { ...meta, sendPreamble: false, preamble: undefined });
+    }
+    await remove('sessions', sideId);
   }
+  // openedWith === 'side': deliberately NOTHING else — our initiation stands,
+  // the preamble keeps riding our outgoing frames (the loser needs it to adopt),
+  // and the side session waits for more stragglers.
 
   return payload;
   });

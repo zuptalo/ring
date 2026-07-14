@@ -10,6 +10,8 @@ import {
   ratchetInitAlice,
   ratchetInitBob,
   ratchetDecryptPreview,
+  sessionRecord,
+  sessionFromRecord,
   type RatchetState,
 } from './ratchet';
 import { sealMessage, openMessage } from './message';
@@ -86,6 +88,53 @@ describe('Double Ratchet', () => {
     const r1 = ratchetDecryptPreview(bob, dhStep.header, dhStep.env, ad);
     expect(JSON.parse(new TextDecoder().decode(r1.plaintext)).body).toBe('m2 new chain');
     expect(r1.advancedDh).toBe(true);
+  });
+
+  it('responder sends many consecutive frames on a fresh session (spec 2033 FR-001, pure level)', () => {
+    // The exact field shape: initiator speaks once, then the RESPONDER sends
+    // back-to-back frames with nothing received in between. The pure ratchet
+    // must derive every key; the field loss lived in the layer above.
+    const { alice, bob, ad } = setupPair();
+    expect(openMessage(bob, sealMessage(alice, msg('bob here'), ad), ad).body).toBe('bob here');
+    const s1 = sealMessage(bob, msg('carol 1'), ad);
+    const s2 = sealMessage(bob, msg('carol 2'), ad);
+    const s3 = sealMessage(bob, msg('carol 3'), ad);
+    const s4 = sealMessage(bob, msg('carol 4'), ad);
+    expect(openMessage(alice, s1, ad).body).toBe('carol 1');
+    expect(openMessage(alice, s2, ad).body).toBe('carol 2');
+    expect(openMessage(alice, s3, ad).body).toBe('carol 3');
+    expect(openMessage(alice, s4, ad).body).toBe('carol 4');
+  });
+
+  it('consecutive sends survive a serialize/deserialize round-trip between every step (spec 2033)', () => {
+    // Mirror the persistence layer: every seal/open is a load→advance→save, so
+    // the state crosses SerializedSession (and IndexedDB's structured clone,
+    // approximated by JSON) between each frame on BOTH sides.
+    const roundTrip = (s: RatchetState): RatchetState =>
+      sessionFromRecord(JSON.parse(JSON.stringify(sessionRecord('t', s))));
+    const { alice, bob, ad } = setupPair();
+    let A = alice;
+    let B = bob;
+    const send = (from: 'A' | 'B', body: string) => {
+      const st = from === 'A' ? A : B;
+      const wire = sealMessage(st, msg(body), ad);
+      if (from === 'A') A = roundTrip(A);
+      else B = roundTrip(B);
+      return wire;
+    };
+    const recv = (at: 'A' | 'B', wire: ReturnType<typeof sealMessage>, body: string) => {
+      const st = at === 'A' ? A : B;
+      expect(openMessage(st, wire, ad).body).toBe(body);
+      if (at === 'A') A = roundTrip(A);
+      else B = roundTrip(B);
+    };
+    recv('B', send('A', 'bob here'), 'bob here');
+    const w1 = send('B', 'carol 1');
+    const w2 = send('B', 'carol 2');
+    recv('A', w1, 'carol 1');
+    const w3 = send('B', 'carol 3');
+    recv('A', w2, 'carol 2');
+    recv('A', w3, 'carol 3');
   });
 
   it('handles out-of-order delivery (skipped message keys)', () => {

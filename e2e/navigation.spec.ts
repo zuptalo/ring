@@ -119,10 +119,14 @@ test('unknown paths redirect into the app; back at a tab root stays in-app', asy
   await a.page.waitForURL('**/tabs/chats');
   expect(await a.page.evaluate(() => history.length)).toBeGreaterThanOrEqual(2);
   await a.page.goBack();
-  await a.page.waitForTimeout(300);
   expect(a.page.url()).not.toContain('about:blank');
   expect(await a.page.evaluate(() => location.pathname)).not.toBe('');
-  expect(await a.page.evaluate(() => !!document.querySelector('ion-app, ion-router-outlet'))).toBe(true);
+  // Landing on the catch-all entry remounts the app via a FULL document load —
+  // poll for the mount instead of a fixed beat (a loaded CI runner loses a
+  // 300ms race; the guarantee is "stays in-app", not "remounts instantly").
+  await a.page.waitForFunction(() => !!document.querySelector('ion-app, ion-router-outlet'), undefined, {
+    timeout: 15_000,
+  });
 
   await ctx.close();
 });

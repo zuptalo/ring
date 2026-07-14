@@ -59,7 +59,13 @@
       <ion-item v-for="pp in pending" :key="pp.id" lines="none" class="postitem">
         <div class="post pending-post">
           <div class="phead">
-            <ion-avatar class="avatar"><div class="ph">{{ initial('You') }}</div></ion-avatar>
+            <!-- Same avatar resolution as a posted card: the real profile picture,
+                 initials only as the no-avatar fallback (a pending card that showed
+                 "Y" next to your own face rows read as someone else posting). -->
+            <ion-avatar class="avatar">
+              <user-avatar v-if="selfAvatar" :src="selfAvatar" alt="You" />
+              <div v-else class="ph">{{ initial('You') }}</div>
+            </ion-avatar>
             <div class="who">
               <div class="name">You</div>
               <div class="sub">
@@ -178,9 +184,19 @@
             <div
               v-else-if="p.kind === 'image' || p.kind === 'video'"
               class="thumb"
-              :class="{ loading: p.kind === 'image' && !mediaLoaded[p.id] }"
+              :class="{ loading: p.kind === 'image' && !mediaLoaded[p.id], 'thumb-video': p.kind === 'video', 'fit-contain': mediaCapped(p) }"
               :style="mediaStyle(p)"
             >
+              <!-- Capped (tall) media letterboxes over its own blurred copy — the album
+                   slides' fill trick, so single posts and albums read the same. Always an
+                   image (a video's poster), never a second <video>. -->
+              <img
+                v-if="mediaCapped(p) && (p.kind === 'video' ? p.posterUrl : p.posterUrl || p.mediaUrl)"
+                class="thumb-fill"
+                :src="p.kind === 'video' ? p.posterUrl : p.posterUrl || p.mediaUrl"
+                alt=""
+                aria-hidden="true"
+              />
               <!-- Image: poster shows instantly; tap or ⤢ opens the minimal full-screen image. -->
               <template v-if="p.kind === 'image' && (p.posterUrl || p.mediaUrl)">
                 <img
@@ -329,6 +345,7 @@ import WallVideo from '@/components/WallVideo.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
 import WallGameCard from '@/components/WallGameCard.vue';
 import { useWall, type WallPost } from '@/composables/useWall';
+import { useSelfProfile } from '@/composables/useSelfProfile';
 import { usePendingPosts } from '@/composables/usePendingPosts';
 import { retryPendingPost, cancelPendingPost } from '@/services/pending-posts';
 import { useReactionPicker } from '@/composables/useReactionPicker';
@@ -345,6 +362,9 @@ import { timeLeft, ago } from '@/utils/post-time';
 const router = useRouter();
 const { wall, now, loaded, synced } = useWall();
 const { pending } = usePendingPosts();
+// Own profile picture for the pending "Posting…" card (same source useWall
+// resolves for our published posts).
+const { avatar: selfAvatar } = useSelfProfile();
 
 // Pull-to-refresh: re-pull the feed (new posts stream in via the live query) and release the
 // control when the sync settles.
@@ -406,8 +426,20 @@ const mediaLoaded = reactive<Record<string, boolean>>({});
 function onMediaLoad(id: string): void {
   mediaLoaded[id] = true;
 }
+// Tall media (image OR video) gets its feed box capped at 4:5 — the album frame's
+// ratio — and is letterboxed WHOLE inside it (contain + a blurred fill, exactly like
+// album slides). A full-height 9:16 box at phone width is taller than the viewport
+// allows, and the .thumb max-height clamp + overflow:hidden then swallowed the bottom
+// of the media — including the video player's control bar — on iPhones (desktop never
+// hits the clamp, which is why it only reproduced on the phone). Landscape/square
+// media keeps its true ratio: it already fits at any width.
+function mediaCapped(p: WallPost): boolean {
+  return !!p.mediaW && !!p.mediaH && p.mediaH > p.mediaW * 1.25;
+}
 function mediaStyle(p: WallPost): Record<string, string> {
-  return { aspectRatio: p.mediaW && p.mediaH ? `${p.mediaW} / ${p.mediaH}` : '4 / 3' };
+  if (!p.mediaW || !p.mediaH) return { aspectRatio: '4 / 3' };
+  if (mediaCapped(p)) return { aspectRatio: '4 / 5' };
+  return { aspectRatio: `${p.mediaW} / ${p.mediaH}` };
 }
 // One stable, slightly-vertical 4:5 frame for a whole mixed-aspect album (Instagram-style):
 // portraits — the common case — nearly fill it, while squares/landscapes sit contained with
@@ -811,6 +843,29 @@ ion-item-sliding ion-item-option {
   max-height: 60vh;
   overflow: hidden;
   background: var(--ion-color-step-100, rgba(120, 120, 128, 0.12));
+}
+/* Video boxes sit on black (their pillarbox/letterbox bands), not the gray skeleton tint. */
+.thumb-video {
+  background: #000;
+}
+/* Capped tall media (see mediaCapped): the main image switches cover → contain so the
+   WHOLE picture shows inside the 4:5 frame, over its blurred fill. The fill mirrors
+   .aslide-fill so single posts and album slides read identically. */
+.thumb.fit-contain {
+  background: #000;
+}
+.thumb.fit-contain > img:not(.thumb-fill) {
+  position: relative;
+  object-fit: contain;
+}
+.thumb > img.thumb-fill {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.15); /* hide the blur's soft edge */
+  filter: blur(22px) brightness(0.85) saturate(1.1);
 }
 /* Inline album gallery: a horizontal scroll-snap row inside the aspect-ratio box, so you
    can swipe every photo/video right in the feed. */

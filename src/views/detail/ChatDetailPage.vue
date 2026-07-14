@@ -420,11 +420,15 @@
               <a
                 v-if="m.kind === 'text' && m.linkPreview"
                 class="link-card rich"
+                :class="{ 'lp-iconic': isIconPreview(m.linkPreview) }"
                 :href="m.linkPreview.url"
                 target="_blank"
                 rel="noopener noreferrer"
                 @click.stop.prevent="openExternal(m.linkPreview.url)"
               >
+                <!-- (spec 2035) A tiny source image (favicon-class, no real og:image)
+                     renders as a fixed-size icon beside the text — a hero slot would
+                     upscale it into a blurry smear (the reported YouTube card). -->
                 <img v-if="m.linkPreview.image" class="lp-thumb" :src="m.linkPreview.image" alt="" />
                 <span class="lp-meta">
                   <span v-if="m.linkPreview.title" class="lp-title">{{ m.linkPreview.title }}</span>
@@ -1742,6 +1746,11 @@ function onBubbleTap(m: Message, ev: Event): void {
 const LINK_RE = /\bhttps?:\/\/[^\s]+/i;
 const hasLink = (s: string) => LINK_RE.test(s);
 const linkOf = (s: string) => s.match(LINK_RE)?.[0] ?? '';
+// (spec 2035) A preview whose image is favicon-class (tiny natural width) renders
+// as a compact icon card — the hero slot would upscale it into a blurry smear.
+// Previews without a recorded width (older senders) keep the hero presentation.
+const isIconPreview = (lp: { image?: string; imageWidth?: number }): boolean =>
+  !!lp.image && lp.imageWidth !== undefined && lp.imageWidth < 200;
 const linkDomain = (s: string) => {
   try {
     return new URL(linkOf(s)).hostname.replace(/^www\./, '');
@@ -5415,6 +5424,20 @@ function cancelRecording() {
   max-height: 160px;
   object-fit: cover;
   display: block;
+}
+/* (spec 2035) Favicon-class preview image: a compact icon row instead of a hero —
+   the image sits at a fixed small size beside the meta, never upscaled. */
+.link-card.lp-iconic {
+  display: flex;
+  align-items: center;
+}
+.link-card.lp-iconic .lp-thumb {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  margin-left: 10px;
+  border-radius: 8px;
+  object-fit: contain;
 }
 .lp-meta {
   min-width: 0;
