@@ -116,3 +116,45 @@ test('in-app banner renders below the header (no overlap with the toolbar)', asy
   await ctxA.close();
   await ctxB.close();
 });
+
+/**
+ * Spec 1050 (FR-010): a collapsed banner dismisses with one upward swipe; the ✕
+ * is no longer part of the visual design (it stays in the DOM, focusable, for
+ * assistive tech). Quick-reply's own gestures are covered by their existing suite.
+ */
+test('a collapsed banner dismisses with an upward swipe; the close button is visually hidden', async ({ browser }) => {
+  test.setTimeout(120_000);
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const a = await createAccount(ctxA, 'SWIPE01');
+  const b = await createAccount(ctxB, 'SWIPE02');
+  await ev(a, ([n]) => (window as any).__ringTest.setProfile(n, ''), ['Alice']);
+  await pair(a, b);
+  const aChat = (await ev(a, (id: string) => (window as any).__ringTest.chatWith(id), b.id)) as string;
+  const bChat = (await ev(b, (id: string) => (window as any).__ringTest.chatWith(id), a.id)) as string;
+  await b.page.waitForFunction(() => (window as any).__ringTest.settleMsLeft() === 0, undefined, { timeout: 30_000 });
+
+  await sendAndReceive(a, b, aChat, bChat, 'swipe me away');
+  await b.page.waitForFunction(
+    () => (window as any).__ringTest.notices().length === 1,
+    undefined,
+    { timeout: 30_000 },
+  );
+
+  const card = b.page.locator('.nb').first();
+  // The ✕ exists for AT but is not visually rendered (opacity 0, no pointer target).
+  await expect(card.locator('.nb-close')).toHaveCSS('opacity', '0');
+
+  // Swipe up: press on the card body, drag well past the 44px threshold, release.
+  const box = (await card.boundingBox())!;
+  const x = box.x + box.width / 2;
+  await b.page.mouse.move(x, box.y + box.height / 2);
+  await b.page.mouse.down();
+  await b.page.mouse.move(x, box.y + box.height / 2 - 70, { steps: 6 });
+  await b.page.mouse.up();
+
+  await b.page.waitForFunction(() => (window as any).__ringTest.notices().length === 0, undefined, { timeout: 10_000 });
+
+  await ctxA.close();
+  await ctxB.close();
+});

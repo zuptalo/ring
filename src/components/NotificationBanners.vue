@@ -10,10 +10,15 @@
       class="nb"
       :class="{ replying: replyUrl === b.url, dragging: dragUrl === b.url, 'nb-danger': b.tone === 'danger' }"
       :style="cardStyle(b)"
+      @pointerdown="onCardDown($event, b)"
+      @pointermove="onCardMove($event, b)"
+      @pointerup="onCardUp($event, b)"
+      @pointercancel="onCardCancel(b)"
     >
-      <!-- Explicit dismiss affordance (FR-015), in addition to swipe-up / auto-dismiss.
-           Stop propagation so closing never opens the chat. -->
-      <button class="nb-close" aria-label="Dismiss notification" @click.stop="dismissBanner(b.id)" @pointerdown.stop>
+      <!-- Non-gestural dismiss for assistive tech (spec 1050 FR-010): visually
+           hidden — swipe-up is the visible affordance — but focusable, so keyboard
+           and screen-reader users keep an explicit close. Reveals on focus. -->
+      <button class="nb-close nb-close-sr" aria-label="Dismiss notification" @click.stop="dismissBanner(b.id)" @pointerdown.stop>
         <ion-icon :icon="closeOutline" />
       </button>
       <!-- Header: tap anywhere here to open the full chat. An 'action' card (the update
@@ -276,6 +281,55 @@ function onGrabUp(e: PointerEvent, b: NotifyBanner): void {
   }
 }
 
+/* ---- spec 1050 (FR-010): swipe UP anywhere on a collapsed card dismisses it. ----
+ * Coexists with the grab-zone gestures: reply mode keeps the grab handle's
+ * swipe-up-discards meaning (we stand down entirely while replying), the
+ * quick-reply composer/buttons and the grab zone are excluded from tracking, and
+ * we never preventDefault — a small movement stays a tap/click (open the chat). */
+const CARD_DISMISS_PX = 44;
+let cardUrl: string | null = null;
+let cardStartY = 0;
+let cardStartX = 0;
+
+function cardGestureExcluded(e: PointerEvent, b: NotifyBanner): boolean {
+  if (replyUrl.value === b.url) return true; // reply mode: the grab handle owns swipe-up (discard)
+  const t = e.target as HTMLElement | null;
+  return !!t?.closest('.nb-grab, .nb-reply, .nb-close, .nb-actions');
+}
+
+function onCardDown(e: PointerEvent, b: NotifyBanner): void {
+  if (cardGestureExcluded(e, b)) return;
+  cardUrl = b.url;
+  cardStartY = e.clientY;
+  cardStartX = e.clientX;
+}
+function onCardMove(e: PointerEvent, b: NotifyBanner): void {
+  if (cardUrl !== b.url || dragUrl.value) return;
+  const dy = e.clientY - cardStartY;
+  // Vertical intent only; a horizontal wander is not a dismiss.
+  if (dy < 0 && Math.abs(dy) > Math.abs(e.clientX - cardStartX)) {
+    dragUrl.value = b.url; // reuse the existing translate styling for feedback
+    dragDy.value = Math.max(-90, dy);
+  }
+}
+function onCardUp(e: PointerEvent, b: NotifyBanner): void {
+  if (cardUrl !== b.url) return;
+  cardUrl = null;
+  if (dragUrl.value !== b.url) return; // never engaged (it was a tap) — click handles it
+  const dy = e.clientY - cardStartY;
+  dragUrl.value = null;
+  dragDy.value = 0;
+  if (dy < -CARD_DISMISS_PX) dismissBanner(b.id);
+}
+function onCardCancel(b: NotifyBanner): void {
+  if (cardUrl !== b.url) return;
+  cardUrl = null;
+  if (dragUrl.value === b.url) {
+    dragUrl.value = null;
+    dragDy.value = 0;
+  }
+}
+
 // Pin the banner being replied to so the MAX_BANNERS cap can't evict it (and lose the
 // draft), and unpin the previous one whenever the reply closes or switches.
 watch(replyUrl, (next, prev) => {
@@ -362,6 +416,17 @@ watch(
   background: var(--ion-color-danger, #eb445a);
 }
 /* Explicit dismiss button (FR-015), top-trailing so it clears the avatar + text. */
+/* spec 1050 (FR-010): the close button is for keyboards + screen readers only —
+   swipe-up is the visible dismiss. Hidden until keyboard focus reveals it. */
+.nb-close-sr {
+  opacity: 0;
+  pointer-events: none;
+}
+.nb-close-sr:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .nb-close {
   position: absolute;
   top: 6px;

@@ -337,6 +337,7 @@ import {
   listFriends, listCloseFriends, syncPosts,
   MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
   markWallSeen, setWallMuteUntil, isWallTempMuted, setWallUserMuted, setWallUserHidden,
+  isWallUserAlwaysAlert, setWallUserAlwaysAlert,
   challengeFallbackBody,
 } from '@/db/queries';
 import { timeLeft, ago } from '@/utils/post-time';
@@ -548,6 +549,14 @@ async function openPostMenu(post: WallPost): Promise<void> {
           text: post.muted ? 'Unmute their wall notifications' : 'Mute their wall notifications',
           handler: () => void toggleMute(post),
         },
+        {
+          // spec 1050 (FR-008a): per-friend follow — their new posts push this
+          // device even when the global wall notifications toggle is off.
+          text: (await isWallUserAlwaysAlert(post.author))
+            ? 'Stop always alerting their new posts'
+            : 'Always alert me about their new posts',
+          handler: () => void toggleAlwaysAlert(post),
+        },
         { text: 'Hide all their posts', handler: () => void hideUser(post) },
       ];
   // A game post's story in numbers (spec 0009) lives on the post page — the
@@ -615,6 +624,16 @@ async function toggleMute(post: WallPost): Promise<void> {
   await appToast({
     message: post.muted ? `Unmuted ${post.authorName}` : `Muted ${post.authorName}'s Wall notifications`,
     duration: 1400,
+  });
+}
+async function toggleAlwaysAlert(post: WallPost): Promise<void> {
+  const on = !(await isWallUserAlwaysAlert(post.author));
+  await setWallUserAlwaysAlert(post.author, on);
+  await appToast({
+    message: on
+      ? `You'll always hear about ${post.authorName}'s new posts`
+      : `Back to your usual wall notification setting for ${post.authorName}`,
+    duration: 1800,
   });
 }
 async function hideUser(post: WallPost): Promise<void> {

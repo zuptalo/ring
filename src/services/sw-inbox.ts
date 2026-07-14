@@ -414,6 +414,10 @@ export function noteForPayload(
       ? chats.find((c) => c.id === payload.groupId && c.isGroup)
       : chats.find((c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === from);
     const mine = !!row && (row.outgoing || row.senderId === 'me');
+    // spec 1050 (US2): a member with their OWN reaction on the target is a
+    // co-reactor — loud too, with "also reacted" wording. selfId is never the
+    // incoming reactor here (own devices are filtered below).
+    const coReactor = !!row && !mine && !!selfId && (row.reactions ?? []).some((r) => r.userId === selfId);
     const enabled = rChat?.isGroup ? reactionCtx?.prefs?.group === true : reactionCtx?.prefs?.dm === true;
     const suppressedByChat =
       !rChat ||
@@ -421,7 +425,7 @@ export function noteForPayload(
       (rChat.mutedUntil !== undefined && rChat.mutedUntil > Date.now()) ||
       rChat.notifyWebPush === false ||
       (rChat.notifyContent ?? 'full') === 'none';
-    if (sig.remove || !mine || from === selfId || !enabled || !showMessages || suppressedByChat) {
+    if (sig.remove || (!mine && !coReactor) || from === selfId || !enabled || !showMessages || suppressedByChat) {
       return { note: null, wasMessage: false };
     }
     const showText = (rChat.notifyContent ?? 'full') === 'full' && showPreview;
@@ -430,9 +434,12 @@ export function noteForPayload(
     // A short quote of the reacted-to message; media/empty bodies read naturally.
     const raw = (row.body || '').replace(/\s+/g, ' ').trim();
     const quote = raw.length > 80 ? `${raw.slice(0, 79)}…` : raw;
+    // Co-reactor wording says "also" and drops the "your message" claim — the
+    // target is someone else's message the recipient happened to react to.
+    const verb = coReactor ? `also reacted ${sig.emoji}` : `reacted ${sig.emoji}`;
     const line = rChat.isGroup
-      ? quote ? `${first} reacted ${sig.emoji} to: ${quote}` : `${first} reacted ${sig.emoji} to your message`
-      : quote ? `Reacted ${sig.emoji} to: ${quote}` : `Reacted ${sig.emoji} to your message`;
+      ? quote ? `${first} ${verb} to: ${quote}` : `${first} ${verb} to ${coReactor ? 'a message you reacted to' : 'your message'}`
+      : quote ? `${coReactor ? 'Also reacted' : 'Reacted'} ${sig.emoji} to: ${quote}` : `${coReactor ? 'Also reacted' : 'Reacted'} ${sig.emoji} to ${coReactor ? 'a message you reacted to' : 'your message'}`;
     return {
       note: {
         ids: [f.id as string],

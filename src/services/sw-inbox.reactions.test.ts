@@ -93,6 +93,27 @@ describe('spec 1048 US1 — reaction notes (SW path, contract Table 1)', () => {
   });
 });
 
+describe('spec 1050 US2 — co-reactors are loud with "also reacted" wording', () => {
+  it("a reaction to SOMEONE ELSE's message is loud when I have my own reaction on it", () => {
+    const row = myMsg({ senderId: 'peer-9', outgoing: false, reactions: [{ userId: SELF, emoji: '👍', at: 1 }] });
+    const r = run(reaction(), [dmChat], ctx({ row }));
+    expect(r.note).not.toBeNull();
+    expect(r.note?.body).toBe('Also reacted ❤️ to: hi there');
+  });
+
+  it('group co-reactor wording names the reactor', () => {
+    const row = myMsg({ chatId: 'g1', senderId: 'peer-9', outgoing: false, reactions: [{ userId: SELF, emoji: '👍', at: 1 }] });
+    const r = run(reaction({ groupId: 'g1' }), [groupChat], ctx({ row }));
+    expect(r.note?.body).toBe('Alice also reacted ❤️ to: hi there');
+    expect(r.note?.tag).toBe('ring:g1');
+  });
+
+  it('no own reaction on the target → still the silent bystander shape', () => {
+    const row = myMsg({ senderId: 'peer-9', outgoing: false, reactions: [{ userId: 'someone-else', emoji: '🔥', at: 1 }] });
+    expect(run(reaction(), [dmChat], ctx({ row }))).toEqual(SILENT_SIDE_EFFECT);
+  });
+});
+
 describe('spec 1048 US1 — never-notify set (FR-006): silent side effects keep the pre-1048 shape', () => {
   it('reaction REMOVAL stays silent', () => {
     const p = reaction();
