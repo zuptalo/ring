@@ -327,6 +327,13 @@ export function sessionRecord(chatId: string, state: RatchetState): SerializedSe
   return serialize(chatId, state);
 }
 
+/** Rehydrate a state from a sessions-store row (the inverse of sessionRecord).
+ *  Exercised directly by the spec-2033 persistence-round-trip regression tests;
+ *  production reads go through loadSession. */
+export function sessionFromRecord(rec: SerializedSession): RatchetState {
+  return deserialize(rec);
+}
+
 export async function loadSession(chatId: string): Promise<RatchetState | null> {
   const rec = await get<SerializedSession>('sessions', chatId);
   return rec ? deserialize(rec) : null;
