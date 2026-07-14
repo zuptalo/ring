@@ -139,6 +139,29 @@ func TestUnfurlTruncatesLargeHTML(t *testing.T) {
 	}
 }
 
+// (spec 2035) og tags buried DEEP in a heavyweight page still reach the client:
+// YouTube's watch pages carry og:image around byte ~641K, past the old 512 KiB
+// cap — the client then fell back to the favicon and rendered a blurry hero.
+func TestUnfurlDeepOgTagsSurviveTheCap(t *testing.T) {
+	allowLoopback(t)
+	const ogOffset = 700 << 10 // beyond the old 512 KiB cap, inside the new one
+	page := strings.Repeat("x", ogOffset) +
+		`<meta property="og:image" content="https://example.com/thumb.jpg">`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(page))
+	}))
+	defer srv.Close()
+
+	rec := doUnfurl(t, srv.URL, false)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "og:image") {
+		t.Errorf("og tag at %d bytes was truncated away (cap %d)", ogOffset, unfurlMaxHTML)
+	}
+}
+
 // Upstream 404 → 404; any other non-200 → 502.
 func TestUnfurlUpstreamStatus(t *testing.T) {
 	allowLoopback(t)

@@ -114,3 +114,4 @@ Specs are grouped by category band; status moves
 | [2029](specs/2029-camera-off-shows/spec.md) | Camera Off Shows Your Picture to the Call, Not a Black Screen | 🟢 shipped |
 | [2030](specs/2030-rtl-names-truncate/spec.md) | RTL Names Truncate at the Correct End | 🔵 in-review |
 | [2032](specs/2032-ipad-taps-dead/spec.md) | iPad Taps Dead on Send & Quick-React | 🟡 in-progress |
+| [2035](specs/2035-link-previews-look/spec.md) | Link Previews Look Sharp | 🟡 in-progress |
