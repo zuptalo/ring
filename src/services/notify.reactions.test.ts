@@ -168,6 +168,33 @@ describe('spec 1048 US1 — reaction alerts on the page path', () => {
   });
 });
 
+describe('spec 1050 — the group tone is finally a real setting', () => {
+  it('a group message notice plays notifications.group.sound, not the message tone', async () => {
+    h.settings.set('notifications.message.sound', 'note');
+    h.settings.set('notifications.group.sound', 'beacon');
+    await refreshPrefs();
+    await notifyIncoming({ kind: 'message', group: true, chatId: 'g9', msgId: 'm9', name: 'Team', body: 'Ann: hi all' } as never);
+    expect(h.tones).toHaveBeenCalledWith('beacon');
+    expect(h.tones).not.toHaveBeenCalledWith('note');
+  });
+
+  it('a 1:1 message keeps the message tone', async () => {
+    h.settings.set('notifications.message.sound', 'note');
+    h.settings.set('notifications.group.sound', 'beacon');
+    await refreshPrefs();
+    await notifyIncoming({ kind: 'message', chatId: 'c9', msgId: 'm8', name: 'Ann', body: 'hi' } as never);
+    expect(h.tones).toHaveBeenCalledWith('note');
+  });
+
+  it('a group REACTION still uses the dedicated reaction tone (most specific wins)', async () => {
+    h.settings.set('notifications.group.sound', 'beacon');
+    await refreshPrefs();
+    await notifyIncoming(reactionNotice({ group: true, chatId: 'g9' }));
+    expect(h.tones).toHaveBeenCalledWith('pop');
+    expect(h.tones).not.toHaveBeenCalledWith('beacon');
+  });
+});
+
 describe('spec 1048 US2 — reply-to-you escalation on the page path', () => {
   it('escalates past mute exactly like a mention', async () => {
     h.muted.add('g1');

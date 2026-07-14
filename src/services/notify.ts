@@ -40,6 +40,7 @@ interface NotifyPrefs {
   showPreview: boolean;
   inappSounds: boolean;
   messageSound: string;
+  groupSound: string; // group-chat tone (spec 1050 wired the long-dead key up)
   reactionSound: string; // dedicated reaction tone (spec 1048); 'none' = visible but silent
   inappStyle: string;
 }
@@ -51,6 +52,7 @@ const PREF_DEFAULTS: NotifyPrefs = {
   // (message/group/reaction) look broken on devices that never found the toggle.
   inappSounds: true,
   messageSound: 'note',
+  groupSound: 'note',
   reactionSound: 'pop',
   inappStyle: 'banners',
 };
@@ -58,15 +60,16 @@ let prefs: NotifyPrefs = { ...PREF_DEFAULTS };
 let prefsHydrated = false;
 
 async function loadPrefs(): Promise<void> {
-  const [showMessages, showPreview, inappSounds, messageSound, reactionSound, inappStyle] = await Promise.all([
+  const [showMessages, showPreview, inappSounds, messageSound, groupSound, reactionSound, inappStyle] = await Promise.all([
     getSetting<boolean>('notifications.message.show', PREF_DEFAULTS.showMessages),
     getSetting<boolean>('notifications.showPreview', PREF_DEFAULTS.showPreview),
     getSetting<boolean>('notifications.inapp.sounds', PREF_DEFAULTS.inappSounds),
     getSetting<string>('notifications.message.sound', PREF_DEFAULTS.messageSound),
+    getSetting<string>('notifications.group.sound', PREF_DEFAULTS.groupSound),
     getSetting<string>('notifications.reactions.sound', PREF_DEFAULTS.reactionSound),
     getSetting<string>('notifications.inapp.style', PREF_DEFAULTS.inappStyle),
   ]);
-  prefs = { showMessages, showPreview, inappSounds, messageSound, reactionSound, inappStyle };
+  prefs = { showMessages, showPreview, inappSounds, messageSound, groupSound, reactionSound, inappStyle };
 }
 
 async function ensurePrefs(): Promise<NotifyPrefs> {
@@ -120,6 +123,8 @@ export interface IncomingNotice {
   // set) with "replied to you" wording; `mentionName` names the replier. When a
   // message both mentions AND replies, mention wording wins (one notification).
   replied?: boolean;
+  // Group-chat notice (spec 1050): picks the group tone over the message tone.
+  group?: boolean;
 }
 
 /* ---- in-app notification banners (custom green overlay; see NotificationBanners.vue) ---- */
@@ -433,8 +438,9 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
     const mentionBody = n.mention
       ? `${n.mentionName ?? 'Someone'} mentioned you`
       : `${n.mentionName ?? 'Someone'} replied to you`;
-    // The reaction tone (spec 1048): dedicated + subtle; undefined = message tone.
-    const noticeTone = n.reaction ? p.reactionSound : undefined;
+    // Tone precedence (most specific wins): reaction tone (spec 1048), then the
+    // group tone (spec 1050 wired the dead key up), then the message tone.
+    const noticeTone = n.reaction ? p.reactionSound : n.group ? p.groupSound : undefined;
     const owner = notificationOwner({
       appVisible: appVisible(),
       unlocked: true, // isUnlockedNow() was checked above

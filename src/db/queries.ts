@@ -798,6 +798,7 @@ async function handleReaction(from: string, signal: ReactionSignal): Promise<voi
           await notifyIncoming({
             kind: 'message',
             reaction: true,
+            group: chat.isGroup,
             chatId: chat.id,
             msgId: message.id,
             name: chat.isGroup ? chat.name : name,
@@ -6160,6 +6161,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     kind: 'message',
     chatId: targetChatId,
     msgId: message.id,
+    group: isGroupMsg, // group tone (spec 1050)
     name: chat?.isGroup ? chat.name : contact.name,
     // The notification spells out shared location / contact / poll (no icon to lean
     // on), unlike the terser `preview` used for the chats list above.
