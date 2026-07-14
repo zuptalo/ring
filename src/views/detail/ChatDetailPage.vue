@@ -501,7 +501,7 @@
                   class="react-btn"
                   aria-label="React"
                   @click.stop="openQuickReact(m, $event)"
-                  @pointerdown.prevent
+                  @mousedown.prevent
                 >
                   <ion-icon :icon="happyOutline" />
                 </button>
@@ -652,7 +652,7 @@
                   class="react-btn"
                   aria-label="React"
                   @click.stop="openQuickReact(item.messages[0], $event)"
-                  @pointerdown.prevent
+                  @mousedown.prevent
                 >
                   <ion-icon :icon="happyOutline" />
                 </button>
@@ -759,7 +759,7 @@
           :key="c.everyone ? '@everyone' : c.id"
           type="button"
           class="mention-row"
-          @pointerdown.prevent
+          @mousedown.prevent
           @click="pickMention(c)"
         >
           <ion-icon v-if="c.everyone" :icon="megaphoneOutline" class="mention-row-ico" />
@@ -977,12 +977,15 @@
                 <span v-if="effectiveTtlMs" class="ttl-badge">{{ msgTtlShort }}</span>
               </span>
             </ion-button>
+            <!-- @mousedown.prevent (NOT pointerdown): keeps the tap from stealing focus
+                 (keyboard stays open) without cancelling the click. Cancelling pointerdown
+                 suppresses the synthesized click entirely on iPadOS — dead button (spec 2032). -->
             <ion-button
               v-if="draft.trim() || pendingMedia.length"
               color="primary"
               aria-label="Send"
               @click="send"
-              @pointerdown.prevent
+              @mousedown.prevent
             >
               <ion-icon slot="icon-only" :icon="sendOutline" />
             </ion-button>

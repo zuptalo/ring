@@ -54,6 +54,13 @@ func TestSPAHandler(t *testing.T) {
 		// (400), never escaping the tree. In production the stdlib mux also cleans
 		// the path before the handler runs, so a real traversal can't leak a file.
 		{name: "traversal rejected", path: "/assets/../../../etc/passwd", wantCode: 400},
+		// Spec 2032: a MISSING fingerprinted asset is a dead chunk from a superseded
+		// deploy, never a client-side route — it must 404, not fall back to the app
+		// shell. Serving index.html as JavaScript is how a stale installed PWA (old
+		// shell cache-first, precache partially evicted, dist since rebuilt) ends up
+		// with silently dead features: the module loader receives HTML and the whole
+		// chunk's handlers never wire up.
+		{name: "missing hashed asset 404s", path: "/assets/gone.def456.js", wantCode: 404},
 	}
 
 	for _, tc := range cases {
