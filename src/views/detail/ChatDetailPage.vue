@@ -4909,6 +4909,18 @@ function cancelRecording() {
 .bubble-row.out .bubble-col {
   align-items: flex-end;
 }
+/* Spec 1051: the column already sizes to its WIDEST child, so stretching the
+   bubble's wrapper (the swipe-wrap is the actual flex child) makes a short
+   message grow to hold a wide reaction row — the chips then straddle the
+   bubble's edge instead of spilling over the wallpaper. With no reactions, or
+   text wider than the chips, the column IS the bubble's natural width and this
+   is a no-op. The 78% cap and chip wrapping are unchanged. */
+.bubble-col > .swipe-wrap {
+  align-self: stretch;
+}
+.bubble-col > .swipe-wrap > .bubble {
+  width: 100%;
+}
 .bubble {
   max-width: 100%;
   padding: 8px 12px;
