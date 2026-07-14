@@ -195,6 +195,28 @@ describe('spec 1050 — the group tone is finally a real setting', () => {
   });
 });
 
+describe("spec 1050 — the group 'Show notifications' master is finally real", () => {
+  it('group.show off silences a group message notice; 1:1 still banners', async () => {
+    h.settings.set('notifications.group.show', false);
+    await refreshPrefs();
+    const g = await notifyIncoming({ kind: 'message', group: true, chatId: 'g1', msgId: 'm1', name: 'Team', body: 'Ann: hi' } as never);
+    expect(g).toBe(false);
+    expect(notifyBanners.value).toHaveLength(0);
+    const dm = await notifyIncoming({ kind: 'message', chatId: 'c1', msgId: 'm2', name: 'Ann', body: 'hi' } as never);
+    expect(dm).toBe(true);
+  });
+
+  it('group.show is a surface MASTER: mentions and reactions in groups are silenced too', async () => {
+    h.settings.set('notifications.group.show', false);
+    await refreshPrefs();
+    const m = await notifyIncoming({ kind: 'message', group: true, mention: true, mentionName: 'Ann', chatId: 'g1', msgId: 'm3', name: 'Team', body: 'Ann: @you' } as never);
+    expect(m).toBe(false);
+    const r = await notifyIncoming(reactionNotice({ group: true, chatId: 'g1' }));
+    expect(r).toBe(false);
+    expect(notifyBanners.value).toHaveLength(0);
+  });
+});
+
 describe('spec 1048 US2 — reply-to-you escalation on the page path', () => {
   it('escalates past mute exactly like a mention', async () => {
     h.muted.add('g1');

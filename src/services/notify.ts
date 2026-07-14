@@ -37,6 +37,7 @@ import { notificationOwner } from '@/services/notify-policy';
 // then refresh on any settings write (the change bus already fires for 'settings').
 interface NotifyPrefs {
   showMessages: boolean;
+  showGroups: boolean; // group-surface master (spec 1050 wired the dead key up)
   showPreview: boolean;
   inappSounds: boolean;
   messageSound: string;
@@ -46,6 +47,7 @@ interface NotifyPrefs {
 }
 const PREF_DEFAULTS: NotifyPrefs = {
   showMessages: true,
+  showGroups: true,
   showPreview: true,
   // Default ON (spec 1050 field report): every major messenger plays in-app
   // sounds out of the box, and a silent default made the per-surface tones
@@ -60,8 +62,9 @@ let prefs: NotifyPrefs = { ...PREF_DEFAULTS };
 let prefsHydrated = false;
 
 async function loadPrefs(): Promise<void> {
-  const [showMessages, showPreview, inappSounds, messageSound, groupSound, reactionSound, inappStyle] = await Promise.all([
+  const [showMessages, showGroups, showPreview, inappSounds, messageSound, groupSound, reactionSound, inappStyle] = await Promise.all([
     getSetting<boolean>('notifications.message.show', PREF_DEFAULTS.showMessages),
+    getSetting<boolean>('notifications.group.show', PREF_DEFAULTS.showGroups),
     getSetting<boolean>('notifications.showPreview', PREF_DEFAULTS.showPreview),
     getSetting<boolean>('notifications.inapp.sounds', PREF_DEFAULTS.inappSounds),
     getSetting<string>('notifications.message.sound', PREF_DEFAULTS.messageSound),
@@ -69,7 +72,7 @@ async function loadPrefs(): Promise<void> {
     getSetting<string>('notifications.reactions.sound', PREF_DEFAULTS.reactionSound),
     getSetting<string>('notifications.inapp.style', PREF_DEFAULTS.inappStyle),
   ]);
-  prefs = { showMessages, showPreview, inappSounds, messageSound, groupSound, reactionSound, inappStyle };
+  prefs = { showMessages, showGroups, showPreview, inappSounds, messageSound, groupSound, reactionSound, inappStyle };
 }
 
 async function ensurePrefs(): Promise<NotifyPrefs> {
@@ -420,6 +423,9 @@ export async function notifyIncoming(n: IncomingNotice): Promise<boolean> {
     }
     const p = await ensurePrefs();
     if (!p.showMessages) return false; // the global "Show notifications" toggle
+    // The group-surface master (spec 1050): like the global master, it is NOT
+    // pierced by escalation — turning the group surface off means off.
+    if (n.group && !p.showGroups) return false;
     const [muted, chatPrefs, globalInApp] = await Promise.all([
       n.chatId ? isChatMuted(n.chatId) : Promise.resolve(false),
       n.chatId ? getChatNotifyPrefs(n.chatId) : Promise.resolve(null),
