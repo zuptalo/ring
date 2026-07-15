@@ -54,15 +54,19 @@ vi.mock('@/db/queries', () => ({
   },
 }));
 
-import { recoverInterruptedPosts, __resetRecoveryForTest } from './pending-posts';
+import { recoverInterruptedPosts, drainPendingPosts, retryPendingPost, __resetRecoveryForTest } from './pending-posts';
 
 const bytes = () => new Uint8Array([1, 2, 3]);
 
-beforeEach(() => {
+beforeEach(async () => {
   H.outbox.clear();
   H.posts.clear();
   H.deleteOnNextGet.clear();
   __resetRecoveryForTest();
+  // Recovery kicks a DETACHED drain; flush any straggler from the previous test
+  // against the now-empty outbox, then reset call counts.
+  await drainPendingPosts();
+  vi.mocked((await import('@/db/queries')).createPost).mockClear();
 });
 
 describe('recoverInterruptedPosts (spec 2036)', () => {
@@ -117,5 +121,34 @@ describe('recoverInterruptedPosts (spec 2036)', () => {
     H.deleteOnNextGet.add('a'); // the upload completes right at the re-read
     await recoverInterruptedPosts();
     expect(H.outbox.has('a')).toBe(false); // stayed deleted — no zombie draft
+  });
+});
+
+describe('auto-retry attempt budget (spec 2037)', () => {
+  it('a record at the cap flips to failed WITHOUT running createPost (the crash-loop breaker)', async () => {
+    const q = await import('@/db/queries');
+    H.outbox.set('a', { id: 'a', status: 'uploading', body: 'x', attempts: 3, items: [{ kind: 'video', bytes: bytes() }] });
+    await drainPendingPosts();
+    expect(H.outbox.get('a')?.status).toBe('failed');
+    expect(vi.mocked(q.createPost)).not.toHaveBeenCalled();
+  });
+
+  it('below the cap the upload runs and the record drains', async () => {
+    const q = await import('@/db/queries');
+    H.outbox.set('a', { id: 'a', status: 'uploading', body: 'x', attempts: 2, items: [{ kind: 'video', bytes: bytes() }] });
+    await drainPendingPosts();
+    expect(vi.mocked(q.createPost)).toHaveBeenCalledTimes(1);
+    expect(H.outbox.has('a')).toBe(false); // drained on success
+  });
+
+  it('manual Retry resets the budget and the upload runs again', async () => {
+    const q = await import('@/db/queries');
+    H.outbox.set('a', { id: 'a', status: 'failed', body: 'x', attempts: 3, items: [{ kind: 'video', bytes: bytes() }] });
+    await retryPendingPost('a');
+    // retry kicks the drain DETACHED (drainPendingPosts self-guards re-entry);
+    // wait for that kick to empty the outbox instead of racing it.
+    for (let i = 0; i < 100 && H.outbox.size > 0; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(vi.mocked(q.createPost)).toHaveBeenCalled();
+    expect(H.outbox.has('a')).toBe(false);
   });
 });
