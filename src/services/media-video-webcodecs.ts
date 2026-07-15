@@ -106,6 +106,62 @@ export function synthAacAsc(sampleRate?: number, channels?: number): Uint8Array 
   return new Uint8Array([(objectType << 3) | (fi >> 1), ((fi & 1) << 7) | (ch << 3)]);
 }
 
+/* ---- streaming demux (spec 2041) ----
+ * The old demux read the WHOLE source into one ArrayBuffer for mp4box and then
+ * copied every compressed sample into EncodedVideoChunks before decoding — on a
+ * phone that's 2× the file in the JS heap before a single frame decodes, and it
+ * was the out-of-memory kill (iOS jetsam) behind the "app crashes while posting
+ * a video" report. The streaming demux keeps input-side memory O(window):
+ *  1. scan the top-level box layout with tiny header reads (no media data),
+ *  2. feed mp4box only the metadata boxes plus each mdat's bare HEADER — mp4box
+ *     skips a header-only mdat (processIncompleteMdat seeks to its end), so a
+ *     trailing moov (every iPhone camera file) parses without buffering mdat,
+ *  3. pump the mdat bodies through in bounded windows, decoding as samples
+ *     surface and releasing consumed sample data (appendBuffer drops fully-used
+ *     buffers via cleanBuffers on every call).
+ */
+
+/** One top-level box in an mp4 container. */
+export interface Mp4BoxRange {
+  type: string;
+  start: number;
+  size: number;
+  headerLen: number;
+}
+
+/** Index the top-level boxes of an mp4 by reading only their headers (8–16 bytes
+ *  each) — a handful of tiny slice reads, never the media data. Throws on
+ *  anything that doesn't look like an ISO-BMFF layout, which sends the caller
+ *  down the ffmpeg/original fallback exactly like the old parse timeout did. */
+export async function scanTopLevelBoxes(blob: Blob): Promise<Mp4BoxRange[]> {
+  const out: Mp4BoxRange[] = [];
+  let off = 0;
+  while (off + 8 <= blob.size) {
+    const head = new DataView(await blob.slice(off, Math.min(off + 16, blob.size)).arrayBuffer());
+    let size: number = head.getUint32(0);
+    const type = String.fromCharCode(head.getUint8(4), head.getUint8(5), head.getUint8(6), head.getUint8(7));
+    if (!/^[\x20-\x7e]{4}$/.test(type)) throw new Error(`not an mp4: bad box type at ${off}`);
+    let headerLen = 8;
+    if (size === 1) {
+      // 64-bit largesize (large mdat)
+      if (head.byteLength < 16) throw new Error('not an mp4: truncated largesize box');
+      size = head.getUint32(8) * 2 ** 32 + head.getUint32(12);
+      headerLen = 16;
+    } else if (size === 0) {
+      size = blob.size - off; // box extends to EOF
+    }
+    if (size < headerLen || off + size > blob.size) throw new Error(`not an mp4: bad box size at ${off}`);
+    out.push({ type, start: off, size, headerLen });
+    off += size;
+  }
+  if (off !== blob.size) throw new Error('not an mp4: trailing garbage');
+  return out;
+}
+
+// Bytes of mdat pumped through mp4box per step. Big enough that a 400 MB clip is
+// a few dozen appends, small enough that input-side heap stays trivial.
+const DEMUX_WINDOW_BYTES = 16 << 20;
+
 export async function webcodecsTranscode(
   blob: Blob,
   preset: VideoPreset,
@@ -113,29 +169,35 @@ export async function webcodecsTranscode(
 ): Promise<Blob> {
   if (!webCodecsSupported()) throw new Error('WebCodecs unavailable');
 
+  const boxes = await scanTopLevelBoxes(blob);
+  if (!boxes.some((b) => b.type === 'moov')) throw new Error('not an mp4: no moov box');
+
   const file = MP4Box.createFile();
-  // mp4box fires NEITHER onReady nor onError for an input it can't parse (a corrupt or
-  // non-mp4 container, or too-few bytes), which would hang the whole send forever in
-  // 'compressing'. A timeout turns that into a clean rejection so the orchestrator falls
-  // through to ffmpeg/original and the send is never blocked (spec 2007 FR-006).
-  const READY_TIMEOUT_MS = 15_000;
-  const info = await new Promise<any>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('mp4box: parse timed out (unsupported container?)')), READY_TIMEOUT_MS);
-    file.onReady = (i: any) => {
-      clearTimeout(timer);
-      resolve(i);
-    };
-    file.onError = (e: string) => {
-      clearTimeout(timer);
-      reject(new Error(`mp4box: ${e}`));
-    };
-    const ab = blob.arrayBuffer() as Promise<ArrayBuffer & { fileStart?: number }>;
-    void ab.then((buf) => {
-      (buf as any).fileStart = 0;
-      file.appendBuffer(buf as any);
-      file.flush();
-    });
-  });
+  // Parse errors surface via onError DURING appendBuffer; capture and rethrow
+  // between appends so a corrupt container is a clean rejection (spec 2007
+  // FR-006) — the orchestrator falls through to ffmpeg/original.
+  let parseError: Error | null = null;
+  file.onError = (e: string) => {
+    parseError ??= new Error(`mp4box: ${e}`);
+  };
+  let readyInfo: any = null;
+  file.onReady = (i: any) => {
+    readyInfo = i;
+  };
+  const appendRange = async (start: number, end: number) => {
+    const buf = (await blob.slice(start, end).arrayBuffer()) as ArrayBuffer & { fileStart: number };
+    buf.fileStart = start;
+    file.appendBuffer(buf);
+    if (parseError) throw parseError;
+  };
+  // Metadata boxes in full; mdat as bare header (mp4box skips over a header-only
+  // mdat to keep parsing the boxes that follow it — the trailing-moov layout).
+  for (const b of boxes) {
+    if (b.type === 'mdat') await appendRange(b.start, b.start + b.headerLen);
+    else await appendRange(b.start, b.start + b.size);
+  }
+  if (!readyInfo) throw new Error('mp4box: moov did not parse (unsupported container?)');
+  const info = readyInfo;
 
   const vTrack = info.videoTracks?.[0];
   if (!vTrack) throw new Error('no video track');
@@ -275,90 +337,15 @@ export async function webcodecsTranscode(
     synthesized: !!aTrack && !audioSpecificConfig(file, aTrack.id) && !!asc,
   });
   if (aTrack && !asc) throw new Error('cannot read audio config'); // avoid a silent result
-  const videoChunks: EncodedVideoChunk[] = [];
-  let audioCount = 0;
 
-  // Collect ALL samples before decoding. mp4box delivers samples across one or more
-  // onSamples callbacks; we must wait for genuine completion (every track's full
-  // nb_samples received), counting cumulatively rather than guessing from the last
-  // batch's sample number. The previous `setTimeout(resolve, 0)` "safety" could
-  // resolve BEFORE the batches arrived, yielding truncated/empty output that then
-  // tripped the "not smaller"/"audio dropped" guards and fell into the OOM-prone
-  // ffmpeg leg — the silent degrade-to-original on large iPhone 4K clips (spec 2007).
-  // A real wall-clock timeout now REJECTS (a clean failure → fallback), never resolves
-  // a partial result as success.
-  const EXTRACT_TIMEOUT_MS = 60_000;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('mp4box sample extraction timed out')),
-      EXTRACT_TIMEOUT_MS,
-    );
-    const finish = (err?: Error) => {
-      clearTimeout(timer);
-      if (err) reject(err);
-      else resolve();
-    };
-    const checkDone = () => {
-      const vDone = videoChunks.length >= vTrack.nb_samples;
-      const aDone = !aTrack || audioCount >= aTrack.nb_samples;
-      if (vDone && aDone) finish();
-    };
-    file.onSamples = (id: number, _u: any, samples: any[]) => {
-      try {
-        if (id === vTrack.id) {
-          for (const s of samples) {
-            videoChunks.push(
-              new EncodedVideoChunk({
-                type: s.is_sync ? 'key' : 'delta',
-                timestamp: (s.cts / s.timescale) * 1e6,
-                duration: (s.duration / s.timescale) * 1e6,
-                data: s.data,
-              }),
-            );
-          }
-        } else if (aTrack && id === aTrack.id) {
-          for (const s of samples) {
-            const chunk = new EncodedAudioChunk({
-              type: 'key',
-              timestamp: (s.cts / s.timescale) * 1e6,
-              duration: (s.duration / s.timescale) * 1e6,
-              data: s.data,
-            });
-            muxer.addAudioChunk(chunk, {
-              decoderConfig: {
-                codec: 'mp4a.40.2',
-                sampleRate: aTrack.audio.sample_rate,
-                numberOfChannels: aTrack.audio.channel_count,
-                description: asc,
-              },
-            } as any);
-            audioCount++;
-          }
-        }
-        checkDone();
-      } catch (e) {
-        finish(e as Error);
-      }
-    };
-    file.setExtractionOptions(vTrack.id, null, { nbSamples: Number.POSITIVE_INFINITY });
-    if (aTrack) file.setExtractionOptions(aTrack.id, null, { nbSamples: Number.POSITIVE_INFINITY });
-    file.start();
-    file.flush();
-    // mp4box delivers everything it can synchronously during start()/flush(); if the
-    // counts already satisfy completion, resolve now. Otherwise the timeout guards it.
-    checkDone();
-  });
-
-  // (spec 2038) BACKPRESSURE: flooding the decoder with every chunk at once let
-  // decoded frames pile up faster than the canvas→encoder leg drained them — on
-  // phones that raw-frame pileup was the out-of-memory kill behind the crash
-  // loop (a single 4K frame is ~33 MB; a long clip queued hundreds). Feed the
-  // pipeline in bounded steps instead: wait until both queues drain below the
+  // (spec 2038) BACKPRESSURE: flooding the decoder let decoded frames pile up
+  // faster than the canvas→encoder leg drained them — a single 4K frame is
+  // ~33 MB; a long clip queued hundreds. Wait until both queues drain below the
   // cap before decoding the next chunk. The 'dequeue' event wakes us where
   // supported; the timer is the safety net.
   const MAX_QUEUE = 8;
   const queuesDrained = () => decoder.decodeQueueSize < MAX_QUEUE && encoder.encodeQueueSize < MAX_QUEUE;
-  for (const chunk of videoChunks) {
+  const awaitQueues = async () => {
     while (!queuesDrained()) {
       if (fatalError) throw fatalError;
       await new Promise<void>((resolve) => {
@@ -373,8 +360,97 @@ export async function webcodecsTranscode(
         encoder.addEventListener?.('dequeue', done);
       });
     }
-    decoder.decode(chunk);
+  };
+
+  // (spec 2041) Samples are converted the moment mp4box surfaces them (both
+  // chunk constructors and the muxer COPY the bytes, so the mp4box-side sample
+  // data is released immediately after each batch), video chunks are decoded
+  // with backpressure between windows, and the per-batch release plus
+  // appendBuffer's cleanBuffers keep the demux-side heap bounded by the window
+  // size instead of the file size.
+  let pendingVideo: EncodedVideoChunk[] = [];
+  let videoCount = 0;
+  let audioCount = 0;
+  file.onSamples = (id: number, _u: any, samples: any[]) => {
+    if (!samples.length) return;
+    if (id === vTrack.id) {
+      for (const s of samples) {
+        pendingVideo.push(
+          new EncodedVideoChunk({
+            type: s.is_sync ? 'key' : 'delta',
+            timestamp: (s.cts / s.timescale) * 1e6,
+            duration: (s.duration / s.timescale) * 1e6,
+            data: s.data,
+          }),
+        );
+      }
+      videoCount += samples.length;
+    } else if (aTrack && id === aTrack.id) {
+      for (const s of samples) {
+        const chunk = new EncodedAudioChunk({
+          type: 'key',
+          timestamp: (s.cts / s.timescale) * 1e6,
+          duration: (s.duration / s.timescale) * 1e6,
+          data: s.data,
+        });
+        muxer.addAudioChunk(chunk, {
+          decoderConfig: {
+            codec: 'mp4a.40.2',
+            sampleRate: aTrack.audio.sample_rate,
+            numberOfChannels: aTrack.audio.channel_count,
+            description: asc,
+          },
+        } as any);
+        audioCount++;
+      }
+    } else {
+      return;
+    }
+    file.releaseUsedSamples(id, samples[samples.length - 1].number + 1);
+  };
+  const drainPendingVideo = async () => {
+    if (!pendingVideo.length) return;
+    const batch = pendingVideo;
+    pendingVideo = [];
+    for (const chunk of batch) {
+      await awaitQueues();
+      decoder.decode(chunk);
+    }
+  };
+
+  file.setExtractionOptions(vTrack.id, null, { nbSamples: 200 });
+  if (aTrack) file.setExtractionOptions(aTrack.id, null, { nbSamples: 200 });
+  file.start();
+
+  // Pump each mdat's BODY through in bounded windows (the headers went in during
+  // the open phase). Windows are appended in file order; mp4box surfaces samples
+  // as their bytes become contiguous, onSamples converts them, and we decode
+  // between appends so the frame queues never outrun the encoder.
+  for (const b of boxes) {
+    if (b.type !== 'mdat') continue;
+    let off = b.start + b.headerLen;
+    const end = b.start + b.size;
+    while (off < end) {
+      const next = Math.min(end, off + DEMUX_WINDOW_BYTES);
+      await appendRange(off, next);
+      off = next;
+      await drainPendingVideo();
+      if (fatalError) throw fatalError;
+    }
   }
+  file.flush();
+  if (parseError) throw parseError;
+  await drainPendingVideo();
+
+  // Completeness guard (spec 2007 lesson, kept from the collect-first design):
+  // a truncated extraction must be a clean REJECTION, never silently muxed as a
+  // shorter clip — the orchestrator falls through to ffmpeg/original instead.
+  if (videoCount < vTrack.nb_samples || (aTrack && audioCount < aTrack.nb_samples)) {
+    throw new Error(
+      `mp4box sample extraction incomplete (video ${videoCount}/${vTrack.nb_samples}, audio ${audioCount}/${aTrack?.nb_samples ?? 0})`,
+    );
+  }
+
   await decoder.flush();
   await encoder.flush();
   // A decode/encode error reported asynchronously (captured by `fail`) becomes a

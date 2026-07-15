@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-15
 
-**Status**: in-review
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User bug report (2026-07-15): after removing the app and logging back

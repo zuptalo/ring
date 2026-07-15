@@ -3109,12 +3109,18 @@ export async function createPost(opts: {
     let h: number | undefined;
     if (m.kind === 'image') ({ width: w, height: h } = await readImageMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
     else if (m.kind === 'video') ({ width: w, height: h } = await readVideoMeta(toUpload).catch(() => ({ width: undefined, height: undefined })));
+    // (spec 2041 rider) The byte upload owns only 50→90% of the item's bar
+    // (value ≤ 0.8 in the uploading band). A converted clip is small (~5 MB for
+    // 16 s at 'hd'), so its upload can finish in a blink — mapping it straight
+    // to 100% left the card sitting on "100%" for the ~10 s of real work that
+    // FOLLOWS (poster + tiers + sealing + registering + per-friend envelopes).
+    // The tail values below keep the bar moving through that finishing stretch.
     const ref = await prepareOutgoingMedia(
       toUpload,
       m.name,
       m.durationSec,
       { width: w, height: h, quality: achieved },
-      (value) => opts.onProgress?.({ phase: 'uploading', index, total, value }),
+      (value) => opts.onProgress?.({ phase: 'uploading', index, total, value: value * 0.8 }),
     );
     refs.push(ref);
     const id = uid();
@@ -3135,7 +3141,9 @@ export async function createPost(opts: {
       // while with no upload traffic — heartbeat the outbox stall-watchdog so it
       // only ever fires on a GENUINE hang (an abandoned attempt races a detached,
       // non-cancellable createPost into server-side duplicate churn).
-      opts.onProgress?.({ phase: 'uploading', index, total, value: 1 });
+      // (spec 2041 rider) …at 0.84, not 1: the bar shows ~92% while the poster
+      // work runs instead of a premature "100%".
+      opts.onProgress?.({ phase: 'uploading', index, total, value: 0.84 });
       const dataUrl = await generateVideoPoster(toUpload).catch(() => undefined);
       // Embed the poster (a small JPEG data URL, ≤~40KB) in the sealed MediaRef so a RECIPIENT
       // shows the thumbnail without downloading/decoding the clip — exactly how chat video
@@ -3169,8 +3177,10 @@ export async function createPost(opts: {
   else if (refs.length > 1) payload.album = refs;
 
   const built = buildPost(payload, audience);
-  // (spec 2036) Same heartbeat before the post-blob seal/upload/register leg.
-  if (mediaList.length) opts.onProgress?.({ phase: 'uploading', index: mediaList.length - 1, total, value: 1 });
+  // (spec 2036) Same heartbeat before the post-blob seal/upload/register leg —
+  // (spec 2041 rider) at 0.9 (~95% shown), so the register/envelope stretch is
+  // visible movement instead of a stall on a premature 100%.
+  if (mediaList.length) opts.onProgress?.({ phase: 'uploading', index: mediaList.length - 1, total, value: 0.9 });
   const blobId = await uploadBlob(new Blob([built.blob as BlobPart]));
   const id = opts.id ?? uid();
   const createdAt = now();
@@ -3199,10 +3209,19 @@ export async function createPost(opts: {
     updatedAt: createdAt,
   };
   await put<Post>('posts', post);
+  // (spec 2041 rider) 100% only when the post really EXISTS (registered +
+  // stored) — the card hits full and disappears together instead of idling
+  // on a premature 100% through the finishing work.
+  if (mediaList.length) opts.onProgress?.({ phase: 'uploading', index: mediaList.length - 1, total, value: 1 });
   return post;
 }
 
 // ---- spec 1024: resilient-posting outbox (`pendingPosts` store) ----
+
+/** (spec 2041) Items at or below this ride the outbox as inline bytes (bulletproof across an iOS
+ *  restart); larger ones are stored as disk-backed Blobs so a phone video never sits in the JS
+ *  heap. 24 MB keeps every image/voice note and short clip on the proven inline path. */
+export const OUTBOX_INLINE_MAX_BYTES = 24 << 20;
 
 /** Cache the staged media + metadata as a pending post and return its id. The composer dismisses
  *  the moment this resolves; the upload worker (services/pending-posts) drains it in the
@@ -3225,16 +3244,25 @@ export async function enqueuePendingPost(input: {
   }[];
 }): Promise<string> {
   const id = uid();
-  // Read every item's bytes and store them INLINE (as an ArrayBuffer, not a Blob). This is what lets
-  // a post survive a full app close: a Blob read back from IDB after a restart can be unreadable on
-  // iOS, an ArrayBuffer always reads back. So an interrupted post keeps its photos/videos/voice and
-  // can be finished from the recovered draft. The read happens once here, at Share (in-session, while
-  // the picked files are still readable).
+  // Read every SMALL item's bytes and store them INLINE (as an ArrayBuffer, not a Blob). This is
+  // what lets a post survive a full app close: a Blob read back from IDB after a restart can be
+  // unreadable on iOS, an ArrayBuffer always reads back. So an interrupted post keeps its
+  // photos/videos/voice and can be finished from the recovered draft. The read happens once here,
+  // at Share (in-session, while the picked files are still readable).
+  //
+  // (spec 2041) LARGE items are stored as the Blob itself instead: inlining a phone video means the
+  // whole file in the JS heap plus a structured-clone copy at put() — at Share time, and again on
+  // every drain read — which was a big slice of the out-of-memory kill behind "posting a video
+  // crashes the app" on iPhone. A stored Blob is disk-backed by the browser (put() clones it by
+  // reference), costing ~zero heap on both sides. The iOS unreadable-Blob risk this trades back in
+  // is handled at recovery: recoverInterruptedPosts PROBES blob-backed items and draft-ifies the
+  // post if one doesn't read (the pre-1024 fallback), instead of wedging the drain.
   const items: OutboxItem[] = [];
   for (const it of input.items) {
+    const inline = it.blob.size <= OUTBOX_INLINE_MAX_BYTES;
     items.push({
       localId: uid(),
-      bytes: await it.blob.arrayBuffer(),
+      ...(inline ? { bytes: await it.blob.arrayBuffer() } : { blob: it.blob }),
       kind: it.kind,
       name: it.name,
       mime: it.mime,

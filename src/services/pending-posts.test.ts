@@ -152,3 +152,35 @@ describe('auto-retry attempt budget (spec 2037)', () => {
     expect(H.outbox.has('a')).toBe(false);
   });
 });
+
+describe('blob-backed outbox items (spec 2041)', () => {
+  const readableBlob = { slice: () => ({ arrayBuffer: async () => new ArrayBuffer(1) }) };
+  const hangingBlob = { slice: () => ({ arrayBuffer: () => new Promise(() => {}) }) };
+
+  it('a record whose stored Blob still reads is left alone for the drain to resume', async () => {
+    H.outbox.set('v', { id: 'v', status: 'uploading', body: 'clip', attempts: 0, items: [{ kind: 'video', blob: readableBlob }] });
+    const res = await recoverInterruptedPosts();
+    expect(res).toEqual({ recovered: 0, discarded: 0 });
+    expect(H.outbox.get('v')?.status).toBe('uploading'); // untouched — resumable
+  });
+
+  it('a hanging Blob read (the iOS failure mode) drafts the post instead of wedging recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      H.outbox.set('v', {
+        id: 'v', status: 'uploading', body: 'clip', attempts: 2,
+        items: [{ kind: 'video', blob: hangingBlob }, { kind: 'image', bytes: bytes() }],
+      });
+      const run = recoverInterruptedPosts();
+      await vi.advanceTimersByTimeAsync(3_500); // past the probe timeout
+      const res = await run;
+      expect(res).toEqual({ recovered: 1, discarded: 0 });
+      const rec = H.outbox.get('v');
+      expect(rec?.status).toBe('interrupted'); // drafted for the user
+      expect(rec?.items.length).toBe(1); // unreadable video dropped, image kept
+      expect(rec?.items[0].kind).toBe('image');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
