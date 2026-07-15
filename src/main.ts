@@ -1,4 +1,11 @@
 import { createApp } from 'vue';
+import { initBootGuard } from '@/services/boot-guard';
+
+// Spec 2039: arm the boot-loop guard BEFORE anything heavy can run — a device
+// crash-looping at startup gets one safe boot (background work paused, waiting
+// update auto-applied) instead of being trapped on a broken build forever.
+const bootSafeMode = initBootGuard();
+if (bootSafeMode) console.warn('[boot] safe mode: repeated early crashes detected — background work paused this boot');
 import { IonicVue } from '@ionic/vue';
 import { iosTransitionAnimation, createAnimation } from '@ionic/core';
 import type { TransitionOptions } from '@ionic/core';
