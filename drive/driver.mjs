@@ -115,7 +115,7 @@ export async function newClient({ mobile = false, label = '?' } = {}) {
   const page = await ctx.newPage();
   page.on('console', (m) => {
     const t = m.text();
-    if (process.env.VERBOSE || /\[call\]|\[messaging\]|error|fail/i.test(t)) console.log(`[${label}] ${m.type()}: ${t}`);
+    if (process.env.VERBOSE || /\[call\]|\[messaging\]|\[pp\]|error|fail/i.test(t)) console.log(`[${label}] ${m.type()}: ${t}`);
   });
   page.on('pageerror', (e) => console.log(`[${label}] pageerror: ${e.message}`));
   return { ctx, page, label, id: '' };

@@ -49,6 +49,21 @@ export async function drainPendingPosts(): Promise<void> {
 
 const lastProgressWrite = new Map<string, number>();
 
+// (spec 2036) Tombstones for outbox rows this module has deleted. writeProgress is
+// fired DETACHED from upload callbacks; one in flight across the moment of
+// deletion would re-put the row it read earlier — resurrecting the record as
+// 'uploading' and making the drain re-post the same (idempotent, but endless)
+// attempt. Ids are never reused, so the set only ever grows by one per post.
+const dropped = new Set<string>();
+
+/** Delete an outbox row for good: tombstone first so no in-flight progress write
+ *  can resurrect it, then remove the record + throttle state. */
+async function dropPendingPost(id: string): Promise<void> {
+  dropped.add(id);
+  await deletePendingPost(id);
+  lastProgressWrite.delete(id);
+}
+
 // If an upload makes NO progress for this long it's treated as stalled and fails (→ Retry/Cancel),
 // rather than spinning at 0% forever and wedging the single-drain worker behind it. A real upload
 // reports progress well within this window (encode + the immediate onProgress(0) on upload start);
@@ -62,14 +77,14 @@ async function uploadOne(id: string): Promise<void> {
   await updatePendingPost(rec);
   let lastTick = Date.now();
   let watchdog: ReturnType<typeof setInterval> | undefined;
+  let attempt: Promise<unknown> | undefined;
   try {
     const stalled = new Promise<never>((_, reject) => {
       watchdog = setInterval(() => {
         if (Date.now() - lastTick > UPLOAD_STALL_MS) reject(new Error('Upload stalled. Tap Retry to try again.'));
       }, 5_000);
     });
-    await Promise.race([
-      createPost({
+    attempt = createPost({
         // Pass the outbox record's id as the post id so a retry is idempotent: createPost overwrites
         // the same local Post instead of minting a second one. (See the "already made" guard below for
         // the kill-after-send window the stable id alone can't cover.)
@@ -92,19 +107,29 @@ async function uploadOne(id: string): Promise<void> {
           lastTick = Date.now(); // each progress event keeps the watchdog from firing
           void writeProgress(id, p);
         },
-      }),
-      stalled,
-    ]);
+      });
+    await Promise.race([attempt, stalled]);
     // createPost wrote the real Post (createdAt = confirmation time) → drop the outbox record + blobs.
-    await deletePendingPost(id);
-    lastProgressWrite.delete(id);
+    await dropPendingPost(id);
   } catch (err) {
+    // (spec 2036) Losing the stall race does NOT cancel createPost — it has no
+    // cancellation seam and may very well still finish (the watchdog fired
+    // during a long poster/seal step, not a real hang). If the detached attempt
+    // eventually succeeds, heal the outbox row so the posted result never sits
+    // under a stale 'failed' card — and a concurrent RETRY that collides
+    // server-side resolves through the same heal.
+    void attempt
+      ?.then(async () => {
+        await dropPendingPost(id);
+      })
+      .catch(() => {
+        /* the raced-out attempt really failed too — the failed card stands */
+      });
     // If the app was killed AFTER the post was already sent but BEFORE we cleaned up, the retry's
     // server insert collides on the (now-existing) post id. The local Post is present, so this isn't
     // a real failure — treat it as success and clear the outbox quietly rather than flash "failed".
     if (await getPost(id)) {
-      await deletePendingPost(id);
-      lastProgressWrite.delete(id);
+      await dropPendingPost(id);
       return;
     }
     const cur = await getPendingPost(id);
@@ -146,6 +171,7 @@ function friendlyError(err: unknown): string {
 export async function retryPendingPost(id: string): Promise<void> {
   const rec = await getPendingPost(id);
   if (!rec) return;
+  dropped.delete(id); // live again — accept progress writes
   rec.status = 'uploading';
   rec.error = undefined;
   rec.attempts = 0;
@@ -155,8 +181,7 @@ export async function retryPendingPost(id: string): Promise<void> {
 
 /** Drop a pending post for good — discards its cached blobs (user tapped Cancel / Discard). */
 export async function cancelPendingPost(id: string): Promise<void> {
-  await deletePendingPost(id);
-  lastProgressWrite.delete(id);
+  await dropPendingPost(id);
 }
 
 let recovered = false;
@@ -234,9 +259,11 @@ async function writeProgress(
   p: { phase: 'encoding' | 'uploading'; index: number; total: number; value: number },
 ): Promise<void> {
   const t = Date.now();
+  if (dropped.has(id)) return; // the row is gone for good — never resurrect it
   if (p.value < 1 && (lastProgressWrite.get(id) ?? 0) > t - 150) return;
   lastProgressWrite.set(id, t);
   const rec = await getPendingPost(id);
+  if (dropped.has(id)) return; // deleted while we read — the put below would resurrect
   if (!rec || rec.status !== 'uploading' || !rec.items[p.index]) return;
   // encode is the first half of an item, upload the second half. High-water mark:
   // an engine fallback (WebCodecs → ffmpeg) restarts the encode band from 0, and

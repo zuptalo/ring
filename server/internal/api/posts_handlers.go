@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"log/slog"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -121,6 +123,13 @@ func (h *Handlers) createPost(w http.ResponseWriter, r *http.Request) {
 	if err := h.Posts.CreatePost(r.Context(), store.NewPost{
 		ID: req.ID, Author: uid, BlobID: req.BlobID, Size: req.Size, ExpiresAt: &expires, TtlMs: ttl, Envelopes: envs,
 	}); err != nil {
+		if errors.Is(err, store.ErrPostIDTaken) {
+			httpx.Error(w, http.StatusForbidden, "post id unavailable")
+			return
+		}
+		// Kept after the spec-2036 hunt: an unlogged store error here cost a whole
+		// debugging round-trip (the duplicate-key churn surfaced only as bare 500s).
+		slog.Error("create post failed", "err", err, "post", req.ID)
 		httpx.Error(w, http.StatusInternalServerError, "could not create post")
 		return
 	}
