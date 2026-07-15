@@ -349,7 +349,32 @@ export async function webcodecsTranscode(
     checkDone();
   });
 
-  for (const chunk of videoChunks) decoder.decode(chunk);
+  // (spec 2038) BACKPRESSURE: flooding the decoder with every chunk at once let
+  // decoded frames pile up faster than the canvas→encoder leg drained them — on
+  // phones that raw-frame pileup was the out-of-memory kill behind the crash
+  // loop (a single 4K frame is ~33 MB; a long clip queued hundreds). Feed the
+  // pipeline in bounded steps instead: wait until both queues drain below the
+  // cap before decoding the next chunk. The 'dequeue' event wakes us where
+  // supported; the timer is the safety net.
+  const MAX_QUEUE = 8;
+  const queuesDrained = () => decoder.decodeQueueSize < MAX_QUEUE && encoder.encodeQueueSize < MAX_QUEUE;
+  for (const chunk of videoChunks) {
+    while (!queuesDrained()) {
+      if (fatalError) throw fatalError;
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(done, 20);
+        function done(): void {
+          clearTimeout(t);
+          decoder.removeEventListener?.('dequeue', done);
+          encoder.removeEventListener?.('dequeue', done);
+          resolve();
+        }
+        decoder.addEventListener?.('dequeue', done);
+        encoder.addEventListener?.('dequeue', done);
+      });
+    }
+    decoder.decode(chunk);
+  }
   await decoder.flush();
   await encoder.flush();
   // A decode/encode error reported asynchronously (captured by `fail`) becomes a

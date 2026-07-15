@@ -11,7 +11,7 @@ vi.mock('./media-video-ffmpeg', () => ({
   ffmpegTranscode: vi.fn(),
 }));
 
-import { compressVideoAdaptive } from './media-video';
+import { compressVideoAdaptive, shouldUploadAsIs, sniffMp4CodecIsPlainH264, VIDEO_PRESETS } from './media-video';
 import { webcodecsTranscode } from './media-video-webcodecs';
 import { ffmpegTranscode } from './media-video-ffmpeg';
 
@@ -55,5 +55,37 @@ describe('compressVideoAdaptive fallback ladder', () => {
     vi.mocked(ffmpegTranscode).mockRejectedValue(new Error('oom / too large'));
     const out = await compressVideoAdaptive(src, 'hd');
     expect(out).toBe(src);
+  });
+});
+
+describe('upload-as-is gate (spec 2038)', () => {
+  const hd = VIDEO_PRESETS.hd;
+  const base = { sizeBytes: 15_000_000, durationSec: 40, width: 1280, height: 720, h264Compatible: true };
+
+  it('an efficient, preset-fitting H.264 clip skips the transcode', () => {
+    // 15MB / 40s = 3.0 Mbps ≤ 1.5 × 2.5 Mbps
+    expect(shouldUploadAsIs(base, hd)).toBe(true);
+  });
+  it('a fat bitrate transcodes', () => {
+    expect(shouldUploadAsIs({ ...base, sizeBytes: 60_000_000 }, hd)).toBe(false); // 12 Mbps
+  });
+  it('4K-class resolution always transcodes, whatever the bitrate', () => {
+    expect(shouldUploadAsIs({ ...base, width: 3840, height: 2160 }, hd)).toBe(false);
+  });
+  it('incompatible codecs always transcode', () => {
+    expect(shouldUploadAsIs({ ...base, h264Compatible: false }, hd)).toBe(false);
+  });
+  it('zero/unknown duration never skips', () => {
+    expect(shouldUploadAsIs({ ...base, durationSec: 0 }, hd)).toBe(false);
+  });
+
+  const buf = (s: string) => new TextEncoder().encode(`....${s}....avc1....`);
+  it('codec sniff accepts plain H.264 and rejects modern-codec markers', () => {
+    expect(sniffMp4CodecIsPlainH264(new TextEncoder().encode('..moov..avc1..'))).toBe(true);
+    expect(sniffMp4CodecIsPlainH264(buf('hvc1'))).toBe(false);
+    expect(sniffMp4CodecIsPlainH264(buf('hev1'))).toBe(false);
+    expect(sniffMp4CodecIsPlainH264(buf('av01'))).toBe(false);
+    expect(sniffMp4CodecIsPlainH264(buf('vp09'))).toBe(false);
+    expect(sniffMp4CodecIsPlainH264(new TextEncoder().encode('..no codec here..'))).toBe(false);
   });
 });

@@ -121,3 +121,4 @@ Specs are grouped by category band; status moves
 | [2035](specs/2035-link-previews-look/spec.md) | Link Previews Look Sharp | 🟡 in-progress |
 | [2036](specs/2036-video-posts-finish/spec.md) | Video Posts Finish Cleanly | 🟡 in-progress |
 | [2037](specs/2037-pending-post-auto/spec.md) | Pending-Post Auto-Retry Gets an Attempt Budget | 🟡 in-progress |
+| [2038](specs/2038-videos-reasonable-size/spec.md) | Reasonable Videos Upload As-Is | 🟡 in-progress |
