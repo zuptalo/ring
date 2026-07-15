@@ -70,9 +70,26 @@ async function dropPendingPost(id: string): Promise<void> {
 // only a genuine hang — e.g. reading an unreadable cached blob — goes silent this long.
 const UPLOAD_STALL_MS = 45_000;
 
+// (spec 2037) Automatic attempts per record before the drain STOPS and surfaces a
+// failed card (Retry/Cancel) instead. `attempts` is persisted BEFORE the heavy
+// work starts, so even a resume whose transcode crashes the whole web view (the
+// reported iOS crash loop: OOM → WebKit kill → reload → auto-resume → …) breaks
+// the loop on the first launch past the budget. Manual Retry resets the budget.
+const MAX_AUTO_ATTEMPTS = 3;
+
 async function uploadOne(id: string): Promise<void> {
   const rec = await getPendingPost(id);
   if (!rec || rec.status !== 'uploading') return; // canceled / interrupted / already gone
+  // (spec 2037) Budget check FIRST — before the transcode/upload that may itself
+  // be what kills the app. Reaching here at the cap means the previous attempts
+  // never finished (crash, kill, stall): stop auto-retrying and hand control
+  // back to the user as a failed card.
+  if (rec.attempts >= MAX_AUTO_ATTEMPTS) {
+    rec.status = 'failed';
+    rec.error = "Couldn't finish this post after several tries. Tap Retry to try again.";
+    await updatePendingPost(rec);
+    return;
+  }
   rec.attempts += 1;
   await updatePendingPost(rec);
   let lastTick = Date.now();
