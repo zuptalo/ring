@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-15
 
-**Status**: in-progress
+**Status**: in-review
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User report (2026-07-15, after specs 2036–2039 shipped to the dev
