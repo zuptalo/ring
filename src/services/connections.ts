@@ -46,9 +46,26 @@ async function hydrate(userId: string): Promise<{ name: string; avatar: string }
 export async function refreshConnections(): Promise<void> {
   let data: Awaited<ReturnType<typeof listConnections>>;
   try {
-    data = await listConnections();
+    data = await listConnections(true);
   } catch {
     return;
+  }
+  // Spec 2040: the connected-peers ledger is device-local and written only by
+  // live accept events, so a recovered install restores contacts but an EMPTY
+  // friends list (blank close-friends picker, wall posts with no audience).
+  // The server owns the accepted graph — additively re-mark every accepted
+  // peer here so the ledger self-heals on every boot/reconnect. Additive only:
+  // marking is idempotent, and ids without a contact row are harmless (the
+  // ledger is intersected with contacts at read time, and the contact may
+  // simply not have own-synced down yet).
+  if (Array.isArray(data.friends)) {
+    for (const id of data.friends) {
+      try {
+        await markContactConnected(id);
+      } catch {
+        /* one bad row must not break request-list refresh */
+      }
+    }
   }
   incomingRequests.value = await Promise.all(
     data.incoming.map(async (r) => ({

@@ -101,6 +101,9 @@ func (c *fakePostConn) IncomingRequests(context.Context, string) ([]store.Connec
 func (c *fakePostConn) OutgoingRequests(context.Context, string) ([]store.ConnectionReq, error) {
 	return nil, nil
 }
+func (c *fakePostConn) AcceptedPeers(context.Context, string) ([]string, error) {
+	return nil, nil
+}
 func (c *fakePostConn) OutgoingWithRecentAccepts(context.Context, string) ([]store.ConnectionReq, error) {
 	return nil, nil
 }

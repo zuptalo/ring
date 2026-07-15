@@ -577,11 +577,17 @@ export async function connectLink(target: string): Promise<void> {
   if (!res.ok) throw new Error(`connect link failed: ${res.status}`);
 }
 
-/** The caller's incoming (awaiting accept) + outgoing (pending/rejected) requests. */
-export async function listConnections(): Promise<{ incoming: ConnReq[]; outgoing: ConnReq[] }> {
-  const res = await fetch(`${apiBaseUrl()}/v1/connections`, { headers: authHeaders() });
+/** The caller's incoming (awaiting accept) + outgoing (pending/rejected) requests.
+ *  With `includeFriends` the server also returns the full accepted-peer id list
+ *  (spec 2040) — the authoritative friend graph a recovered device rebuilds its
+ *  local connected-peers ledger from. `friends` is undefined on older servers. */
+export async function listConnections(
+  includeFriends = false,
+): Promise<{ incoming: ConnReq[]; outgoing: ConnReq[]; friends?: string[] }> {
+  const url = `${apiBaseUrl()}/v1/connections${includeFriends ? '?include=friends' : ''}`;
+  const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error(`list connections failed: ${res.status}`);
-  return (await res.json()) as { incoming: ConnReq[]; outgoing: ConnReq[] };
+  return (await res.json()) as { incoming: ConnReq[]; outgoing: ConnReq[]; friends?: string[] };
 }
 
 /** Register a browser push subscription with the backend. */
