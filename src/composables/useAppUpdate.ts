@@ -22,6 +22,7 @@ import { useRegisterSW } from 'virtual:pwa-register/vue';
 import { modalController } from '@ionic/vue';
 import { sparklesOutline } from 'ionicons/icons';
 import { fetchServerConfig } from '@/services/api';
+import { inSafeMode } from '@/services/boot-guard';
 import { showActionBanner, type NotifyAction } from '@/services/notify';
 import { computeDelta, userFacing, displayVersion, type ReleaseNote } from '@/services/release-notes';
 import WhatsNewSheet from '@/components/WhatsNewSheet.vue';
@@ -193,6 +194,20 @@ export function useAppUpdate(): void {
   // for someone who never fully closes the app — it comes back next time they reopen it.
   async function maybePrompt(): Promise<void> {
     if (!needRefresh.value || prompting) return;
+    // (spec 2039) Safe-mode boot: apply the waiting update SILENTLY — a device
+    // crash-looping on a broken build cannot keep a toast alive long enough to
+    // tap it, and escaping that build is exactly what safe mode is for. Same
+    // one-per-tab cap as the install-gate auto-pull below.
+    if (inSafeMode()) {
+      let alreadySafe = false;
+      try { alreadySafe = sessionStorage.getItem(GATE_UPDATED_KEY) === '1'; } catch { /* ignore */ }
+      if (!alreadySafe) {
+        try { sessionStorage.setItem(GATE_UPDATED_KEY, '1'); } catch { /* ignore */ }
+        prompting = true;
+        await applyUpdate(updateServiceWorker);
+        return;
+      }
+    }
     // Install-gate visitor: don't offer a card they'd have to tap — a browser-gated
     // visitor must never install a stale cached build. Silently pull the waiting update
     // (skipWaiting + reload) so the guide they read and the shell they install are the
