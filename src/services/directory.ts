@@ -18,7 +18,10 @@ import {
 } from './api';
 import { getSelfUserId } from './auth';
 import { get, put } from '@/db/idb';
-import { isPeerBlocked, getSetting, downscaleAvatar, listContacts, updateContactProfile } from '@/db/queries';
+import {
+  isPeerBlocked, getSetting, downscaleAvatar, listContacts, updateContactProfile,
+  resetContactAvatarToRemote,
+} from '@/db/queries';
 import { hasTombstone, clearTombstone } from '@/db/tombstones';
 import { getSecret } from '@/db/secrets';
 import { isUnlockedNow } from '@/services/crypto/identity';
@@ -88,6 +91,19 @@ export async function refetchContactProfile(id: string): Promise<void> {
     const name = (u.displayName || u.username || '').trim();
     const avatar = u.avatar || '';
     await updateContactProfile(id, name, avatar, true); // force-apply the server's current profile
+  } catch {
+    /* offline / not found → keep the optimistic local revert the caller already applied */
+  }
+}
+
+/** Photo-only variant of refetchContactProfile (spec 1054 "Reset to their photo"):
+ *  pull the peer's CURRENT avatar and re-apply it, leaving a local NAME override
+ *  untouched (the force-refetch above would clobber it). */
+export async function refetchContactAvatar(id: string): Promise<void> {
+  try {
+    const u = await fetchDirectoryUser(id);
+    if (!u?.avatar) return;
+    await resetContactAvatarToRemote(id, u.avatar);
   } catch {
     /* offline / not found → keep the optimistic local revert the caller already applied */
   }

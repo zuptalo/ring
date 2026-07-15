@@ -4920,6 +4920,29 @@ export async function resetContactToRemote(id: string): Promise<void> {
   await syncChatFromContact(id, c.name, c.avatar);
 }
 
+/** Revert ONLY a locally-overridden photo back to the peer's own (spec 1054's
+ *  "Reset to their photo"), unlike resetContactToRemote above which reverts the
+ *  name too. A custom NAME override must survive, so `localProfile` stays set
+ *  while the name still differs from the peer's; and a STAGED name change
+ *  (`pendingName`) stays untouched so its adopt/dismiss prompt remains
+ *  answerable. `freshAvatar` lets the directory refetch pass in the peer's
+ *  CURRENT photo (the stored `remoteAvatar` may be stale / the reset may run
+ *  offline). */
+export async function resetContactAvatarToRemote(id: string, freshAvatar?: string): Promise<void> {
+  const c = await getContact(id);
+  if (!c) return;
+  if (freshAvatar) c.remoteAvatar = freshAvatar;
+  if (!c.remoteAvatar) return; // nothing known to reset to (UI hides the entry)
+  c.avatar = c.remoteAvatar;
+  // The staged-photo half of a pending prompt is moot once we just applied that
+  // exact picture; a staged NAME (or a different staged photo) is preserved.
+  if (c.pendingAvatar === c.avatar) delete c.pendingAvatar;
+  if (!(c.remoteName && c.name !== c.remoteName)) delete c.localProfile;
+  c.updatedAt = now();
+  await put('contacts', c);
+  await syncChatFromContact(id, c.name, c.avatar);
+}
+
 /** Add a peer by Ring id and send them a friend request (our name + photo).
  *  The chat is created hidden (pending) until they accept. */
 // Open-network model: there is no accept-first friend gate for 1:1 chats, so
