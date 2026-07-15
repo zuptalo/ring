@@ -95,6 +95,17 @@ function probeVideoMeta(blob: Blob): Promise<{ durationSec: number; width: numbe
 // (e.g. if a device produces bad WebCodecs output).
 const WEBCODECS_ENABLED = true;
 
+
+/** (spec 2038) Final sanity gate on ANY transcode output: if the browser cannot
+ *  even read its metadata, the file is broken — never upload it (a corrupt
+ *  partial output once shipped as an unplayable 0-duration post). Outside a DOM
+ *  (unit tests) this trusts the engine result. */
+async function transcodeOutputPlayable(out: Blob): Promise<boolean> {
+  if (typeof document === 'undefined') return true;
+  const meta = await probeVideoMeta(out);
+  return meta !== null && meta.durationSec > 0;
+}
+
 export async function compressVideoAdaptive(
   blob: Blob,
   quality: 'sd' | 'hd' | 'fhd',
@@ -130,7 +141,7 @@ export async function compressVideoAdaptive(
       if (supported) {
         const out = await webcodecsTranscode(blob, preset, onProgress);
         console.info('[video] webcodecs output', { bytes: out.size, vs: blob.size });
-        if (out.size > 0 && out.size < blob.size) return out;
+        if (out.size > 0 && out.size < blob.size && (await transcodeOutputPlayable(out))) return out;
         // A COMPLETED hardware re-encode that isn't smaller means the source is
         // already efficiently compressed for this preset — the honest result is
         // the original (achievedQuality labels it so). Falling into ffmpeg here
@@ -153,6 +164,10 @@ export async function compressVideoAdaptive(
     const { ffmpegTranscode } = await import('./media-video-ffmpeg');
     const out = await ffmpegTranscode(blob, preset, onProgress);
     console.info('[video] ffmpeg output', { bytes: out.size, vs: blob.size });
+    if (out !== blob && !(await transcodeOutputPlayable(out))) {
+      console.warn('[video] ffmpeg output unreadable; sending original');
+      return blob;
+    }
     return out;
   } catch (e) {
     console.warn('[video] ffmpeg transcode FAILED; sending original', e);

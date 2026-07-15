@@ -70,7 +70,7 @@ export async function ffmpegTranscode(
   if (onProgress) ff.on('progress', onProg);
   await ff.writeFile(input, await fetchFile(blob));
   try {
-    await ff.exec([
+    const rc = await ff.exec([
       '-i', input,
       // spec 1018 US1: do NOT pass -noautorotate. ffmpeg auto-applies the source display matrix,
       // baking the upright orientation into the pixels (and clearing the matrix), so the recipient
@@ -86,6 +86,14 @@ export async function ffmpegTranscode(
       '-movflags', '+faststart',
       output,
     ], FFMPEG_TIMEOUT_MS);
+    // (spec 2038) ffmpeg.wasm's exec RESOLVES with an exit code — it never
+    // rejects on a conversion failure. Reading the output regardless shipped a
+    // PARTIAL file that passed the smaller-than-source guard and posted as an
+    // unplayable 0-duration video (the reported desktop breakage). Non-zero rc
+    // → throw, so the orchestrator falls back to the original.
+    if (rc !== 0) {
+      throw new Error(`ffmpeg conversion failed (exit ${rc})`);
+    }
     const data = (await ff.readFile(output)) as Uint8Array;
     const out = new Blob([data.buffer as ArrayBuffer], { type: 'video/mp4' });
     // Keep whichever is smaller (re-encoding a small clip can grow it).
