@@ -48,7 +48,7 @@
             <ion-icon slot="start" :icon="createOutline" />
             <ion-label>Edit name</ion-label>
           </ion-item>
-          <ion-item button :detail="false" @click="photoInput?.click()">
+          <ion-item button :detail="false" @click="editPhoto">
             <ion-icon slot="start" :icon="cameraOutline" />
             <ion-label>Change photo</ion-label>
           </ion-item>
@@ -57,7 +57,6 @@
             <ion-label>Reset to their name &amp; photo</ion-label>
           </ion-item>
         </ion-list>
-        <input ref="photoInput" type="file" accept="image/*" hidden @change="onPickPhoto" />
 
         <ion-list v-if="!contact.ghosted && contact.about" :inset="true">
           <ion-item lines="none">
@@ -167,22 +166,27 @@ import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton,
   IonContent, IonAvatar, IonButton, IonIcon, IonList, IonItem, IonLabel, IonNote, IonToggle,
-  alertController, actionSheetController,
+  alertController, actionSheetController, modalController,
 } from '@ionic/vue';
+import type { ActionSheetButton } from '@ionic/vue';
 import {
   chatbubbleOutline, searchOutline, banOutline, imagesOutline, videocamOutline,
   notificationsOutline, notificationsOffOutline, starOutline, timerOutline, eyeOutline, documentTextOutline,
-  createOutline, cameraOutline, refreshOutline, personOutline, trashOutline,
+  createOutline, cameraOutline, imageOutline, happyOutline, refreshOutline, personOutline, trashOutline,
 } from 'ionicons/icons';
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import {
   getContact, startDirectChat, blockContact, unblockContact, listChats, setChatMute, setChatTtl, setChatSendQuality,
   getPresenceOverrides, setPresenceOverride, setChatNotifyPrefs, type ChatNotifyContent,
-  setContactLocalProfile, resetContactToRemote, adoptContactProfile, dismissContactProfile, downscaleAvatar,
+  setContactLocalProfile, resetContactToRemote, resetContactAvatarToRemote,
+  adoptContactProfile, dismissContactProfile, downscaleAvatar,
   deleteContact,
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
-import { refetchContactProfile } from '@/services/directory';
+import { refetchContactProfile, refetchContactAvatar } from '@/services/directory';
+import EmojiPickerModal from '@/components/EmojiPickerModal.vue';
+import { emojiAvatar } from '@/db/avatars';
+import { pickImageFile, fileToDataUrl } from '@/utils/pick-image';
 import { ensureProfile } from '@/composables/useProfileGate';
 import { forceReconnect } from '@/composables/useSync';
 import type { Contact, Chat } from '@/db/types';
@@ -192,7 +196,6 @@ import { peerPresence, presenceLabel } from '@/composables/usePresence';
 const route = useRoute();
 const router = useRouter();
 const contactId = route.params.id as string;
-const photoInput = ref<HTMLInputElement | null>(null);
 
 // ---- local name/photo override + adopt a staged remote change ----
 async function editName(): Promise<void> {
@@ -213,24 +216,69 @@ async function editName(): Promise<void> {
   });
   await a.present();
 }
-async function onPickPhoto(e: Event): Promise<void> {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = ''; // allow re-picking the same file
+// Take/choose a photo via the shared robust picker (same as the profile page —
+// it handles the Android camera focus/`change` race so the captured photo isn't
+// dropped). Photos keep the downscale treatment; emoji below must not.
+async function pickPhoto(capture: boolean): Promise<void> {
+  const file = await pickImageFile(capture);
   if (!file) return;
   try {
-    const dataUrl = await new Promise<string>((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res(r.result as string);
-      r.onerror = () => rej(r.error);
-      r.readAsDataURL(file);
-    });
-    const avatar = await downscaleAvatar(dataUrl);
+    const avatar = await downscaleAvatar(await fileToDataUrl(file));
     await setContactLocalProfile(contactId, { avatar });
   } catch {
     await appToast({ message: "Couldn't use that image.", color: 'danger' });
   }
 }
+
+// Pick an emoji as the contact's photo (spec 1054): stored VERBATIM as
+// emojiAvatar's disc — never through downscaleAvatar, whose canvas re-encode
+// would rasterize the SVG and strip the recoverable emoji (killing the
+// animated rendering in UserAvatar).
+async function pickEmoji(): Promise<void> {
+  const modal = await modalController.create({
+    component: EmojiPickerModal,
+    cssClass: 'emoji-picker-sheet',
+    breakpoints: [0, 0.6, 0.95],
+    initialBreakpoint: 0.6,
+  });
+  await modal.present();
+  const { data } = await modal.onWillDismiss<{ emoji?: string }>();
+  if (!data?.emoji) return;
+  await setContactLocalProfile(contactId, { avatar: emojiAvatar(data.emoji) });
+}
+
+// "Reset to their photo" is offered only when there is actually a local PHOTO
+// override to undo (a name-only override doesn't count) and a published photo
+// is known. Requiring `localProfile` keeps the entry from doubling as a hidden
+// half-adopt when a STAGED remote change is what makes avatar ≠ remoteAvatar.
+const photoOverridden = computed(
+  () =>
+    !!contact.value?.localProfile &&
+    !!contact.value.remoteAvatar &&
+    contact.value.avatar !== contact.value.remoteAvatar,
+);
+
+// Optimistic: revert to the last-known published photo (works offline), then
+// re-pull the peer's CURRENT one. Photo only — a custom name stays.
+async function resetPhoto(): Promise<void> {
+  await resetContactAvatarToRemote(contactId);
+  await refetchContactAvatar(contactId);
+}
+
+async function editPhoto(): Promise<void> {
+  const buttons: ActionSheetButton[] = [
+    { text: 'Take photo', icon: cameraOutline, handler: () => void pickPhoto(true) },
+    { text: 'Choose photo', icon: imageOutline, handler: () => void pickPhoto(false) },
+    { text: 'Pick an emoji', icon: happyOutline, handler: () => void pickEmoji() },
+  ];
+  if (photoOverridden.value) {
+    buttons.push({ text: 'Reset to their photo', icon: refreshOutline, handler: () => void resetPhoto() });
+  }
+  buttons.push({ text: 'Cancel', role: 'cancel' });
+  const sheet = await actionSheetController.create({ header: 'Edit photo', buttons });
+  await sheet.present();
+}
+
 async function resetProfile(): Promise<void> {
   // Optimistic: drop the override + revert to the last-known remote (works offline),
   // then re-pull the peer's CURRENT name/photo from the directory and apply it.

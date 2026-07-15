@@ -7,7 +7,9 @@
        the parent (ion-avatar or a styled container), like the <img> it
        replaces; surfaces not yet swept keep showing the static disc. -->
   <span v-if="emoji" class="ua" :style="{ background: disc }" role="img" :aria-label="alt">
-    <animated-emoji :emoji="emoji" :animate="anim.animate" :plays="anim.plays" class="ua-glyph" />
+    <!-- :key remounts on emoji change — AnimatedEmoji renders a stale glyph if
+         its emoji prop swaps in place (e.g. a contact photo override → reset). -->
+    <animated-emoji :key="emoji" :emoji="emoji" :animate="anim.animate" :plays="anim.plays" class="ua-glyph" />
   </span>
   <img v-else :src="src" :alt="alt" />
 </template>

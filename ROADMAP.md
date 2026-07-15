@@ -79,6 +79,7 @@ Specs are grouped by category band; status moves
 | [1051](specs/1051-message-bubble-grows/spec.md) | Message Bubble Grows to Hold Its Reactions | 🟡 in-progress |
 | [1052](specs/1052-group-adds-you/spec.md) | Group Adds You Can Trust | 🟡 in-progress |
 | [1053](specs/1053-composer-buttons-transition/spec.md) | Composer Buttons Transition Like WhatsApp | 🟡 in-progress |
+| [1054](specs/1054-pick-emoji-contact/spec.md) | Emoji contact photos + reset to their photo | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
