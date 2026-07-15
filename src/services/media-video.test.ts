@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The WebCodecs + ffmpeg engines are browser-only; here we mock them and assert the
 // ORCHESTRATION decisions of compressVideoAdaptive (spec 2007). A real transcode is
 // exercised by the e2e suite + on-device verification, not vitest.
-vi.mock('./media-video-webcodecs', () => ({
+vi.mock('./media-video-webcodecs', async (importOriginal) => ({
+  // Keep the real pure helpers (the spec 2041 box scanner is unit-tested here);
+  // only the engine entry points are mocked.
+  ...(await importOriginal<object>()),
   webCodecsSupported: vi.fn(() => true),
   webcodecsTranscode: vi.fn(),
 }));
@@ -87,5 +90,67 @@ describe('upload-as-is gate (spec 2038)', () => {
     expect(sniffMp4CodecIsPlainH264(buf('av01'))).toBe(false);
     expect(sniffMp4CodecIsPlainH264(buf('vp09'))).toBe(false);
     expect(sniffMp4CodecIsPlainH264(new TextEncoder().encode('..no codec here..'))).toBe(false);
+  });
+});
+
+/* ---- spec 2041: header-only codec sniff + box scanner ---- */
+
+/** Build a synthetic top-level box: 4-byte size, 4-byte type, payload. */
+function box(type: string, payload: Uint8Array): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(8 + payload.length);
+  new DataView(out.buffer).setUint32(0, out.length);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  out.set(payload, 8);
+  return out;
+}
+const fourcc = (s: string): Uint8Array<ArrayBuffer> => new Uint8Array([...s].map((c) => c.charCodeAt(0)));
+
+describe('scanTopLevelBoxes (spec 2041)', () => {
+  it('indexes a moov-last (iPhone camera) layout without touching media data', async () => {
+    const { scanTopLevelBoxes } = await import('./media-video-webcodecs');
+    const blob = new Blob([box('ftyp', fourcc('isom')), box('mdat', new Uint8Array(1000)), box('moov', fourcc('avc1'))]);
+    const boxes = await scanTopLevelBoxes(blob);
+    expect(boxes.map((b) => b.type)).toEqual(['ftyp', 'mdat', 'moov']);
+    expect(boxes[1].size).toBe(1008);
+    expect(boxes[2].start).toBe(12 + 1008);
+  });
+
+  it('handles a 64-bit largesize mdat', async () => {
+    const { scanTopLevelBoxes } = await import('./media-video-webcodecs');
+    const payload = new Uint8Array(100);
+    const big = new Uint8Array(16 + payload.length) as Uint8Array<ArrayBuffer>;
+    const dv = new DataView(big.buffer);
+    dv.setUint32(0, 1); // size==1 → largesize follows
+    for (let i = 0; i < 4; i++) big[4 + i] = 'mdat'.charCodeAt(i);
+    dv.setUint32(8, 0);
+    dv.setUint32(12, big.length);
+    const blob = new Blob([box('ftyp', fourcc('isom')), big, box('moov', fourcc('avc1'))]);
+    const boxes = await scanTopLevelBoxes(blob);
+    expect(boxes[1]).toMatchObject({ type: 'mdat', size: big.length, headerLen: 16 });
+  });
+
+  it('rejects a non-mp4 byte stream', async () => {
+    const { scanTopLevelBoxes } = await import('./media-video-webcodecs');
+    await expect(scanTopLevelBoxes(new Blob([new Uint8Array(64).fill(0xab)]))).rejects.toThrow(/not an mp4/);
+  });
+});
+
+describe('sniffBlobCodecIsPlainH264 (spec 2041)', () => {
+  it('finds avc1 in the moov without reading mdat', async () => {
+    const { sniffBlobCodecIsPlainH264 } = await import('./media-video');
+    // mdat contains an hvc1 marker to prove it is NOT scanned (only moov is).
+    const blob = new Blob([box('ftyp', fourcc('isom')), box('mdat', fourcc('hvc1')), box('moov', fourcc('avc1'))]);
+    expect(await sniffBlobCodecIsPlainH264(blob)).toBe(true);
+  });
+
+  it('rejects an HEVC moov', async () => {
+    const { sniffBlobCodecIsPlainH264 } = await import('./media-video');
+    const blob = new Blob([box('ftyp', fourcc('isom')), box('moov', fourcc('hvc1'))]);
+    expect(await sniffBlobCodecIsPlainH264(blob)).toBe(false);
+  });
+
+  it('an unscannable container is simply not-compatible (transcode as before)', async () => {
+    const { sniffBlobCodecIsPlainH264 } = await import('./media-video');
+    expect(await sniffBlobCodecIsPlainH264(new Blob([new Uint8Array(32).fill(1)]))).toBe(false);
   });
 });

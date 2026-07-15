@@ -78,7 +78,7 @@ const UPLOAD_STALL_MS = 45_000;
 const MAX_AUTO_ATTEMPTS = 3;
 
 async function uploadOne(id: string): Promise<void> {
-  const rec = await getPendingPost(id);
+  let rec = await getPendingPost(id);
   if (!rec || rec.status !== 'uploading') return; // canceled / interrupted / already gone
   // (spec 2037) Budget check FIRST — before the transcode/upload that may itself
   // be what kills the app. Reaching here at the cap means the previous attempts
@@ -92,6 +92,27 @@ async function uploadOne(id: string): Promise<void> {
   }
   rec.attempts += 1;
   await updatePendingPost(rec);
+  // (spec 2041) Everything createPost needs is copied OUT of the record here, and the record
+  // reference is dropped before the heavy pipeline runs. Holding `rec` across the createPost await
+  // kept every inline-bytes ArrayBuffer alive for the entire transcode+upload — for a video post
+  // that was a whole extra file-copy pinned in the heap exactly when memory pressure peaks on a
+  // phone. (new Blob([bytes]) copies into browser blob storage, so the inline bytes are collectable
+  // the moment `rec` is released; large items are Blob-backed and pass straight through.)
+  const body = rec.body || undefined;
+  const audience = rec.audience ?? 'friends';
+  const lifetime = rec.lifetime ?? '72h';
+  const media = rec.items.length
+    ? rec.items.map((it) => ({
+        // Rebuild a fresh in-memory Blob from the inline bytes (always readable, unlike a Blob
+        // read back from IDB after a restart). Large/legacy items carry a stored Blob instead.
+        blob: it.bytes ? new Blob([it.bytes], { type: it.mime }) : (it.blob as Blob),
+        kind: it.kind,
+        name: it.name,
+        durationSec: it.durationSec,
+        quality: 'hd' as const,
+      }))
+    : undefined;
+  rec = undefined;
   let lastTick = Date.now();
   let watchdog: ReturnType<typeof setInterval> | undefined;
   let attempt: Promise<unknown> | undefined;
@@ -106,20 +127,10 @@ async function uploadOne(id: string): Promise<void> {
         // the same local Post instead of minting a second one. (See the "already made" guard below for
         // the kill-after-send window the stable id alone can't cover.)
         id,
-        body: rec.body || undefined,
-        audience: rec.audience ?? 'friends',
-        lifetime: rec.lifetime ?? '72h',
-        media: rec.items.length
-          ? rec.items.map((it) => ({
-              // Rebuild a fresh in-memory Blob from the inline bytes (always readable, unlike a Blob
-              // read back from IDB after a restart). Fall back to a legacy stored Blob if present.
-              blob: it.bytes ? new Blob([it.bytes], { type: it.mime }) : (it.blob as Blob),
-              kind: it.kind,
-              name: it.name,
-              durationSec: it.durationSec,
-              quality: 'hd' as const,
-            }))
-          : undefined,
+        body,
+        audience,
+        lifetime,
+        media,
         onProgress: (p) => {
           lastTick = Date.now(); // each progress event keeps the watchdog from firing
           void writeProgress(id, p);
@@ -208,6 +219,22 @@ export function __resetRecoveryForTest(): void {
   recovered = false;
 }
 
+/** (spec 2041) Does a stored Blob still read after a restart? Probes a 1 KB slice
+ *  under a timeout: the iOS failure mode for an IDB Blob is a read that HANGS,
+ *  so a bare await would wedge recovery. A timed-out read is 'unreadable'. */
+const BLOB_PROBE_TIMEOUT_MS = 3_000;
+async function blobReads(b: Blob): Promise<boolean> {
+  try {
+    await Promise.race([
+      b.slice(0, 1024).arrayBuffer(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('probe timed out')), BLOB_PROBE_TIMEOUT_MS)),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Run ONCE at app start (after unlock). A pending post still around is left over
  * from a previous session. Since spec 1024 every item's bytes ride INLINE in the
@@ -239,16 +266,24 @@ export async function recoverInterruptedPosts(): Promise<{ recovered: number; di
       await deletePendingPost(rec.id);
       continue;
     }
-    if (rec.items.every((it) => !!it.bytes)) {
-      // Fully byte-backed (every post the current composer creates): the drain
+    // (spec 2041) An item is resumable if it carries inline bytes OR a stored Blob
+    // that still READS. Blob-backed items (large videos) trade the iOS
+    // unreadable-Blob risk back in for bounded memory, so each one is probed here
+    // — with a timeout, because the iOS failure mode is a HANG (arrayBuffer()
+    // never settles), and an un-raced probe would wedge recovery itself.
+    const itemOk = await Promise.all(
+      rec.items.map(async (it) => !!it.bytes || (!!it.blob && (await blobReads(it.blob)))),
+    );
+    if (itemOk.every(Boolean)) {
+      // Fully readable (every post the current composer creates): the drain
       // resumes it as-is. Don't touch the record — two writers on one row was
       // exactly the reported zombie-draft bug.
       resumable += 1;
       continue;
     }
-    // Legacy items without inline bytes can't be re-read after a restart: draft
-    // what survives (caption + byte-backed items) for the user to finish.
-    const usable = rec.items.filter((it) => !!it.bytes);
+    // Items that can't be re-read after a restart: draft what survives
+    // (caption + readable items) for the user to finish.
+    const usable = rec.items.filter((_, i) => itemOk[i]);
     // FR-002: re-read before writing — the record may have completed (and been
     // deleted) or changed since the list snapshot; never write over that.
     const fresh = await getPendingPost(rec.id);

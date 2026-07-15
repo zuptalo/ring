@@ -36,12 +36,22 @@ const AS_IS_BITRATE_FACTOR = 1.5;
 
 /** Pure rule: may this clip skip the transcode entirely? Codec compatibility is
  *  the caller's input (see sniffMp4Codecs) — this only judges the numbers. */
+// (spec 2041) The largest video we ever hand to the seal+upload path unconverted.
+// Encryption holds plaintext AND ciphertext in the heap at once, so shipping an
+// arbitrarily large original is the same out-of-memory kill the transcode fix
+// removed — and the server caps a blob at 256 MiB anyway. Anything above this
+// must convert or fail honestly (never crash the app trying).
+export const ORIGINAL_MAX_BYTES = 128 << 20;
+
+/** Pure rule: may this clip skip the transcode entirely? Codec compatibility is
+ *  the caller's input (see sniffMp4Codecs) — this only judges the numbers. */
 export function shouldUploadAsIs(
   info: { sizeBytes: number; durationSec: number; width: number; height: number; h264Compatible: boolean },
   preset: VideoPreset,
 ): boolean {
   if (!info.h264Compatible) return false;
   if (!(info.durationSec > 0)) return false;
+  if (info.sizeBytes > ORIGINAL_MAX_BYTES) return false; // must shrink first (spec 2041)
   if (Math.max(info.width, info.height) > preset.maxEdge) return false; // 4K-class → downscale
   const bps = (info.sizeBytes * 8) / info.durationSec;
   return bps <= preset.bitrate * AS_IS_BITRATE_FACTOR;
@@ -53,6 +63,32 @@ export function shouldUploadAsIs(
  *  need the compatibility transcode. A dumb byte scan is deliberate: it needs no
  *  demuxer, handles moov-at-end files, and a false negative only means we
  *  transcode like before. */
+/** (spec 2041) sniffMp4CodecIsPlainH264 over a Blob without loading the media
+ *  data: reads only the non-mdat top-level boxes (ftyp/moov/…, where the sample
+ *  descriptions live). Any scan failure or an implausibly large header region
+ *  returns false — "not known-compatible", so the caller transcodes as before. */
+export async function sniffBlobCodecIsPlainH264(blob: Blob): Promise<boolean> {
+  const HEADER_SNIFF_MAX_BYTES = 16 << 20;
+  try {
+    const { scanTopLevelBoxes } = await import('./media-video-webcodecs');
+    const boxes = (await scanTopLevelBoxes(blob)).filter((b) => b.type !== 'mdat');
+    const total = boxes.reduce((n, b) => n + b.size, 0);
+    if (total === 0 || total > HEADER_SNIFF_MAX_BYTES) return false;
+    const parts = await Promise.all(
+      boxes.map(async (b) => new Uint8Array(await blob.slice(b.start, b.start + b.size).arrayBuffer())),
+    );
+    const bytes = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) {
+      bytes.set(p, off);
+      off += p.length;
+    }
+    return sniffMp4CodecIsPlainH264(bytes);
+  } catch {
+    return false;
+  }
+}
+
 export function sniffMp4CodecIsPlainH264(bytes: Uint8Array): boolean {
   const has = (fourcc: string): boolean => {
     const a = fourcc.charCodeAt(0), b = fourcc.charCodeAt(1), c = fourcc.charCodeAt(2), d = fourcc.charCodeAt(3);
@@ -121,7 +157,13 @@ export async function compressVideoAdaptive(
     try {
       const meta = await probeVideoMeta(blob);
       if (meta) {
-        const h264Compatible = sniffMp4CodecIsPlainH264(new Uint8Array(await blob.arrayBuffer()));
+        // (spec 2041) Sniff the codec from the METADATA boxes only. The codec
+        // FourCCs live in the moov sample descriptions, so reading the non-mdat
+        // boxes (a few MB even for a long clip) replaces the old whole-file
+        // arrayBuffer() read — which put the entire video in the heap just to
+        // answer a yes/no question. An oversized or unscannable header simply
+        // means "not known-compatible" → the normal transcode ladder.
+        const h264Compatible = await sniffBlobCodecIsPlainH264(blob);
         if (shouldUploadAsIs({ sizeBytes: blob.size, durationSec: meta.durationSec, width: meta.width, height: meta.height, h264Compatible }, preset)) {
           console.info('[video] uploading as-is (spec 2038)', { bps: Math.round((blob.size * 8) / meta.durationSec), ...meta });
           return blob;
@@ -150,7 +192,7 @@ export async function compressVideoAdaptive(
         // posting progress bar sat near 0% for the whole detour. ffmpeg remains
         // the fallback for webcodecs FAILURES only.
         console.info('[video] webcodecs output not smaller — source already efficient, sending original');
-        return blob;
+        return originalOrThrow(blob);
       }
     } catch (e) {
       console.warn('[video] WebCodecs transcode FAILED; trying ffmpeg', e);
@@ -166,14 +208,27 @@ export async function compressVideoAdaptive(
     console.info('[video] ffmpeg output', { bytes: out.size, vs: blob.size });
     if (out !== blob && !(await transcodeOutputPlayable(out))) {
       console.warn('[video] ffmpeg output unreadable; sending original');
-      return blob;
+      return originalOrThrow(blob);
     }
-    return out;
+    return out === blob ? originalOrThrow(blob) : out;
   } catch (e) {
+    if ((e as Error)?.message?.includes('too big to send')) throw e;
     console.warn('[video] ffmpeg transcode FAILED; sending original', e);
   }
 
-  // 3. Give up → original (never block the send).
+  // 3. Give up → original (never block the send — unless shipping it would
+  // crash the app; see originalOrThrow).
   console.warn('[video] no engine succeeded, sending original', { bytes: blob.size });
+  return originalOrThrow(blob);
+}
+
+/** (spec 2041) The "ship the original" escape hatch, bounded. Sealing holds
+ *  plaintext + ciphertext in the heap together, so an oversized original is the
+ *  same jetsam kill the streaming transcode removed. A clean, explained failure
+ *  card beats a crashed app. */
+function originalOrThrow(blob: Blob): Blob {
+  if (blob.size > ORIGINAL_MAX_BYTES) {
+    throw new Error('This video is too big to send without converting and converting failed on this device. Try a shorter or smaller clip.');
+  }
   return blob;
 }

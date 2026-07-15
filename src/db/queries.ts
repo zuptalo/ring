@@ -3201,6 +3201,11 @@ export async function createPost(opts: {
 
 // ---- spec 1024: resilient-posting outbox (`pendingPosts` store) ----
 
+/** (spec 2041) Items at or below this ride the outbox as inline bytes (bulletproof across an iOS
+ *  restart); larger ones are stored as disk-backed Blobs so a phone video never sits in the JS
+ *  heap. 24 MB keeps every image/voice note and short clip on the proven inline path. */
+export const OUTBOX_INLINE_MAX_BYTES = 24 << 20;
+
 /** Cache the staged media + metadata as a pending post and return its id. The composer dismisses
  *  the moment this resolves; the upload worker (services/pending-posts) drains it in the
  *  background. The blobs are the app's OWN cached copies, so removing the source can't break it. */
@@ -3222,16 +3227,25 @@ export async function enqueuePendingPost(input: {
   }[];
 }): Promise<string> {
   const id = uid();
-  // Read every item's bytes and store them INLINE (as an ArrayBuffer, not a Blob). This is what lets
-  // a post survive a full app close: a Blob read back from IDB after a restart can be unreadable on
-  // iOS, an ArrayBuffer always reads back. So an interrupted post keeps its photos/videos/voice and
-  // can be finished from the recovered draft. The read happens once here, at Share (in-session, while
-  // the picked files are still readable).
+  // Read every SMALL item's bytes and store them INLINE (as an ArrayBuffer, not a Blob). This is
+  // what lets a post survive a full app close: a Blob read back from IDB after a restart can be
+  // unreadable on iOS, an ArrayBuffer always reads back. So an interrupted post keeps its
+  // photos/videos/voice and can be finished from the recovered draft. The read happens once here,
+  // at Share (in-session, while the picked files are still readable).
+  //
+  // (spec 2041) LARGE items are stored as the Blob itself instead: inlining a phone video means the
+  // whole file in the JS heap plus a structured-clone copy at put() — at Share time, and again on
+  // every drain read — which was a big slice of the out-of-memory kill behind "posting a video
+  // crashes the app" on iPhone. A stored Blob is disk-backed by the browser (put() clones it by
+  // reference), costing ~zero heap on both sides. The iOS unreadable-Blob risk this trades back in
+  // is handled at recovery: recoverInterruptedPosts PROBES blob-backed items and draft-ifies the
+  // post if one doesn't read (the pre-1024 fallback), instead of wedging the drain.
   const items: OutboxItem[] = [];
   for (const it of input.items) {
+    const inline = it.blob.size <= OUTBOX_INLINE_MAX_BYTES;
     items.push({
       localId: uid(),
-      bytes: await it.blob.arrayBuffer(),
+      ...(inline ? { bytes: await it.blob.arrayBuffer() } : { blob: it.blob }),
       kind: it.kind,
       name: it.name,
       mime: it.mime,
