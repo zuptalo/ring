@@ -133,7 +133,10 @@ async function uploadOne(id: string): Promise<void> {
         media,
         onProgress: (p) => {
           lastTick = Date.now(); // each progress event keeps the watchdog from firing
-          void writeProgress(id, p);
+          // Detached + best-effort: a progress write that loses an IDB race (or
+          // times out under load) must not surface as an unhandled rejection —
+          // the next event repaints the bar anyway.
+          void writeProgress(id, p).catch(() => {});
         },
       });
     await Promise.race([attempt, stalled]);
