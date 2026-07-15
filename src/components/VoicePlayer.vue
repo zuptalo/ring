@@ -12,7 +12,7 @@
         v-for="(h, i) in bars"
         :key="i"
         class="vp-bar"
-        :class="{ played: (i + 0.5) / bars.length <= progress }"
+        :class="{ played: (i + 0.5) / bars.length <= paint }"
         :style="{ height: barHeight(h) }"
       />
     </div>
@@ -50,6 +50,10 @@ const props = defineProps<{
   // Wall feed: hide the floating controller while THIS inline player is on screen, and reveal it
   // the moment the post is swiped/scrolled out of view (so you don't see both at once).
   floatWhenAway?: boolean;
+  // Send in flight (sender side): 0..1 upload fraction. While defined, the waveform paints
+  // it left→right — the wave itself is the progress indicator — so the bubble needs no
+  // extra progress row (nothing appears/disappears around the player when the send ends).
+  uploadProgress?: number;
 }>();
 
 const BAR_COUNT = 44;
@@ -63,6 +67,8 @@ const total = ref(props.durationSec ?? 0);
 const isActive = computed(() => audioCurId.value === props.mid);
 const playing = computed(() => isActive.value && audioPlaying.value);
 const progress = computed(() => (isActive.value ? audioProgress.value : 0)); // 0..1
+// What the wave paints: the upload waterline while the send is in flight, playback after.
+const paint = computed(() => props.uploadProgress ?? progress.value);
 const elapsed = computed(() => progress.value * total.value);
 const rate = computed(() => audioRate.value);
 

@@ -3,7 +3,10 @@
     <button type="button" class="audio-cover" :aria-label="playing ? 'Pause' : 'Play'" @click.stop="$emit('toggle')">
       <img v-if="coverUrl" :src="coverUrl" alt="" />
       <ion-icon v-else class="audio-note" :icon="musicalNotes" />
-      <span class="audio-play"><ion-icon :icon="playing ? pause : play" /></span>
+      <!-- Send in flight: the play scrim shows the cloud waterline instead of the glyph;
+           same overlay box, so nothing about the card moves when the upload ends. -->
+      <span v-if="uploadProgress !== undefined" class="audio-play"><cloud-fill :progress="uploadProgress" /></span>
+      <span v-else class="audio-play"><ion-icon :icon="playing ? pause : play" /></span>
     </button>
     <div class="audio-meta">
       <span class="audio-title">{{ title }}</span>
@@ -24,6 +27,7 @@ import { computed } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, pause, musicalNotes } from 'ionicons/icons';
 import SpeedPill from '@/components/SpeedPill.vue';
+import CloudFill from '@/components/CloudFill.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -35,6 +39,7 @@ const props = withDefaults(
     playing?: boolean;
     progress?: number; // 0..1 (only meaningful when active)
     rate?: number; // playback speed of the shared player (only meaningful when active)
+    uploadProgress?: number; // send in flight (sender side): 0..1, undefined = not uploading
   }>(),
   { progress: 0, rate: 1 },
 );

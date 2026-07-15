@@ -159,6 +159,7 @@
             downloadProgress[m.id],
             groupRunStart(i),
             senderAvatar(m.senderId),
+            m.status === 'compressing' ? Math.round(uploadFrac(m) * 50) : -1,
           ]"
           @click="selecting && toggleSelect([m.id])"
         >
@@ -258,7 +259,10 @@
                   alt="gif"
                 />
                 <img v-else-if="mediaInfo[m.mediaId]?.posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId]!.posterUrl" alt="photo" loading="lazy" decoding="async" />
-                <ion-skeleton-text v-else :animated="true" class="media-skel" />              </div>
+                <ion-skeleton-text v-else :animated="true" class="media-skel" />
+                <!-- Send in flight: the cloud waterline in the thumbnail centre (see CloudFill). -->
+                <span v-if="m.status === 'compressing'" class="upload-cloud"><cloud-fill :progress="uploadFrac(m)" /></span>
+              </div>
               <!-- Video: a still thumbnail with a play button. Tapping the poster opens the
                    action menu (whole bubble is the hit target); the play button is the
                    direct affordance to the full-screen viewer. The sender-embedded
@@ -274,8 +278,16 @@
                 />
                 <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 <!-- Visual play affordance only; a tap anywhere on the poster opens
-                     the viewer via the bubble's tap handler. -->
-                <ion-icon class="play-overlay" :icon="playCircle" aria-hidden="true" />              </div>
+                     the viewer via the bubble's tap handler. While the send is in
+                     flight the same centre spot shows the cloud waterline instead. -->
+                <span v-if="m.status === 'compressing'" class="upload-cloud"><cloud-fill :progress="uploadFrac(m)" /></span>
+                <!-- Custom triangle rather than the ionicons glyph: that one is taller than
+                     wide with heavy corner rounding, which reads as a blob at this size.
+                     Near-equilateral, gently rounded corners, optically centred. -->
+                <span v-else class="play-overlay" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M7.5 5.14 19 12 7.5 18.86Z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" /></svg>
+                </span>
+              </div>
 
               <!-- Non-square media (round note / voice / audio card / file chip) stays gated
                    on mediaInfo: these are text-height cards with no fixed-square frame, so
@@ -300,6 +312,7 @@
                   :outgoing="m.outgoing"
                   :avatar="!m.outgoing && !chat?.isGroup ? chat?.avatar : undefined"
                   :duration-sec="m.durationSec"
+                  :upload-progress="m.status === 'compressing' ? uploadFrac(m) : undefined"
                 />
                 <!-- Shared audio file (music): track card with cover/title/artist. -->
                 <audio-card
@@ -312,6 +325,7 @@
                   :playing="audioCurId === m.id && audioPlaying"
                   :progress="audioCurId === m.id ? audioProgress : 0"
                   :rate="audioRate"
+                  :upload-progress="m.status === 'compressing' ? uploadFrac(m) : undefined"
                   @toggle="toggleAudio(m.id)"
                   @seek="(f) => seekAudio(m.id, f)"
                   @cycle-speed="cycleAudioRate"
@@ -323,7 +337,9 @@
                   :download="mediaInfo[m.mediaId].name"
                   @click.stop
                 >
-                  <ion-icon :icon="documentOutline" />
+                  <!-- Send in flight: the document glyph gives its slot to the cloud waterline. -->
+                  <cloud-fill v-if="m.status === 'compressing'" class="chip-cloud" :progress="uploadFrac(m)" />
+                  <ion-icon v-else :icon="documentOutline" />
                   <span>{{ mediaInfo[m.mediaId].name }}</span>
                 </a>
               </template>
@@ -481,19 +497,9 @@
                   :animate="animEmoji"
                   :large="emojiBig(m.body)"
                 /><template v-else>{{ p.text }}</template></template></span>
-              <!-- Background job: separate encode + upload progress bars. -->
-              <div v-if="m.status === 'compressing'" class="job-progress">
-                <div v-if="m.mediaQuality && m.mediaQuality !== 'original'" class="job-row">
-                  <span class="job-label">Encoding</span>
-                  <span class="job-track"><span class="job-fill" :style="{ width: jobPct(m.id, 'compress') }" /></span>
-                  <span class="job-num">{{ jobPct(m.id, 'compress') }}</span>
-                </div>
-                <div class="job-row">
-                  <span class="job-label">Uploading</span>
-                  <span class="job-track"><span class="job-fill" :style="{ width: jobPct(m.id, 'upload') }" /></span>
-                  <span class="job-num">{{ jobPct(m.id, 'upload') }}</span>
-                </div>
-              </div>
+              <!-- In-flight send progress lives INSIDE each media visual (cloud waterline on
+                   thumbnails/chips, the waveform fill for voice) — never as a bar row below,
+                   which would grow the bubble and then snap it shorter when the upload ends. -->
               <!-- Media facts (quality · resolution · size) live in Message info now
                    (long-press → Message info), not on the bubble. -->
               <!-- Direction-aware foot: react button opposite the timestamp; sent →
@@ -1205,6 +1211,7 @@ import PollComposer from '@/components/PollComposer.vue';
 import ContactPicker from '@/components/ContactPicker.vue';
 import LocationComposer from '@/components/LocationComposer.vue';
 import AudioCard from '@/components/AudioCard.vue';
+import CloudFill from '@/components/CloudFill.vue';
 import SpeedPill from '@/components/SpeedPill.vue';
 import { nextRate, playWhenReady } from '@/utils/playback';
 import AudioReview from '@/components/AudioReview.vue';
@@ -1381,9 +1388,13 @@ function dlSizeLabel(m: Message): string {
 }
 
 
-// Encode / upload progress as a "42%" string for the in-flight bars.
-function jobPct(id: string, phase: 'compress' | 'upload'): string {
-  return `${Math.round((jobProgress[id]?.[phase] ?? 0) * 100)}%`;
+// One 0..1 for the whole in-flight job, driving the cloud/waveform fill: when this media
+// gets transcoded first, encoding occupies the first half and upload the second (a single
+// monotonic waterline, no reset halfway); upload-only media map 1:1.
+function uploadFrac(m: Message): number {
+  const j = jobProgress[m.id];
+  if (!j) return 0;
+  return m.mediaQuality && m.mediaQuality !== 'original' ? (j.compress + j.upload) / 2 : j.upload;
 }
 
 function statusIcon(status: MessageStatus) {
@@ -3025,6 +3036,19 @@ function observeScroll(): void {
     setupWindowSentinels(el);
     setupBubbleObserver(el); // spec 1013: per-bubble ≥50% visibility → Seen
   });
+  // iOS PWA keyboard hole: the on-screen keyboard often shrinks only the VISUAL viewport —
+  // no layout resize, so the ResizeObserver above never fires — and the pinned bottom
+  // (newest messages) ends up behind the keyboard. The visualViewport resize is the one
+  // signal that always accompanies the keyboard; re-pin on it under the same
+  // momentum-quiet guard. Registration is idempotent (named handler, add after remove).
+  if (window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', onVisualViewportResize);
+    window.visualViewport.addEventListener('resize', onVisualViewportResize);
+  }
+}
+function onVisualViewportResize(): void {
+  if (stickBottom && !shouldDeferScrollWrite(Date.now(), lastScrollAt, MOMENTUM_QUIET_MS))
+    void scrollToNewest();
 }
 
 // Look-ahead prefetch: an IntersectionObserver rooted on the scroll element with
@@ -3139,6 +3163,7 @@ onMounted(() => {
 onUnmounted(() => {
   void persistDraft(); // leaving the chat → keep the unsent message for next time
   document.removeEventListener('visibilitychange', onVisibilityChange);
+  window.visualViewport?.removeEventListener('resize', onVisualViewportResize);
   clearTimeout(headerReadyFallback);
   clearTimeout(listReadyFallback);
   resizeObs?.disconnect();
@@ -3293,9 +3318,23 @@ function reseedTopPad(): void {
 // already pinned there (stickBottom) or it's our own send, never while reading history. The
 // first populated load reveals the list once scrolled to newest (no flash of the oldest).
 let didInitialLoad = false;
+// The on-screen top of a rendered bubble, for the arrival-glide shift measurement. Rect-based so
+// it reflects exactly what the user sees (spacer rebases and window trims cancel out of the
+// before/after difference).
+function bubbleTop(id: string | undefined): number | undefined {
+  if (!id) return undefined;
+  return listEl.value
+    ?.querySelector<HTMLElement>(`.bubble[data-mid="${CSS.escape(id)}"]`)
+    ?.getBoundingClientRect().top;
+}
 watch(
   () => rows.value[rows.value.length - 1]?.id,
   async (newestId, prevId) => {
+    // Captured synchronously, before this pre-flush watcher yields and the new row renders:
+    // where the previous newest bubble sat, and whether the window even holds the true bottom.
+    // The arrival glide below needs the before/after difference.
+    const prevTopBefore = bubbleTop(prevId);
+    const hadNewer = history.hasNewer.value;
     markChatSeenIfVisible();
     if (!didInitialLoad) {
       didInitialLoad = true;
@@ -3324,7 +3363,19 @@ watch(
     if (search.value || !newestId || newestId === prevId) return; // not a new bottom message
     if (seeking) return; // a seek is swapping the window — don't yank back to the newest
     const newest = rows.value[rows.value.length - 1];
-    if (newest?.outgoing || stickBottom) await scrollToNewest();
+    if (newest?.outgoing || stickBottom) {
+      await scrollToNewest();
+      // The new bubble pops in from the corner nearest its side; independent of the glide
+      // below so it also runs when there's no previous bubble to measure (first message).
+      popNewestIn(newestId, !!newest?.outgoing);
+      // Arrival glide: how far did the previous newest bubble jump up? (New row + any day
+      // divider, and in the pinned case the scrollTop snap — the rect difference captures it
+      // all.) Skip when the window was swapped in from elsewhere (hadNewer): that's a jump to
+      // the bottom of the chat, not an arrival.
+      const prevTopAfter = bubbleTop(prevId);
+      if (!hadNewer && prevTopBefore !== undefined && prevTopAfter !== undefined)
+        glideNewestIn(prevTopBefore - prevTopAfter);
+    }
   },
 );
 // Search reloads the run; re-seed the spacer for the fresh result set.
@@ -3799,6 +3850,84 @@ async function scrollToNewest(): Promise<void> {
   // We're at the newest now → hide the control (the count clears itself as the now-visible bottom
   // messages get reported Seen by the visibility observer).
   jumpVisible.value = false;
+}
+
+// ---- arrival glide ----
+// When a new bottom message lands while we're following the newest (an incoming message with the
+// chat open, or our own send), the append + scrollToNewest snap repaints the conversation shifted
+// up by the new row's height in a single frame — the bubble pops in with a visible jump. To make
+// it glide instead (the WhatsApp arrival animation), translate the list back DOWN by exactly the
+// measured shift right after the snap — that frame paints pixel-identical to the pre-append one —
+// then ease the transform to 0: the whole conversation slides up together and the new bubble
+// emerges from behind the composer. Works for short (bottom-anchored) chats too, where the same
+// append pushes the previous bubbles up with no scrollTop involved. Transform-only and composited:
+// layout, scroll metrics, and the spacer/anchor machinery never see it.
+let glideCleanup: (() => void) | null = null;
+function glideNewestIn(delta: number): void {
+  const list = listEl.value;
+  const el = scrollEl;
+  if (!list || !el || !(delta > 2) || document.hidden) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  // Tall media can add most of a screen; cap the travel so the glide reads as a beat, not a tour.
+  const cap = Math.round(el.clientHeight * 0.85);
+  let from = Math.min(Math.round(delta), cap);
+  // Burst of messages mid-glide: the list is still translated — start from the current offset
+  // plus the new shift so consecutive arrivals stack into one continuous motion (no teleport).
+  const ty = new DOMMatrixReadOnly(getComputedStyle(list).transform).m42;
+  if (ty > 0) from = Math.min(from + Math.round(ty), cap);
+  glideCleanup?.();
+  list.style.transition = 'none';
+  list.style.transform = `translateY(${from}px)`;
+  list.style.willChange = 'transform';
+  void list.offsetHeight; // commit the start frame, so the transition below actually runs
+  list.style.transition = 'transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1)';
+  list.style.transform = 'translateY(0)';
+  const done = (e?: TransitionEvent) => {
+    if (e && (e.target !== list || e.propertyName !== 'transform')) return; // a child's transition bubbling up
+    clearTimeout(backstop);
+    list.removeEventListener('transitionend', done);
+    list.style.transition = '';
+    list.style.transform = '';
+    list.style.willChange = '';
+    if (glideCleanup === done) glideCleanup = null;
+    // Assurance pin: if the keyboard/composer resized mid-glide, the snap we took before
+    // animating may be stale — re-assert the bottom now that the transform is gone.
+    if (stickBottom && scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+  };
+  // transitionend is lossy (backgrounded tab, display flip mid-run) — always settle.
+  const backstop = setTimeout(done, 600);
+  list.addEventListener('transitionend', done);
+  glideCleanup = done;
+}
+onUnmounted(() => glideCleanup?.());
+
+// The bubble pop: the new bubble grows from the corner it "comes from" — scale 0 up to a
+// slight overshoot past full size, then settles back to 1 (the overshoot is in the easing
+// curve). Own sends grow from their bottom-RIGHT corner (out of the composer); incoming
+// mirrors from the bottom-LEFT. Runs alongside the list glide: the glide carries the
+// vertical shift of the conversation, the pop is the new bubble's arrival. WAAPI, so it
+// never touches Vue-managed style state and self-cleans on unmount/re-render.
+function popNewestIn(id: string, outgoing: boolean): void {
+  const bubble = listEl.value?.querySelector<HTMLElement>(`.bubble[data-mid="${CSS.escape(id)}"]`);
+  if (!bubble || document.hidden) return;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  bubble.style.transformOrigin = outgoing ? 'bottom right' : 'bottom left';
+  // The overshoot is a fixed ~12px of edge travel, not a fixed percentage: 10% past full
+  // size feels right on a 40px text bubble but lurches a 340px photo by 30+px. Deriving
+  // the peak from the bubble's height keeps the bounce ENERGY constant across sizes
+  // (small bubbles pop ~1.1, a full-width photo barely ~1.03).
+  const peak = 1 + Math.min(0.1, 12 / Math.max(1, bubble.getBoundingClientRect().height));
+  const anim = bubble.animate(
+    [
+      { transform: 'scale(0)', easing: 'cubic-bezier(0.2, 0.9, 0.3, 1)' },
+      { transform: `scale(${peak})`, offset: 0.72, easing: 'cubic-bezier(0.33, 0, 0.67, 1)' },
+      { transform: 'scale(1)' },
+    ],
+    { duration: 280 },
+  );
+  anim.onfinish = anim.oncancel = () => {
+    bubble.style.transformOrigin = '';
+  };
 }
 // Within ~120px of the bottom counts as "pinned to newest". Defaults to true before
 // the scroll element resolves (a fresh chat opens pinned to newest).
@@ -5216,43 +5345,34 @@ function cancelRecording() {
   font-size: 24px;
   cursor: pointer;
 }
-/* Background job: labelled encode + upload progress bars. */
-.job-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin: 4px 0 2px;
-}
-.job-row {
+/* Send-in-flight cloud waterline, centred on a photo/video thumbnail: the same dark
+   48px disc as the download button (.dl-btn) so upload and download read as one family.
+   Purely indicative — taps pass through to the bubble as usual. */
+.upload-cloud {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--app-text-muted);
+  justify-content: center;
+  font-size: 24px;
+  pointer-events: none;
 }
-.job-label {
+/* The compact variant living in a file chip's icon slot. Both the document glyph and
+   the cloud get the SAME fixed box so the swap between them never moves the chip. */
+.file-chip > ion-icon,
+.chip-cloud {
+  font-size: 18px;
   flex: none;
-  width: 56px;
 }
-.job-track {
-  flex: 1;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(0, 0, 0, 0.14);
-  overflow: hidden;
-}
-.job-fill {
-  display: block;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--ion-color-primary);
-  transition: width 0.2s ease;
-}
-.job-num {
-  flex: none;
-  width: 34px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+.chip-cloud {
+  color: var(--ion-color-primary);
 }
 /* Wrapper so a photo can overlay its quality/size badge. */
 /* Fixed media frame: image/video bubbles are a constant square, so every media row
@@ -5927,18 +6047,26 @@ function cancelRecording() {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 40px;
   color: #fff;
   background: rgba(0, 0, 0, 0.42);
   border-radius: 50%;
   filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.5));
   /* Visual only — the whole poster is the tap target (handled on the bubble). */
   pointer-events: none;
+}
+/* The triangle, proportioned like the media viewer's centre play (VideoPlayer .vid-play:
+   ~21px of glyph ink on a 64px disc): the path's ink spans 11.5/24 of this box, so 33px
+   yields ~16×19px of ink on the 48px disc — the same disc:triangle ratio. Nudged right
+   onto the optical centre (a right-pointing triangle's mass sits left of its box centre). */
+.play-overlay svg {
+  width: 33px;
+  height: 33px;
+  margin-inline-start: 3px;
 }
 .bubble-audio {
   width: 240px;
