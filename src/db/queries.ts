@@ -39,6 +39,7 @@ import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deri
 import { THUMB_TIERS } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/link-preview';
+import { inSafeMode } from '@/services/boot-guard';
 import { ensureHiddenLoaded, isRevealed, isHiddenKnown } from '@/services/hidden-state';
 import { hiddenCallKeys } from '@/db/hidden-calls';
 import { routeInboundFrom } from '@/db/inbound-route';
@@ -2728,6 +2729,8 @@ export async function downloadMessageMedia(
 
 /** Resume any interrupted compressions (called on app start + when reconnecting). */
 export async function resumePendingMediaJobs(): Promise<void> {
+  // (spec 2039) Safe-mode boot: heavy media resumes wait for a healthy boot.
+  if (inSafeMode()) return;
   const msgs = await getAll<Message>('messages');
   for (const m of msgs) {
     if (m.status === 'compressing') void processMediaJob(m.id);

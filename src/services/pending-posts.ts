@@ -25,8 +25,14 @@ import {
 
 let draining = false;
 
-/** Fire-and-forget kick — safe to call repeatedly (enqueue, in-session Retry). */
+import { inSafeMode } from './boot-guard';
+
+/** Fire-and-forget kick — safe to call repeatedly (enqueue, in-session Retry).
+ *  (spec 2039) A safe-mode boot skips automatic drains entirely — the drain's
+ *  heavy work (a resumed transcode) is a prime crash-loop suspect. A manual
+ *  Retry still runs (deliberate user action drains directly). */
 export function kickPendingPosts(): void {
+  if (inSafeMode()) return;
   void drainPendingPosts();
 }
 
@@ -207,7 +213,7 @@ export async function retryPendingPost(id: string): Promise<void> {
   rec.error = undefined;
   rec.attempts = 0;
   await updatePendingPost(rec);
-  kickPendingPosts();
+  void drainPendingPosts(); // deliberate user action — runs even in safe mode
 }
 
 /** Drop a pending post for good — discards its cached blobs (user tapped Cancel / Discard). */

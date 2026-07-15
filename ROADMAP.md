@@ -122,4 +122,5 @@ Specs are grouped by category band; status moves
 | [2036](specs/2036-video-posts-finish/spec.md) | Video Posts Finish Cleanly | 🟡 in-progress |
 | [2037](specs/2037-pending-post-auto/spec.md) | Pending-Post Auto-Retry Gets an Attempt Budget | 🟡 in-progress |
 | [2038](specs/2038-videos-reasonable-size/spec.md) | Reasonable Videos Upload As-Is | 🟡 in-progress |
-| [2041](specs/2041-video-post-memory/spec.md) | Video Posts Must Not Exhaust iPhone Memory | 🟡 in-progress |
+| [2039](specs/2039-boot-loop-safe/spec.md) | Boot-Loop Safe Mode | 🟡 in-progress |
+| [2041](specs/2041-video-post-memory/spec.md) | Video Posts Must Not Exhaust iPhone Memory | 🔵 in-review |
