@@ -50,6 +50,7 @@ type fakeConn struct {
 	withdrawn map[[2]string]bool // (requester,target) -> true
 	rejected  map[[2]string]bool // (requester,target) declined → suppressed (FR-007)
 	outgoing  []store.ConnectionReq // what OutgoingRequests returns (spec 1040)
+	friends []string // spec 2040: AcceptedPeers result
 }
 
 func newFakeConn() *fakeConn {
@@ -97,6 +98,10 @@ func (c *fakeConn) OutgoingWithRecentAccepts(_ context.Context, _ string) ([]sto
 	// rejected + accepted-within-24h (the window is SQL-side; the fake returns
 	// everything injected via `outgoing`).
 	return c.outgoing, nil
+}
+
+func (c *fakeConn) AcceptedPeers(_ context.Context, _ string) ([]string, error) {
+	return c.friends, nil
 }
 
 // newConnTestServer builds the router with a real fake store (for register/auth)
@@ -327,5 +332,52 @@ func TestListConnectionsAcceptedRowsAreOptIn(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "friend-1") {
 		t.Errorf("accepted row missing from include=accepted response")
+	}
+}
+
+// Spec 2040: `?include=friends` returns the full accepted-peer list so a
+// recovered device can rebuild its local friends ledger. The field is opt-in
+// (absent by default) and always an array, even when the user has no friends —
+// clients use its presence to tell "no friends" apart from an old server.
+func TestListConnectionsFriendsAreOptIn(t *testing.T) {
+	conn := newFakeConn()
+	srv, _ := newConnTestServer(conn)
+	tok, _, _ := registerNamed(t, srv, "alice")
+
+	conn.friends = []string{"friend-1", "friend-2"}
+
+	// Default: no friends field.
+	rr := do(t, srv, http.MethodGet, "/v1/connections", tok, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var def map[string]json.RawMessage
+	if err := json.Unmarshal(rr.Body.Bytes(), &def); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, present := def["friends"]; present {
+		t.Errorf("default response must NOT carry friends, got %s", rr.Body.String())
+	}
+
+	// Opt-in: the accepted peers come back verbatim.
+	rr = do(t, srv, http.MethodGet, "/v1/connections?include=friends", tok, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list(include=friends) status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Friends []string `json:"friends"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Friends) != 2 || resp.Friends[0] != "friend-1" || resp.Friends[1] != "friend-2" {
+		t.Errorf("friends = %v, want [friend-1 friend-2]", resp.Friends)
+	}
+
+	// Empty ledger still serializes as [], never null.
+	conn.friends = nil
+	rr = do(t, srv, http.MethodGet, "/v1/connections?include=friends", tok, "")
+	if !strings.Contains(rr.Body.String(), `"friends":[]`) {
+		t.Errorf("empty friends must serialize as [], body=%s", rr.Body.String())
 	}
 }
