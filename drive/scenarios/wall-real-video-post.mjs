@@ -69,6 +69,16 @@ console.log('[realpost] DOM:', JSON.stringify(domState));
 console.log(domState.pendingCards === 0 && domState.videos >= 1 ? '[realpost] PASS — clean finish, video posted' : '[realpost] FAIL — leftover card or missing video');
 await shot(kim, 'real-post-wall-after');
 
+// TEMP probe: the posted video must be playable with a real duration.
+const dur = await kim.page.evaluate(async () => {
+  const v = document.querySelector('.post video');
+  if (!v) return 'no-video-el';
+  for (let i = 0; i < 40 && !(v.duration > 0); i++) await new Promise((r) => setTimeout(r, 250));
+  return { duration: v.duration, w: v.videoWidth, h: v.videoHeight };
+});
+console.log('[realpost] playback probe:', JSON.stringify(dur));
+
+
 // Recipient sanity: Pal sees the post arrive too.
 await pal.page.goto('/tabs/wall');
 await poll(
