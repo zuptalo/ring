@@ -43,6 +43,10 @@ type PostForRecipient struct {
 }
 
 // CreatePost stores a post and its envelopes atomically.
+// ErrPostIDTaken: a different author already holds this post id (id-squatting
+// attempt or a client bug) — never treated as an idempotent retry.
+var ErrPostIDTaken = errors.New("post id belongs to another author")
+
 func (s *Store) CreatePost(ctx context.Context, p NewPost) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -53,10 +57,26 @@ func (s *Store) CreatePost(ctx context.Context, p NewPost) error {
 	if ttl <= 0 {
 		ttl = 72 * 60 * 60 * 1000
 	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO posts (id, author, blob_id, size, expires_at, ttl_ms) VALUES ($1, $2, $3, $4, $5, $6)`,
-		p.ID, p.Author, p.BlobID, p.Size, p.ExpiresAt, ttl); err != nil {
+	// Idempotent by client-minted id (spec 2036): the outbox worker retries with
+	// the SAME id precisely so a lost response can't double-post — a conflicting
+	// row by the SAME author means the earlier attempt already landed and this
+	// retry simply converges (envelopes below are ON CONFLICT DO NOTHING too).
+	// A conflicting row by a DIFFERENT author is id-squatting and stays an error.
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO posts (id, author, blob_id, size, expires_at, ttl_ms) VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (id) DO NOTHING`,
+		p.ID, p.Author, p.BlobID, p.Size, p.ExpiresAt, ttl)
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		var author string
+		if err := tx.QueryRow(ctx, `SELECT author FROM posts WHERE id = $1`, p.ID).Scan(&author); err != nil {
+			return err
+		}
+		if author != p.Author {
+			return ErrPostIDTaken
+		}
 	}
 	for _, e := range p.Envelopes {
 		if _, err := tx.Exec(ctx,

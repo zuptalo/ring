@@ -3128,6 +3128,11 @@ export async function createPost(opts: {
     let posterGrid: Blob | undefined;
     let posterStrip: Blob | undefined;
     if (m.kind === 'video') {
+      // (spec 2036) Poster generation + tier derivation on a big clip can take a
+      // while with no upload traffic — heartbeat the outbox stall-watchdog so it
+      // only ever fires on a GENUINE hang (an abandoned attempt races a detached,
+      // non-cancellable createPost into server-side duplicate churn).
+      opts.onProgress?.({ phase: 'uploading', index, total, value: 1 });
       const dataUrl = await generateVideoPoster(toUpload).catch(() => undefined);
       // Embed the poster (a small JPEG data URL, ≤~40KB) in the sealed MediaRef so a RECIPIENT
       // shows the thumbnail without downloading/decoding the clip — exactly how chat video
@@ -3161,6 +3166,8 @@ export async function createPost(opts: {
   else if (refs.length > 1) payload.album = refs;
 
   const built = buildPost(payload, audience);
+  // (spec 2036) Same heartbeat before the post-blob seal/upload/register leg.
+  if (mediaList.length) opts.onProgress?.({ phase: 'uploading', index: mediaList.length - 1, total, value: 1 });
   const blobId = await uploadBlob(new Blob([built.blob as BlobPart]));
   const id = opts.id ?? uid();
   const createdAt = now();

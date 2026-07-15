@@ -177,6 +177,11 @@ func (f *fakePostStore) ListViews(_ context.Context, postID string) ([]store.Pos
 	return out, nil
 }
 func (f *fakePostStore) CreatePost(_ context.Context, p store.NewPost) error {
+	// Mirror the real store's spec-2036 idempotency: same-author retry converges,
+	// a different author's id is rejected.
+	if prev, ok := f.posts[p.ID]; ok && prev.Author != p.Author {
+		return store.ErrPostIDTaken
+	}
 	f.posts[p.ID] = p
 	return nil
 }
@@ -1021,5 +1026,42 @@ func TestGameEngagementPushesAudience(t *testing.T) {
 	}
 	if games != 3 || follows != 1 || overs != 2 {
 		t.Errorf("listed games/follows/overs = %d/%d/%d; want 3/1/2", games, follows, overs)
+	}
+}
+
+// Spec 2036: the outbox worker retries with the SAME client-minted id after a lost
+// response — the same-author retry must converge (201), never surface as a 500.
+func TestCreatePostIdempotentRetry(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	_, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("first create status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Errorf("same-author retry status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// A DIFFERENT author reusing an existing post id is squatting, not a retry → 403.
+func TestCreatePostRejectsForeignIDReuse(t *testing.T) {
+	conn := newFakePostConn()
+	srv := newPostTestServer(conn, newFakePostStore())
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("first create status = %d, want 201; body=%s", rr.Code, rr.Body.String())
+	}
+	bodyB := `{"id":"` + postID + `","blobId":"cap2","envelopes":[{"recipient":"` + aliceID + `","wrappedKey":"WK"}]}`
+	conn.befriend(bobID, aliceID)
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokB, bodyB); rr.Code != http.StatusForbidden {
+		t.Errorf("foreign id reuse status = %d, want 403; body=%s", rr.Code, rr.Body.String())
 	}
 }
