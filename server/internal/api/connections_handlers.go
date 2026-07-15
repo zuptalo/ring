@@ -217,10 +217,25 @@ func (h *Handlers) listConnections(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not list connections")
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"incoming": connDTOs(incoming),
 		"outgoing": connDTOs(outgoing),
-	})
+	}
+	// `?include=friends` (spec 2040) adds the full accepted-peer list so a
+	// recovered device can rebuild its local friends ledger. Always an array
+	// (never null) so clients can distinguish "no friends" from "old server".
+	if r.URL.Query().Get("include") == "friends" {
+		friends, err := h.Connections.AcceptedPeers(r.Context(), uid)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "could not list connections")
+			return
+		}
+		if friends == nil {
+			friends = []string{}
+		}
+		resp["friends"] = friends
+	}
+	httpx.JSON(w, http.StatusOK, resp)
 }
 
 func connDTOs(rs []store.ConnectionReq) []connDTO {

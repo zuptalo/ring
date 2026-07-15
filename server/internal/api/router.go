@@ -54,6 +54,10 @@ type ConnectionStore interface {
 	// Spec 1040: OutgoingRequests + accepted rows updated within 24h, served only
 	// for GET /v1/connections?include=accepted (the SW's accepted-note reconcile).
 	OutgoingWithRecentAccepts(ctx context.Context, user string) ([]store.ConnectionReq, error)
+	// Spec 2040: every accepted peer (either direction), served for
+	// GET /v1/connections?include=friends — the ledger a recovered device
+	// rebuilds its local friends list from.
+	AcceptedPeers(ctx context.Context, user string) ([]string, error)
 }
 
 // BlockStore is the per-user block-list persistence. *store.Store satisfies it.

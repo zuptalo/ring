@@ -156,6 +156,35 @@ func (s *Store) OutgoingRequests(ctx context.Context, user string) ([]Connection
 		   ORDER BY updated_at DESC`, user)
 }
 
+// AcceptedPeers returns every peer this user has an accepted connection with,
+// in either direction (spec 2040): the authoritative friend list a recovered
+// device rebuilds its local ledger from. Blocked pairs are excluded the same
+// way Connected() excludes them.
+func (s *Store) AcceptedPeers(ctx context.Context, user string) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT CASE WHEN c.requester = $1 THEN c.target ELSE c.requester END
+		   FROM connections c
+		  WHERE c.state = 'accepted'
+		    AND (c.requester = $1 OR c.target = $1)
+		    AND NOT EXISTS (
+		      SELECT 1 FROM blocks b
+		       WHERE (b.blocker = c.requester AND b.blocked = c.target)
+		          OR (b.blocker = c.target AND b.blocked = c.requester))`, user)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // OutgoingWithRecentAccepts is OutgoingRequests plus RECENTLY accepted rows
 // (spec 1040), served only when a client explicitly asks
 // (GET /v1/connections?include=accepted): the service worker's closed-app
