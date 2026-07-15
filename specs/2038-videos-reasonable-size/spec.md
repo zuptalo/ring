@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-15
 
-**Status**: in-progress
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User direction (2026-07-15): "If a video file size to length ratio is

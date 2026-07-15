@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-15
 
-**Status**: in-progress
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: Field incident (2026-07-15): an iPhone stuck on an old build crash-
