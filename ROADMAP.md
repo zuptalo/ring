@@ -120,3 +120,4 @@ Specs are grouped by category band; status moves
 | [2034](specs/2034-wall-video-posts/spec.md) | Wall Video Posts — Honest Progress, Real Avatar, Media That Fits | 🔵 in-review |
 | [2035](specs/2035-link-previews-look/spec.md) | Link Previews Look Sharp | 🟡 in-progress |
 | [2036](specs/2036-video-posts-finish/spec.md) | Video Posts Finish Cleanly | 🟡 in-progress |
+| [2038](specs/2038-videos-reasonable-size/spec.md) | Reasonable Videos Upload As-Is | 🟡 in-progress |

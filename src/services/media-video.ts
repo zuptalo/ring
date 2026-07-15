@@ -26,6 +26,71 @@ export const VIDEO_PRESETS: Record<'sd' | 'hd' | 'fhd', VideoPreset> = {
   fhd: { maxEdge: 1920, bitrate: 5_000_000 },
 };
 
+
+/* ---- spec 2038: upload-as-is gate ---- */
+
+// A clip already within 1.5× of the preset's target bitrate gains little from a
+// re-encode; re-encoding it anyway costs time, battery, quality — and on weak
+// devices the transcode is the memory-heavy step behind the spec-2037 loop.
+const AS_IS_BITRATE_FACTOR = 1.5;
+
+/** Pure rule: may this clip skip the transcode entirely? Codec compatibility is
+ *  the caller's input (see sniffMp4Codecs) — this only judges the numbers. */
+export function shouldUploadAsIs(
+  info: { sizeBytes: number; durationSec: number; width: number; height: number; h264Compatible: boolean },
+  preset: VideoPreset,
+): boolean {
+  if (!info.h264Compatible) return false;
+  if (!(info.durationSec > 0)) return false;
+  if (Math.max(info.width, info.height) > preset.maxEdge) return false; // 4K-class → downscale
+  const bps = (info.sizeBytes * 8) / info.durationSec;
+  return bps <= preset.bitrate * AS_IS_BITRATE_FACTOR;
+}
+
+/** Scan an MP4/QuickTime file's bytes for codec FourCCs. Returns whether the clip
+ *  is plain H.264 (universally playable on Apple/Android/desktop) with no
+ *  modern-codec track (HEVC/AV1/VP9 — typical recent phone captures) that would
+ *  need the compatibility transcode. A dumb byte scan is deliberate: it needs no
+ *  demuxer, handles moov-at-end files, and a false negative only means we
+ *  transcode like before. */
+export function sniffMp4CodecIsPlainH264(bytes: Uint8Array): boolean {
+  const has = (fourcc: string): boolean => {
+    const a = fourcc.charCodeAt(0), b = fourcc.charCodeAt(1), c = fourcc.charCodeAt(2), d = fourcc.charCodeAt(3);
+    for (let i = 0; i + 3 < bytes.length; i++) {
+      if (bytes[i] === a && bytes[i + 1] === b && bytes[i + 2] === c && bytes[i + 3] === d) return true;
+    }
+    return false;
+  };
+  if (has('hvc1') || has('hev1') || has('av01') || has('vp09') || has('vp08')) return false;
+  return has('avc1') || has('avc3');
+}
+
+/** Cheap metadata probe (duration + dimensions) via a detached <video> element —
+ *  loads headers only, decodes no frames. Null on any failure/timeout. */
+function probeVideoMeta(blob: Blob): Promise<{ durationSec: number; width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const v = document.createElement('video');
+    v.preload = 'metadata';
+    const finish = (out: { durationSec: number; width: number; height: number } | null) => {
+      URL.revokeObjectURL(url);
+      v.removeAttribute('src');
+      resolve(out);
+    };
+    const timer = setTimeout(() => finish(null), 5000);
+    v.onloadedmetadata = () => {
+      clearTimeout(timer);
+      const d = v.duration;
+      finish(Number.isFinite(d) && d > 0 ? { durationSec: d, width: v.videoWidth, height: v.videoHeight } : null);
+    };
+    v.onerror = () => {
+      clearTimeout(timer);
+      finish(null);
+    };
+    v.src = url;
+  });
+}
+
 // WebCodecs is the fast path; flip to false to force the ffmpeg path everywhere
 // (e.g. if a device produces bad WebCodecs output).
 const WEBCODECS_ENABLED = true;
@@ -37,6 +102,24 @@ export async function compressVideoAdaptive(
 ): Promise<Blob> {
   const preset = VIDEO_PRESETS[quality];
   console.info('[video] compress start', { quality, type: blob.type, bytes: blob.size, preset });
+
+  // (spec 2038) A clip that is already efficient AND universally playable ships
+  // as-is: no engine load, no re-encode, straight to upload. Any probe failure
+  // just falls through to the normal ladder.
+  if (typeof document !== 'undefined' && /(mp4|quicktime|m4v)/i.test(blob.type)) {
+    try {
+      const meta = await probeVideoMeta(blob);
+      if (meta) {
+        const h264Compatible = sniffMp4CodecIsPlainH264(new Uint8Array(await blob.arrayBuffer()));
+        if (shouldUploadAsIs({ sizeBytes: blob.size, durationSec: meta.durationSec, width: meta.width, height: meta.height, h264Compatible }, preset)) {
+          console.info('[video] uploading as-is (spec 2038)', { bps: Math.round((blob.size * 8) / meta.durationSec), ...meta });
+          return blob;
+        }
+      }
+    } catch (e) {
+      console.info('[video] as-is probe failed; transcoding as usual', e);
+    }
+  }
 
   // 1. WebCodecs fast path, mp4/mov containers only (mp4box demux).
   if (WEBCODECS_ENABLED && /(mp4|quicktime|m4v)/i.test(blob.type)) {
