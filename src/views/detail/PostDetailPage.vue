@@ -165,7 +165,7 @@
 import UserAvatar from '@/components/UserAvatar.vue';
 import WallGameCard from '@/components/WallGameCard.vue';
 import WallGameStats from '@/components/WallGameStats.vue';
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
   IonContent, IonAvatar, IonIcon, IonTextarea, IonList, IonItem, IonLabel,
@@ -206,6 +206,16 @@ const posterUrl = ref<string | undefined>(undefined); // single-video poster (st
 // Album posts (FR-019): every media resolved to an object URL, shown as a swipeable gallery.
 const albumMedia = ref<{ url: string; kind: 'image' | 'video'; poster?: string }[]>([]);
 const albumIndex = ref(0);
+// authorAvatar is snapshotted (not bound) below so it can also hold a contact's/
+// game host's avatar. For our own posts specifically, keep it live: on a cold boot
+// the warm profile store can still be decrypting when this page's own load runs,
+// which would otherwise freeze authorAvatar on the generated-initials fallback.
+watch(
+  () => self.avatar.value,
+  (v) => {
+    if (post.value?.author === selfId) authorAvatar.value = v;
+  },
+);
 function onAlbumScroll(e: Event): void {
   const el = e.target as HTMLElement;
   albumIndex.value = el.clientWidth ? Math.round(el.scrollLeft / el.clientWidth) : 0;

@@ -47,3 +47,6 @@ server/.env
 # Spec Kit: per-active-feature pointer written by spec-new.sh / the speckit
 # commands. Ephemeral working state — the tracked source of truth is specs/.
 .specify/feature.json
+
+# Showcase demo assets (real photos/portraits used only to seed local screenshot runs)
+/showcase/media/

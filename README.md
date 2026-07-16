@@ -22,7 +22,8 @@ This is a single repository with two parts that ship as one container:
   (libsodium), offline-first IndexedDB, Web Push, and 1:1 + group WebRTC calls.
   Builds to `dist/` with Vite.
 - **Server** (`server/`): `ringd`, a Go 1.26 service on `net/http` with PostgreSQL
-  (pgx), embedded SQL migrations, an embedded TURN relay + SFU for calls, and
+  (pgx), embedded SQL migrations, an embedded TURN relay for calls (media goes
+  peer-to-peer direct when networks allow, relayed otherwise — no SFU), and
   VAPID Web Push. See `server/README.md` for the API surface.
 
 In production a single image runs `ringd`, which serves the built PWA at `/` and

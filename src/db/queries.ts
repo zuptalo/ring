@@ -48,7 +48,7 @@ import { computeUnreadTotal, type HiddenBadgeMode } from '@/db/badge-count';
 import type {
   MessagePayload, ContactCard, GroupCard, GroupMember, ReactionSignal, PollVoteSignal, MediaRef,
   EditSignal, EraseSignal, LinkPreviewSignal, GameMoveSignal, GameAcceptSignal, GameCancelSignal,
-  CallEventSignal,
+  CallEventSignal, LinkPreview,
 } from '@/services/crypto/message';
 import { RING_WINDOW_MS, reconcilePending, type PendingCallEvent } from '@/services/call-events';
 import { GAMES } from '@/games/registry';
@@ -427,7 +427,12 @@ export async function countChatMessages(chatId: string): Promise<number> {
 }
 
 /** Append a locally-authored message (starts `pending`) and update the chat.
- *  `replyTo` quotes another message above this one. */
+ *  `replyTo` quotes another message above this one. `preloadedPreview` is a link
+ *  preview the composer already resolved before Send was tapped (so the sender saw
+ *  it first) — `undefined` means none was attempted (the usual deferred background
+ *  build below still applies), `null` means one was attempted and came back empty
+ *  (don't retry), and a `LinkPreview` sends inline from the first payload instead of
+ *  arriving as a later patch. */
 export async function sendMessage(
   chatId: string,
   body: string,
@@ -435,6 +440,7 @@ export async function sendMessage(
   mentions?: string[],
   mentionsEveryone?: boolean,
   ttlOverrideMs?: number | null,
+  preloadedPreview?: LinkPreview | null,
 ): Promise<void> {
   const ts = now();
   const chat = await getChat(chatId);
@@ -458,6 +464,7 @@ export async function sendMessage(
     replyTo,
     mentions: ment,
     mentionsEveryone: everyone,
+    linkPreview: preloadedPreview ?? undefined,
     updatedAt: ts,
   };
   await put('messages', message);
@@ -474,17 +481,24 @@ export async function sendMessage(
 
   // Seal the message (E2EE) and hand it to the sync engine; receipts advance the
   // status. Group chats fan out to each member over their 1:1 session.
-  const payload: MessagePayload = { body, kind: 'text', timestamp: ts, reply: replyTo, mentions: ment, mentionsEveryone: everyone };
+  const payload: MessagePayload = {
+    body, kind: 'text', timestamp: ts, reply: replyTo, mentions: ment, mentionsEveryone: everyone,
+    linkPreview: preloadedPreview ?? undefined,
+  };
   if (chat?.isGroup) await sealAndEnqueueGroup(chat, message.id, payload, ttlOverrideMs);
   else await sealAndEnqueue(chat, message.id, payload, ttlOverrideMs);
 
   // Link preview: build it in the background (a relay round-trip + downscale) and
   // patch it in once ready, so the text isn't held up. Best-effort and gated by
   // the privacy toggle. Fire-and-forget — never awaited, never blocks the send.
-  const previewsDisabled = await getSetting<boolean>('privacy.disableLinkPreviews', false);
-  if (shouldBuildLinkPreview(body, previewsDisabled)) {
-    const link = firstLink(body);
-    if (link) void attachLinkPreview(message.id, link);
+  // Skipped entirely when the composer already attempted one (preloadedPreview is
+  // defined, even if null) — no point re-fetching what the sender already saw.
+  if (preloadedPreview === undefined) {
+    const previewsDisabled = await getSetting<boolean>('privacy.disableLinkPreviews', false);
+    if (shouldBuildLinkPreview(body, previewsDisabled)) {
+      const link = firstLink(body);
+      if (link) void attachLinkPreview(message.id, link);
+    }
   }
 }
 

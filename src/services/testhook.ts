@@ -190,7 +190,11 @@ import {
 import { owedMove as dutyOwedMove } from '@/games/duty';
 import { initialsAvatar, emojiAvatar, emojiOfAvatar } from '@/db/avatars';
 import { uid } from '@/utils/uid';
-import { seedShowcase as runSeedShowcase } from '@/services/showcase-seed';
+import {
+  seedShowcase as runSeedShowcase,
+  seedAliceFollowup as runSeedAliceFollowup,
+  clearAliceFollowup as runClearAliceFollowup,
+} from '@/services/showcase-seed';
 import type { Call, Chat, FriendRequest, Media, Message, Post, OutboxPost } from '@/db/types';
 import {
   startDirectCall,
@@ -1194,8 +1198,12 @@ export function installTestHook(): void {
     },
 
     /** Inject the curated showcase demo dataset (contacts, chats, messages, media,
-     *  call log) for the screenshot harness. See services/showcase-seed.ts. */
-    seedShowcase: (): Promise<void> => runSeedShowcase(),
+     *  call log, Wall posts) for the screenshot harness. See services/showcase-seed.ts. */
+    seedShowcase: (assets: Parameters<typeof runSeedShowcase>[0]): Promise<void> => runSeedShowcase(assets),
+    /** The rest of Alice's showcase conversation, appended live once her chat is
+     *  already open — see showcase-seed.ts's seedAliceFollowup doc comment. */
+    seedAliceFollowup: (assets: Parameters<typeof runSeedAliceFollowup>[0]): Promise<void> => runSeedAliceFollowup(assets),
+    clearAliceFollowup: (): Promise<void> => runClearAliceFollowup(),
     /** Total on-device media bytes by kind (originals + thumbnail tiers, distinct). Spec 1014. */
     storageByType: () => dbStorageByType(),
     /** Per-chat media footprint incl. thumbnail-tier bytes (spec 1014 FR-016). */
