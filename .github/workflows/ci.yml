@@ -41,6 +41,12 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # Empty token forces local git-based diffing instead of the GitHub REST
+          # API's listFiles endpoint. The API path 404s on a PR with a very large
+          # diff (seen on the first-ever develop -> main release PR, 1000+ files
+          # since main starts nearly empty) — git diff has no such limit and we
+          # already have full history via fetch-depth: 0 above.
+          token: ''
           # `code` is true when ANY path the heavy jobs cover changed. If nothing
           # here matched, the change is docs/specs/tooling-only and verify is skipped.
           filters: |
@@ -102,7 +108,13 @@ jobs:
 
           head_ver=$(node -p "require('./package.json').version")
           git fetch --quiet origin main
-          base_ver=$(git show origin/main:package.json | node -p "JSON.parse(require('fs').readFileSync(0)).version")
+          # main won't have a package.json at all before the very first release —
+          # treat that as version 0.0.0 rather than letting `git show` fail the job.
+          if git cat-file -e origin/main:package.json 2>/dev/null; then
+            base_ver=$(git show origin/main:package.json | node -p "JSON.parse(require('fs').readFileSync(0)).version")
+          else
+            base_ver="0.0.0"
+          fi
           echo "head (this PR) version: $head_ver"
           echo "base (main) version:    $base_ver"
 
