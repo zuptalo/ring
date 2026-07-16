@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-14
 
-**Status**: in-progress
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User report with screenshot (2026-07-14, morning device pass): a short message ("Really?") with five reactions shows the chips spilling sideways past the bubble's edge, floating over the wallpaper. "Let's make the message bubble grow in width when the message itself is short, but number of reactions increases."

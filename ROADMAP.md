@@ -63,7 +63,7 @@ Specs are grouped by category band; status moves
 | [1035](specs/1035-game-activity-notifies/spec.md) | Game Activity Notifies Players, Not the Whole Audience | 🟢 shipped |
 | [1036](specs/1036-wall-game-follows/spec.md) | Followers Get the Result Push; Group Chats Retire Games | 🟢 shipped |
 | [1037](specs/1037-zombie-push-subscriptions/spec.md) | Zombie Push Subscriptions Rotate Themselves | 🟢 shipped |
-| [1038](specs/1038-armada-fullscreen-naval/spec.md) | Armada — Fullscreen Naval Duel Replaces Battleship | 🔵 in-review |
+| [1038](specs/1038-armada-fullscreen-naval/spec.md) | Armada — Fullscreen Naval Duel Replaces Battleship | 🟢 shipped |
 | [1039](specs/1039-simultaneous-mutual-calls/spec.md) | Simultaneous mutual calls connect instead of ringing each other | 🟢 shipped |
 | [1040](specs/1040-incoming-call-notifications/spec.md) | Incoming Call & Friend-Request Notifications — Identity, Badge, and Missed-Call Trace | 🟢 shipped |
 | [1041](specs/1041-merge-waiting-caller/spec.md) | Merge a Waiting Caller into the Ongoing Call | 🟢 shipped |
@@ -73,12 +73,12 @@ Specs are grouped by category band; status moves
 | [1045](specs/1045-rearrange-pinned-chats/spec.md) | Rearrange pinned chats with drag, stable manual order, and long-press chat preview | 🟢 shipped |
 | [1046](specs/1046-quick-call-tiles/spec.md) | Quick Call tiles on the Calls tab, usage totals move to Network usage | 🟢 shipped |
 | [1047](specs/1047-chat-background-contrast/spec.md) | Chat background pattern reads clearly in both themes | 🟢 shipped |
-| [1048](specs/1048-notify-reactions-messages/spec.md) | Reaction Notifications & Group Reply Escalation | 🔵 in-review |
-| [1049](specs/1049-richer-higher-quality/spec.md) | Richer Notification Alert Tones | 🔵 in-review |
-| [1050](specs/1050-quiet-housekeeping-frames/spec.md) | Push Classes, Conversation Mutes & Notification Routing | 🔵 in-review |
-| [1051](specs/1051-message-bubble-grows/spec.md) | Message Bubble Grows to Hold Its Reactions | 🟡 in-progress |
-| [1052](specs/1052-group-adds-you/spec.md) | Group Adds You Can Trust | 🟡 in-progress |
-| [1053](specs/1053-composer-buttons-transition/spec.md) | Composer Buttons Transition Like WhatsApp | 🟡 in-progress |
+| [1048](specs/1048-notify-reactions-messages/spec.md) | Reaction Notifications & Group Reply Escalation | 🟢 shipped |
+| [1049](specs/1049-richer-higher-quality/spec.md) | Richer Notification Alert Tones | 🟢 shipped |
+| [1050](specs/1050-quiet-housekeeping-frames/spec.md) | Push Classes, Conversation Mutes & Notification Routing | 🟢 shipped |
+| [1051](specs/1051-message-bubble-grows/spec.md) | Message Bubble Grows to Hold Its Reactions | 🟢 shipped |
+| [1052](specs/1052-group-adds-you/spec.md) | Group Adds You Can Trust | 🟢 shipped |
+| [1053](specs/1053-composer-buttons-transition/spec.md) | Composer Buttons Transition Like WhatsApp | 🟢 shipped |
 | [1054](specs/1054-pick-emoji-contact/spec.md) | Emoji contact photos + reset to their photo | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
@@ -114,15 +114,15 @@ Specs are grouped by category band; status moves
 | [2027](specs/2027-long-media-captions/spec.md) | Media captions wrap at the photo's edge | 🟢 shipped |
 | [2028](specs/2028-quick-forward-button/spec.md) | Quick-Forward Button Sits at the Bottom Edge of Tall Media Messages | 🟢 shipped |
 | [2029](specs/2029-camera-off-shows/spec.md) | Camera Off Shows Your Picture to the Call, Not a Black Screen | 🟢 shipped |
-| [2030](specs/2030-rtl-names-truncate/spec.md) | RTL Names Truncate at the Correct End | 🔵 in-review |
-| [2031](specs/2031-join-call-invite/spec.md) | Join-Call Invite Affordance & Redundant Held Call | 🔵 in-review |
-| [2032](specs/2032-ipad-taps-dead/spec.md) | iPad Taps Dead on Send & Quick-React | 🟡 in-progress |
-| [2033](specs/2033-second-consecutive-frame/spec.md) | Second Consecutive Frame on a Fresh Carrier Session Is Lost | 🔵 in-review |
-| [2034](specs/2034-wall-video-posts/spec.md) | Wall Video Posts — Honest Progress, Real Avatar, Media That Fits | 🔵 in-review |
-| [2035](specs/2035-link-previews-look/spec.md) | Link Previews Look Sharp | 🟡 in-progress |
-| [2036](specs/2036-video-posts-finish/spec.md) | Video Posts Finish Cleanly | 🟡 in-progress |
-| [2037](specs/2037-pending-post-auto/spec.md) | Pending-Post Auto-Retry Gets an Attempt Budget | 🟡 in-progress |
+| [2030](specs/2030-rtl-names-truncate/spec.md) | RTL Names Truncate at the Correct End | 🟢 shipped |
+| [2031](specs/2031-join-call-invite/spec.md) | Join-Call Invite Affordance & Redundant Held Call | 🟢 shipped |
+| [2032](specs/2032-ipad-taps-dead/spec.md) | iPad Taps Dead on Send & Quick-React | 🟢 shipped |
+| [2033](specs/2033-second-consecutive-frame/spec.md) | Second Consecutive Frame on a Fresh Carrier Session Is Lost | 🟢 shipped |
+| [2034](specs/2034-wall-video-posts/spec.md) | Wall Video Posts — Honest Progress, Real Avatar, Media That Fits | 🟢 shipped |
+| [2035](specs/2035-link-previews-look/spec.md) | Link Previews Look Sharp | 🟢 shipped |
+| [2036](specs/2036-video-posts-finish/spec.md) | Video Posts Finish Cleanly | 🟢 shipped |
+| [2037](specs/2037-pending-post-auto/spec.md) | Pending-Post Auto-Retry Gets an Attempt Budget | 🟢 shipped |
 | [2038](specs/2038-videos-reasonable-size/spec.md) | Reasonable Videos Upload As-Is | 🟢 shipped |
 | [2039](specs/2039-boot-loop-safe/spec.md) | Boot-Loop Safe Mode | 🟢 shipped |
 | [2040](specs/2040-recovered-devices-rebuild/spec.md) | Recovered Devices Rebuild Their Friends Ledger | 🟢 shipped |
-| [2041](specs/2041-video-post-memory/spec.md) | Video Posts Must Not Exhaust iPhone Memory | 🔵 in-review |
+| [2041](specs/2041-video-post-memory/spec.md) | Video Posts Must Not Exhaust iPhone Memory | 🟢 shipped |

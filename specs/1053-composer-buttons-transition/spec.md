@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-14
 
-**Status**: in-progress
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User request (2026-07-14, two WhatsApp screen recordings, dark + light):
