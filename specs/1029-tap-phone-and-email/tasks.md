@@ -26,7 +26,7 @@ correctness); the render/action integration gets a lean e2e. No crypto/ZK checkl
 ## Phase 4: User Story 1 & 2 — Wall posts (P1)
 
 - [x] T007 (#679) [US1][US2] Add `segmentContacts` detection to `src/components/EmojiText.vue` (before emoji segmentation) so posts + comments render tappable phone/email → `presentEntityActions`; keep emoji-only rendering otherwise unchanged
-- [ ] T008 (#680) [P] [US1][US2] Extend the e2e (or a drive scenario) to cover a Wall post body with a phone + email rendering tappable
+- [x] T008 (#680) [P] [US1][US2] Extend the e2e (or a drive scenario) to cover a Wall post body with a phone + email rendering tappable
 
 ## Phase 5: Polish & gates
 

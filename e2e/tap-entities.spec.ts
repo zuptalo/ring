@@ -2,10 +2,11 @@ import { test, expect } from '@playwright/test';
 import { createAccount, pair } from './helpers';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// Spec 1029 — a phone number and an email in a received message render as tappable
-// entities; tapping opens the OS-handoff action sheet; Copy places the value on the
-// clipboard (native tel:/sms:/mailto: launch itself isn't invocable headless, so we
-// assert the rendered hrefs + the action menu + the copy confirmation).
+// Spec 1029 — a phone number and an email in a received message (or a Wall post body,
+// US1/US2) render as tappable entities; tapping opens the OS-handoff action sheet; Copy
+// places the value on the clipboard (native tel:/sms:/mailto: launch itself isn't
+// invocable headless, so we assert the rendered hrefs + the action menu + the copy
+// confirmation).
 
 test('phone + email in a message render tappable with the right actions (US1/US2)', async ({ browser }) => {
   test.setTimeout(90_000);
@@ -57,4 +58,30 @@ test('phone + email in a message render tappable with the right actions (US1/US2
   await expect(emailSheet).toBeVisible({ timeout: 10_000 });
   await expect(emailSheet.locator('.action-sheet-button', { hasText: 'Email' })).toBeVisible();
   await expect(emailSheet.locator('.action-sheet-button', { hasText: 'Call' })).toHaveCount(0);
+});
+
+test('phone + email in a Wall post render tappable (US1/US2)', async ({ browser }) => {
+  test.setTimeout(90_000);
+  const a = await createAccount(await browser.newContext(), 'ENT03');
+  const b = await createAccount(await browser.newContext(), 'ENT04');
+  await pair(a, b); // a friends-audience post needs an audience to post to
+
+  const body = 'reach me on +1 415 555 0134 or hi@example.com anytime';
+  const id = await a.page.evaluate((t) => (window as any).__ringTest.post({ body: t, audience: 'friends' }), body);
+
+  await a.page.goto(`/wall/post/${id}`);
+  const phone = a.page.locator('.wrap .body a.entity-link[href^="tel:"]');
+  const email = a.page.locator('.wrap .body a.entity-link[href^="mailto:"]');
+  await expect(phone).toBeVisible({ timeout: 20_000 });
+  await expect(email).toBeVisible();
+  await expect(phone).toHaveAttribute('href', 'tel:+14155550134');
+  await expect(email).toHaveAttribute('href', 'mailto:hi@example.com');
+
+  // Tapping either opens the same OS-handoff action sheet as in messages.
+  await phone.click();
+  const sheet = a.page.locator('ion-action-sheet');
+  await expect(sheet).toBeVisible({ timeout: 10_000 });
+  for (const label of ['Call', 'Message', 'Copy']) {
+    await expect(sheet.locator('.action-sheet-button', { hasText: label })).toBeVisible();
+  }
 });
