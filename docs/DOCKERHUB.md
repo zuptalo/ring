@@ -7,7 +7,7 @@ contacts, profiles, or media.
 
 - 🔒 **Zero-knowledge** — Double Ratchet / X3DH E2EE (libsodium); the server is blind to plaintext.
 - 📱 **Installable PWA** — Vue 3 + Ionic, offline-first, Web Push.
-- 📞 **1:1 & group calls** — WebRTC with an embedded TURN relay + SFU, E2EE media.
+- 📞 **1:1 & group calls** — WebRTC with an embedded TURN relay (no SFU), E2EE media.
 - 🗂️ **One stateless image** — all state (including encrypted-at-rest secrets) lives in PostgreSQL.
 - 🪪 **AGPL-3.0**, self-hostable, invite-only.
 
