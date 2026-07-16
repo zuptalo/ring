@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-15
 
-**Status**: in-progress
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User bug report (2026-07-15, iPhone screenshots): after spec 2036, a

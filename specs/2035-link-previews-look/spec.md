@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-14
 
-**Status**: in-progress
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: User bug report (2026-07-14, iPhone screenshot): a shared YouTube link's preview shows a massively blurry, stretched red play-button image instead of the video's thumbnail.
