@@ -155,9 +155,9 @@ tab; incoming call shows a generic caller.
 **Independent test**: Enable biometrics → reveal without typing the PIN; on
 failure/unsupported, PIN still works.
 
-- [ ] T034 [P] [US6] Unit test `src/composables/useHiddenChats.test.ts`: `revealWithBiometric()` reveals when enabled+available, falls back to PIN on failure/cancel, and the option is inert when unsupported (US6 AC1–AC3); biometrics never replace the PIN (FR-011).
-- [ ] T035 [US6] **Spike first** (resolves analyze finding U1): determine whether the app already has a device-auth/biometric primitive (e.g., used by app-lock / `useAutoLock`). Then implement `revealWithBiometric()` in `src/composables/useHiddenChats.ts` reusing it if present, else the platform credential prompt (WebAuthn), gated by `privacy.hiddenChatsBiometric`; PIN fallback always works (FR-011). Makes T034 pass.
-- [ ] T036 [US6] Add the biometric toggle row (`privacy.hiddenChatsBiometric`, default false) to `src/settings/schema.ts`, disabled/hidden when the device lacks support (FR-011/FR-013).
+- [~] T034 [P] [US6] WON'T DO — biometric unlock isn't a priority for hidden chats; PIN-only stays the permanent design (#523).
+- [~] T035 [US6] WON'T DO (#524).
+- [~] T036 [US6] WON'T DO (#525).
 
 **Checkpoint**: Biometric convenience layer works; PIN remains authoritative.
 

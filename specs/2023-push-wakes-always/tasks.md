@@ -173,7 +173,7 @@ closed, each pinned by a unit test on its pure half.
       per the plan's documented Principle-III deviation (Playwright cannot
       deliver Web Push to the SW); the existing notification e2e suites run
       in CI on push and must stay green
-- [ ] T014 Real-device validation per quickstart.md on the dev iPhone
+- [X] T014 Real-device validation per quickstart.md on the dev iPhone
       (SC-004): foreground + severed socket, 5+ pushes, every wake visible,
       subscription alive afterward — MANUAL, requires the physical device;
       may complete after the PR opens
