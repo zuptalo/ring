@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-13
 
-**Status**: in-review
+**Status**: shipped
 
 **Input**: User bug report with screenshots: a long Persian group name ("خانواده پفک نمکی و تاجی") truncates by clipping the BEGINNING of the name (the visually rightmost part an RTL reader starts from), in the chat header and the new pinned-chats grid tiles.
 

@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-14
 
-**Status**: in-progress
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped. -->
 
 **Input**: Settings audit (2026-07-14) found `privacy.groups` ("Who can add me to groups", Everyone/My contacts) fully unenforced — and structurally vacuous: pickers are contacts-only and contacts are mutual, so "Everyone" describes an adder that cannot exist in the honest UI. User decision after review: replace it with an "Ask before adding me to groups" toggle plus unconditional receiver-side hardening.
