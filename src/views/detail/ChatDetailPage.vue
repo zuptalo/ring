@@ -467,7 +467,7 @@
                   <span class="link-url">{{ linkOf(m.body) }}</span>
                 </span>
               </a>
-              <span v-if="m.body" class="text" dir="auto" :class="{ 'emoji-only': emojiBig(m.body) }"><template
+              <span v-if="displayBody(m)" class="text" dir="auto" :class="{ 'emoji-only': emojiBig(displayBody(m)) }"><template
                 v-for="(p, pi) in bodyParts(m)"
                 :key="pi"
               ><a
@@ -495,7 +495,7 @@
                   v-else-if="p.emoji"
                   :emoji="p.emoji"
                   :animate="animEmoji"
-                  :large="emojiBig(m.body)"
+                  :large="emojiBig(displayBody(m))"
                 /><template v-else>{{ p.text }}</template></template></span>
               <!-- In-flight send progress lives INSIDE each media visual (cloud waterline on
                    thumbnails/chips, the waveform fill for voice) — never as a bar row below,
@@ -806,6 +806,41 @@
           </ion-button>
         </div>
       </ion-toolbar>
+      <!-- A link in the draft gets its preview resolved before Send, not just after —
+           so the sender sees what the recipient will see. Removable (×) in case they'd
+           rather send the bare link (dismissing also skips the deferred post-send build
+           for this link, see send()/clearComposerDraft()). -->
+      <ion-toolbar v-if="composerPreviewUrl && !composerPreviewDismissed" class="lp-compose-bar">
+        <div class="lp-compose">
+          <div v-if="composerPreviewLoading" class="link-card lp-compose-loading">
+            <ion-spinner name="crescent" />
+            <span class="lp-compose-status">Getting preview…</span>
+          </div>
+          <a
+            v-else-if="composerPreview"
+            class="link-card rich lp-compose-card"
+            :class="{ 'lp-iconic': isIconPreview(composerPreview) }"
+            :href="composerPreview.url"
+            target="_blank"
+            rel="noopener noreferrer"
+            @click.stop.prevent="openExternal(composerPreview.url)"
+          >
+            <img v-if="composerPreview.image" class="lp-thumb" :src="composerPreview.image" alt="" />
+            <span class="lp-meta">
+              <span v-if="composerPreview.title" class="lp-title">{{ composerPreview.title }}</span>
+              <span v-if="composerPreview.description" class="lp-desc">{{ composerPreview.description }}</span>
+              <span class="lp-domain">{{ composerPreview.domain }}</span>
+            </span>
+          </a>
+          <div v-else class="link-card lp-compose-empty">
+            <span class="link-thumb"><ion-icon :icon="globeOutline" /></span>
+            <span class="lp-compose-status">No preview available</span>
+          </div>
+          <button type="button" class="lp-compose-x" aria-label="Remove link preview" @click="dismissComposerPreview">
+            <ion-icon :icon="closeOutline" />
+          </button>
+        </div>
+      </ion-toolbar>
       <!-- Media staged in the composer, waiting to be sent: image/video thumbnails and
            file chips above the textarea (each removable); whatever is typed below goes
            out as the caption when Send is tapped. Picked AND pasted media land here
@@ -959,7 +994,7 @@
             v-enter-send="send"
             class="composer"
             :value="draft"
-            :placeholder="pendingMedia.length ? 'Add a caption' : 'Message'"
+            :placeholder="pendingMedia.length ? 'Add a caption' : ''"
             :auto-grow="true"
             :rows="1"
             :maxlength="pendingMedia.length ? CAPTION_MAX : undefined"
@@ -1149,7 +1184,7 @@
 
 <script setup lang="ts">
 import UserAvatar from '@/components/UserAvatar.vue';
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, toRaw, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
@@ -1225,6 +1260,8 @@ import { generateVideoPoster, generateImageThumb, isAnimatedImage } from '@/util
 import { type Quality } from '@/services/media-encode';
 import { openExternal } from '@/utils/external';
 import { segmentContacts, telHref, mailtoHref } from '@/utils/linkify';
+import { firstLink, buildLinkPreview } from '@/services/link-preview';
+import type { LinkPreview } from '@/services/crypto/message';
 import { presentEntityActions, type ContactEntity } from '@/services/entity-actions';
 import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing } from '@/utils/text';
@@ -1757,6 +1794,21 @@ function onBubbleTap(m: Message, ev: Event): void {
 const LINK_RE = /\bhttps?:\/\/[^\s]+/i;
 const hasLink = (s: string) => LINK_RE.test(s);
 const linkOf = (s: string) => s.match(LINK_RE)?.[0] ?? '';
+// The rich preview card already shows the URL as its own linked domain/title — repeating
+// it as plain body text underneath is pure duplication. Once a message has a preview, the
+// link itself is stripped from the rendered text (and the blank space it leaves behind);
+// any caption before/after it still renders in full, and a bare link collapses to nothing
+// (the template then skips the empty text row entirely). Tap-to-copy still copies m.body
+// verbatim either way — only the DISPLAY text changes.
+function displayBody(m: Message): string {
+  if (m.kind !== 'text' || !m.linkPreview) return m.body;
+  return m.body
+    .split(m.linkPreview.url).join('')
+    .replace(/[ \t]+\n/g, '\n') // trailing spaces the removal left before a line break
+    .replace(/\n{3,}/g, '\n\n') // a blank-line gap where the link used to sit, alone on its line
+    .replace(/ {2,}/g, ' ') // an inline removal leaving a double space mid-sentence
+    .trim();
+}
 // (spec 2035) A preview whose image is favicon-class (tiny natural width) renders
 // as a compact icon card — the hero slot would upscale it into a blurry smear.
 // Previews without a recorded width (older senders) keep the hero presentation.
@@ -1820,7 +1872,7 @@ function bodyParts(m: Message): BodySeg[] {
       }
     }
   };
-  for (const p of linkParts(m.body)) {
+  for (const p of linkParts(displayBody(m))) {
     if (p.url) {
       out.push({ text: p.text, url: p.url });
       continue;
@@ -2170,6 +2222,12 @@ async function persistDraftMedia(): Promise<void> {
 // Sent → the draft is spent; drop the pending saves and the stored copies (text + attachments).
 function clearComposerDraft(): void {
   clearTimeout(draftSaveTimer);
+  clearTimeout(composerPreviewTimer);
+  composerPreviewToken++; // discard any in-flight build, it was for the message that just sent
+  composerPreviewUrl.value = '';
+  composerPreview.value = null;
+  composerPreviewLoading.value = false;
+  composerPreviewDismissed.value = false;
   draftMediaBytes.clear();
   void clearDraft(chatId);
   void clearDraftMedia(chatId);
@@ -2592,6 +2650,56 @@ const search = ref('');
 const showSearch = ref(false);
 const draft = ref('');
 
+// ---- composer link preview: build it BEFORE send so the sender sees what a
+// recipient will see, instead of only finding out after (the bubble previously
+// only got a preview via the deferred post-send attach). Debounced off the same
+// input path as the draft-save (scheduleDraftSave); a stale in-flight build is
+// discarded via composerPreviewToken if the URL changes again before it resolves.
+const linkPreviewsDisabled = useLiveQuery(
+  () => getSetting<boolean>('privacy.disableLinkPreviews', false),
+  ['settings'],
+  false,
+);
+const composerPreviewUrl = ref(''); // the link this preview state is FOR (empty = none)
+const composerPreview = ref<LinkPreview | null>(null); // resolved result (null = tried, nothing found)
+const composerPreviewLoading = ref(false);
+const composerPreviewDismissed = ref(false); // sender explicitly removed it via the × button
+let composerPreviewTimer: ReturnType<typeof setTimeout> | undefined;
+let composerPreviewToken = 0;
+
+function scheduleLinkPreviewCheck(): void {
+  clearTimeout(composerPreviewTimer);
+  composerPreviewTimer = setTimeout(() => void checkLinkPreview(), 500);
+}
+
+async function checkLinkPreview(): Promise<void> {
+  const link = firstLink(draft.value);
+  if (!link) {
+    composerPreviewUrl.value = '';
+    composerPreview.value = null;
+    composerPreviewLoading.value = false;
+    composerPreviewDismissed.value = false;
+    return;
+  }
+  if (link === composerPreviewUrl.value) return; // same link already resolved/resolving
+  composerPreviewUrl.value = link;
+  composerPreview.value = null;
+  composerPreviewDismissed.value = false;
+  if (linkPreviewsDisabled.value) return; // respect the privacy toggle; leave it unresolved
+  composerPreviewLoading.value = true;
+  const mine = ++composerPreviewToken;
+  const preview = await buildLinkPreview(link);
+  if (mine !== composerPreviewToken || link !== composerPreviewUrl.value) return; // superseded
+  composerPreview.value = preview;
+  composerPreviewLoading.value = false;
+}
+
+function dismissComposerPreview(): void {
+  composerPreviewToken++; // discard any in-flight build for this url
+  composerPreviewDismissed.value = true;
+  composerPreviewLoading.value = false;
+}
+
 // ---- per-message disappearing timer (composer) ----
 // Sticky override applied to messages you send from now on, on top of the chat/group default:
 //   undefined = follow the chat default · null = off (don't disappear) · >0 = this many ms.
@@ -2702,6 +2810,7 @@ function onComposerInput(e: CustomEvent): void {
   if (draft.value.trim()) startActivity('typing');
   else stopActivity('typing'); // cleared the draft → no longer typing
   scheduleDraftSave(); // persist the unsent text so leaving/closing keeps your place
+  scheduleLinkPreviewCheck(); // resolve a link preview before send, not just after
   updateMentionQuery(); // spec 1020: open/refresh the @-mention autocomplete
   const host = composerEl.value?.$el;
   if (host) requestAnimationFrame(() => { host.scrollTop = host.scrollHeight; });
@@ -4025,6 +4134,22 @@ async function send() {
     return;
   }
 
+  // Capture whatever the composer already resolved for this exact link before
+  // clearComposerDraft() below resets that state — undefined (still loading / never
+  // attempted) falls back to sendMessage's own deferred post-send build; null means
+  // the sender saw "no preview" (or dismissed it) and we shouldn't retry.
+  const linkNow = firstLink(text);
+  const preloadedPreview: LinkPreview | null | undefined =
+    !linkNow || linkNow !== composerPreviewUrl.value
+      ? undefined
+      : composerPreviewDismissed.value
+        ? null
+        : composerPreviewLoading.value
+          ? undefined
+          // toRaw: composerPreview.value is a reactive Proxy (it's a ref<object>) —
+          // IndexedDB's structured clone can't clone a Proxy (DataCloneError).
+          : composerPreview.value && toRaw(composerPreview.value);
+
   draft.value = '';
   clearComposerDraft();
   mentionQuery.value = null; // close the autocomplete
@@ -4033,7 +4158,7 @@ async function send() {
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
-  await sendMessage(chatId, text, reply, mentions, everyone, msgTtl.value);
+  await sendMessage(chatId, text, reply, mentions, everyone, msgTtl.value, preloadedPreview);
   await scrollToNewest();
 }
 
@@ -4734,6 +4859,43 @@ function cancelRecording() {
 /* Pasted-image staging row above the textarea: small square thumbnails (the
    picture itself is reviewed full-size after sending / in the viewer), each
    with a corner × to drop it before sending. Scrolls sideways if several. */
+.lp-compose-bar {
+  --min-height: 0;
+}
+.lp-compose {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 2px;
+}
+.lp-compose .link-card {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  margin-bottom: 0;
+}
+.lp-compose-loading,
+.lp-compose-empty {
+  align-items: center;
+}
+.lp-compose-status {
+  font-size: 13px;
+  color: var(--app-text-muted);
+}
+.lp-compose-x {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ion-color-medium);
+  color: var(--ion-color-medium-contrast);
+  font-size: 20px;
+}
 .paste-bar {
   --min-height: 0;
 }
@@ -6184,9 +6346,27 @@ function cancelRecording() {
 .wa-glyph-send {
   margin-left: 2px;
 }
+/* (WhatsApp-style) A pill that bounds the text and grows with it as you type,
+   instead of bare text floating in the toolbar. Deliberately NOT fill="solid":
+   that mode hardcodes min-height: 56px (Material's filled-textfield spec) which
+   is why an earlier version of this was too tall for one line no matter what
+   padding said — the base (no-fill) mode has no such floor, just a smaller
+   44px default we override below. --highlight-height kills the underline
+   bar md-mode textareas draw by default (only suppressed by fill="outline",
+   which we're also not using). A single FIXED border-radius (not a percentage)
+   is what gives the WhatsApp look at both ends: on a short one-line pill it's
+   ~half the height (a true stadium), and it reads as an ordinary rounded
+   rectangle once auto-grow makes the box taller than ~2x the radius. */
 .composer {
+  --background: var(--app-surface);
   --padding-top: 6px;
   --padding-bottom: 6px;
+  --padding-start: 14px;
+  --padding-end: 14px;
+  --border-radius: 20px;
+  --highlight-height: 0px;
+  min-height: 36px;
+  margin: 4px 0;
   max-height: 7.5rem;
   overflow-y: auto;
 }
