@@ -1,7 +1,7 @@
 # Keel - the cluster-wide image auto-updater - installed as plain manifests (no
 # Helm needed). Keel watches Deployments annotated with keel.sh/* (see 20-ringd.yaml:
 # policy=force, trigger=poll, pollSchedule=@every 2m), polls their image tag in the
-# registry and, when the :develop digest changes, forces a rolling redeploy. The
+# registry and, when the :latest digest changes, forces a rolling redeploy. The
 # ghcr.io/zuptalo/ring image is public, so Keel needs no registry credentials.
 #
 # Pinned to a concrete tag (not :latest) so the updater itself is reproducible.

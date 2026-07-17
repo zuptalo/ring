@@ -4579,7 +4579,15 @@ async function resendRecentOutgoing(chatId: string): Promise<void> {
 
 /* ---- delivery reconcile (recover a 'delivered' receipt dropped while we were offline) ---- */
 
-const RECONCILE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+// Must stay <= the server's relay/deliveries retention (relayRetention, 35d in
+// cmd/ringd/main.go): the server durably records a delivery for that long, so we
+// keep re-asking about a still-unconfirmed outgoing message for the same span. A
+// shorter window (was 3d) stranded messages whose recipient only came online — or
+// whose service worker only drained the backlog — days after we sent, leaving our
+// copy stuck at 'sent' forever even though the delivery WAS recorded (and the live
+// receipt was dropped because we were offline at that instant). Going beyond 35d
+// buys nothing: the record has already been swept server-side.
+const RECONCILE_WINDOW_MS = 35 * 24 * 60 * 60 * 1000; // 35 days — matches server relayRetention
 const RECONCILE_ID_CAP = 500;
 
 /**
@@ -4593,19 +4601,27 @@ const RECONCILE_ID_CAP = 500;
 export async function collectUnconfirmedOutgoing(): Promise<string[]> {
   const since = now() - RECONCILE_WINDOW_MS;
   const all = await getAll<Message>('messages');
-  const ids: string[] = [];
+  const unconfirmed: Message[] = [];
   for (const m of all) {
     if (!m.outgoing || m.timestamp < since) continue;
     const recs = m.receipts;
     if (recs && recs.length) {
       // Group: any member not yet delivered (→ checkDeliveries) or not yet seen
       // (→ checkSeen) keeps this message in the reconcile set.
-      if (recs.some((r) => !r.deliveredAt || !r.seenAt)) ids.push(m.id);
+      if (recs.some((r) => !r.deliveredAt || !r.seenAt)) unconfirmed.push(m);
     } else if (m.status === 'sent') {
-      ids.push(m.id);
+      unconfirmed.push(m);
     }
   }
-  return ids.slice(-RECONCILE_ID_CAP);
+  // Message ids are random UUIDs, so getAll returns them in an arbitrary (but
+  // stable) order — a plain cap would re-check the SAME arbitrary subset every
+  // reconnect and never cover the rest, which the widened 35d window makes reachable.
+  // Order by send time and keep the OLDEST RECONCILE_ID_CAP: those are closest to the
+  // server's 35d sweep (most urgent to recover before their record is gone), while
+  // newer unconfirmed messages have many more reconnects ahead to be picked up as
+  // confirmed ones drop out of the set. The server bounds its query at 500 too.
+  unconfirmed.sort((a, b) => a.timestamp - b.timestamp);
+  return unconfirmed.slice(0, RECONCILE_ID_CAP).map((m) => m.id);
 }
 
 /** Set (or clear) a chat's per-kind media send-quality override. null = fall back to the global
