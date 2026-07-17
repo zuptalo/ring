@@ -72,6 +72,10 @@ jobs:
       - name: Create and push tag
         if: steps.check.outputs.exists == 'false'
         run: |
+          # An annotated tag needs a committer identity; the runner has none by
+          # default (fatal: empty ident name). Set the standard github-actions bot.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${{ steps.ver.outputs.tag }}" -m "Release ${{ steps.ver.outputs.tag }}"
           git push origin "${{ steps.ver.outputs.tag }}"
 
@@ -157,20 +161,19 @@ jobs:
             --target "${{ github.sha }}" \
             --notes-file release-notes.md
 
-  # GitFlow's usual "merge main back into develop" after a release — main's tip is
-  # a merge commit that only exists on main, so without this, develop never gets
-  # the release folded into its own ancestry (the tag stays unreachable from it,
-  # and the two branches' merge-base drifts a little further apart every release).
-  # develop requires linear history, so a real merge commit can't land there
-  # directly; this goes through a normal squash-merged PR instead.
+  # Open develop for the next release. After X.Y.Z ships, develop still sits at
+  # X.Y.Z, so the release-guard (which requires the next develop -> main PR to be
+  # strictly greater than main) would block the following release until someone
+  # bumps develop by hand. This bumps develop to the next patch (X.Y.Z+1) via an
+  # auto-merged PR, keeping develop one step ahead of main and the next release
+  # unblocked. (A minor/major release just bumps further from there by hand.)
   #
-  # In this repo's flow main NEVER carries content develop doesn't already have
-  # (everything reaches main only via a develop -> main release PR), so the diff
-  # is expected to be empty — auto-merge only fires in that verified-empty case.
-  # If main ever does carry something new (e.g. a future direct hotfix), the PR
-  # is still opened but left for manual review rather than auto-merged blind.
-  sync-develop:
-    name: Sync develop with main
+  # A real "merge main back into develop" isn't used here on purpose: develop
+  # requires linear history (so main's merge commit can't land on it), and content
+  # only ever flows develop -> main, so there's nothing to merge back — only the
+  # version needs to move forward.
+  open-develop-next:
+    name: Open develop for the next version
     needs: release
     if: needs.release.result == 'success' && needs.release.outputs.exists == 'false'
     runs-on: ubuntu-latest
@@ -180,36 +183,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: develop
           fetch-depth: 0
-      - name: Open (and auto-merge, if empty) a develop sync PR
+      - name: Bump develop to the next patch version (auto-merged PR)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git fetch origin develop main --quiet
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if git diff --quiet origin/develop origin/main; then
-            empty=true
-          else
-            empty=false
-          fi
-
-          branch="chore/sync-develop-post-${{ needs.release.outputs.tag }}"
-          git push origin "refs/remotes/origin/main:refs/heads/$branch"
-
-          body="Automated post-release sync so develop's ancestry includes the ${{ needs.release.outputs.tag }} release merge commit."
-          if [ "$empty" = "true" ]; then
-            body="$body Content-empty (the expected case) — auto-merging."
-          else
-            body="$body This PR has REAL file changes, meaning main has content develop doesn't. Needs manual review before merging."
-          fi
+          # Next patch above whatever develop currently holds (not above the release
+          # tag) — so a manual pre-bump on develop is respected rather than clobbered.
+          next=$(npm version patch --no-git-tag-version | tr -d 'v')
+          branch="chore/open-develop-$next"
+          git checkout -b "$branch"
+          git add package.json package-lock.json
+          git commit -m "chore: open develop for v$next"
+          git push origin "$branch"
 
           pr_url=$(gh pr create --base develop --head "$branch" \
-            --title "chore: sync develop with main after ${{ needs.release.outputs.tag }}" \
-            --body "$body")
-
-          if [ "$empty" = "true" ]; then
-            gh pr merge --squash --auto --delete-branch "$pr_url"
-          else
-            echo "::warning::$pr_url is non-empty — left open for manual review, not auto-merged."
-          fi
+            --title "chore: open develop for v$next" \
+            --body "Automated post-release bump: ${{ needs.release.outputs.tag }} shipped, so develop moves to v$next to stay ahead of main and unblock the next release-guard. Bump further by hand if the next release is a minor/major.")
+          gh pr merge --squash --auto --delete-branch "$pr_url"
