@@ -88,8 +88,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Same grouped, filtered, prettified notes as a GA release (not GitHub's raw
+          # --generate-notes PR dump). Based on the last STABLE tag, so an RC shows the
+          # full set of changes coming in this version.
+          node scripts/release-notes-md.mjs --tag "${{ steps.ver.outputs.tag }}" \
+            --repo "${{ github.repository }}" > release-notes.md
           gh release create "${{ steps.ver.outputs.tag }}" \
-            --title "${{ steps.ver.outputs.tag }}" \
+            --title "Ring ${{ steps.ver.outputs.version }}" \
             --target "${{ github.sha }}" \
             --prerelease \
-            --generate-notes
+            --notes-file release-notes.md

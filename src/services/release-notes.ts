@@ -68,7 +68,7 @@ const CC_PREFIX = /^[a-z]+(\([^)]*\))?!?:\s*/i;
 // `spec\s*\d+[^)]*` form deliberately swallows any suffix after the number (US/FR/task
 // labels) — the leak the iOS user saw — while `(finally)` and other prose parentheticals
 // are left alone because they don't start with `spec`/`#`/`gh-`.
-const TRAILING_REF = /\s*\((?:spec\s*\d+[^)]*|#\d+|gh-\d+)\)\s*$/i;
+const TRAILING_REF = /\s*\((?:specs?\s*\d+[^)]*|#\d+|gh-\d+)\)\s*$/i;
 
 // A trailing `(+ …)` developer aside (e.g. `(+ flaky test fix)`) — a parenthetical the
 // author tacked on, not user-facing. Only strips parens that OPEN with `+`, so genuine
@@ -80,11 +80,14 @@ const TRAILING_ASIDE = /\s*\(\+[^)]*\)\s*$/;
  *  first letter. A non-conforming subject is passed through (just trimmed + capitalized),
  *  never dropped. */
 export function prettify(subject: string): string {
-  const stripped = subject
-    .replace(CC_PREFIX, '')
-    .replace(TRAILING_ASIDE, '')
-    .replace(TRAILING_REF, '')
-    .trim();
+  let stripped = subject.replace(CC_PREFIX, '').trim();
+  // A squash-merge stacks trailing refs — `… (spec 1054) (#1012)` — so strip the aside
+  // and reference repeatedly until neither matches, not just once (a single pass would
+  // leave the inner `(spec 1054)` behind once `(#1012)` is removed).
+  for (let prev = ''; prev !== stripped; ) {
+    prev = stripped;
+    stripped = stripped.replace(TRAILING_ASIDE, '').replace(TRAILING_REF, '').trim();
+  }
   const text = stripped || subject.trim();
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
