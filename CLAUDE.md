@@ -220,6 +220,13 @@ GitFlow. **`develop`** is the integration branch; **`main`** is production.
   value (patch by default). This is manual on purpose — GitHub Actions can't open
   the bump PR (org policy blocks Actions from creating PRs), and the release guard
   enforces it at release time. See constitution "Development Workflow."
+- **Scan the latest image at the start of new work.** Check the Docker Scout report
+  for the current `zuptalo/ring` tag (Docker Hub) and apply any vulnerability that
+  has a fix version: bump the Go module (`go get pkg@fixed && go mod tidy`) or the
+  base image in `Dockerfile`, rebuild + test, ride the same branch. "No fix
+  available" ones are noted and left. A CVE-patch bump is `fix`/`security`-typed
+  (so it reaches "What's new") and gets released, not parked. Constitution mandates
+  this ("Supply-chain scan at the start of new work").
 - Releases are driven by `package.json` `version`: bump it on `develop`, open a
   PR into `main`. That PR **auto-merges** once green (`auto-merge-release.yml`),
   which then dispatches `release.yml` (a workflow-token push can't trigger it
