@@ -167,6 +167,13 @@ npm run test:e2e              # Playwright e2e (needs `make db-up`; spins its ow
 
 Releases are driven by `package.json` `version`:
 
+> **Bump at the start of a cycle.** After a release ships, `develop` and `main`
+> hold the same version, so the *next* `develop → main` PR fails the release guard
+> until `develop` is moved forward. Bump `develop`'s version (with the script below)
+> as the first change of the new cycle. This is manual by design — GitHub Actions
+> can't open the bump PR (org policy forbids Actions from creating PRs), so there's
+> no bot to do it for you; the release guard is the backstop at release time.
+
 - **Release:** bump the version on `develop`, then open a PR into `main`. Bump with
   the one-shot script (no manual editing, no local tag/commit — it just edits
   `package.json` + `package-lock.json` for you to commit):
