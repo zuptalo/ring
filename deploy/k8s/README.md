@@ -1,7 +1,8 @@
 # Ring on k3s (with auto-deploy)
 
 Deploys Ring to a fresh k3s cluster with **voice/video calls** and **automatic
-image updates** from `ghcr.io/zuptalo/ring:develop`. Everything stays in the
+image updates** from `ghcr.io/zuptalo/ring:latest` (the newest production release).
+Everything stays in the
 cluster: in-cluster PostgreSQL, ringd terminating its own TLS, and **Keel**
 rolling the deployment whenever a new image is published.
 
@@ -11,7 +12,7 @@ rolling the deployment whenever a new image is published.
   (HTTPS +       (TCP/SNI               │   :8443 app HTTPS                        │
    TURNS)         passthrough)          │   :3478 TURN-over-TLS (call media)       │
                                         │   ACME certs + secrets stored in PG      │
-   Keel (ns: keel) ── polls GHCR ──────►│   redeploys on a new :develop digest    │
+   Keel (ns: keel) ── polls GHCR ──────►│   redeploys on a new :latest digest     │
                                         └──────────────────────────────────────────┘
 ```
 
@@ -71,9 +72,10 @@ keel.sh/trigger: poll
 keel.sh/pollSchedule: "@every 2m"
 ```
 
-Keel polls `ghcr.io/zuptalo/ring:develop` every ~2 min; when CI publishes a new
-`develop` build, Keel forces a rolling (Recreate) redeploy that pulls the new
-digest and re‑runs migrations on boot. Nothing else to do.
+Keel polls `ghcr.io/zuptalo/ring:latest` every ~2 min; when a new production
+release moves `:latest`, Keel forces a rolling redeploy that pulls the new
+digest and re‑runs migrations on boot. Nothing else to do. (To track the rolling
+dev build instead, point the image tag at `:develop`.)
 
 **Track stable releases instead of develop:** in `20-ringd.yaml` change the image
 tag to `:latest` (published on each version release) and re‑apply. Keel `force`
