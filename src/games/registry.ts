@@ -1,0 +1,26 @@
+// The game catalog (spec 0008, FR-016/FR-017).
+//
+// Explicit registration — not glob auto-discovery — is deliberate: the one-line
+// entry here is the human review point that guarantees every playable game is
+// first-party code shipped inside the build. Games are NEVER downloaded or
+// dynamically loaded; a "plugin" in Ring is a bundled module behind the
+// GameModule interface, nothing more.
+//
+// Adding a game: create src/games/<id>/ (pure logic + module + board), add one
+// line here and one line in boards.ts. Everything else — transport, storage,
+// previews, notifications, the picker — is generic.
+
+import type { GameModule } from './types'
+import tictactoe from './tictactoe'
+import connect4 from './connect4'
+import battleship from './battleship'
+import armada from './armada'
+import chess from './chess'
+
+export const GAMES: Record<string, GameModule> = {
+  [tictactoe.id]: tictactoe as GameModule,
+  [connect4.id]: connect4 as GameModule,
+  [battleship.id]: battleship as GameModule,
+  [armada.id]: armada as GameModule,
+  [chess.id]: chess as GameModule,
+}

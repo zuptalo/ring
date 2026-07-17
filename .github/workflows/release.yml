@@ -1,0 +1,150 @@
+# Release: fires when develop is merged into main. It re-runs the full build +
+# test suite on the merge commit and, only if that is green, tags main with the
+# package.json version, publishes the production image, and cuts a GitHub release
+# whose notes are the version plus one bullet per change since the last tag.
+#
+# Versioning is driven by package.json: to ship a release, bump the "version"
+# there on develop and open a PR into main. If the tag for the current version
+# already exists, the release steps no-op (a merge without a version bump won't
+# overwrite a published release).
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/build-test.yml
+
+  release:
+    name: Tag, image, and GitHub release
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag + the GitHub release
+      packages: write # push the production image to GHCR
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so release notes can diff from the last tag
+
+      - name: Resolve version
+        id: ver
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+      - name: Has this version already shipped?
+        id: check
+        run: |
+          if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag ${{ steps.ver.outputs.tag }} already exists. Bump the version in package.json to cut a new release. Skipping release steps."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Compose the build's release notes BEFORE creating the new tag, so the script's
+      # "since the last release tag" range is this release's changes (the previous tag
+      # is still the highest one). Baked into the image for the PWA's "what's new".
+      - name: Compose release notes (base64 JSON)
+        id: notes_b64
+        if: steps.check.outputs.exists == 'false'
+        run: echo "b64=$(scripts/release-notes.sh | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git tag -a "${{ steps.ver.outputs.tag }}" -m "Release ${{ steps.ver.outputs.tag }}"
+          git push origin "${{ steps.ver.outputs.tag }}"
+
+      - uses: docker/setup-qemu-action@v3 # arm64 emulation for the final stage
+        if: steps.check.outputs.exists == 'false'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.check.outputs.exists == 'false'
+      - uses: docker/login-action@v3
+        if: steps.check.outputs.exists == 'false'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Mirror the production image to Docker Hub (canonical registry stays ghcr.io).
+      - uses: docker/login-action@v3
+        if: steps.check.outputs.exists == 'false'
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        if: steps.check.outputs.exists == 'false'
+        with:
+          images: |
+            ghcr.io/zuptalo/ring
+            docker.io/zuptalo/ring
+          # latest + full semver + major.minor, all pointing at this release.
+          tags: |
+            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ steps.ver.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.ver.outputs.version }}
+      - uses: docker/build-push-action@v6
+        if: steps.check.outputs.exists == 'false'
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            RELEASE_NOTES_B64=${{ steps.notes_b64.outputs.b64 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Build human-readable notes: the version followed by one bullet per change,
+      # taken from the Conventional-Commit subjects since the previous release tag
+      # (merge commits excluded). This shows the user *what changed*, not a SHA.
+      - name: Compose release notes
+        if: steps.check.outputs.exists == 'false'
+        id: notes
+        run: |
+          set -euo pipefail
+          tag="${{ steps.ver.outputs.tag }}"
+
+          # Highest existing vX.Y.Z tag, excluding the one we're about to create.
+          prev=$(git tag --list 'v*' --sort=-v:refname | grep -vx "$tag" | head -n1 || true)
+
+          {
+            echo "## $tag"
+            echo
+            if [ -n "$prev" ]; then
+              git log "$prev"..HEAD --no-merges --pretty='- %s'
+              echo
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$prev...$tag"
+            else
+              # First release: list everything reachable, still as one-liners.
+              git log --no-merges --pretty='- %s'
+            fi
+          } > release-notes.md
+
+          echo "Generated release notes:"
+          cat release-notes.md
+
+      - name: Create GitHub release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            --title "${{ steps.ver.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --notes-file release-notes.md

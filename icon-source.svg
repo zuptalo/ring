@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#10b981"/>
+  <!-- Mark enlarged to fill the icon like the in-app logo. scale 4.2 maps the
+       100-unit mark to ~420px; centred via translate (256 - 50*4.2 = 46,
+       256 - 51*4.2 = 41.8). -->
+  <g transform="translate(46,41.8) scale(4.2)">
+    <path d="M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z" fill="#fff"/>
+    <circle cx="50" cy="49" r="18" fill="none" stroke="#10b981" stroke-width="7"/>
+  </g>
+</svg>

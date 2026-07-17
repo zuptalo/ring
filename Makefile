@@ -1,0 +1,94 @@
+# Ring - root dev orchestration.
+# `make start` brings up the whole stack for local development:
+#   1. PostgreSQL (Docker, idempotent - no-op if already running)
+#   2. Go backend (ringd) in hot-reload mode via `air`
+#   3. Frontend (Vite) in hot-reload mode
+#
+# Backend and frontend run concurrently in the foreground; Ctrl+C stops both.
+#
+# `make deploy-dev` instead runs the public deployment posture (ACME TLS + TURN)
+# WITH hot reload: ringd reverse-proxies the app + HMR socket to the Vite dev
+# server, so https://ring-dev.zuptalo.com gets true HMR (great for phone/PWA
+# testing) while ringd owns the cert, /v1 and TURN.
+
+SHELL := /bin/bash
+SERVER_DIR := server
+GOBIN := $(shell go env GOPATH)/bin
+AIR := $(GOBIN)/air
+
+.PHONY: start stop db-up db-down db-reset tools backend frontend deploy-dev hooks roadmap spec
+
+## start: database (if needed) + backend hot reload + frontend hot reload
+start: db-up tools
+	@echo "▶ Starting backend (air) + frontend (vite) - Ctrl+C to stop both"
+	@trap 'kill 0' INT TERM EXIT; \
+		( cd $(SERVER_DIR) && set -a && { [ -f .env ] && . ./.env; }; set +a; $(AIR) ) & \
+		( npm run dev ) & \
+		wait
+
+## db-up: start local PostgreSQL 18 if it isn't already running
+db-up:
+	@echo "▶ Ensuring PostgreSQL is up…"
+	@cd $(SERVER_DIR) && docker compose up -d
+
+## db-down: stop local PostgreSQL (keeps the data volume)
+db-down:
+	@cd $(SERVER_DIR) && docker compose down
+
+## db-reset: wipe the dev database (drops all local accounts/messages; keeps the volume).
+##   Use after investigation runs leave throwaway accounts behind. Stop `make start`
+##   first (ringd holds connections); ringd re-migrates + re-seeds INVITE01..10 on the
+##   next start. The hermetic e2e/drive harnesses use a separate DB and aren't affected.
+db-reset: db-up
+	@echo "▶ Resetting dev DB 'ring' (all local accounts/messages will be dropped)…"
+	@cd $(SERVER_DIR) && docker compose exec -T db psql -U ring -d postgres \
+		-c "DROP DATABASE IF EXISTS ring WITH (FORCE)" -c "CREATE DATABASE ring"
+	@echo "  Done — run \`make start\`; ringd re-migrates + re-seeds invite codes."
+
+## stop: tear everything down (db + any stray air/vite processes)
+stop:
+	@cd $(SERVER_DIR) && docker compose down
+	-@pkill -f "$(AIR)" 2>/dev/null || true
+	-@pkill -f "ringd" 2>/dev/null || true
+	-@pkill -f "vite" 2>/dev/null || true
+
+## backend: run only the backend in hot-reload mode
+backend: tools
+	@cd $(SERVER_DIR) && set -a && { [ -f .env ] && . ./.env; }; set +a; $(AIR)
+
+## frontend: run only the frontend in hot-reload mode
+frontend:
+	@npm run dev
+
+## deploy-dev: public dev deployment WITH hot reload (e.g. https://ring-dev.zuptalo.com).
+##   db + Vite dev server (HMR) + ringd (ACME TLS + TURN). ringd reverse-proxies the
+##   app + HMR websocket to Vite (DEV_PROXY), so the public URL gets true HMR while
+##   ringd owns the cert, /v1 and TURN. DEV_HMR_PUBLIC_PORT=443 tells the Vite HMR
+##   client to connect over the public :443 origin. Reads server/.env. Ctrl+C stops both.
+deploy-dev: db-up tools
+	@echo "▶ Dev deployment (HMR): vite dev + ringd (ACME/TURN, proxy → vite) - Ctrl+C to stop both"
+	@trap 'kill 0' INT TERM EXIT; \
+		( DEV_HMR_PUBLIC_PORT=443 npm run dev ) & \
+		( cd $(SERVER_DIR) && set -a; [ -f .env ] && . ./.env; DEV_PROXY=http://localhost:5173; set +a; $(AIR) ) & \
+		wait
+
+## tools: install air (Go live-reload) if missing
+tools: $(AIR)
+$(AIR):
+	@echo "▶ Installing air (Go live reload)…"
+	@go install github.com/air-verse/air@latest
+
+## hooks: opt in to the repo's git hooks (advisory release-bump pre-push warning)
+hooks:
+	@git config core.hooksPath scripts/hooks
+	@echo "▶ Git hooks enabled (core.hooksPath = scripts/hooks)."
+	@echo "  Disable with: git config --unset core.hooksPath"
+
+## roadmap: regenerate ROADMAP.md from specs/ (CI fails if it's stale)
+roadmap:
+	@python3 scripts/roadmap-gen.py
+
+## spec: start a new numbered spec — make spec CATEGORY=planned DESC="Add search"
+##       CATEGORY is planned|adhoc|hotfix (default planned).
+spec:
+	@scripts/spec-new.sh "$(or $(CATEGORY),planned)" "$(DESC)"

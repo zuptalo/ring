@@ -1,0 +1,175 @@
+<template>
+  <!-- iMessage-style pinned chats (specs 1044 + 1045): large circular avatars in a
+       3-column grid above the list, in the USER'S order. Tap opens the chat. A short
+       press-and-hold lifts a tile into the page's drag controller (rearrange /
+       drag-out-to-unpin); holding still opens the peek. Right-click (desktop) keeps
+       the full actions sheet — on touch the peek's menu (incl. More…) replaced it.
+       The TransitionGroup FLIP-animates tiles as the drag's preview gap moves. -->
+  <TransitionGroup ref="root" tag="div" name="pin" class="pin-grid" role="list" aria-label="Pinned chats">
+    <template v-for="id in displayIds" :key="id">
+      <!-- A member tile. While it's the one riding the drag proxy it renders as the
+           ghost well via CSS ONLY — the BUTTON MUST STAY MOUNTED: iOS stops
+           delivering the gesture's touch/pointer events the moment their original
+           target leaves the DOM, which froze the drag (and let the peek timer fire
+           mid-drag). Keyed as the chat so FLIP moves the gap around the grid. -->
+      <button
+        v-if="byId[id]"
+        type="button"
+        class="pin-tile"
+        :class="{ 'pin-ghost': id === dragId }"
+        role="listitem"
+        :aria-label="byId[id].name"
+        :aria-hidden="id === dragId ? 'true' : undefined"
+        :data-chat-id="id"
+        @click="$emit('open', id)"
+        @pointerdown="$emit('press', byId[id], $event)"
+        @contextmenu.prevent="$emit('more', byId[id])"
+      >
+        <div class="pin-avatar">
+          <user-avatar :src="byId[id].avatar" :alt="byId[id].name" :attention="byId[id].unread > 0" />
+          <ion-badge v-if="byId[id].unread" color="primary" class="pin-badge">{{ byId[id].unread }}</ion-badge>
+          <span v-else-if="byId[id].manualUnread" class="pin-dot" aria-hidden="true" />
+        </div>
+        <span class="pin-name" dir="auto">{{ byId[id].name }}</span>
+      </button>
+      <!-- A FOREIGN drag (a list row hovering in): no chat data here, so the well is
+           its own element. It's never the gesture's touch target, so (un)mounting
+           it mid-drag is safe. -->
+      <div v-else-if="id === dragId" class="pin-tile pin-ghost" role="listitem" aria-hidden="true">
+        <div class="pin-avatar" />
+      </div>
+    </template>
+  </TransitionGroup>
+</template>
+
+<script setup lang="ts">
+import { computed, ref } from 'vue';
+import { IonBadge } from '@ionic/vue';
+import UserAvatar from '@/components/UserAvatar.vue';
+import type { Chat } from '@/db/types';
+
+const props = defineProps<{
+  /** Pinned chats in the user's (rank) order. */
+  chats: Chat[];
+  /** Render order mid-drag (the live gap); falls back to `chats`' order. */
+  displayOrder?: string[];
+  /** The chat currently riding the floating proxy (its slot renders as a well). */
+  dragId?: string | null;
+}>();
+defineEmits<{
+  (e: 'open', id: string): void;
+  (e: 'more', chat: Chat): void;
+  (e: 'press', chat: Chat, ev: PointerEvent): void;
+}>();
+
+const byId = computed(() => {
+  const m: Record<string, Chat> = {};
+  for (const c of props.chats) m[c.id] = c;
+  return m;
+});
+// Ids to render: the drag preview order when given, else the true order. Foreign
+// ids (a list row hovering in) have no chat here — they render as the ghost well.
+const displayIds = computed(() => {
+  const order = props.displayOrder ?? props.chats.map((c) => c.id);
+  return order.filter((id) => byId.value[id] || id === props.dragId);
+});
+
+// The grid's root element, for the page's drag controller hit-testing. The ref
+// lands on the TransitionGroup component; its $el is the rendered .pin-grid div.
+const root = ref<{ $el: HTMLElement } | null>(null);
+defineExpose({
+  el: (): HTMLElement | null => root.value?.$el ?? null,
+});
+</script>
+
+<style scoped>
+.pin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  row-gap: 12px;
+  padding: 12px 8px 4px;
+}
+.pin-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  min-width: 0; /* let the name ellipsize instead of widening the column */
+  /* A press-and-hold must lift the tile, never select its label or pop the iOS
+     callout — the gesture owns the long press now. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  /* Ionic's global css puts touch-action: manipulation on every <button>, which
+     let the browser pointercancel the drag gesture (spec 1045). `none` fixed the
+     drag but ate vertical SCROLLS started on a tile — the list only scrolled from
+     the gaps (spec 1052 rider). pan-y is the balance: a vertical swipe scrolls
+     (the browser claims it; onPointerCancel cleanly drops the pending press),
+     while a held press still lifts — after LIFT_MS the controller's non-passive
+     document touchmove blocker owns the finger, so the drag and the
+     drag-out-to-unpin keep working on iOS. */
+  touch-action: pan-y;
+}
+/* The avatar <img> must never start a NATIVE image drag under the mouse — the
+   browser pointercancels our gesture when it does (belt to the dragstart block
+   in useChatDrag). */
+.pin-tile img {
+  -webkit-user-drag: none;
+}
+/* FLIP: tiles glide to their new slot as the drag gap moves. */
+.pin-move {
+  transition: transform 0.2s ease;
+}
+.pin-avatar {
+  position: relative;
+  width: 88px;
+  height: 88px;
+}
+/* The empty well left behind by (or opening up for) the floating avatar. Applied
+   to the SAME tile element (CSS only — see the template note about iOS): its
+   content hides, the avatar box becomes the well. Hidden via OPACITY, not
+   visibility: flipping visibility back while the tile's FLIP transform settles
+   hit a WebKit stale-paint bug — the dropped tile's NAME stayed invisible until
+   the next grid invalidation (i.e. the next drag). Opacity changes always go
+   through the compositor, and the transition forces the repaint. */
+.pin-ghost .pin-avatar {
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--app-text, #000) 8%, transparent);
+}
+.pin-avatar > *,
+.pin-name {
+  opacity: 1;
+  transition: opacity 0.12s ease;
+}
+.pin-ghost .pin-avatar > *,
+.pin-ghost .pin-name {
+  opacity: 0;
+}
+.pin-badge {
+  position: absolute;
+  top: -2px;
+  inset-inline-end: -6px;
+  border-radius: 10px;
+}
+.pin-dot {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ion-color-primary);
+}
+.pin-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--ion-text-color);
+}
+</style>

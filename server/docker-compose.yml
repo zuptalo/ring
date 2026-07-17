@@ -1,0 +1,25 @@
+services:
+  db:
+    image: postgres:18
+    # Survive Docker-engine/VM restarts (e.g. OrbStack resource changes restart
+    # the whole VM): without this, dev Postgres stays dead until a manual
+    # `make db-up`, silently breaking the dev stack and any running e2e suite.
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ring
+      POSTGRES_PASSWORD: ring
+      POSTGRES_DB: ring
+    ports:
+      - "5432:5432"
+    # postgres:18+ stores data in a major-version subdirectory, so the mount
+    # point is /var/lib/postgresql (not /var/lib/postgresql/data).
+    volumes:
+      - ring_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ring -d ring"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ring_pgdata:

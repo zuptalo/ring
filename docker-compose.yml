@@ -1,0 +1,107 @@
+# Ring - single-host deployment: the all-in-one image (PWA + API + embedded TURN)
+# plus its PostgreSQL.
+#
+# The app container is STATELESS - all state lives in Postgres: the server secrets
+# (encrypted with SECRETS_KEY) and, when ACME is on, the TLS certs too. Only the
+# database has a volume. Backup = the db volume (or a pg_dump) + your SECRETS_KEY.
+#
+# Set these for ANY scenario, then `docker compose up -d`:
+#   export PUBLIC_URL=https://ring.example.com
+#   export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+#   export SECRETS_KEY=$(openssl rand -hex 32)      # keep STABLE + backed up
+# (Image tag: :latest exists after your first release; pin :X.Y.Z or :develop
+#  otherwise - see the README "Image tags" note. `up -d --build` builds locally.)
+#
+# Pick ONE scenario. The file ships configured for Scenario A; B and C are the
+# commented blocks - read the matching "Scenario X" comments inside the service.
+#
+# ===========================================================================
+# A) DEFAULT - behind a TLS-terminating reverse proxy. Messaging only.
+#    Your proxy (Caddy / nginx / Traefik-HTTP / nginx-proxy-manager / Synology DSM)
+#    terminates TLS for PUBLIC_URL's host and forwards HTTP to this app on :8080.
+#    It MUST proxy WebSocket upgrades for /v1/ws and allow large uploads
+#    (>= MAX_BLOB_MB, e.g. nginx `client_max_body_size 300m`). Calls do NOT work
+#    through a TLS-terminating HTTP proxy (TURN media is not HTTP) - keep calls off.
+#
+# B) DIRECT - ringd serves its own TLS via Let's Encrypt (ACME). Messaging only.
+#    No separate proxy: ringd auto-provisions a cert for PUBLIC_URL's host and
+#    serves HTTPS itself. Point DNS at this box. (Calls still need Scenario C -
+#    two hostnames cannot share :443 without an SNI router.)
+#
+# C) SELF-SUFFICIENT + CALLS - behind a pure L4 SNI-passthrough proxy.
+#    ringd auto-certs BOTH the app (HTTPS :8443) and the TURNS relay (:3478); a
+#    passthrough proxy (Traefik TCP / HAProxy / nginx `stream`) on :443 routes by
+#    SNI: app host -> ring:8443, TURN_HOST -> ring:3478. The only setup where
+#    voice/video survives restrictive/censored networks (TURN-over-TLS on 443).
+#    Full recipe + an example Traefik config: server/docs/CALLING.md.
+# ===========================================================================
+
+services:
+  ring:
+    image: ghcr.io/zuptalo/ring:latest
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ENV: production
+      DATABASE_URL: postgres://ring:${POSTGRES_PASSWORD:-ring}@db:5432/ring?sslmode=disable
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL to the public https URL of this instance}
+      SECRETS_KEY: ${SECRETS_KEY:?set SECRETS_KEY (openssl rand -hex 32); keep it stable + backed up}
+
+      # --- Scenarios B & C: built-in TLS (ringd auto-provisions + renews) -------
+      # ACME: "true"
+      # ACME_EMAIL: you@example.com
+      # ACME_DIRECTORY_URL: https://acme-staging-v02.api.letsencrypt.org/directory  # test first, then remove
+
+      # --- Scenario C: voice/video calls (needs the L4 passthrough proxy) --------
+      # ENABLE_CALLS: "true"
+      # TURN_HOST: m.example.com        # neutral SNI host for TURNS; DNS -> this box
+
+    # === Scenario A (default): a reverse proxy terminates TLS and hits :8080 ===
+    ports:
+      - "8080:8080"
+    # If your proxy is a container on a shared network, delete the ports above and
+    # use these instead (define `proxy-net` as external at the bottom):
+    #   expose: ["8080"]
+    #   networks: [default, proxy-net]
+
+    # === Scenario B: ringd serves HTTPS directly (host 443 -> container 8443) ===
+    # Replace the Scenario A `ports:` above with:
+    # ports:
+    #   - "443:8443"
+
+    # === Scenario C: expose to a pure L4 SNI-passthrough proxy (no host ports) ===
+    # Replace the Scenario A `ports:` above with `expose` + the proxy network:
+    # expose:
+    #   - "8443"   # app HTTPS (autocert)  <- proxy passthroughs app-host:443 here
+    #   - "3478"   # TURNS (autocert)       <- proxy passthroughs TURN_HOST:443 here
+    # networks:
+    #   - default      # keeps access to the db
+    #   - proxy-net    # the proxy reaches the app/turn by container name
+
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ring
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ring}
+      POSTGRES_DB: ring
+    volumes:
+      - ring_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ring -d ring"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  ring_pgdata:
+
+# Uncomment for the shared-proxy-network options in Scenario A / C:
+# networks:
+#   proxy-net:
+#     external: true

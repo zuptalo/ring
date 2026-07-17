@@ -1,0 +1,86 @@
+# In-cluster PostgreSQL 18 for Ring. Single instance, one PVC on the k3s default
+# local-path storage class. This is the ONLY stateful component - everything else
+# (incl. ringd's secrets and TLS certs) lives encrypted inside this database.
+#
+# Backups = this PVC (or a pg_dump) PLUS the SECRETS_KEY from the `ring-secrets`
+# Secret. Losing SECRETS_KEY makes the stored server secrets unrecoverable.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ring-postgres
+  namespace: ring
+spec:
+  clusterIP: None # headless; StatefulSet pod is reached as ring-postgres:5432
+  selector:
+    app: ring-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ring-postgres
+  namespace: ring
+spec:
+  serviceName: ring-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ring-postgres
+  template:
+    metadata:
+      labels:
+        app: ring-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: ring
+            - name: POSTGRES_DB
+              value: ring
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ring-secrets
+                  key: POSTGRES_PASSWORD
+            # Keep PGDATA in a subdir so the volume root can hold lost+found etc.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ring", "-d", "ring"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ring", "-d", "ring"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              # 2Gi (up from 1Gi): pg_restore of the media-heavy `blobs` table
+              # spikes past 1Gi and the container was OOMKilled mid-restore. The
+              # node is small (~3.3Gi), so this is the safe ceiling, not generous.
+              memory: 2Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path # k3s default provisioner
+        resources:
+          requests:
+            storage: 10Gi

@@ -1,0 +1,6 @@
+# Renders the "Sponsor" button on the GitHub repo. Pay-what-you-want, all `zuptalo`.
+# Mirrors the in-app "Support Ring" screen (spec 1021). GitHub Sponsors only appears
+# once the listing is approved/published; until then GitHub simply omits that entry.
+github: zuptalo
+ko_fi: zuptalo
+liberapay: zuptalo

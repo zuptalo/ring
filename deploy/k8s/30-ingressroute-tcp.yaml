@@ -1,0 +1,44 @@
+# L4 SNI passthrough on :443 using k3s's built-in Traefik. Traefik does NOT
+# terminate TLS here - it routes the raw TCP stream by SNI to ringd, which holds
+# the cert (its own ACME) and terminates TLS itself. This is what lets both the
+# HTTPS app traffic AND the TURN-over-TLS call media share :443.
+#
+#   SNI = ${APP_HOST}  -> ringd:8443  (HTTPS app + API + /v1/ws)
+#   SNI = ${TURN_HOST} -> ringd:3478  (TURN-over-TLS call media)
+#
+# TLS-ALPN-01 ACME challenges ride the same passthrough (they're just TLS on :443
+# with the matching SNI), so ringd issues/renews certs for both hosts unattended.
+#
+# Note: `websecure` is k3s Traefik's :443 entrypoint. If your Traefik is v2.x and
+# rejects apiVersion traefik.io/v1alpha1, change it to traefik.containo.us/v1alpha1.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: ring-app-tls
+  namespace: ring
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: HostSNI(`${APP_HOST}`)
+      services:
+        - name: ringd
+          port: 8443
+  tls:
+    passthrough: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: ring-turns-tls
+  namespace: ring
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: HostSNI(`${TURN_HOST}`)
+      services:
+        - name: ringd
+          port: 3478
+  tls:
+    passthrough: true

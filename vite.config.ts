@@ -1,0 +1,159 @@
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
+import { VitePWA } from 'vite-plugin-pwa';
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+
+// App version, exposed to the client as the compile-time constant __APP_VERSION__
+// (shown in the UI and compared against the server's /v1/config version to detect a
+// new deploy). Prefer RING_VERSION when the build sets it (the Docker image stamps
+// the SAME value into both this and the Go binary's main.version, so the UI shows
+// the true DEPLOYED version), falling back to package.json for local/dev builds.
+// Read package.json via fs rather than process.env.npm_package_version so it works
+// under `npx vite` too.
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')) as {
+  version: string;
+};
+const appVersion = process.env.RING_VERSION || pkg.version;
+
+// This build's release notes (changes since the last release tag), exposed as the
+// compile-time constant __RELEASE_NOTES__ and used as the "running" side of the
+// What's-new update delta. The Docker build passes the SAME JSON into both this and
+// the Go binary (served from /v1/config), produced by scripts/release-notes.sh.
+// Defaults to an empty list for local/dev builds that don't set RING_RELEASE_NOTES.
+let releaseNotes: unknown = [];
+try {
+  releaseNotes = JSON.parse(process.env.RING_RELEASE_NOTES || '[]');
+} catch {
+  releaseNotes = [];
+}
+
+// Backend the dev server proxies /v1 + /healthz to. Defaults to local ringd on
+// :8080; the e2e harness overrides it to its isolated test backend.
+const proxyTarget = process.env.RING_PROXY_TARGET || 'http://localhost:8080';
+
+// HMR-over-public-URL mode (`make deploy-dev`): ringd reverse-proxies us behind
+// https://ring-dev.zuptalo.com. A precaching service worker and HMR are mutually
+// exclusive — the SW serves a cached shell and HMR never reaches the page — so in
+// this mode we DON'T register a dev SW, and the client actively unregisters any
+// stale one (__HMR_NO_SW__) so an already-installed PWA self-heals.
+const hmrProxy = !!process.env.DEV_HMR_PUBLIC_PORT;
+
+export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __RELEASE_NOTES__: JSON.stringify(releaseNotes),
+    __HMR_NO_SW__: JSON.stringify(hmrProxy),
+  },
+  server: {
+    host: true, // listen on 0.0.0.0 so 10.0.1.50:5173 is reachable on the LAN
+    port: 5173,
+    allowedHosts: ['ring-dev.zuptalo.com'],
+    // Hot reload over the public dev URL: when ringd reverse-proxies us behind
+    // https://ring-dev.zuptalo.com (make deploy-dev), the page is on :443, so the
+    // HMR client must connect to wss://<host>:443 — not the internal :5173. The
+    // host falls back to the page's location, so only the port/protocol need
+    // overriding. Unset for plain `make start` (localhost HMR works as before).
+    hmr: process.env.DEV_HMR_PUBLIC_PORT
+      ? { clientPort: Number(process.env.DEV_HMR_PUBLIC_PORT), protocol: 'wss' }
+      : undefined,
+    // Only watch app source. Without this, Vite watches the whole repo and a full
+    // page reload fires whenever the Go backend writes runtime state (server/data:
+    // secrets, uploaded blobs, the emoji cache), e2e artifacts change, etc.
+    watch: {
+      ignored: [
+        '**/server/**',
+        '**/data/**',
+        '**/test-results/**',
+        '**/playwright-report/**',
+        '**/public/ffmpeg/**',
+        '**/dist/**',
+        '**/.git/**',
+      ],
+    },
+    // Proxy the backend through the dev server so the client can use same-origin
+    // URLs (/v1/...). This makes a single public URL work: the tunnel points at
+    // Vite, and Vite forwards API + WebSocket traffic to ringd on :8080. The
+    // target is overridable (RING_PROXY_TARGET) so the e2e harness can point a
+    // test frontend at an isolated test backend.
+    proxy: {
+      '/v1': { target: proxyTarget, changeOrigin: true, ws: true },
+      '/healthz': { target: proxyTarget, changeOrigin: true },
+    },
+  },
+  preview: {
+    host: true,
+    port: 5173,
+    allowedHosts: ['ring-dev.zuptalo.com'],
+  },
+  plugins: [
+    vue(),
+    VitePWA({
+      // 'prompt' (not autoUpdate): a new deploy must not silently reload the page
+      // out from under the user. The app surfaces a toast naming the new version and
+      // applies it only when the user accepts (see useAppUpdate + sw.ts SKIP_WAITING).
+      registerType: 'prompt',
+      // Custom service worker (src/sw.ts) so we can handle Web Push in addition
+      // to app-shell precaching. esbuild-compiled by the plugin.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      // badge-96.png is the Android notification badge shown by the SW push handler;
+      // precache it so the notification icon resolves even when the device is offline.
+      includeAssets: ['favicon.ico', 'favicon.svg', 'apple-touch-icon.png', 'safari-pinned-tab.svg', 'browserconfig.xml', 'badge-96.png'],
+      // The main bundle embeds libsodium (sumo) for E2EE crypto, which pushes it
+      // past workbox's 2 MiB default precache ceiling. Raise the limit so the
+      // service worker precaches the app shell (otherwise the SW build fails).
+      // Don't precache the lazily-loaded ffmpeg.wasm core (~32 MB) - it's fetched
+      // on demand only when a video is compressed.
+      injectManifest: {
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        globIgnores: ['**/ffmpeg/**'],
+      },
+      // Serve the manifest + service worker in `vite dev` too, so installing
+      // to the home screen from the dev server behaves like the real PWA
+      // (proper scope/start_url - no breaking out to Safari on navigation).
+      // type: 'module' lets the dev SW use ES imports (workbox-precaching).
+      // EXCEPT in HMR-proxy mode (make deploy-dev): a precaching SW would cache
+      // the shell and block HMR, so disable it there.
+      devOptions: { enabled: !hmrProxy, type: 'module' },
+      manifest: {
+        name: 'Ring',
+        short_name: 'Ring',
+        description: 'Ring mobile app',
+        theme_color: '#10b981',
+        background_color: '#0a0a0a',
+        display: 'standalone',
+        id: '/',
+        start_url: '/',
+        scope: '/',
+        icons: [
+          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'pwa-maskable-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: 'pwa-maskable-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+      },
+    }),
+  ],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      // libsodium-wrappers-sumo's published ESM entry is broken (it imports a
+      // missing ./libsodium-sumo.mjs), so Vite's optimizer can't build it.
+      // Point the bare import at the self-contained CJS build instead; Vite
+      // pre-bundles that into a valid ESM module for the browser. (TypeScript
+      // still resolves types via the package name + @types, unaffected.)
+      'libsodium-wrappers-sumo': path.resolve(
+        __dirname,
+        'node_modules/libsodium-wrappers-sumo/dist/modules-sumo/libsodium-wrappers.js',
+      ),
+    },
+  },
+  optimizeDeps: {
+    include: ['libsodium-wrappers-sumo'],
+    // @ffmpeg/* spawns a worker via `new URL('./worker.js', import.meta.url)`,
+    // which Vite's dep pre-bundling breaks - exclude so the worker URL resolves.
+    exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
+  },
+});

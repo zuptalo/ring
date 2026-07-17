@@ -1,0 +1,111 @@
+# Keel - the cluster-wide image auto-updater - installed as plain manifests (no
+# Helm needed). Keel watches Deployments annotated with keel.sh/* (see 20-ringd.yaml:
+# policy=force, trigger=poll, pollSchedule=@every 2m), polls their image tag in the
+# registry and, when the :develop digest changes, forces a rolling redeploy. The
+# ghcr.io/zuptalo/ring image is public, so Keel needs no registry credentials.
+#
+# Pinned to a concrete tag (not :latest) so the updater itself is reproducible.
+# RBAC mirrors upstream keel-hq/keel deployment-template.yaml, trimmed to what
+# polling + redeploying needs (no Helm/Slack/webhookrelay/LoadBalancer).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keel
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keel
+  namespace: keel
+  labels:
+    app: keel
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: keel
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [watch, list]
+  # Keel reads image pull secrets to authenticate to private registries. Harmless
+  # here (the image is public) but required by Keel's startup.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, watch, list]
+  # The workloads Keel manages: it lists/watches them and patches the pod template
+  # (an update) to trigger a redeploy on a new digest.
+  - apiGroups: ["", extensions, apps, batch]
+    resources:
+      - pods
+      - replicasets
+      - replicationcontrollers
+      - statefulsets
+      - deployments
+      - daemonsets
+      - jobs
+      - cronjobs
+    verbs: [get, delete, watch, list, update]
+  - apiGroups: [""]
+    resources: [configmaps, pods/portforward]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: keel
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: keel
+subjects:
+  - kind: ServiceAccount
+    name: keel
+    namespace: keel
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keel
+  namespace: keel
+  labels:
+    app: keel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keel
+  template:
+    metadata:
+      labels:
+        app: keel
+    spec:
+      serviceAccountName: keel
+      containers:
+        - name: keel
+          image: keelhq/keel:0.20.0
+          imagePullPolicy: IfNotPresent
+          command: [/bin/keel]
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Poll provider on; the per-Deployment keel.sh/pollSchedule sets the cadence.
+            - name: POLL
+              value: "true"
+            - name: NOTIFICATION_LEVEL
+              value: info
+          ports:
+            - containerPort: 9300
+          livenessProbe:
+            httpGet: { path: /healthz, port: 9300 }
+            initialDelaySeconds: 30
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

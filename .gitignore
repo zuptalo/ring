@@ -17,18 +17,36 @@ test-results
 playwright-report
 /playwright/.cache
 
+# Showcase screenshot output (generated marketing assets)
+showcase/output
+
+# Unit-test coverage output (vitest)
+coverage
+
 # Scratch / tooling state (local only)
 .audit_tmp
 .tmp-review
 .tmp_verify
 .cc-tmp-search
 .rtmp
-.claude
 .m
 .grep_out2.txt
+
+# Claude Code project setup is TRACKED (skills, shared settings) so a fresh clone
+# has the full workflow and we can pick up exactly where we left off on any machine.
+# Only machine-local / ephemeral bits stay out.
+.claude/settings.local.json
+.claude/*.lock
 
 # Server runtime state + secrets are also covered by server/.gitignore
 server/data
 server/tmp
 server/ringd
 server/.env
+
+# Spec Kit: per-active-feature pointer written by spec-new.sh / the speckit
+# commands. Ephemeral working state — the tracked source of truth is specs/.
+.specify/feature.json
+
+# Showcase demo assets (real photos/portraits used only to seed local screenshot runs)
+/showcase/media/

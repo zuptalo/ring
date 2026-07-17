@@ -1,0 +1,178 @@
+/* Ionic Variables and Theming. For more info, please see:
+   http://ionicframework.com/docs/theming/ */
+
+:root {
+  --ion-color-primary: #10b981;
+  --ion-color-primary-rgb: 16, 185, 129;
+  --ion-color-primary-contrast: #000000;
+  --ion-color-primary-contrast-rgb: 0, 0, 0;
+  --ion-color-primary-shade: #0ea372;
+  --ion-color-primary-tint: #28c08e;
+}
+
+/* App-level semantic tokens. Light defaults here; the dark overrides below
+   use the same prefers-color-scheme query as Ionic's dark.system.css, so they
+   flip together with the device theme. Ionic's stepped colors aren't reliably
+   defined in this setup, so we own these tints explicitly. */
+:root {
+  --app-text: #000000;
+  --app-text-muted: rgba(0, 0, 0, 0.55);
+  /* Secondary/explanatory text (setting captions, help paragraphs). Stronger than
+     --app-text-muted so descriptions stay comfortably readable on both themes. */
+  --app-text-secondary: rgba(0, 0, 0, 0.72);
+  --app-surface: rgba(0, 0, 0, 0.04);
+  --app-border: rgba(0, 0, 0, 0.1);
+  --app-otp-border: rgba(0, 0, 0, 0.22);
+  /* Chat bubbles, opaque (not translucent) so the background pattern doesn't
+     bleed through the text. Incoming = light grey, outgoing = soft green. */
+  --app-bubble-in: #e7e8ec;
+  --app-bubble-out: #d6f3cc;
+  /* Wall pending/unfinished post card — a warm amber so an unsent, uploading or failed post reads
+     as "not final yet" against the settled green posts. Opaque, like the bubbles, for legible text. */
+  --app-bubble-pending: #ffe6ad;
+  /* Game cards (spec 1033): games render as a full-width NEUTRAL shared card,
+     not a sided bubble — a game belongs to both players. Values from the
+     submarine-redesign handoff. */
+  --app-game-card-bg: #ffffff;
+  --app-game-card-border: rgba(0, 0, 0, 0.07);
+  /* Full-screen media viewer (spec 1014 FR-023): follows the app theme rather than a
+     hardcoded black surface. Light defaults here; dark overrides below. The chrome (top/
+     bottom bars) sits over the media, so the scrims + pill fills are theme-tinted for
+     legibility of the (theme-coloured) text/icons over any photo. */
+  --viewer-surface: #ffffff;
+  --viewer-text: #1c1c1e;
+  --viewer-overlay-top: rgba(255, 255, 255, 0.72);
+  --viewer-overlay-bottom: rgba(255, 255, 255, 0.72);
+  --viewer-chrome-bg: rgba(255, 255, 255, 0.82);
+  --viewer-menu-bg: #ffffff;
+  --viewer-pill-bg: rgba(0, 0, 0, 0.08);
+  --viewer-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* Manual dark override: when the user picks Dark (or System resolves to dark),
+   useTheme() adds `ion-palette-dark` to <html>. These mirror the media-query
+   values so app tokens flip together with Ionic's class palette. Setting the
+   same CSS variables, not restyling components. */
+:root.ion-palette-dark {
+  --app-text: #ffffff;
+  --app-text-muted: rgba(255, 255, 255, 0.6);
+  --app-text-secondary: rgba(255, 255, 255, 0.78);
+  --app-surface: rgba(255, 255, 255, 0.05);
+  --app-border: rgba(255, 255, 255, 0.12);
+  --app-otp-border: rgba(255, 255, 255, 0.25);
+  /* Opaque dark bubbles (WhatsApp-style): grey incoming, deep-green outgoing. */
+  --app-bubble-in: #232d33;
+  --app-bubble-out: #103a2c;
+  /* Deep amber pending card for dark mode (mirrors the light --app-bubble-pending). */
+  --app-bubble-pending: #43320c;
+  /* Game cards, dark (spec 1033 handoff). */
+  --app-game-card-bg: #181f1b;
+  --app-game-card-border: rgba(255, 255, 255, 0.08);
+  /* Media viewer — immersive dark surface in dark mode (spec 1014 FR-023). */
+  --viewer-surface: #000000;
+  --viewer-text: #ffffff;
+  --viewer-overlay-top: rgba(0, 0, 0, 0.55);
+  --viewer-overlay-bottom: rgba(0, 0, 0, 0.65);
+  --viewer-chrome-bg: rgba(0, 0, 0, 0.42);
+  --viewer-menu-bg: #2a2a2a;
+  --viewer-pill-bg: rgba(255, 255, 255, 0.16);
+  --viewer-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+
+/* Chat wallpaper tile (the scattered Ring shields behind conversations): the
+   SAME artwork with a per-theme stroke — darker lines on the light theme,
+   brighter on dark — so the pattern reads equally in both. The two data URLs
+   differ only in the stroke value (gzip collapses the duplication). */
+:root {
+  --app-chat-doodle: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27264%27 height=%27264%27 viewBox=%270 0 264 264%27%3E%3Cg fill=%27none%27 stroke=%27rgba(96,96,96,0.28)%27 stroke-width=%273%27%3E%3Cg transform=%27translate(16,14) scale(0.3) rotate(-148 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(96,18) scale(0.18) rotate(63 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(152,12) scale(0.24) rotate(172 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(222,20) scale(0.16) rotate(-37 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(48,64) scale(0.2) rotate(98 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(120,72) scale(0.32) rotate(-12 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(198,62) scale(0.22) rotate(-95 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(246,68) scale(0.15) rotate(141 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(12,118) scale(0.18) rotate(205 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(82,124) scale(0.27) rotate(-66 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(152,128) scale(0.2) rotate(28 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(222,120) scale(0.18) rotate(-118 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(40,172) scale(0.24) rotate(160 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(112,182) scale(0.3) rotate(-24 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(188,176) scale(0.2) rotate(82 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(246,172) scale(0.15) rotate(-160 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(70,222) scale(0.18) rotate(-200 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(152,224) scale(0.22) rotate(117 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(224,224) scale(0.16) rotate(-52 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+:root.ion-palette-dark {
+  --app-chat-doodle: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27264%27 height=%27264%27 viewBox=%270 0 264 264%27%3E%3Cg fill=%27none%27 stroke=%27rgba(210,210,210,0.26)%27 stroke-width=%273%27%3E%3Cg transform=%27translate(16,14) scale(0.3) rotate(-148 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(96,18) scale(0.18) rotate(63 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(152,12) scale(0.24) rotate(172 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(222,20) scale(0.16) rotate(-37 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(48,64) scale(0.2) rotate(98 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(120,72) scale(0.32) rotate(-12 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(198,62) scale(0.22) rotate(-95 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(246,68) scale(0.15) rotate(141 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(12,118) scale(0.18) rotate(205 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(82,124) scale(0.27) rotate(-66 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(152,128) scale(0.2) rotate(28 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(222,120) scale(0.18) rotate(-118 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(40,172) scale(0.24) rotate(160 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(112,182) scale(0.3) rotate(-24 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(188,176) scale(0.2) rotate(82 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(246,172) scale(0.15) rotate(-160 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(70,222) scale(0.18) rotate(-200 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(152,224) scale(0.22) rotate(117 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3Cg transform=%27translate(224,224) scale(0.16) rotate(-52 50 49)%27%3E%3Cpath d=%27M50 8 L88 21 V52 C88 72 72 87 50 94 C28 87 12 72 12 52 V21 Z%27/%3E%3Ccircle cx=%2750%27 cy=%2749%27 r=%2718%27/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* Whole-app personality: a barely-there wash of the theme green over the base
+   background, fading out before the midpoint so it's felt more than seen. A
+   layered background keeps the real base color (so contrast is unchanged) with
+   the tint on top. Applied to ion-content, the main surface on every screen. */
+:root {
+  --app-bg-gradient:
+    linear-gradient(165deg, rgba(var(--ion-color-primary-rgb), 0.16), rgba(var(--ion-color-primary-rgb), 0.03) 70%),
+    var(--ion-background-color, #ffffff);
+}
+:root.ion-palette-dark {
+  --app-bg-gradient:
+    linear-gradient(165deg, rgba(var(--ion-color-primary-rgb), 0.22), rgba(var(--ion-color-primary-rgb), 0.05) 70%),
+    var(--ion-background-color, #000000);
+}
+
+ion-content {
+  --background: var(--app-bg-gradient);
+}
+
+/* Also paint the wash on the app shell. During page transitions Ionic applies a
+   transform to the .ion-page, which suspends the translucent header's
+   backdrop-filter; without this the top would briefly fall back to the bare
+   black base (the "black bar" flash). With the shell carrying the wash, that
+   fallback is the gradient instead. */
+ion-app {
+  background: var(--app-bg-gradient);
+}
+
+/* Tint component surfaces (list rows, cards) with a faint amount of the theme
+   color instead of pure black/white, so they read as part of the same family
+   as the background wash rather than hard cutouts. Opaque (legibility kept);
+   color-mix degrades to Ionic's default surface where unsupported. */
+:root {
+  --ion-item-background: color-mix(in srgb, var(--ion-color-primary) 5%, var(--ion-background-color, #ffffff));
+  --ion-card-background: color-mix(in srgb, var(--ion-color-primary) 5%, var(--ion-background-color, #ffffff));
+  /* Tint the toolbar fill too, so when a page transition suspends the
+     translucent header's backdrop blur, the fallback is a wash-colored bar
+     rather than the bare black toolbar fill. */
+  --ion-toolbar-background: color-mix(in srgb, var(--ion-color-primary) 5%, var(--ion-background-color, #ffffff));
+  /* Bottom tab bar: the SAME subtle toolbar tint as the chat composer footer, dropped
+     to ~90% opacity so a gentle backdrop blur (TabsPage) frosts whatever scrolls under
+     it — a quiet, blends-in bar like the composer, not a distinct green pane. */
+  --app-tabbar-bg: color-mix(in srgb, var(--ion-toolbar-background) 90%, transparent);
+}
+:root.ion-palette-dark {
+  --ion-item-background: color-mix(in srgb, var(--ion-color-primary) 8%, var(--ion-background-color, #000000));
+  --ion-card-background: color-mix(in srgb, var(--ion-color-primary) 8%, var(--ion-background-color, #000000));
+  --ion-toolbar-background: color-mix(in srgb, var(--ion-color-primary) 8%, var(--ion-background-color, #000000));
+  --app-tabbar-bg: color-mix(in srgb, var(--ion-toolbar-background) 86%, transparent);
+}
+
+/* Large-title (condense) headers sit inside the scrolled content; let the
+   background wash show through instead of a solid black slab behind the title,
+   matching the translucent sticky header. Only targets the condense header, so
+   the pinned top header keeps its opaque/translucent backdrop. */
+ion-header.header-collapse-condense ion-toolbar {
+  --background: transparent;
+  --border-color: transparent;
+}
+
+/* The black-bar flash, fixed at the source. During an iOS large-title push/pop
+   Ionic's header.ios.css sets the collapsing header's toolbar background to
+   --ion-background-color (black in dark mode) so the bar looks solid mid-slide:
+     .header-collapse-condense-inactive.header-transitioning:not(.header-collapse-condense) ion-toolbar
+       { --background: var(--ion-background-color) }
+   That bare black is the flash (iOS-only, since md has no such rule). We override
+   just that transient state to the tinted toolbar color, so the transitioning
+   bar is wash-colored instead of black. Full translucency is kept everywhere
+   the rest of the time; the `ion-header` prefix wins the specificity. */
+ion-header.header-collapse-condense-inactive.header-transitioning:not(.header-collapse-condense) ion-toolbar {
+  --background: var(--ion-toolbar-background);
+}
+
+/* Full-width (non-inset) lists shouldn't paint an opaque band behind their
+   headers/empty areas; let the background wash show; rows still carry their own
+   tinted surface. Inset lists (the settings cards) are left untouched. */
+ion-list:not(.list-inset) {
+  background: transparent;
+}
+
+/* Sticky section dividers (e.g. the Contacts A/B/C index) match the tinted row
+   surface instead of a black band, while staying opaque enough for stickiness. */
+ion-item-divider {
+  --background: var(--ion-item-background);
+}
