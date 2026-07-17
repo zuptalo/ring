@@ -36,11 +36,8 @@ jobs:
     permissions:
       contents: write # create the tag + the GitHub release
       packages: write # push the production image to GHCR
-    outputs:
-      exists: ${{ steps.check.outputs.exists }}
-      tag: ${{ steps.ver.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # full history so release notes can diff from the last tag
 
@@ -79,24 +76,24 @@ jobs:
           git tag -a "${{ steps.ver.outputs.tag }}" -m "Release ${{ steps.ver.outputs.tag }}"
           git push origin "${{ steps.ver.outputs.tag }}"
 
-      - uses: docker/setup-qemu-action@v3 # arm64 emulation for the final stage
+      - uses: docker/setup-qemu-action@v4 # arm64 emulation for the final stage
         if: steps.check.outputs.exists == 'false'
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         if: steps.check.outputs.exists == 'false'
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: steps.check.outputs.exists == 'false'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Mirror the production image to Docker Hub (canonical registry stays ghcr.io).
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: steps.check.outputs.exists == 'false'
         with:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@v6
         id: meta
         if: steps.check.outputs.exists == 'false'
         with:
@@ -108,7 +105,7 @@ jobs:
             type=raw,value=latest
             type=semver,pattern={{version}},value=${{ steps.ver.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.ver.outputs.version }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         if: steps.check.outputs.exists == 'false'
         with:
           context: .
@@ -143,49 +140,3 @@ jobs:
             --title "Ring ${{ steps.ver.outputs.version }}" \
             --target "${{ github.sha }}" \
             --notes-file release-notes.md
-
-  # Open develop for the next release. After X.Y.Z ships, develop still sits at
-  # X.Y.Z, so the release-guard (which requires the next develop -> main PR to be
-  # strictly greater than main) would block the following release until someone
-  # bumps develop by hand. This bumps develop to the next patch (X.Y.Z+1) via an
-  # auto-merged PR, keeping develop one step ahead of main and the next release
-  # unblocked. (A minor/major release just bumps further from there by hand.)
-  #
-  # A real "merge main back into develop" isn't used here on purpose: develop
-  # requires linear history (so main's merge commit can't land on it), and content
-  # only ever flows develop -> main, so there's nothing to merge back — only the
-  # version needs to move forward.
-  open-develop-next:
-    name: Open develop for the next version
-    needs: release
-    if: needs.release.result == 'success' && needs.release.outputs.exists == 'false'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: develop
-          fetch-depth: 0
-      - name: Bump develop to the next patch version (auto-merged PR)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Next patch above whatever develop currently holds (not above the release
-          # tag) — so a manual pre-bump on develop is respected rather than clobbered.
-          next=$(npm version patch --no-git-tag-version | tr -d 'v')
-          branch="chore/open-develop-$next"
-          git checkout -b "$branch"
-          git add package.json package-lock.json
-          git commit -m "chore: open develop for v$next"
-          git push origin "$branch"
-
-          pr_url=$(gh pr create --base develop --head "$branch" \
-            --title "chore: open develop for v$next" \
-            --body "Automated post-release bump: ${{ needs.release.outputs.tag }} shipped, so develop moves to v$next to stay ahead of main and unblock the next release-guard. Bump further by hand if the next release is a minor/major.")
-          gh pr merge --squash --auto --delete-branch "$pr_url"
