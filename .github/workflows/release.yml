@@ -12,6 +12,11 @@ name: Release
 on:
   push:
     branches: [main]
+  # A GITHUB_TOKEN-authored push (e.g. auto-merge-release.yml's auto-merge) doesn't
+  # trigger the push event above (anti-infinite-loop safeguard) — workflow_dispatch
+  # is exempt from that, so auto-merge-release.yml calls this explicitly once a
+  # release PR actually merges. Also handy for a manual re-run.
+  workflow_dispatch:
 
 concurrency:
   group: release-main
@@ -31,6 +36,9 @@ jobs:
     permissions:
       contents: write # create the tag + the GitHub release
       packages: write # push the production image to GHCR
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+      tag: ${{ steps.ver.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,3 +156,60 @@ jobs:
             --title "${{ steps.ver.outputs.tag }}" \
             --target "${{ github.sha }}" \
             --notes-file release-notes.md
+
+  # GitFlow's usual "merge main back into develop" after a release — main's tip is
+  # a merge commit that only exists on main, so without this, develop never gets
+  # the release folded into its own ancestry (the tag stays unreachable from it,
+  # and the two branches' merge-base drifts a little further apart every release).
+  # develop requires linear history, so a real merge commit can't land there
+  # directly; this goes through a normal squash-merged PR instead.
+  #
+  # In this repo's flow main NEVER carries content develop doesn't already have
+  # (everything reaches main only via a develop -> main release PR), so the diff
+  # is expected to be empty — auto-merge only fires in that verified-empty case.
+  # If main ever does carry something new (e.g. a future direct hotfix), the PR
+  # is still opened but left for manual review rather than auto-merged blind.
+  sync-develop:
+    name: Sync develop with main
+    needs: release
+    if: needs.release.result == 'success' && needs.release.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Open (and auto-merge, if empty) a develop sync PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch origin develop main --quiet
+
+          if git diff --quiet origin/develop origin/main; then
+            empty=true
+          else
+            empty=false
+          fi
+
+          branch="chore/sync-develop-post-${{ needs.release.outputs.tag }}"
+          git push origin "refs/remotes/origin/main:refs/heads/$branch"
+
+          body="Automated post-release sync so develop's ancestry includes the ${{ needs.release.outputs.tag }} release merge commit."
+          if [ "$empty" = "true" ]; then
+            body="$body Content-empty (the expected case) — auto-merging."
+          else
+            body="$body This PR has REAL file changes, meaning main has content develop doesn't. Needs manual review before merging."
+          fi
+
+          pr_url=$(gh pr create --base develop --head "$branch" \
+            --title "chore: sync develop with main after ${{ needs.release.outputs.tag }}" \
+            --body "$body")
+
+          if [ "$empty" = "true" ]; then
+            gh pr merge --squash --auto --delete-branch "$pr_url"
+          else
+            echo "::warning::$pr_url is non-empty — left open for manual review, not auto-merged."
+          fi

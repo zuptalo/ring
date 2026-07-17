@@ -20,6 +20,7 @@ on:
 permissions:
   contents: write # github-actions[bot] performs the eventual merge
   pull-requests: write # enable auto-merge on the PR
+  actions: write # dispatch release.yml after the merge (see below)
 
 jobs:
   enable-auto-merge:
@@ -38,3 +39,30 @@ jobs:
           gh pr merge "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
             --auto --merge
+
+      # GitHub deliberately does not let a push made with the run's own GITHUB_TOKEN
+      # trigger other workflows (anti-infinite-loop safeguard) — so once GitHub's
+      # platform completes the auto-merge above, release.yml's `push: branches:
+      # [main]` never fires. workflow_dispatch IS exempt from that suppression even
+      # when called with GITHUB_TOKEN, so: poll until the PR actually merges, then
+      # explicitly dispatch release.yml. (First hit + full writeup: the v1.0.0 cut.)
+      - name: Wait for the merge, then dispatch the release workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # ~60 minutes at 20s/poll — comfortably past the slowest observed e2e run.
+          for i in $(seq 1 180); do
+            state=$(gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --json state -q .state)
+            if [ "$state" = "MERGED" ]; then
+              echo "PR merged — dispatching release.yml on main"
+              gh workflow run release.yml --repo "${{ github.repository }}" --ref main
+              exit 0
+            fi
+            if [ "$state" = "CLOSED" ]; then
+              echo "PR closed without merging — nothing to dispatch"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::warning::Timed out waiting for the PR to merge; release.yml was not dispatched. Run it manually: gh workflow run release.yml --ref main"
