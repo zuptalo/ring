@@ -119,34 +119,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Build human-readable notes: the version followed by one bullet per change,
-      # taken from the Conventional-Commit subjects since the previous release tag
-      # (merge commits excluded). This shows the user *what changed*, not a SHA.
+      # Human-readable release notes: user-facing changes since the previous STABLE
+      # release, grouped (New / Fixes / …) and prettified with the same filter + wording
+      # rules the in-app "What's new" uses (scripts/release-notes-md.mjs). ci/docs/chore
+      # noise is dropped; a spec/PR ref is stripped. Basing on the last stable tag (not
+      # the RC) means a GA release shows the whole product delta, not just the RC gap.
       - name: Compose release notes
         if: steps.check.outputs.exists == 'false'
-        id: notes
         run: |
-          set -euo pipefail
-          tag="${{ steps.ver.outputs.tag }}"
-
-          # Highest existing vX.Y.Z tag, excluding the one we're about to create.
-          prev=$(git tag --list 'v*' --sort=-v:refname | grep -vx "$tag" | head -n1 || true)
-
-          {
-            echo "## $tag"
-            echo
-            if [ -n "$prev" ]; then
-              git log "$prev"..HEAD --no-merges --pretty='- %s'
-              echo
-              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$prev...$tag"
-            else
-              # First release: list everything reachable, still as one-liners.
-              git log --no-merges --pretty='- %s'
-            fi
-          } > release-notes.md
-
-          echo "Generated release notes:"
-          cat release-notes.md
+          node scripts/release-notes-md.mjs --tag "${{ steps.ver.outputs.tag }}" \
+            --repo "${{ github.repository }}" > release-notes.md
+          echo "Generated release notes:"; cat release-notes.md
 
       - name: Create GitHub release
         if: steps.check.outputs.exists == 'false'
@@ -154,6 +137,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ steps.ver.outputs.tag }}" \
-            --title "${{ steps.ver.outputs.tag }}" \
+            --title "Ring ${{ steps.ver.outputs.version }}" \
             --target "${{ github.sha }}" \
             --notes-file release-notes.md
