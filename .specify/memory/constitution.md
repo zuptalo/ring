@@ -207,6 +207,15 @@ These are project-specific guardrails every relevant spec MUST respect.
   `main` is production. Feature branches merge into `develop`; releases are a
   `develop → main` PR carrying a `package.json` version bump (the release guard
   blocks an un-bumped release PR).
+- **Version is bumped at the START of a release cycle, not automated after one.**
+  After a release ships, `develop` and `main` hold the same `package.json`
+  version, so the next `develop → main` PR would fail the release guard until
+  `develop` is moved forward. The first change of a new cycle MUST bump
+  `develop`'s `package.json` to the next intended version (patch by default;
+  minor/major when the work warrants it). This is a deliberate manual step —
+  GitHub Actions cannot open the bump PR itself (org policy forbids Actions from
+  creating pull requests), and the release guard is the backstop that enforces it
+  at release time.
 - **Spec numbering.** Bands are assigned by category and never reused: planned
   `0001–0999`, ad-hoc `1001–1999`, hotfix/bug `2001+`. The next free number in the
   band is allocated by `.specify/scripts/bash/create-new-feature.sh --category`
@@ -236,4 +245,4 @@ These are project-specific guardrails every relevant spec MUST respect.
 - Runtime engineering guidance that is not constitutional lives in `CLAUDE.md` and
   `CONTRIBUTING.md`; where they conflict with this document, this document wins.
 
-**Version**: 1.2.0 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-06-22
+**Version**: 1.2.1 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-07-17
