@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Idempotent installer for Ring on a fresh k3s cluster (calls enabled, Keel
-# auto-updates from ghcr.io/zuptalo/ring:develop). Re-runnable: it never rotates
-# the existing SECRETS_KEY / DB password.
+# auto-updates from ghcr.io/zuptalo/ring:latest — the newest production release).
+# Re-runnable: it never rotates the existing SECRETS_KEY / DB password.
 #
 #   APP_HOST=ring.example.com ACME_EMAIL=you@example.com ./install.sh
 #
@@ -82,6 +82,6 @@ Done. Next:
   3. First-run invite code:   kubectl -n ring logs deploy/ringd | grep FIRST-RUN
   4. Open https://${APP_HOST}, install the PWA, register with that code.
 
-New :develop images now auto-deploy within ~2 minutes (Keel). To track stable
-releases instead, edit 20-ringd.yaml: image tag -> :latest and keep keel policy force.
+New production releases (:latest) now auto-deploy within ~2 minutes (Keel). To track
+the rolling dev build instead, edit 20-ringd.yaml: image tag -> :develop, keep policy force.
 EOF

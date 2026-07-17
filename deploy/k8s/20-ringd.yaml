@@ -5,8 +5,10 @@
 # roll deploys with a brief 2-pod overlap rather than a hard stop-then-start, so
 # updates don't take the app down - see the strategy block below.
 #
-# Keel auto-updates this Deployment: it polls ghcr.io/zuptalo/ring:develop and,
-# when the tag's digest changes (a new develop build), forces a rolling redeploy.
+# Keel auto-updates this Deployment: it polls ghcr.io/zuptalo/ring:latest and,
+# when the tag's digest changes (a new production release moves :latest), forces a
+# rolling redeploy. So this cluster always tracks the newest stable release. To
+# follow the rolling dev build instead, point the image tag below at :develop.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -58,7 +60,7 @@ metadata:
   name: ringd
   namespace: ring
   annotations:
-    # Keel: watch the mutable :develop tag and force a redeploy on a new digest.
+    # Keel: watch the mutable :latest tag and force a redeploy on a new digest.
     keel.sh/policy: force
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 2m"
@@ -87,7 +89,7 @@ spec:
     spec:
       containers:
         - name: ringd
-          image: ghcr.io/zuptalo/ring:develop
+          image: ghcr.io/zuptalo/ring:latest
           imagePullPolicy: Always
           ports:
             - { name: http, containerPort: 8080 }
