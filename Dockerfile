@@ -63,7 +63,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpat
 # --- Stage 3: runtime -------------------------------------------------------
 # No --platform: this stage is the TARGET arch (linux/amd64 or linux/arm64). Only
 # the small apk/adduser layer runs under emulation; the heavy builds above don't.
-FROM alpine:3.20
+FROM alpine:3.24
 # OCI labels. image.source links the GHCR package to its repo (and lets the
 # package inherit the repo's access so Actions can publish with the default token).
 LABEL org.opencontainers.image.source="https://github.com/zuptalo/ring" \

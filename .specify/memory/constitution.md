@@ -216,6 +216,15 @@ These are project-specific guardrails every relevant spec MUST respect.
   GitHub Actions cannot open the bump PR itself (org policy forbids Actions from
   creating pull requests), and the release guard is the backstop that enforces it
   at release time.
+- **Supply-chain scan at the start of new work.** Before starting a new feature or
+  bug fix, review the Docker Scout vulnerability report for the latest published
+  image (Docker Hub → `zuptalo/ring` → the current tag). Any flagged vulnerability
+  that has a fix version available MUST be applied as part of that work — bump the
+  Go module (`go get pkg@fixed && go mod tidy`) or the base image (`Dockerfile`),
+  rebuild and test, and let it ride the same branch. A vulnerability with **no fix
+  available** upstream is noted (in the PR) and left until one exists. A fix that is
+  itself a shippable improvement (dependency/base-image CVE patch) is `fix`/
+  `security`-typed so it reaches users, and is released rather than parked.
 - **Spec numbering.** Bands are assigned by category and never reused: planned
   `0001–0999`, ad-hoc `1001–1999`, hotfix/bug `2001+`. The next free number in the
   band is allocated by `.specify/scripts/bash/create-new-feature.sh --category`
@@ -245,4 +254,4 @@ These are project-specific guardrails every relevant spec MUST respect.
 - Runtime engineering guidance that is not constitutional lives in `CLAUDE.md` and
   `CONTRIBUTING.md`; where they conflict with this document, this document wins.
 
-**Version**: 1.2.1 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-07-17
+**Version**: 1.2.2 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-07-17
