@@ -98,6 +98,21 @@ describe('prettify', () => {
     expect(prettify('feat: add search (gh-12)')).toBe('Add search');
   });
 
+  it('strips stacked trailing references (a squash-merge leaves both a spec and a PR ref)', () => {
+    expect(prettify("feat(contacts): set an emoji as a contact's photo (spec 1054) (#1012)")).toBe(
+      "Set an emoji as a contact's photo",
+    );
+    expect(prettify('fix(chat): reach you through muted groups (spec 1048) (#993)')).toBe(
+      'Reach you through muted groups',
+    );
+  });
+
+  it('strips a plural "(specs N + M)" reference', () => {
+    expect(prettify('feat(notifications): richer tones and quieter housekeeping (specs 1049 + 1050)')).toBe(
+      'Richer tones and quieter housekeeping',
+    );
+  });
+
   it('strips a trailing reference that carries extra detail', () => {
     // The reported jargon leak: a spec ref with user-story suffix slipped through.
     expect(prettify('feat(chat): visibility-driven Seen + catch-up (spec 1013 US2/US3)')).toBe(

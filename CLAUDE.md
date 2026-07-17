@@ -209,13 +209,30 @@ contributor walkthrough is in `CONTRIBUTING.md`.
 
 GitFlow. **`develop`** is the integration branch; **`main`** is production.
 
-- Every push to `develop` and every PR runs the full build+test suite. A
-  `develop` push also publishes the rolling `ghcr.io/zuptalo/ring:develop` image.
+- Every PR runs the full build+test suite (path-filtered: doc/spec/tooling-only
+  changes skip the heavy jobs). A push to `develop` does NOT re-run the suite —
+  the merged PR already tested the identical tree — it only rebuilds and publishes
+  the rolling `ghcr.io/zuptalo/ring:develop` image.
+- **Bump the version at the start of each release cycle.** After a release ships,
+  `develop` and `main` sit at the same `package.json` version, so the next
+  `develop → main` PR fails the release guard until `develop` moves forward. The
+  first change of a new cycle bumps `develop`'s `version` to the next intended
+  value (patch by default). This is manual on purpose — GitHub Actions can't open
+  the bump PR (org policy blocks Actions from creating PRs), and the release guard
+  enforces it at release time. See constitution "Development Workflow."
+- **Scan the latest image at the start of new work.** Check the Docker Scout report
+  for the current `zuptalo/ring` tag (Docker Hub) and apply any vulnerability that
+  has a fix version: bump the Go module (`go get pkg@fixed && go mod tidy`) or the
+  base image in `Dockerfile`, rebuild + test, ride the same branch. "No fix
+  available" ones are noted and left. A CVE-patch bump is `fix`/`security`-typed
+  (so it reaches "What's new") and gets released, not parked. Constitution mandates
+  this ("Supply-chain scan at the start of new work").
 - Releases are driven by `package.json` `version`: bump it on `develop`, open a
-  PR into `main`. On merge, the release pipeline re-verifies the merge commit and,
-  if green and the `vX.Y.Z` tag doesn't already exist, tags `main`, publishes the
-  production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub release. A merge
-  without a version bump re-runs CI but does not re-release.
+  PR into `main`. That PR **auto-merges** once green (`auto-merge-release.yml`),
+  which then dispatches `release.yml` (a workflow-token push can't trigger it
+  directly). If green and the `vX.Y.Z` tag doesn't already exist, it tags `main`,
+  publishes the production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub
+  release. A merge without a version bump re-runs CI but does not re-release.
 - Release candidates are cut by pushing a `vX.Y.Z-rc.N` tag (off `develop`):
   `release-candidate.yml` runs the full suite and, if green, publishes a single
   immutable `:X.Y.Z-rc.N` image + a GitHub pre-release. RCs never move `:latest`
