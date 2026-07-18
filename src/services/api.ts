@@ -608,6 +608,28 @@ export async function subscribePush(sub: {
   if (!res.ok) throw new Error(`push subscribe failed: ${res.status}`);
 }
 
+/**
+ * (spec 2043) Fetch the caller's queued-frame status: the oldest queued frame's age
+ * (epoch ms, null when the queue is empty) and the total count. Side-effect-free on
+ * the server (no dequeue, no delivery receipt), so it is safe to poll on foreground.
+ * Powers the client zombie self-heal: a subscription the push service silently
+ * revoked still 201-accepts upstream but never wakes the device, so the server holds
+ * frames older than any push wake this device recorded. Bounded so a hung request
+ * can't stall the foreground path.
+ */
+export async function fetchRelayStatus(): Promise<{ oldestQueuedAtMs: number | null; count: number }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  let res: Response;
+  try {
+    res = await fetch(`${apiBaseUrl()}/v1/relay/status`, { headers: authHeaders(), signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw new Error(`relay status failed: ${res.status}`);
+  return (await res.json()) as { oldestQueuedAtMs: number | null; count: number };
+}
+
 /** Mint a single-use invitation code (owned by the current user) to share. */
 export async function createInvitation(): Promise<{ code: string; publicUrl: string }> {
   const res = await fetch(`${apiBaseUrl()}/v1/invitations`, {

@@ -23,7 +23,8 @@ import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
-  mayEndWakeSilently, quietNote, stampPushWake, stampedShow, countAccepted,
+  mayEndWakeSilently, quietNote, stampPushWake, countAccepted,
+  runGuardedWake, recordWake, type WakeCtx,
   previewCallRing, recordCallTickle, recordCallOutcome, withdrawCallBadgeUnit, callBadgeCount,
   readRingShown, recordRingShown, clearRingShown,
   type SwNote, type ConnNote,
@@ -148,10 +149,14 @@ const DEV_HOST = /(^|\.)ring-dev\./.test(self.location.hostname) || self.locatio
 async function showGeneric(reason?: string): Promise<void> {
   // (spec 2014 US1) Title is the STATUS, not the literal app name: iOS already shows "Ring" as its
   // forced app-name header, so titling this "Ring" too rendered the app name twice
-  // ("Ring › Ring › New message"). (US2) On the dev host only, the body carries why we fell back to
-  // generic so the "generic after a while" cause can be confirmed on a real device.
+  // ("Ring › Ring › New message"). (US2) The body carries WHY we fell back to generic so the
+  // "generic after a while" cause can be confirmed on a real device — on the dev host always, and
+  // (spec 2043) on production when the user opts into the push diagnostics toggle. Content-free:
+  // the reason is an internal token (timeout / clean-resolve-no-show / an error message), never
+  // sender or message text.
+  const showReason = reason && (DEV_HOST || (await setting('diagnostics.pushReasonText', false)));
   await self.registration.showNotification('New message', {
-    body: DEV_HOST && reason ? reason : 'Tap to open',
+    body: showReason ? reason : 'Tap to open',
     icon: ICON,
     badge: BADGE,
     tag: GENERIC_TAG,
@@ -330,10 +335,15 @@ async function showQuietNote(kind: 'msg' | 'activity'): Promise<void> {
  *  WebKit — where webpushd's cumulative three-strike counter has NO on-screen
  *  exemption — plus Firefox and anything unrecognized, every wake ends visibly
  *  no matter what the client list claims. */
-async function showQuietUnlessVisible(kind: 'msg' | 'activity'): Promise<void> {
+// (spec 2043) Returns whether it actually SHOWED the quiet note. `false` means
+// silence was licensed (trusted platform + focused & visible window) — the caller
+// treats that as satisfied-but-not-shown, so a clean wake doesn't trip the backstop
+// yet a reject/timeout still falls back (the wake produced no OS notification).
+async function showQuietUnlessVisible(kind: 'msg' | 'activity'): Promise<boolean> {
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-  if (mayEndWakeSilently(self.navigator.userAgent, clients)) return; // licensed: trusted platform + focused & visible window
+  if (mayEndWakeSilently(self.navigator.userAgent, clients)) return false; // licensed: trusted platform + focused & visible window
   await showQuietNote(kind);
+  return true;
 }
 
 /** Close any lingering notifications with a given tag (used to clear the generic
@@ -593,7 +603,7 @@ async function showConnNotification(): Promise<number> {
  * an ack is only ever sent for a durably-committed frame, and the notification
  * is shown before the ack so a kill can't consume a frame silently.
  */
-async function tryAuthoritativeDrain(): Promise<boolean> {
+async function tryAuthoritativeDrain(ctx: WakeCtx): Promise<boolean> {
   try {
     return await serializeNotify(async () => {
       const r = await drainPersistPending();
@@ -609,7 +619,12 @@ async function tryAuthoritativeDrain(): Promise<boolean> {
       // message keys are consumed — it would misread them as decrypt failures).
       await markShown(r.ackIds);
       await ackFrames(r.ackIds); // strictly after commit + notifications
-      if (r.deferred > 0) return false; // preview flow handles the deferred remainder
+      if (r.deferred > 0) {
+        // Preview flow handles the deferred remainder AND sets ctx there. Any notes
+        // we accepted above still count toward this wake having shown.
+        if (accepted > 0) ctx.shown = true;
+        return false;
+      }
       // Fully handled: applied rows are already in unreadCount(), nothing pending.
       await updateAppBadge(0);
       // (spec 1034/2023) Persisted + acked but nothing made it on screen — every
@@ -619,7 +634,11 @@ async function tryAuthoritativeDrain(): Promise<boolean> {
       // owed. A failure of the quiet note itself is contained by this function's
       // catch, which degrades to the preview flow — whose own quiet terminal
       // propagates (FR-005 carve-out).
-      if (!r.notes.length || accepted === 0) await showQuietUnlessVisible('msg');
+      let shown = accepted > 0;
+      if (!r.notes.length || accepted === 0) shown = (await showQuietUnlessVisible('msg')) || shown;
+      // (spec 2043) A fully-handled drain always ends satisfied (shown or licensed).
+      ctx.shown = shown;
+      ctx.satisfied = true;
       return true;
     });
   } catch (e) {
@@ -634,7 +653,7 @@ async function tryAuthoritativeDrain(): Promise<boolean> {
  * *some* notification (iOS requires one per push). A generic placeholder shown on
  * timeout is UPGRADED to the rich preview when the full decrypt settles.
  */
-async function showMessageNotification(): Promise<void> {
+async function showMessageNotification(ctx: WakeCtx): Promise<void> {
   // (spec 2017) Serialize only the critical read→show→markShown sections (NOT the straggler's sleeps),
   // so overlapping burst wakes can't interleave and duplicate a notification or bounce the per-pass
   // count — while a queued wake still gets the lock during another wake's sleep gaps and is never
@@ -695,7 +714,11 @@ async function showMessageNotification(): Promise<void> {
   // off (`silenced`), the master-toggle race (`suppressed`), and a nothing-new
   // wake with nothing to re-assert all still consumed a push — end them with the
   // content-free quiet generic unless Ring is actually on screen.
-  if (!shownAny) await showQuietUnlessVisible('msg');
+  if (!shownAny) shownAny = await showQuietUnlessVisible('msg');
+  // (spec 2043) Record the wake's per-event outcome for the guard: a real show or
+  // a licensed-silent quiet skip both satisfy it; only an actual show sets `shown`.
+  ctx.shown = shownAny;
+  ctx.satisfied = true;
 
   // Settle the full preview (bounded) so its /relay/pending fetch lands (→ delivery)
   // even after a generic fallback, we learn the accurate backlog for the badge, and
@@ -825,7 +848,7 @@ async function pageWillNotify(clients: readonly Client[], timeoutMs: number): Pr
   return acked;
 }
 
-async function dispatchPush(event: PushEvent): Promise<void> {
+async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
       // (spec 1037) Every wake stamps its time FIRST — the page-side zombie
       // detector treats "no wake since a stale message was sent" as the
       // rotate-the-subscription signature. It's best-effort telemetry though, so
@@ -847,6 +870,10 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         const sig = await readRingShown();
         const reassert = ringReassert(sig, Date.now());
         await showCall(reassert ?? undefined, { realert: true });
+        // (spec 2043) The ring alert is up; any later naming upgrade is a bonus. If
+        // showCall threw, ctx stays unshown → the guard's fallback fires.
+        ctx.shown = true;
+        ctx.satisfied = true;
         if (reassert && sig) {
           await recordRingShown({ ...sig, ts: Date.now() });
         } else if (!ringReassert(await readRingShown(), Date.now())) {
@@ -905,10 +932,13 @@ async function dispatchPush(event: PushEvent): Promise<void> {
           // the conn path previously never touched the badge, so a friend request didn't count.
           const pendingIncoming = await showConnNotification();
           await updateAppBadge(pendingIncoming);
+          ctx.shown = true;
+          ctx.satisfied = true; // showConnNotification always ends with a visible show
         } else {
           // (spec 1034) A client EXISTS but may be a frozen background PWA (the norm
           // on iOS) that will never render the page-side alert — end visibly anyway.
-          await showQuietUnlessVisible('activity');
+          ctx.shown = await showQuietUnlessVisible('activity');
+          ctx.satisfied = true;
         }
         return;
       }
@@ -924,10 +954,13 @@ async function dispatchPush(event: PushEvent): Promise<void> {
           // Name the author AND bump the app-icon badge (the post path previously did neither).
           const newCount = await showPostNotification();
           await updateAppBadge(newCount);
+          ctx.shown = true;
+          ctx.satisfied = true; // showPostNotification always ends with a visible show
         } else {
           // (spec 1034) Toggle off, or a (possibly frozen) client exists: the wake
           // still consumed a push — end it with the content-free quiet generic.
-          await showQuietUnlessVisible('activity');
+          ctx.shown = await showQuietUnlessVisible('activity');
+          ctx.satisfied = true;
         }
         return;
       }
@@ -951,7 +984,9 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         // (spec 1034) Toggle off, frozen client, or a removal that previews to zero
         // notes: still a consumed push — end visibly (content-free; a removal shows
         // the neutral "New activity", never who or what).
-        if (!shownActivity) await showQuietUnlessVisible('activity');
+        if (!shownActivity) shownActivity = await showQuietUnlessVisible('activity');
+        ctx.shown = shownActivity;
+        ctx.satisfied = true;
         return;
       }
       if (kind === 'version') {
@@ -963,9 +998,12 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         for (const client of clients) client.postMessage({ type: 'ring:checkupdate' });
         if (!clients.length) {
           await showVersionNotification();
+          ctx.shown = true;
+          ctx.satisfied = true; // showVersionNotification always ends with a visible show
         } else {
           // (spec 1034) A frozen background client can't show the update toast.
-          await showQuietUnlessVisible('activity');
+          ctx.shown = await showQuietUnlessVisible('activity');
+          ctx.satisfied = true;
         }
         return;
       }
@@ -999,14 +1037,20 @@ async function dispatchPush(event: PushEvent): Promise<void> {
         // Chrome window that stays focused+visible still skips exactly as before (the user
         // saw the in-app banner, so no OS duplicate).
         const nowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-        if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) await showQuietNote('msg');
+        if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) {
+          await showQuietNote('msg');
+          ctx.shown = true;
+        }
+        // Either we showed the quiet note, or silence is licensed here (focused +
+        // visible Chromium). Both are satisfied; only the show sets ctx.shown.
+        ctx.satisfied = true;
         return;
       }
       // Spec 1032: with sw.fullPersist on (and no page claiming the wake), persist
       // + ack eligible frames right now so the app opens warm. Any degrade — and
       // any deferred remainder — falls through to today's preview flow.
-      if (await tryAuthoritativeDrain()) return;
-      await showMessageNotification();
+      if (await tryAuthoritativeDrain(ctx)) return;
+      await showMessageNotification(ctx);
 }
 
 // The Web Push `userVisibleOnly` contract is unforgiving on iOS: a push event
@@ -1021,50 +1065,25 @@ async function dispatchPush(event: PushEvent): Promise<void> {
 // broken device finally says WHY on-screen).
 const PUSH_DEADLINE_MS = 20000; // under iOS's ~30s SW-event budget, over our own straggler+settle window
 
-// Whether a notification was actually shown DURING the current push event — the
-// only correct gate for the fallback. (An earlier version checked
-// getNotifications(), but that also counts a STALE notification from a PRIOR
-// push still on screen, so when a later push failed with an old notification
-// visible, the fallback was wrongly suppressed → a SILENT push → the exact
-// subscription revocation this guard exists to prevent.) Wrapping the one
-// registration method that every show* path funnels through centralizes the
-// tracking without threading a flag through all of them. If the platform blocks
-// reassigning the native method, the flag simply never flips → the guard always
-// shows on failure, which is the safe direction (a rare double beats a silent).
-let lastNotificationAt = 0;
-try {
-  const rawShow = self.registration.showNotification.bind(self.registration);
-  // (spec 2023 FR-006) Stamp on FULFILLMENT, never at call time: a show the OS
-  // rejects (or hangs) was never shown, and stamping it early would suppress the
-  // guarded fallback below — the exact silent wake it exists to prevent.
-  self.registration.showNotification = stampedShow(rawShow, () => {
-    lastNotificationAt = Date.now();
-  }) as ServiceWorkerRegistration['showNotification'];
-} catch {
-  /* reassignment blocked — fallback stays maximally safe (always shows on failure) */
-}
-
+// (spec 2043) Guard one push wake with a PER-EVENT context. dispatchPush threads a
+// WakeCtx and marks it `shown` the instant an OS notification is accepted and
+// `satisfied` when the wake ends shown OR with licensed silence. runGuardedWake then:
+//   - reject/deadline → last-resort generic UNLESS this event already showed
+//     (ctx.shown). Because the flag is per-event, a sibling wake's show can no longer
+//     suppress this one's fallback — the module-global stamp that did exactly that
+//     (a later push's show bleeding past an earlier push's start → a silent wake →
+//     an iOS subscription strike) is GONE.
+//   - clean resolve, not satisfied → backstop generic. The "every iOS wake shows
+//     something" invariant every terminal used to assume is now ENFORCED here.
+// `showGeneric` is the registration's native showNotification path (no monkeypatch);
+// the reason is surfaced only on the dev host / when the diagnostic toggle is on.
 async function guardedPush(event: PushEvent): Promise<void> {
-  const startedAt = Date.now();
-  try {
-    await Promise.race([
-      dispatchPush(event),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('push handler exceeded deadline')), PUSH_DEADLINE_MS),
-      ),
-    ]);
-  } catch (err) {
-    // Only skip the fallback if THIS event already produced a notification (a
-    // stale one from an earlier push must NOT suppress it — that's what caused
-    // the silent pushes). On any doubt, show: a double beats a revocation.
-    if (lastNotificationAt < startedAt) {
-      try {
-        await showGeneric(`fallback: ${String((err as Error)?.message ?? err)}`);
-      } catch {
-        /* the platform denied even the bare fallback — nothing more we can do */
-      }
-    }
-  }
+  const { kind } = pushKind(event);
+  const res = await runGuardedWake((ctx) => dispatchPush(event, ctx), (reason) => showGeneric(reason), PUSH_DEADLINE_MS);
+  // (spec 2043) Content-free ledger entry: which tickle kind, and did the wake end
+  // shown / licensed-silent / on the backstop generic. Surfaced (behind the
+  // diagnostics toggle) so a real device can finally say WHY it fell silent.
+  void recordWake(kind, res.fellBack ? 'fallback' : res.shown ? 'shown' : 'licensed-silent');
 }
 
 self.addEventListener('push', (event) => {

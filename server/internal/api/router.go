@@ -288,6 +288,9 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	// Relay drain over HTTP (for the service worker's background decrypt path; the
 	// live client still drains + acks over the WebSocket).
 	mux.Handle("GET /v1/relay/pending", authMW(http.HandlerFunc(h.relayPending)))
+	// Side-effect-free queue metadata (age + count) for the spec-2043 zombie
+	// self-heal; never dequeues, never emits a receipt, so it's safe to poll.
+	mux.Handle("GET /v1/relay/status", authMW(http.HandlerFunc(h.relayStatus)))
 	mux.Handle("POST /v1/relay/ack", authMW(http.HandlerFunc(h.relayAck)))
 	// Sender-side reconcile: which of my still-'sent' messages were delivered while
 	// I was offline (so a dropped 'delivered' receipt is recovered on reconnect).

@@ -29,7 +29,7 @@ import { deferNotificationsFor } from '@/services/notify';
 import { publishOwnPreKeysOnce, replenishPreKeysIfLow } from '@/services/messaging';
 import { runOwnSync, ownSyncQuiet } from '@/services/ownsync';
 import { publishOwnProfile, syncContactEdges, refreshContactProfiles } from '@/services/directory';
-import { applyPushPreference, disablePush, revalidatePushSubscription } from '@/services/push';
+import { applyPushPreference, disablePush, healZombieIfLikely, revalidatePushSubscription } from '@/services/push';
 import { checkForUpdate } from '@/composables/useAppUpdate';
 import { refreshConnections, onConnectionAccepted } from '@/services/connections';
 import { notifyIncoming } from '@/services/notify';
@@ -303,6 +303,10 @@ function start(): void {
       // outcome marker lands before the stale judgement.
       if (isUnlocked.value) void reconcilePendingCallEvents();
       void applyPushPreference(true); // (re)register or drop push per the notification prefs
+      // (spec 2043) On reconnect, check whether the server is holding frames this
+      // device never woke for — the zombie signature — and force-rotate if so. This
+      // is wake-independent, so it recovers a subscription that silently went dark.
+      void healZombieIfLikely();
       void sendPresencePrefs(); // upload our sharing booleans
       void sendPresenceSub(); // watch our contacts' presence
       void sendPresenceSelf(selfActive()); // correct the server's connect-default if we're locked
@@ -518,6 +522,9 @@ function start(): void {
         // whose subscription silently lapsed while closed heals on foreground.
         // Throttled internally, so this is cheap to run every time.
         void revalidatePushSubscription();
+        // (spec 2043) And on a warm reopen, force-rotate a subscription the server
+        // proves is a zombie (holding frames older than any wake). Throttled too.
+        void healZombieIfLikely();
         void sweepExpiredMessages(); // drop anything that expired while backgrounded
         // Spec 1032: the SW may have PERSISTED messages while this page sat frozen
         // (iOS freezes JS but keeps the page alive), and a frozen page can miss the

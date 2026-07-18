@@ -83,6 +83,12 @@ func (m *memRelay) PendingForRecipient(_ context.Context, recipient string) ([]s
 	return append([]store.RelayItem(nil), m.queue[recipient]...), nil
 }
 
+func (m *memRelay) OldestPendingForRecipient(_ context.Context, recipient string) (int64, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return 0, len(m.queue[recipient]), nil
+}
+
 func (m *memRelay) DeleteRelay(_ context.Context, recipient, msgID string) (string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

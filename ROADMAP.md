@@ -126,3 +126,4 @@ Specs are grouped by category band; status moves
 | [2039](specs/2039-boot-loop-safe/spec.md) | Boot-Loop Safe Mode | 🟢 shipped |
 | [2040](specs/2040-recovered-devices-rebuild/spec.md) | Recovered Devices Rebuild Their Friends Ledger | 🟢 shipped |
 | [2041](specs/2041-video-post-memory/spec.md) | Video Posts Must Not Exhaust iPhone Memory | 🟢 shipped |
+| [2043](specs/2043-push-zombie-subscriptions/spec.md) | Push zombie subscriptions & silent-wake strikes | 🟡 in-progress |
