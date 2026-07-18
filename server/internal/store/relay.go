@@ -47,6 +47,36 @@ func (s *Store) PendingForRecipient(ctx context.Context, recipient string) ([]Re
 	return out, rows.Err()
 }
 
+// OldestPendingForRecipient returns the age of the oldest queued frame for a
+// recipient and the total queued count - zero-knowledge metadata for the client's
+// zombie self-heal (spec 2043). oldestMs is the oldest frame's created_at in epoch
+// milliseconds, 0 when the queue is empty. No payload ever leaves the server here;
+// only a server timestamp and a count, so the client can tell "the server is holding
+// messages I never woke for" without decrypting anything.
+func (s *Store) OldestPendingForRecipient(ctx context.Context, recipient string) (oldestMs int64, count int, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT COALESCE(EXTRACT(EPOCH FROM min(created_at)) * 1000, 0)::bigint, count(*)
+		   FROM relay_queue WHERE recipient = $1`,
+		recipient).Scan(&oldestMs, &count)
+	return oldestMs, count, err
+}
+
+// CountZombieFleet counts recipients who hold a push subscription yet carry unacked
+// relay frames older than staleAge - the server-side signature of a "zombie"
+// subscription (spec 2043): the upstream push service still 201-accepts every send,
+// but the device never wakes to drain, so frames pile up unacked. Emitted periodically
+// from the sweep loop for operator visibility (and a before/after handle on the fix).
+func (s *Store) CountZombieFleet(ctx context.Context, staleAge time.Duration) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(DISTINCT rq.recipient)
+		   FROM relay_queue rq
+		   JOIN push_subscriptions ps ON ps.user_id = rq.recipient
+		  WHERE rq.created_at < now() - make_interval(secs => $1)`,
+		staleAge.Seconds()).Scan(&n)
+	return n, err
+}
+
 // SweepRelayOlderThan deletes queued frames older than age, returning the number
 // removed. The service worker's preview path never acks (and even the spec-1032
 // authoritative drain acks only what it durably committed, leaving deferred frame

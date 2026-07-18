@@ -58,6 +58,67 @@ func TestRelayPendingAndAck(t *testing.T) {
 	}
 }
 
+// TestRelayStatus proves GET /v1/relay/status (spec 2043) reports the queued count
+// and oldest-frame age with NO side effects, and returns a null oldest for an empty
+// queue. It powers the client zombie self-heal without dequeuing or emitting receipts.
+func TestRelayStatus(t *testing.T) {
+	as := newFakeStore()
+	srv := NewRouter(&Handlers{
+		Store: as, Directory: as, Blocks: as, Relay: as, Hub: ws.NewHub(),
+		Keys: newFakeKeysStore(), Blobs: newFakeBlobStore(),
+		Sync: newFakeSyncStore(), Push: newFakePushStore(), Invites: as,
+		PublicURL: "https://ring.example",
+	}, []string{"http://localhost:5173"})
+
+	tok, uid, code := registerNamed(t, srv, "statususer")
+	if code != http.StatusOK {
+		t.Fatalf("register = %d", code)
+	}
+
+	// Empty queue → count 0 and a NULL oldest (never an epoch-0 timestamp).
+	rr := do(t, srv, http.MethodGet, "/v1/relay/status", tok, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	var got struct {
+		OldestQueuedAtMs *int64 `json:"oldestQueuedAtMs"`
+		Count            int    `json:"count"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if got.Count != 0 || got.OldestQueuedAtMs != nil {
+		t.Fatalf("empty status = %+v, want count 0 + null oldest (%s)", got, rr.Body.String())
+	}
+
+	// Queue two frames, the older one stamped in the past.
+	as.mu.Lock()
+	as.relay = map[string][]relayRow{
+		uid: {
+			{seq: 1, sender: "00000000-0000-0000-0000-000000000999", msgID: "m1", createdMs: 1_000_000},
+			{seq: 2, sender: "00000000-0000-0000-0000-000000000999", msgID: "m2", createdMs: 2_000_000},
+		},
+	}
+	as.mu.Unlock()
+
+	rr = do(t, srv, http.MethodGet, "/v1/relay/status", tok, "")
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if got.Count != 2 {
+		t.Fatalf("status count = %d, want 2", got.Count)
+	}
+	if got.OldestQueuedAtMs == nil || *got.OldestQueuedAtMs != 1_000_000 {
+		t.Fatalf("status oldest = %v, want 1000000", got.OldestQueuedAtMs)
+	}
+
+	// No side effect: the frames are still queued (relay/status never dequeues).
+	pend := do(t, srv, http.MethodGet, "/v1/relay/pending", tok, "")
+	var pg struct {
+		Frames []json.RawMessage `json:"frames"`
+	}
+	_ = json.Unmarshal(pend.Body.Bytes(), &pg)
+	if len(pg.Frames) != 2 {
+		t.Fatalf("after status, pending = %d, want 2 (status must not dequeue)", len(pg.Frames))
+	}
+}
+
 // TestDeliveriesReconcile proves the WS11 sender-side reconcile: after the recipient
 // acks (recording a durable delivery), the SENDER can recover the 'delivered' state
 // for its still-'sent' messages even though the live receipt may have been dropped.

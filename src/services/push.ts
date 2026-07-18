@@ -9,7 +9,7 @@
  * Requires notification permission to already be granted (the onboarding wizard
  * handles the prompt); these functions are safe no-ops otherwise.
  */
-import { fetchServerConfig, savePushPrefs, subscribePush, unsubscribePushServer } from './api';
+import { fetchRelayStatus, fetchServerConfig, savePushPrefs, subscribePush, unsubscribePushServer } from './api';
 import { get, getAll, put, remove, subscribe as subscribeBus } from '@/db/idb';
 import { readHiddenSetOrNull } from './hidden-chats';
 import { derivePushPrefs, type PrefsChatSnap } from './push-prefs';
@@ -176,6 +176,65 @@ async function consumeRotationDecision(): Promise<boolean> {
 
 export { STALE_MSG_MS };
 
+/* ---- (spec 2043) The SERVER-TRUTH zombie signature. The two signatures above key
+ * on the DECRYPTED send time of a drained message, so they need the app to actually
+ * receive + decrypt frames, and they can't match a fresh-burst zombie (<10min old,
+ * <3 drain sessions) or a subscription that NEVER woke. This one reads /relay/status
+ * directly: if the server is holding frames older than the bar and this device has no
+ * push wake since they queued, the subscription is a zombie (still 201-accepted
+ * upstream, never delivered) — rotate. It fires even when lastWakeAt is 0, which is
+ * the whole point. Its own SHORT cap (2h, not the 24h drain cap) lets a device that
+ * rotated into a still-dead endpoint retry on the next session. ---- */
+const ZOMBIE_QUEUE_AGE_MS = 10 * 60 * 1000; // a frame this old must have woken a live sub by now
+const FORCE_ROTATE_MIN_INTERVAL_MS = 2 * 60 * 60 * 1000; // retry cap for the force-rotate signal
+const FORCE_ROTATED_KEY = 'push.lastForceRotateAt';
+
+/** The pure server-truth rotation decision (unit-tested). */
+export function shouldRotateForQueueAge(args: {
+  oldestQueuedAtMs: number | null;
+  lastWakeAt: number;
+  lastForceRotateAt: number;
+  now: number;
+}): boolean {
+  const { oldestQueuedAtMs, lastWakeAt, lastForceRotateAt, now } = args;
+  if (!oldestQueuedAtMs) return false; // empty queue (null / 0)
+  if (now - oldestQueuedAtMs < ZOMBIE_QUEUE_AGE_MS) return false; // too fresh — a held push may still be in flight
+  if (lastWakeAt >= oldestQueuedAtMs) return false; // a wake since it queued → the push path works
+  return now - lastForceRotateAt >= FORCE_ROTATE_MIN_INTERVAL_MS;
+}
+
+// Throttle the /relay/status probe so healZombieIfLikely is cheap to call on every
+// foreground and reconnect (mirrors revalidatePushSubscription's throttle).
+let lastZombieProbe = 0;
+const ZOMBIE_PROBE_THROTTLE_MS = 5 * 60_000;
+
+/**
+ * (spec 2043) Detect a likely-zombie subscription from SERVER queue age and, if
+ * found, force-rotate to a fresh endpoint — the only client-side cure for a
+ * subscription the push service silently revoked (it still 201-accepts, so the
+ * server never prunes and the browser hands back the same dead object forever).
+ * Foreground/reconnect-driven and wake-independent: this is what recovers a device
+ * that went dark without ever waking. Best-effort and throttled; a probe failure
+ * or a not-yet-zombie result is a silent no-op.
+ */
+export async function healZombieIfLikely(): Promise<void> {
+  if (!pushReady()) return;
+  const now = Date.now();
+  if (now - lastZombieProbe < ZOMBIE_PROBE_THROTTLE_MS) return;
+  lastZombieProbe = now;
+  try {
+    const { oldestQueuedAtMs } = await fetchRelayStatus();
+    const lastWakeAt = (await get<Setting<number>>('settings', WAKE_KEY))?.value ?? 0;
+    const lastForceRotateAt = (await get<Setting<number>>('settings', FORCE_ROTATED_KEY))?.value ?? 0;
+    if (!shouldRotateForQueueAge({ oldestQueuedAtMs, lastWakeAt, lastForceRotateAt, now })) return;
+    console.warn('[push] server-truth zombie signature — force-rotating the subscription');
+    await put<Setting<number>>('settings', { key: FORCE_ROTATED_KEY, value: now });
+    await ensurePushSubscription({ forceRotate: true });
+  } catch {
+    /* probe/rotate is best-effort — the next foreground retries after the throttle */
+  }
+}
+
 /** Whether an existing subscription was created with the given VAPID key. If not,
  *  the server's key rotated (or differs across envs) and pushes to it would
  *  silently fail, so it must be replaced. */
@@ -196,7 +255,7 @@ function subMatchesKey(sub: PushSubscription, desired: Uint8Array): boolean {
  * re-subscribes, so a rotated/mismatched key can't silently kill delivery. Returns
  * true only when a subscription was successfully registered (so callers can retry).
  */
-export async function ensurePushSubscription(): Promise<boolean> {
+export async function ensurePushSubscription(opts?: { forceRotate?: boolean }): Promise<boolean> {
   if (!pushReady()) return false;
   try {
     const reg = await navigator.serviceWorker.ready;
@@ -207,6 +266,17 @@ export async function ensurePushSubscription(): Promise<boolean> {
     const key = urlBase64ToUint8Array(vapidPublicKey);
     let sub = await reg.pushManager.getSubscription();
     if (sub && !subMatchesKey(sub, key)) {
+      try {
+        await sub.unsubscribe();
+      } catch {
+        /* ignore, we resubscribe below regardless */
+      }
+      sub = null;
+    }
+    // (spec 2043) Caller-forced rotation: the server-truth zombie heal decided this
+    // endpoint is dead (queued frames older than any wake). Drop it and mint a fresh
+    // one — the browser object is not trustworthy evidence the push service delivers.
+    if (sub && opts?.forceRotate) {
       try {
         await sub.unsubscribe();
       } catch {

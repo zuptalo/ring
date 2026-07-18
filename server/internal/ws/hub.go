@@ -46,6 +46,10 @@ const (
 type RelayStore interface {
 	EnqueueRelay(ctx context.Context, recipient, sender, msgID string, payload []byte) error
 	PendingForRecipient(ctx context.Context, recipient string) ([]store.RelayItem, error)
+	// OldestPendingForRecipient returns the oldest queued frame's age (epoch ms, 0 if
+	// empty) and the total count - zero-knowledge metadata for the spec-2043 zombie
+	// self-heal, with no payload and no side effects.
+	OldestPendingForRecipient(ctx context.Context, recipient string) (oldestMs int64, count int, err error)
 	DeleteRelay(ctx context.Context, recipient, msgID string) (sender string, found bool, err error)
 	// RecordDelivery durably notes msgID (from sender) reached recipient, so the
 	// sender can reconcile a dropped 'delivered' receipt on reconnect.
