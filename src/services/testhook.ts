@@ -9,7 +9,7 @@
  */
 import { register, getSelfUserId, getSelfUsername } from '@/services/auth';
 import { syncDirectory, importDirectoryUser, searchDirectory, publishOwnProfile, refetchContactProfile } from '@/services/directory';
-import { previewPending } from '@/services/sw-inbox';
+import { previewPending, readWakeLedger } from '@/services/sw-inbox';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
 import { disconnectTransport, nudgeReconnect, forceReconnect, sendDownloadedReceipts, sendSeenReceipts, applySeenPref } from '@/composables/useSync';
 import {
@@ -352,6 +352,10 @@ export function installTestHook(): void {
       const ackOk = r.mode === 'applied' ? await ackFrames(r.ackIds) : false;
       return { ...r, ackOk };
     },
+    /** (spec 2043) The content-free push-wake ledger — one entry per push wake
+     *  ({ ts, kind, outcome, count }). Lets the burst e2e assert every wake ended
+     *  shown/licensed and none fell to the backstop. */
+    pushWakeLedger: () => readWakeLedger(),
     /** Drop the WebSocket so the server queues messages (simulate app closed). */
     disconnect: () => disconnectTransport(),
     /** Reconnect the WebSocket (drains the queue for real). */

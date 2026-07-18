@@ -568,6 +568,11 @@ export const SETTINGS: Record<string, SettingNode> = {
         items: [{ type: 'toggle', title: 'Show preview', key: 'notifications.showPreview', default: true }],
         footer: 'Preview message text inside new message notifications.',
       },
+      {
+        header: 'Troubleshooting',
+        items: [{ type: 'toggle', title: 'Show notification diagnostics', key: 'diagnostics.pushReasonText', default: false }],
+        footer: 'If a notification arrives as a plain "New message", show a short reason for it. Turn this on only if we ask you to help track down missing notifications. It never reveals who messaged you or what they said.',
+      },
     ],
   },
   'notifications-message-sound': {

@@ -68,6 +68,31 @@ func (h *Handlers) relayPending(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"frames": frames})
 }
 
+// relayStatus (GET /v1/relay/status) returns metadata about the caller's queued
+// frames - the oldest frame's age and the total count - with NO side effects: unlike
+// relayPending it never dequeues and never emits a delivery receipt, so the client
+// can poll it on every foreground. It powers the spec-2043 zombie self-heal: a client
+// whose subscription the push service silently revoked (still 201-accepted upstream,
+// never delivered to the device) sees "the server is holding messages older than any
+// push wake I recorded" and force-rotates to a fresh subscription. Zero-knowledge:
+// only a server timestamp and a count leave the server, never any payload.
+func (h *Handlers) relayStatus(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	oldestMs, count, err := h.Relay.OldestPendingForRecipient(r.Context(), uid)
+	if err != nil {
+		slog.Error("relay status failed", "err", err, "user", uid)
+		httpx.Error(w, http.StatusInternalServerError, "could not load relay status")
+		return
+	}
+	// null (not 0) when the queue is empty, so the client never misreads an empty
+	// queue as an epoch-0 timestamp.
+	var oldest any
+	if count > 0 && oldestMs > 0 {
+		oldest = oldestMs
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"oldestQueuedAtMs": oldest, "count": count})
+}
+
 type relayAckRequest struct {
 	IDs []string `json:"ids"`
 }

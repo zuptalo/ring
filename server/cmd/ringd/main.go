@@ -517,6 +517,18 @@ func run() error {
 						break
 					}
 				}
+				// (spec 2043) Zombie-fleet gauge: recipients who hold a push
+				// subscription yet carry unacked relay frames older than a day - the
+				// server-side signature of a subscription the push service still
+				// 201-accepts but never delivers (the device never wakes to drain).
+				// Emitted every sweep as the before/after handle for the client
+				// self-heal; costs one indexed count query.
+				const zombieStaleAge = 24 * time.Hour
+				if zn, zerr := st.CountZombieFleet(sctx, zombieStaleAge); zerr != nil {
+					slog.Error("push: zombie fleet", "err", zerr)
+				} else {
+					slog.Info("push: zombie fleet", "recipients", zn, "staleHours", 24)
+				}
 				cancel()
 				if bn > 0 {
 					slog.Info("blob sweep", "removed", bn)

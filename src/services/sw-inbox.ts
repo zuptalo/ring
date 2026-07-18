@@ -137,6 +137,110 @@ export async function stampPushWake(): Promise<void> {
   }
 }
 
+/** (spec 2043) The per-event outcome of a single push wake. Both bits are scoped
+ *  to ONE event — never a module global — which is the whole fix: pre-2043 a shared
+ *  "last shown" stamp let a later event's accepted show bleed past an earlier
+ *  event's start and suppress its fallback, ending that earlier wake silently (an
+ *  iOS subscription strike). */
+export interface WakeCtx {
+  /** An OS notification was actually accepted DURING this event. Gates the
+   *  reject/timeout fallback: fall back unless this specific event showed. */
+  shown: boolean;
+  /** Shown, OR silence was licensed for this wake (`mayEndWakeSilently`). Gates the
+   *  clean-resolve backstop: a wake that resolves neither shown nor licensed is a
+   *  silent push and must show a backstop generic. */
+  satisfied: boolean;
+}
+
+/** (spec 2043) The deadline message; also the reason token the guard surfaces so a
+ *  hung handler is distinguishable from a thrown one in the fallback body/ledger. */
+export const PUSH_DEADLINE_MESSAGE = 'push handler exceeded deadline';
+
+/** (spec 2043) The coarse, content-free outcome of a guarded wake. */
+export interface WakeResult {
+  /** An OS notification was accepted this event. */
+  shown: boolean;
+  /** Shown or licensed-silent — the wake ended acceptably (no backstop needed). */
+  satisfied: boolean;
+  /** The last-resort backstop generic fired (the primary path showed nothing). */
+  fellBack: boolean;
+}
+
+/** (spec 2043) Run one push wake under a per-event guard. `dispatch` mutates its
+ *  own `WakeCtx` as it shows / licenses silence; `showFallback` is the last-resort
+ *  visible generic. The Web Push `userVisibleOnly` contract is unforgiving on iOS —
+ *  a push event that resolves without a visible notification is a silent push, and
+ *  a few of those revoke the subscription — so this guarantees EVERY wake ends
+ *  either shown or with licensed silence:
+ *    - clean resolve, not satisfied → backstop generic (the always-visible invariant
+ *      becomes enforced, not merely assumed by each terminal).
+ *    - reject / deadline, not shown → last-resort generic (per-event, so a sibling
+ *      wake's show can't suppress it — the 2043 stamp-bleed regression).
+ *  A fallback that itself fails is swallowed (the platform denied even the generic;
+ *  nothing more we can do). Kept pure + injectable here so it is unit-testable
+ *  without the `self`-bound service-worker module. */
+export async function runGuardedWake(
+  dispatch: (ctx: WakeCtx) => Promise<void>,
+  showFallback: (reason: string) => Promise<void>,
+  deadlineMs: number,
+): Promise<WakeResult> {
+  const ctx: WakeCtx = { shown: false, satisfied: false };
+  let fellBack = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const fallback = async (reason: string): Promise<void> => {
+    fellBack = true;
+    try {
+      await showFallback(reason);
+    } catch {
+      /* the platform denied even the bare fallback — nothing more we can do */
+    }
+  };
+  try {
+    await Promise.race([
+      dispatch(ctx),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(PUSH_DEADLINE_MESSAGE)), deadlineMs);
+      }),
+    ]);
+    if (!ctx.satisfied) await fallback('clean-resolve-no-show');
+  } catch (err) {
+    if (!ctx.shown) await fallback(`fallback: ${String((err as Error)?.message ?? err)}`);
+  } finally {
+    // Clear the loser of the race so a still-pending deadline reject can't surface
+    // as an unhandled rejection after dispatch already settled.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+  return { shown: ctx.shown, satisfied: ctx.satisfied, fellBack };
+}
+
+/* ---- (spec 2043) On-device push-wake ledger. A bounded, ZERO-KNOWLEDGE ring buffer
+ * of what each push wake did — enum kind, enum outcome, a count, a timestamp. NO
+ * sender, body, or tag ever enters it, so it is safe to surface on a real production
+ * device (behind the diagnostics toggle) to see WHY notifications fell silent, which
+ * is otherwise invisible on iOS. ---- */
+export type WakeKind = 'call' | 'conn' | 'post' | 'post-activity' | 'version' | 'msg';
+export type WakeOutcome = 'shown' | 'licensed-silent' | 'fallback';
+export interface WakeLedgerEntry { ts: number; kind: WakeKind; outcome: WakeOutcome; count: number }
+const WAKE_LEDGER_KEY = 'push.wakeLedger';
+const WAKE_LEDGER_MAX = 50;
+
+/** Append one content-free wake outcome, capped at the newest WAKE_LEDGER_MAX.
+ *  Best-effort telemetry — never blocks or fails the alert. */
+export async function recordWake(kind: WakeKind, outcome: WakeOutcome, count = 0): Promise<void> {
+  try {
+    const prev = (await get<Setting<WakeLedgerEntry[]>>('settings', WAKE_LEDGER_KEY))?.value ?? [];
+    const next = [...prev, { ts: Date.now(), kind, outcome, count }].slice(-WAKE_LEDGER_MAX);
+    await put<Setting<WakeLedgerEntry[]>>('settings', { key: WAKE_LEDGER_KEY, value: next });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Read the wake ledger (newest last) for the diagnostics view. */
+export async function readWakeLedger(): Promise<WakeLedgerEntry[]> {
+  return (await get<Setting<WakeLedgerEntry[]>>('settings', WAKE_LEDGER_KEY))?.value ?? [];
+}
+
 export async function setting<T>(key: string, fallback: T): Promise<T> {
   const s = await get<Setting<T>>('settings', key);
   return s ? s.value : fallback;

@@ -67,3 +67,44 @@ describe('weak zombie signature: shouldRotateForMissedWakes', () => {
     expect(shouldRotateForMissedWakes({ ...weakBase, lastRotateAt: NOW - 23 * H })).toBe(false);
   });
 });
+
+// Spec 2043 — the server-truth zombie signature: the server holds queued frames
+// older than the bar with NO push wake since they queued. Unlike the two decrypted-
+// evidence signatures above, this reads directly from /relay/status, so it fires even
+// on a device whose lastWakeAt is 0 (never woke) or a fresh-burst zombie that matches
+// neither the ≥10-min-stale nor the streak-of-3 signature. Its OWN short (2h) cap,
+// separate from the 24h drain cap, lets a device that rotated into a still-dead
+// endpoint retry next session.
+import { shouldRotateForQueueAge } from './push';
+
+const M = 60 * 1000;
+const queueBase = {
+  oldestQueuedAtMs: NOW - 30 * M, // oldest frame queued 30min ago (well past the 10min bar)
+  lastWakeAt: 0, // never woke — the exact case the decrypted-evidence signatures can't heal
+  lastForceRotateAt: 0,
+  now: NOW,
+};
+
+describe('spec 2043: shouldRotateForQueueAge', () => {
+  it('fires when the server holds old frames and this device never woke', () => {
+    expect(shouldRotateForQueueAge(queueBase)).toBe(true);
+  });
+  it('empty queue (null) → never', () => {
+    expect(shouldRotateForQueueAge({ ...queueBase, oldestQueuedAtMs: null })).toBe(false);
+  });
+  it('a queue younger than the 10min bar → wait (a held push to a live sub may still be in flight)', () => {
+    expect(shouldRotateForQueueAge({ ...queueBase, oldestQueuedAtMs: NOW - 3 * M })).toBe(false);
+  });
+  it('a wake since the oldest frame queued → not a zombie (offline phone caught up)', () => {
+    expect(shouldRotateForQueueAge({ ...queueBase, lastWakeAt: queueBase.oldestQueuedAtMs + 1000 })).toBe(false);
+  });
+  it('a wake BEFORE the oldest frame keeps the signature (that wake proves nothing about these frames)', () => {
+    expect(shouldRotateForQueueAge({ ...queueBase, lastWakeAt: queueBase.oldestQueuedAtMs - 1000 })).toBe(true);
+  });
+  it('force-rotated within the 2h cap → wait', () => {
+    expect(shouldRotateForQueueAge({ ...queueBase, lastForceRotateAt: NOW - 1 * H })).toBe(false);
+  });
+  it('force-rotated over 2h ago → allowed again (retry a still-dead endpoint)', () => {
+    expect(shouldRotateForQueueAge({ ...queueBase, lastForceRotateAt: NOW - 3 * H })).toBe(true);
+  });
+});

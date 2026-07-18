@@ -202,10 +202,11 @@ func (f *fakeStore) Ping(context.Context) error { return nil }
 // --- RelayStore (in-memory queue for relay-drain handler tests) ---
 
 type relayRow struct {
-	seq     int64
-	sender  string
-	msgID   string
-	payload []byte
+	seq       int64
+	sender    string
+	msgID     string
+	payload   []byte
+	createdMs int64 // 0 unless a test sets it (spec 2043 relay status)
 }
 
 func (f *fakeStore) EnqueueRelay(_ context.Context, recipient, sender, msgID string, payload []byte) error {
@@ -217,6 +218,19 @@ func (f *fakeStore) EnqueueRelay(_ context.Context, recipient, sender, msgID str
 	f.relaySeq++
 	f.relay[recipient] = append(f.relay[recipient], relayRow{seq: f.relaySeq, sender: sender, msgID: msgID, payload: payload})
 	return nil
+}
+
+func (f *fakeStore) OldestPendingForRecipient(_ context.Context, recipient string) (int64, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rows := f.relay[recipient]
+	var oldest int64
+	for _, row := range rows {
+		if row.createdMs > 0 && (oldest == 0 || row.createdMs < oldest) {
+			oldest = row.createdMs
+		}
+	}
+	return oldest, len(rows), nil
 }
 
 func (f *fakeStore) PendingForRecipient(_ context.Context, recipient string) ([]store.RelayItem, error) {
