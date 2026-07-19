@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -92,6 +93,7 @@ type capturedReq struct {
 	ttl     string
 	urgency string
 	topic   string
+	bodyLen int // encrypted aes128gcm body length (spec 2046: must stay small)
 	hits    int32
 }
 
@@ -101,6 +103,8 @@ func (c *capturedReq) record(r *http.Request) {
 	c.ttl = r.Header.Get("TTL")
 	c.urgency = r.Header.Get("Urgency")
 	c.topic = r.Header.Get("Topic")
+	body, _ := io.ReadAll(r.Body)
+	c.bodyLen = len(body)
 	atomic.AddInt32(&c.hits, 1)
 }
 
@@ -324,6 +328,47 @@ func TestSendVersionHeaders(t *testing.T) {
 	}
 	if want := base64.RawURLEncoding.EncodeToString([]byte("ring-version")); cap.topic != want {
 		t.Errorf("version Topic = %q, want %q (base64url of ring-version)", cap.topic, want)
+	}
+}
+
+// TestTickleBodyIsSmall (spec 2046) asserts the encrypted push body is sized to fit the
+// content-free tickle, not padded to webpush-go's 4096-byte default — the padding that made
+// constrained Firefox/Mozilla endpoints reject our sends with 413.
+func TestTickleBodyIsSmall(t *testing.T) {
+	cap := &capturedReq{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.record(r)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p256dh, auth := newSubKeys(t)
+	n := newNotifier(t, &memSubStore{subs: map[string][]store.PushSubscription{}})
+	n.SendVersion(context.Background(), store.PushSubscription{Endpoint: srv.URL, P256dh: p256dh, Auth: auth})
+
+	if cap.bodyLen == 0 {
+		t.Fatal("no push body captured")
+	}
+	if cap.bodyLen >= 512 {
+		t.Errorf("push body = %d bytes, want < 512 (was ~4096 before the RecordSize fix)", cap.bodyLen)
+	}
+}
+
+// TestRecordSizeFor pins the record-size math: always strictly above the payload (or
+// webpush-go's encryption underflows), and small.
+func TestRecordSizeFor(t *testing.T) {
+	for _, p := range [][]byte{
+		[]byte(`{"t":"version"}`),
+		[]byte(`{"t":"msg"}`),
+		[]byte(`{"t":"post-activity","post":"00000000-0000-0000-0000-000000000000"}`),
+	} {
+		got := recordSizeFor(p)
+		if int(got) <= len(p)+103 { // 103 = aes128gcm framing the library requires
+			t.Errorf("recordSizeFor(%q) = %d, must exceed payload(%d)+103", p, got, len(p))
+		}
+		if got >= 512 {
+			t.Errorf("recordSizeFor(%q) = %d, want < 512", p, got)
+		}
 	}
 }
 
