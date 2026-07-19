@@ -759,6 +759,43 @@ export function platformTrustsSilence(ua: string): boolean {
   return /\b(?:Chrome|Chromium|HeadlessChrome|Edg)\/\d/.test(ua);
 }
 
+/** (spec 2044) iOS major version from a WebKit UA ("… CPU iPhone OS 16_7_10 like
+ *  Mac OS X …" / iPad "… CPU OS 16_7 …"), or null when the UA isn't an identifiable
+ *  iOS one. The iPhone|iPad|iPod token must precede the version so iPadOS-in-desktop-
+ *  mode UAs (which masquerade as "Macintosh … Mac OS X 10_15_7") parse as null, never
+ *  as a bogus legacy "iOS 10". */
+export function iosMajorVersion(ua: string): number | null {
+  const m = /\b(?:iPhone|iPad|iPod)\b.*?\bOS (\d+)_/.exec(ua);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/** (spec 2044) The ONLY gate into the SW's lite wake path. On iOS <= 16 the
+ *  service-worker context is unreliable past the network layer — IndexedDB
+ *  transactions hang or throw and the decrypt/present pipeline dies silently (the
+ *  iPhone 8 signature: delivered receipts fire, then no visible notification, then
+ *  webpushd strikes the subscription out). Those devices get a guaranteed-visible
+ *  generic-first wake instead of the rich pipeline. Fails toward MODERN: an
+ *  unparseable UA must never downgrade a healthy device to generic-only. */
+export const LEGACY_IOS_MAX_MAJOR = 16;
+export function isLegacyIOS(ua: string): boolean {
+  const major = iosMajorVersion(ua);
+  return major !== null && major <= LEGACY_IOS_MAX_MAJOR;
+}
+
+/** (spec 2044) Bound a promise that may never settle — the shape of a read against a
+ *  wedged SW-context IndexedDB. Falls back on timeout AND on rejection, because both
+ *  must degrade the caller gracefully (a diagnostics read failing must never block
+ *  the last-resort show it decorates). */
+export function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    p.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      () => { clearTimeout(timer); resolve(fallback); },
+    );
+  });
+}
+
 /** Does any window client's state license a silent outcome? Only one that is
  *  BOTH focused AND visible: a frozen/background PWA still appears in matchAll()
  *  with cached attribute snapshots (the norm on iOS) while showing the user
