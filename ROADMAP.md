@@ -128,3 +128,4 @@ Specs are grouped by category band; status moves
 | [2041](specs/2041-video-post-memory/spec.md) | Video Posts Must Not Exhaust iPhone Memory | 🟢 shipped |
 | [2043](specs/2043-push-zombie-subscriptions/spec.md) | Push zombie subscriptions & silent-wake strikes | 🟡 in-progress |
 | [2044](specs/2044-older-iphones-show/spec.md) | Legacy-iOS lite push path — older iPhones always show a notification | 🟡 in-progress |
+| [2045](specs/2045-brief-light-theme/spec.md) | No light-theme flash returning to the app | 🟡 in-progress |

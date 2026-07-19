@@ -1,0 +1,26 @@
+// Spec 2045 — the pure dark/light resolver shared between useTheme (runtime, class toggle)
+// and the index.html pre-paint inline script (first frame on a cold relaunch). Pinning it
+// here guards against the two drifting: whatever this asserts is what index.html must do.
+import { describe, it, expect } from 'vitest';
+import { resolveDark, THEME_MIRROR_KEY } from './useTheme';
+
+describe('spec 2045: resolveDark', () => {
+  it('explicit dark is always dark, regardless of OS', () => {
+    expect(resolveDark('dark', false)).toBe(true);
+    expect(resolveDark('dark', true)).toBe(true);
+  });
+  it('explicit light is always light, regardless of OS', () => {
+    expect(resolveDark('light', true)).toBe(false);
+    expect(resolveDark('light', false)).toBe(false);
+  });
+  it('system follows the OS color scheme', () => {
+    expect(resolveDark('system', true)).toBe(true);
+    expect(resolveDark('system', false)).toBe(false);
+  });
+});
+
+describe('spec 2045: the mirror key matches the settings key the pre-paint script reads', () => {
+  it('is exactly appearance.theme', () => {
+    expect(THEME_MIRROR_KEY).toBe('appearance.theme');
+  });
+});
