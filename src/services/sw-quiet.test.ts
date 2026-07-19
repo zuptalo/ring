@@ -2,7 +2,7 @@
 // gate and visible-client test that together license a silent outcome, and the
 // content-free quiet note shown when the rich path has nothing it may display.
 import { describe, it, expect } from 'vitest';
-import { anyClientVisible, quietNote, platformTrustsSilence, mayEndWakeSilently, stampedShow, countAccepted } from './sw-inbox';
+import { anyClientVisible, quietNote, platformTrustsSilence, mayEndWakeSilently, stampedShow, countAccepted, shouldShowPlaceholderFirst } from './sw-inbox';
 
 // Real-world user agents for the platform gate's truth table (spec 2023 FR-002).
 const UA = {
@@ -79,6 +79,23 @@ describe('spec 1034: anyClientVisible', () => {
     // visibilityState present but `focused` absent must NOT fall back to the old
     // visibility-only license — this pins the fail-closed default.
     expect(anyClientVisible([{ visibilityState: 'visible' }])).toBe(false);
+  });
+});
+
+describe('spec 2048: shouldShowPlaceholderFirst (show-first gate)', () => {
+  it('no clients (app closed) → show first (locked/closed is the norm on iOS)', () => {
+    expect(shouldShowPlaceholderFirst([])).toBe(true);
+  });
+  it('a frozen/background PWA (visible but NOT focused) → show first — it will not render the banner', () => {
+    expect(shouldShowPlaceholderFirst([{ visibilityState: 'visible', focused: false }])).toBe(true);
+    expect(shouldShowPlaceholderFirst([{ visibilityState: 'hidden', focused: true }])).toBe(true);
+  });
+  it('a focused+visible window → do NOT show first (that page renders the in-app banner; await its claim)', () => {
+    expect(shouldShowPlaceholderFirst([{ visibilityState: 'visible', focused: true }])).toBe(false);
+  });
+  it('missing fields fail closed → show first (never assume a page will render)', () => {
+    expect(shouldShowPlaceholderFirst([{}])).toBe(true);
+    expect(shouldShowPlaceholderFirst([{ visibilityState: 'visible' }])).toBe(true);
   });
 });
 

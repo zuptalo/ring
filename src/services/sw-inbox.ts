@@ -830,6 +830,19 @@ export function anyClientVisible(clients: readonly { visibilityState?: string; f
   return clients.some((c) => c.focused === true && c.visibilityState === 'visible');
 }
 
+/** (spec 2048) Show-first gate. Put a visible placeholder up IMMEDIATELY unless a
+ *  focused+visible window is present to render the rich in-app banner itself — only
+ *  then is it worth spending the tight iOS wake window awaiting that page's claim.
+ *  With no such window (locked / backgrounded / frozen-PWA / closed — the norm on
+ *  iOS), waiting or fetching first lets iOS suspend the SW before ANY showNotification,
+ *  which it counts as a silent push and, after a few, revokes the subscription. So
+ *  there we show first. Same fail-closed semantics as anyClientVisible. */
+export function shouldShowPlaceholderFirst(
+  clients: readonly { visibilityState?: string; focused?: boolean }[],
+): boolean {
+  return !anyClientVisible(clients);
+}
+
 /** The ONE license to end a push wake silently (spec 2023, amending 1034 FR-001):
  *  the platform must tolerate silence AND a Ring window must be focused+visible.
  *  On WebKit, Firefox, and unknown engines this is always false — every wake ends
