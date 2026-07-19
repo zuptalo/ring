@@ -23,6 +23,28 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Ring</title>
+    <!-- (spec 2045) Pre-paint theme: apply Ionic's dark palette class synchronously so a
+         cold relaunch (returning from the iOS app switcher after iOS killed the page)
+         never renders a frame in the LIGHT palette before useTheme's async settings read
+         resolves. useTheme mirrors the choice into localStorage on each apply; here we
+         re-resolve it (with 'system' → OS scheme) before first paint. Mirrors
+         resolveDark() in src/composables/useTheme.ts — keep the two in sync. Fails safe to
+         prefers-color-scheme if storage is blocked (private mode). -->
+    <script>
+      (function () {
+        function prefersDark() {
+          try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { return false; }
+        }
+        var dark;
+        try {
+          var pref = localStorage.getItem('appearance.theme') || 'system';
+          dark = pref === 'dark' || (pref === 'system' && prefersDark());
+        } catch (e) {
+          dark = prefersDark();
+        }
+        if (dark) document.documentElement.classList.add('ion-palette-dark');
+      })();
+    </script>
     <!-- Match the app's base background before Vue mounts so there's no white
          flash between the launch screen and the passcode gate. -->
     <style>
@@ -30,6 +52,10 @@
       @media (prefers-color-scheme: dark) {
         html, body { background-color: #000000; }
       }
+      /* When the pre-paint script resolved dark (explicit dark, or system+OS-dark), the
+         raw background must be dark too even on a light-OS device (explicit dark override),
+         so the first frame matches the palette class the script just set. */
+      html.ion-palette-dark, html.ion-palette-dark body { background-color: #000000; }
     </style>
   </head>
   <body>

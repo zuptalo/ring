@@ -169,6 +169,22 @@ func NewSender(vapidPublic, vapidPrivate, subject string) *Sender {
 	return &Sender{vapidPublic: vapidPublic, vapidPrivate: vapidPrivate, subject: subject}
 }
 
+// recordSizeOverhead is the aes128gcm framing webpush-go adds around the plaintext
+// inside one record: the content-coding header (salt 16 + rs 4 + keyid-len 1 + the
+// 65-byte ephemeral public key = 86), the 1-byte padding delimiter, and the 16-byte
+// GCM auth tag — 103 bytes. The library requires RecordSize >= payloadLen + 103 or
+// encryption underflows; we add margin on top so the record comfortably holds the
+// payload while staying tiny (a few hundred bytes) for constrained endpoints.
+const recordSizeOverhead = 128
+
+// recordSizeFor returns the smallest safe aes128gcm record size for a tickle payload:
+// large enough that webpush-go never underflows, small enough that constrained push
+// services accept it (vs the library's 4096-byte default padding). Content-free
+// payloads carry no secret whose length needs hiding (see spec 2046 / the Topic note).
+func recordSizeFor(payload []byte) uint32 {
+	return uint32(len(payload)) + recordSizeOverhead
+}
+
 // attempt makes a single delivery and reports the HTTP status, any Retry-After
 // hint, and a transport error (status 0).
 func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p pushParams) (status int, retryAfter time.Duration, body []byte, err error) {
@@ -195,6 +211,15 @@ func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p push
 		TTL:             p.ttl,
 		Urgency:         p.urgency,
 		Topic:           topic,
+		// (spec 2046) Size the aes128gcm record to just fit this content-free tickle.
+		// webpush-go pads every record UP TO RecordSize (default 4096), so a ~15-byte
+		// tickle went out as a ~4 KB body — which some CONSTRAINED push endpoints (a
+		// Firefox/Mozilla autopush subscription observed in prod) reject with 413. The
+		// padding bought no privacy: the tickle TYPE is already visible to the push
+		// service via the cleartext Topic header (sent for collapsing), and every payload
+		// is a fixed content-free marker. recordSizeFor keeps it strictly above the
+		// payload so encryption never underflows.
+		RecordSize: recordSizeFor(p.payload),
 	})
 	if err != nil {
 		return 0, 0, nil, err
