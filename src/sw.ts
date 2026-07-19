@@ -25,11 +25,13 @@ import {
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
   mayEndWakeSilently, quietNote, stampPushWake, countAccepted,
   runGuardedWake, recordWake, type WakeCtx,
+  isLegacyIOS, withTimeout, fetchPendingFrames,
   previewCallRing, recordCallTickle, recordCallOutcome, withdrawCallBadgeUnit, callBadgeCount,
   readRingShown, recordRingShown, clearRingShown,
   type SwNote, type ConnNote,
 } from '@/services/sw-inbox';
 import type { CallEventSignal } from '@/services/crypto/message';
+import { readSessionToken } from '@/services/session';
 import { hasFreshRing, ringReassert, ringAlreadyNamed } from '@/services/call-events';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
 import { resubscribePush } from '@/services/sw-push';
@@ -154,7 +156,11 @@ async function showGeneric(reason?: string): Promise<void> {
   // (spec 2043) on production when the user opts into the push diagnostics toggle. Content-free:
   // the reason is an internal token (timeout / clean-resolve-no-show / an error message), never
   // sender or message text.
-  const showReason = reason && (DEV_HOST || (await setting('diagnostics.pushReasonText', false)));
+  // (spec 2044) The diagnostics read is BOUNDED: this is the last-resort show, and on iOS-16-class
+  // devices a wedged SW-context IndexedDB leaves a read pending forever — an unbounded await here
+  // would hang the one notification the whole guard chain exists to guarantee (the exact silent
+  // wake that strikes the subscription out). Fail toward the plain body; the show must not wait.
+  const showReason = reason && (DEV_HOST || (await withTimeout(setting('diagnostics.pushReasonText', false), 300, false)));
   await self.registration.showNotification('New message', {
     body: showReason ? reason : 'Tap to open',
     icon: ICON,
@@ -848,6 +854,93 @@ async function pageWillNotify(clients: readonly Client[], timeoutMs: number): Pr
   return acked;
 }
 
+/**
+ * (spec 2044) The LITE wake for legacy iOS (<= 16): show first, decrypt never.
+ *
+ * On that tier the network layer works — the iPhone-8 evidence is delivered receipts
+ * firing for exactly the messages that never produced a banner — but SW-context
+ * IndexedDB transactions hang/throw and the rich pipeline (device unlock, settings
+ * reads, decrypt, ledger writes) dies AFTER the fetch, silently. Every such wake was
+ * a webpushd strike; three strikes killed the subscription. So here the visible
+ * notification comes FIRST, from IDB-free primitives only, and the single IDB read
+ * this path ever risks (the session token, needed to fire delivered receipts) is
+ * time-bounded and happens strictly after the show. Cold open is the accepted cost:
+ * the page WS-drains durably on open, exactly as it already does on this tier.
+ * setAppBadge doesn't exist in the iOS-16 SW, so skipping badge math loses nothing.
+ */
+async function dispatchLiteWake(
+  kind: ReturnType<typeof pushKind>['kind'],
+  clients: readonly Client[],
+  ctx: WakeCtx,
+): Promise<void> {
+  if (kind === 'call') {
+    // Generic ring immediately — no readRingShown dedup (an IDB read that can hang
+    // here). A reminder tickle may re-ring generically; on this tier an extra audible
+    // ring beats a missed call. Ack reachability so the caller flips to "Ringing",
+    // and nudge any live page to reconnect so the buffered call-offer rings in-app.
+    for (const client of clients) client.postMessage({ type: 'ring:drain' });
+    await showCall(undefined, { realert: true });
+    ctx.shown = true;
+    ctx.satisfied = true;
+    void ackCall();
+    return;
+  }
+  if (kind === 'conn' || kind === 'post' || kind === 'post-activity') {
+    // No previews (they read IDB before showing). The content-free quiet generic is
+    // the visible ending; live pages still get their reconcile nudges.
+    const nudge = kind === 'conn' ? 'ring:conn' : 'ring:posts';
+    for (const client of clients) client.postMessage({ type: nudge });
+    await showQuietNote('activity');
+    ctx.shown = true;
+    ctx.satisfied = true;
+    return;
+  }
+  if (kind === 'version') {
+    // Already IDB-free (one network fetch + show); keep the rich "what's new" when
+    // the app is closed, but degrade to the quiet generic if the fetch fails — the
+    // wake must end visibly either way.
+    for (const client of clients) client.postMessage({ type: 'ring:checkupdate' });
+    try {
+      if (!clients.length) await showVersionNotification();
+      else await showQuietNote('activity');
+    } catch {
+      await showQuietNote('activity');
+    }
+    ctx.shown = true;
+    ctx.satisfied = true;
+    return;
+  }
+  // Message. A live, unlocked page may still claim the alert (this arm is IDB-free
+  // and identical to the modern path, preserving the app-open no-double UX); the
+  // platform gate is always untrusted on iOS, so a claimed wake still ends with the
+  // quiet note.
+  if (clients.length && (await pageWillNotify(clients, 2200))) {
+    const nowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) {
+      await showQuietNote('msg');
+      ctx.shown = true;
+    }
+    ctx.satisfied = true;
+    return;
+  }
+  // Unclaimed: the generic shows NOW (bounded diagnostics read inside, spec 2044),
+  // before any keystore/decrypt work is even attempted.
+  await showGeneric('legacy-lite');
+  ctx.shown = true;
+  ctx.satisfied = true;
+  // Best-effort delivered receipts AFTER the show: one bounded keystore read for the
+  // token, one bounded fetch. The server emits 'delivered' for every queued frame on
+  // fetch (idempotent, no ack/dequeue — the page drains durably on open). A hung
+  // token read just skips this wake's receipts; the next wake or app open recovers
+  // them.
+  try {
+    const token = await withTimeout<string | null>(readSessionToken(), 3000, null);
+    if (token) await fetchPendingFrames(token);
+  } catch {
+    /* receipts are best-effort — the notification already showed */
+  }
+}
+
 async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
       // (spec 1037) Every wake stamps its time FIRST — the page-side zombie
       // detector treats "no wake since a stale message was sent" as the
@@ -858,6 +951,16 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
       await Promise.race([stampPushWake(), new Promise((r) => setTimeout(r, 1500))]);
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       const { kind, post } = pushKind(event);
+      // (spec 2044) Legacy iOS (<= 16) takes the LITE wake: show first, decrypt never.
+      // On that tier the SW's network layer works (delivered receipts prove the queue
+      // fetch succeeds) but IndexedDB transactions and the decrypt/present pipeline
+      // hang or die silently — each such wake was a webpushd strike, and the
+      // subscription was dead within a burst. The gate is a pure UA parse that fails
+      // toward modern, so devices on iOS 17+ never enter this branch.
+      if (isLegacyIOS(self.navigator.userAgent)) {
+        await dispatchLiteWake(kind, clients, ctx);
+        return;
+      }
       if (kind === 'call') {
         // A call is never queued on the relay; the tickle itself is the signal.
         // Show the ring immediately, ack reachability (so the caller's UI flips to
