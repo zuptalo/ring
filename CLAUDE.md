@@ -281,5 +281,5 @@ but the subject is the real lever.)
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/2043-push-zombie-subscriptions/plan.md`
+`specs/2044-older-iphones-show/plan.md`
 <!-- SPECKIT END -->
