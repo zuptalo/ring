@@ -78,6 +78,28 @@ export interface SwNote {
   silent?: boolean;
 }
 
+/** (spec 2047) The display options for a rich per-chat note. Deliberately OMITS
+ *  `renotify`: iOS 26 / iPadOS 27 ACCEPT a `renotify:true` show (the promise resolves)
+ *  but never RENDER it on the lock screen — a total, silent failure the guard can't
+ *  catch (it infers "shown" from the promise resolving). The working generic and the
+ *  legacy lite path omit `renotify`, which is exactly why they display; coalescing is
+ *  handled by the per-chat `tag` alone. Keep this a pure function so a unit test can
+ *  pin that `renotify` never returns. */
+export function richNoteOptions(
+  n: Pick<SwNote, 'body' | 'tag' | 'url' | 'silent'>,
+  icon: string,
+  badge: string,
+): NotificationOptions {
+  return {
+    body: n.body,
+    icon,
+    badge,
+    tag: n.tag,
+    silent: n.silent === true,
+    data: { url: n.url },
+  };
+}
+
 /** Background-preview result. `notes` are the displayable notifications, `pending`
  *  is the number of queued (undelivered) message frames, known from the fetch
  *  alone (no decryption needed) and used for the app-icon badge. `suppressed` is
