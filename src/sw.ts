@@ -25,7 +25,7 @@ import {
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
   mayEndWakeSilently, quietNote, stampPushWake, countAccepted,
   runGuardedWake, recordWake, type WakeCtx,
-  isLegacyIOS, withTimeout, fetchPendingFrames,
+  isLegacyIOS, withTimeout, fetchPendingFrames, richNoteOptions,
   previewCallRing, recordCallTickle, recordCallOutcome, withdrawCallBadgeUnit, callBadgeCount,
   readRingShown, recordRingShown, clearRingShown,
   type SwNote, type ConnNote,
@@ -287,18 +287,10 @@ async function showNotes(notes: SwNote[]): Promise<number> {
       // Center entries instead of collapsing them, so close the ring explicitly
       // before showing its replacement.
       if (n.tag === 'ring-call') await closeByTag('ring-call');
-      await self.registration.showNotification(titleWithCount(n), {
-        body: n.body,
-        icon: ICON,
-        badge: BADGE,
-        tag: n.tag,
-        renotify: true, // a genuinely-new message on this tag should re-alert (a silent re-assert
-        // for "nothing new" uses reassertFromSummary below, which sets renotify:false)
-        // (spec 1048) A reaction note with the tone set to None shows without the
-        // platform sound — visible (the wake still ends visibly), just quiet.
-        silent: n.silent === true,
-        data: { url: n.url },
-      });
+      // (spec 2047) Options via richNoteOptions — deliberately NO `renotify` (iOS 26 /
+      // iPadOS 27 accept but never render a renotify:true show; the per-chat `tag`
+      // still coalesces, exactly as the working generic does).
+      await self.registration.showNotification(titleWithCount(n), richNoteOptions(n, ICON, BADGE));
     } catch (e) {
       console.warn('[sw] showNotification failed', e);
       throw e; // rethrow so countAccepted doesn't count a rejected show
@@ -544,12 +536,13 @@ async function showPostNotification(): Promise<number> {
 async function showConnNotes(notes: ConnNote[]): Promise<number> {
   return countAccepted(notes.map((n) => async () => {
     try {
+      // (spec 2047) NO `renotify` — see showNotes: iOS 26/iPadOS 27 accept but do not
+      // render a renotify:true notification; the per-chat `tag` handles coalescing.
       await self.registration.showNotification(n.title, {
         body: n.body,
         icon: ICON,
         badge: BADGE,
         tag: n.tag,
-        renotify: true,
         data: { url: n.url },
       });
     } catch (e) {

@@ -367,14 +367,13 @@ export async function notifyLocal(title: string, body: string, url?: string, cha
       badge: '/badge-96.png',
       // Per-chat tag (matching the service worker's preview) so the page- and
       // SW-shown notes for one conversation COLLAPSE into a single notification
-      // instead of stacking, and a follow-up re-alerts (renotify).
+      // instead of stacking.
       tag: chatId ? `ring:${chatId}` : 'ring-incoming',
-      renotify: true,
+      // (spec 2047) NO `renotify`: iOS 26 / iPadOS 27 accept but never render a
+      // renotify:true notification; the per-chat `tag` still coalesces.
       // Deep-link target read by the service worker's notificationclick handler.
       data: url ? { url } : undefined,
-      // `renotify` is valid per the Notifications spec but missing from the DOM lib
-      // type in this TS version (present in the webworker lib the SW uses).
-    } as NotificationOptions & { renotify?: boolean });
+    });
   } catch {
     /* ignore */
   }
