@@ -25,7 +25,7 @@ import {
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
   mayEndWakeSilently, quietNote, stampPushWake, countAccepted,
   runGuardedWake, recordWake, type WakeCtx,
-  isLegacyIOS, withTimeout, fetchPendingFrames, richNoteOptions,
+  isLegacyIOS, withTimeout, fetchPendingFrames, richNoteOptions, shouldShowPlaceholderFirst,
   previewCallRing, recordCallTickle, recordCallOutcome, withdrawCallBadgeUnit, callBadgeCount,
   readRingShown, recordRingShown, clearRingShown,
   type SwNote, type ConnNote,
@@ -652,7 +652,7 @@ async function tryAuthoritativeDrain(ctx: WakeCtx): Promise<boolean> {
  * *some* notification (iOS requires one per push). A generic placeholder shown on
  * timeout is UPGRADED to the rich preview when the full decrypt settles.
  */
-async function showMessageNotification(ctx: WakeCtx): Promise<void> {
+async function showMessageNotification(ctx: WakeCtx, placeholderShown = false): Promise<void> {
   // (spec 2017) Serialize only the critical read→show→markShown sections (NOT the straggler's sleeps),
   // so overlapping burst wakes can't interleave and duplicate a notification or bounce the per-pass
   // count — while a queued wake still gets the lock during another wake's sleep gaps and is never
@@ -676,7 +676,10 @@ async function showMessageNotification(ctx: WakeCtx): Promise<void> {
     console.warn('[sw] preview slow/failed → generic fallback');
   }
 
-  let shownGeneric = false;
+  // (spec 2048) The show-first placeholder (if dispatchPush already put one up) IS a
+  // generic on GENERIC_TAG, so seed shownGeneric with it: the settle's upgrade
+  // (rich)/downgrade (quiet) machinery gates on shownGeneric.
+  let shownGeneric = placeholderShown;
   let shownAny = false; // spec 1034: track whether THIS wake produced anything visible
   if (result.notes.length) {
     await closeByTag(GENERIC_TAG); // clear any earlier generic before the rich note
@@ -685,13 +688,18 @@ async function showMessageNotification(ctx: WakeCtx): Promise<void> {
     // (spec 2023 FR-007) an all-rejected batch is NOT a visible ending — leaving
     // shownAny false routes this wake to the quiet terminal below.
     shownAny = accepted > 0;
+    // (spec 2048) The rich note REPLACED the placeholder (closeByTag above), so the
+    // settle must not re-show/re-buzz the generic for it.
+    if (accepted > 0) shownGeneric = false;
   } else if (timedOut || (!result.suppressed && !result.silenced && result.newUnshown)) {
     // Show the generic placeholder ONLY when there's a genuinely-new message we couldn't render: a
     // slow cold-start decrypt still in flight at the deadline (timedOut), a fetched-but-undecryptable
     // frame, a PIN-locked device with pending frames, or a failed relay fetch (all → newUnshown). The
     // settle below upgrades it to the rich note if the decrypt lands. `suppressed` (notifications off)
     // and `silenced` (mute / web-push-off / badge-only, spec 1015 FR-022/FR-024) show no placeholder.
-    await showGeneric(timedOut ? 'timeout' : result.reason);
+    // (spec 2048) Skip if the show-first placeholder is already up — a same-tag re-show re-buzzes on
+    // iOS (spec 2020); the placeholder is this branch's visible ending.
+    if (!placeholderShown) await showGeneric(timedOut ? 'timeout' : result.reason);
     shownGeneric = true;
     shownAny = true;
   } else if (isNothingNew(result)) {
@@ -1110,43 +1118,52 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
       // 1200ms — comfortably above the page's own DRAIN_ACK_WINDOW so a page that will
       // show a banner reliably claims it, while a hidden/locked/frozen page (which
       // never acks) still falls through to the SW promptly enough.
-      if (clients.length && (await pageWillNotify(clients, 2200))) {
-        // (spec 2023 FR-003) The page owns the RICH alert, but an in-app banner is
-        // invisible to the OS push service: a claimed wake that shows no OS
-        // notification is a SILENT push, and every userVisibleOnly push service
-        // revokes the subscription after a few of those — not just WebKit's webpushd.
-        // Chromium does too, exempting ONLY a push handled while a window is open AND
-        // focused (its documented "site is visible" carve-out). This skip used to gate
-        // on the platform ALONE, trusting Chromium unconditionally — but the page acks
-        // when it CAN render a banner, and Chromium samples window visibility at event
-        // RESOLUTION, so a page that was visible when it acked and then backgrounded
-        // during the up-to-2200ms wait produced a silent push Chromium counted. Enough
-        // of those and Android's subscription got revoked "after several messages".
-        //
-        // So re-sample the clients HERE (start-of-wake `clients` is now stale) and end
-        // silently only when `mayEndWakeSilently` holds: the platform tolerates silence
-        // AND a window is focused+visible right now. Otherwise show the content-free
-        // quiet note — which is also the only visible ending for the one claim arm that
-        // shows nothing anywhere (a locked hidden chat on a visible page: notify.ts, the
-        // spec-1027 FR-012 zero-trace claim). iOS is unaffected: platformTrustsSilence is
-        // already false there, so this always showed the quiet note and still does; and a
-        // Chrome window that stays focused+visible still skips exactly as before (the user
-        // saw the in-app banner, so no OS duplicate).
+      // (spec 2048) SHOW-FIRST. Only a FOCUSED+VISIBLE page renders the rich in-app
+      // banner itself, so ONLY then may we spend the tight iOS wake window awaiting its
+      // claim (via pageWillNotify). With no such window — locked / backgrounded /
+      // frozen-PWA / closed, the norm on iOS — waiting up to 2200ms and THEN fetching
+      // /relay/pending and decrypting is too slow: iOS suspends the SW before any
+      // showNotification lands (the fetch fires, so the server logs "delivered", but
+      // nothing renders), counts the wake as a SILENT push, and after ~4 REVOKES the
+      // subscription (status=410 Unregistered). So there we put a visible placeholder up
+      // IMMEDIATELY, before the drain/preview, and let the durable work upgrade it.
+      if (!shouldShowPlaceholderFirst(clients) && (await pageWillNotify(clients, 2200))) {
+        // (spec 2023 FR-003) A focused+visible page claimed the RICH in-app alert, but
+        // an in-app banner is invisible to the OS push service, so a claimed wake that
+        // shows no OS notification is a SILENT push. Re-sample and end silently ONLY
+        // when mayEndWakeSilently holds (trusted platform + focused+visible); otherwise
+        // show the content-free quiet note. iOS is unaffected (platformTrustsSilence
+        // false → always the quiet note).
         const nowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
         if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) {
           await showQuietNote('msg');
           ctx.shown = true;
         }
-        // Either we showed the quiet note, or silence is licensed here (focused +
-        // visible Chromium). Both are satisfied; only the show sets ctx.shown.
         ctx.satisfied = true;
         return;
       }
-      // Spec 1032: with sw.fullPersist on (and no page claiming the wake), persist
-      // + ack eligible frames right now so the app opens warm. Any degrade — and
-      // any deferred remainder — falls through to today's preview flow.
+      // No focused+visible client to own the alert. Still nudge any (frozen/background)
+      // client to reconnect + drain durably — but DON'T await it; that 2200ms wait was
+      // the window-burn we are removing (the page-side handler drains on a bare
+      // 'ring:drain' without a reqId, just skipping the ack). Then show the placeholder
+      // NOW, before the fetch + decrypt.
+      for (const client of clients) client.postMessage({ type: 'ring:drain' });
+      try {
+        await showGeneric('show-first');
+        ctx.shown = true;
+        ctx.satisfied = true;
+      } catch (e) {
+        // The platform denied even the placeholder — the drain/preview below (or the
+        // guard's last-resort generic) still owns the visible ending; leave ctx unset.
+        console.warn('[sw] show-first placeholder failed', e);
+      }
+      // Spec 1032: with sw.fullPersist on, persist + ack eligible frames right now so
+      // the app opens warm; either way the durable work UPGRADES the placeholder in
+      // place (closeByTag(GENERIC_TAG) + rich note, or same-tag quiet downgrade when
+      // the batch is muted/suppressed/nothing-new). placeholderShown=true tells
+      // showMessageNotification the generic is already up so it doesn't re-buzz it.
       if (await tryAuthoritativeDrain(ctx)) return;
-      await showMessageNotification(ctx);
+      await showMessageNotification(ctx, true /* placeholderShown */);
 }
 
 // The Web Push `userVisibleOnly` contract is unforgiving on iOS: a push event

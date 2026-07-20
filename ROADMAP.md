@@ -131,3 +131,4 @@ Specs are grouped by category band; status moves
 | [2045](specs/2045-brief-light-theme/spec.md) | No light-theme flash returning to the app | 🟡 in-progress |
 | [2046](specs/2046-version-announcement-push/spec.md) | Push tickles fit constrained push endpoints | 🟡 in-progress |
 | [2047](specs/2047-modern-iphones-and/spec.md) | Modern iPhones/iPads actually display push notifications | 🟡 in-progress |
+| [2048](specs/2048-notifications-not-appear/spec.md) | Show-first notifications (work when locked, keep the subscription alive) | 🟡 in-progress |
