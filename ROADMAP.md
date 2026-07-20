@@ -80,6 +80,7 @@ Specs are grouped by category band; status moves
 | [1052](specs/1052-group-adds-you/spec.md) | Group Adds You Can Trust | 🟢 shipped |
 | [1053](specs/1053-composer-buttons-transition/spec.md) | Composer Buttons Transition Like WhatsApp | 🟢 shipped |
 | [1054](specs/1054-pick-emoji-contact/spec.md) | Emoji contact photos + reset to their photo | 🟢 shipped |
+| [1055](specs/1055-ciphertext-push-instant/spec.md) | Instant rich notifications (bounded encrypted preview in push) | 🟡 in-progress |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 

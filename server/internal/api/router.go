@@ -292,6 +292,7 @@ func NewRouter(h *Handlers, allowedOrigins []string) http.Handler {
 	// self-heal; never dequeues, never emits a receipt, so it's safe to poll.
 	mux.Handle("GET /v1/relay/status", authMW(http.HandlerFunc(h.relayStatus)))
 	mux.Handle("POST /v1/relay/ack", authMW(http.HandlerFunc(h.relayAck)))
+	mux.Handle("POST /v1/relay/notified", authMW(http.HandlerFunc(h.relayNotified)))
 	// Sender-side reconcile: which of my still-'sent' messages were delivered while
 	// I was offline (so a dropped 'delivered' receipt is recovered on reconnect).
 	mux.Handle("POST /v1/deliveries/check", authMW(http.HandlerFunc(h.deliveriesCheck)))

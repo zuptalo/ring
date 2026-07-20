@@ -9,6 +9,7 @@ import {
   ratchetEncrypt,
   ratchetDecrypt,
   ratchetDecryptPreview,
+  ratchetEncryptWithPreview,
   type RatchetState,
   type Header,
 } from './ratchet';
@@ -370,6 +371,28 @@ export function sealMessage(
   ad: Uint8Array = new Uint8Array(0),
 ): WireMessage {
   return ratchetEncrypt(state, utf8ToBytes(JSON.stringify(payload)), ad);
+}
+
+/**
+ * Spec 1055: seal a message AND a bounded display preview in one chain step. The
+ * `previewPayload` (built by buildPreview) is sealed under a domain-separated key
+ * derived from the same message key, header bound as AAD, and rides in the Web Push
+ * so the recipient SW shows a rich notification without a fetch. Advances the ratchet
+ * exactly once — the send path calls THIS or sealMessage, never both.
+ */
+export function sealMessageWithPreview(
+  state: RatchetState,
+  payload: MessagePayload,
+  previewPayload: MessagePayload,
+  ad: Uint8Array = new Uint8Array(0),
+): { wire: WireMessage; previewEnv: Envelope } {
+  const { header, env, previewEnv } = ratchetEncryptWithPreview(
+    state,
+    utf8ToBytes(JSON.stringify(payload)),
+    utf8ToBytes(JSON.stringify(previewPayload)),
+    ad,
+  );
+  return { wire: { header, env }, previewEnv };
 }
 
 /** Decrypt a wire message; mutates `state`. Throws if it doesn't authenticate. */

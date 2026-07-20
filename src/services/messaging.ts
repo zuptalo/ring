@@ -28,7 +28,10 @@ import {
   type RatchetState,
   type PreKeyBundlePub,
 } from './crypto/ratchet';
-import { sealMessage, openMessage, openMessagePreview, type MessagePayload, type WireMessage } from './crypto/message';
+import { sealMessage, sealMessageWithPreview, openMessage, openMessagePreview, type MessagePayload, type WireMessage } from './crypto/message';
+import { buildPreview } from './crypto/push-preview';
+import type { Envelope } from './crypto/envelope';
+import type { Header } from './crypto/ratchet';
 import { sessionRecord, type SerializedSession } from './crypto/ratchet';
 import { withSessionLock, LockTimeoutError } from './cross-lock';
 import {
@@ -113,12 +116,20 @@ export async function clearSession(chatId: string): Promise<void> {
  * the recipient + wire packet to relay. Returns null when the message can't be
  * sent remotely (group chat, or a local-only/demo contact with no account).
  */
+/** Spec 1055: the sealed push preview that rides in the Web Push. Carries the ratchet
+ *  header (so the recipient SW can peek-derive the message key) plus the preview AEAD.
+ *  Opaque to the server, which forwards it verbatim into the (RFC-8291-encrypted) push. */
+export interface PushPreview {
+  h: Header;
+  p: Envelope;
+}
+
 export async function sealForChat(
   chatId: string,
   peerUserId: string,
   isGroup: boolean,
   payload: MessagePayload,
-): Promise<{ to: string; packet: WirePacket } | null> {
+): Promise<{ to: string; packet: WirePacket; pushPreview: PushPreview } | null> {
   if (isGroup) return null; // group messaging (sender keys) is not relay-wired yet
   // Serialize the whole load→advance→save (incl. first-use X3DH bootstrap) per chat so
   // concurrent seals/opens — in THIS context and in the SW — can't corrupt the ratchet.
@@ -159,14 +170,17 @@ export async function sealForChat(
     await setSessionMeta(chatId, meta);
   }
 
-  const wire = sealMessage(session, payload);
+  // Spec 1055: seal the message AND a bounded display preview in one ratchet step.
+  // The preview rides in the Web Push so the recipient shows a rich notification with
+  // no fetch; the full message still relays for the authoritative store on open.
+  const { wire, previewEnv } = sealMessageWithPreview(session, payload, buildPreview(payload));
   await saveSession(chatId, session);
 
   const packet: WirePacket =
     meta?.sendPreamble && meta.preamble
       ? { v: 1, type: 'prekey', ...meta.preamble, msg: wire }
       : { v: 1, type: 'normal', msg: wire };
-  return { to: peerUserId, packet };
+  return { to: peerUserId, packet, pushPreview: { h: wire.header, p: previewEnv } };
   });
 }
 

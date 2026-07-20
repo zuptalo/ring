@@ -28,7 +28,8 @@ import {
   isLegacyIOS, withTimeout, fetchPendingFrames, richNoteOptions, shouldShowPlaceholderFirst,
   previewCallRing, recordCallTickle, recordCallOutcome, withdrawCallBadgeUnit, callBadgeCount,
   readRingShown, recordRingShown, clearRingShown,
-  type SwNote, type ConnNote,
+  previewInline, loadShown, postNotified,
+  type SwNote, type ConnNote, type InlinePreview,
 } from '@/services/sw-inbox';
 import type { CallEventSignal } from '@/services/crypto/message';
 import { readSessionToken } from '@/services/session';
@@ -451,14 +452,25 @@ async function updateAppBadge(newCount: number): Promise<void> {
  *  payload, is treated as a message). 'post-activity' (spec 1031) is the one tickle
  *  that carries data: the id of OUR post that received engagement — returned as
  *  `post` so the handler can pull exactly that post's engagement. */
-function pushKind(event: PushEvent): { kind: 'call' | 'msg' | 'conn' | 'post' | 'post-activity' | 'version'; post?: string } {
+function pushKind(event: PushEvent): {
+  kind: 'call' | 'msg' | 'msgx' | 'conn' | 'post' | 'post-activity' | 'version';
+  post?: string;
+  inline?: InlinePreview;
+} {
   try {
-    const data = event.data?.json() as { t?: string; post?: string } | undefined;
+    const data = event.data?.json() as
+      | { t?: string; post?: string; id?: string; from?: string; pv?: { h: unknown; p: unknown } }
+      | undefined;
     if (data?.t === 'call') return { kind: 'call' };
     if (data?.t === 'conn') return { kind: 'conn' };
     if (data?.t === 'post') return { kind: 'post' };
     if (data?.t === 'post-activity') return { kind: 'post-activity', post: data.post };
     if (data?.t === 'version') return { kind: 'version' };
+    // (spec 1055) Inline preview: a rich notification is decryptable from the push
+    // body itself — no fetch. Malformed → fall through to the plain message tickle.
+    if (data?.t === 'msgx' && data.id && data.from && data.pv) {
+      return { kind: 'msgx', inline: { id: data.id, from: data.from, h: data.pv.h as InlinePreview['h'], p: data.pv.p as InlinePreview['p'] } };
+    }
   } catch {
     /* not JSON → treat as a message */
   }
@@ -610,8 +622,14 @@ async function tryAuthoritativeDrain(ctx: WakeCtx): Promise<boolean> {
       // path owns the nothing-new / re-assert behavior (spec 2016/2017).
       let accepted = 0;
       if (r.notes.length) {
-        await closeByTag(GENERIC_TAG);
-        accepted = await showNotes(r.notes);
+        // (spec 1055 FR-012) Don't re-notify a message the inline preview already showed
+        // (or a prior wake surfaced): the warm still persists + acks it below, silently.
+        const seen = new Set(await loadShown());
+        const fresh = r.notes.filter((n) => n.ids.some((id) => !seen.has(id)));
+        if (fresh.length) {
+          await closeByTag(GENERIC_TAG);
+          accepted = await showNotes(fresh);
+        }
       }
       // Mark applied frames in the preview ledger too: if the ack below fails they
       // linger in the queue, and the preview path must not re-decrypt them (their
@@ -951,7 +969,7 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
       // background if the DB later frees up).
       await Promise.race([stampPushWake(), new Promise((r) => setTimeout(r, 1500))]);
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const { kind, post } = pushKind(event);
+      const { kind, post, inline } = pushKind(event);
       // (spec 2044) Legacy iOS (<= 16) takes the LITE wake: show first, decrypt never.
       // On that tier the SW's network layer works (delivered receipts prove the queue
       // fetch succeeds) but IndexedDB transactions and the decrypt/present pipeline
@@ -959,7 +977,49 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
       // subscription was dead within a burst. The gate is a pure UA parse that fails
       // toward modern, so devices on iOS 17+ never enter this branch.
       if (isLegacyIOS(self.navigator.userAgent)) {
-        await dispatchLiteWake(kind, clients, ctx);
+        // Legacy never decrypts (incl. the inline preview) — the lite path shows a
+        // generic first; a 'msgx' wake is just a message there.
+        await dispatchLiteWake(kind === 'msgx' ? 'msg' : kind, clients, ctx);
+        return;
+      }
+      if (kind === 'msgx' && inline) {
+        // (spec 1055) The rich notification is decryptable from the push itself — show
+        // it WITHOUT any /relay/pending fetch, then best-effort warm the DB. Show first
+        // (the guaranteed, window-fitting part), warm second (pure upside), so a
+        // suspend during the warm can never cause a silent wake.
+        const result = await previewInline(inline);
+        if (result.ok && result.notes.length) {
+          await closeByTag(GENERIC_TAG); // in case a prior wake left a placeholder
+          const accepted = await showNotes(result.notes);
+          if (accepted > 0) {
+            ctx.shown = true;
+            await markShown(allIds(result.notes)); // so the warm/open path won't re-notify (FR-012)
+          }
+        } else if (result.ok && (result.silenced || result.suppressed)) {
+          // Muted / notifications-off: intentionally no content. On iOS the wake must
+          // still end visibly, so show the content-free quiet note unless a page is up.
+          ctx.shown = (await showQuietUnlessVisible('msg')) || ctx.shown;
+        } else {
+          // Locked / decrypt failure → spec-2048 show-first placeholder (rich on open).
+          try {
+            await showGeneric('inline-fallback');
+            ctx.shown = true;
+          } catch (e) {
+            console.warn('[sw] inline fallback placeholder failed', e);
+          }
+        }
+        ctx.satisfied = true;
+        // notified receipt: the device DECRYPTED the preview (regardless of display),
+        // so the sender flips to "delivered" now — fire-and-forget, no mute/hidden leak.
+        if (result.ok) void postNotified(inline.id);
+        // Best-effort warm tail (spec 1032, default-on for non-legacy): persist + ack so
+        // the app opens warm. Runs AFTER the show; self-gates on eligibility; on the
+        // inline path its notify step is deduped by the markShown above (FR-012).
+        try {
+          await tryAuthoritativeDrain(ctx);
+        } catch (e) {
+          console.warn('[sw] inline warm tail failed (DB warms on open)', e);
+        }
         return;
       }
       if (kind === 'call') {

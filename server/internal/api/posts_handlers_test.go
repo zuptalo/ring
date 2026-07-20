@@ -25,6 +25,7 @@ type recordingNotifier struct {
 
 func (n *recordingNotifier) Notify(context.Context, string)                      {}
 func (n *recordingNotifier) NotifyFrame(context.Context, string, string, string) {}
+func (n *recordingNotifier) NotifyFramePreview(context.Context, string, string, string, []byte) {}
 func (n *recordingNotifier) NotifyCall(context.Context, string) {}
 func (n *recordingNotifier) NotifyConn(context.Context, string) {}
 func (n *recordingNotifier) NotifyPost(_ context.Context, userID, _ string) {

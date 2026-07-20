@@ -256,6 +256,17 @@ func (f *fakeStore) DeleteRelay(_ context.Context, recipient, msgID string) (str
 	return "", false, nil
 }
 
+func (f *fakeStore) StampNotified(_ context.Context, recipient, msgID string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.relay[recipient] {
+		if row.msgID == msgID {
+			return row.sender, true, nil // stamp is a no-op in the fake; frame stays queued
+		}
+	}
+	return "", false, nil
+}
+
 func (f *fakeStore) RecordDelivery(_ context.Context, sender, recipient, msgID string) error {
 	if sender == "" || recipient == "" || msgID == "" {
 		return nil
