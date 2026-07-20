@@ -58,6 +58,49 @@ func TestRelayPendingAndAck(t *testing.T) {
 	}
 }
 
+// TestRelayNotified (spec 1055) proves POST /v1/relay/notified stamps a queued frame as
+// notified WITHOUT dequeuing it — the recipient showed a push preview but the full
+// message is still owed, so it must remain in the queue until the authoritative ack.
+func TestRelayNotified(t *testing.T) {
+	as := newFakeStore()
+	srv := NewRouter(&Handlers{
+		Store: as, Directory: as, Blocks: as, Relay: as, Hub: ws.NewHub(),
+		Keys: newFakeKeysStore(), Blobs: newFakeBlobStore(),
+		Sync: newFakeSyncStore(), Push: newFakePushStore(), Invites: as,
+		PublicURL: "https://ring.example",
+	}, []string{"http://localhost:5173"})
+
+	tok, uid, code := registerNamed(t, srv, "notifyuser")
+	if code != http.StatusOK {
+		t.Fatalf("register = %d", code)
+	}
+	_ = as.EnqueueRelay(context.Background(), uid, "00000000-0000-0000-0000-000000000999", "m1",
+		[]byte(`{"t":"msg","id":"m1","from":"sndr","ciphertext":{"v":1}}`))
+
+	// Notified → 204, and the frame is STILL queued (unlike ack).
+	if rr := do(t, srv, http.MethodPost, "/v1/relay/notified", tok, `{"ids":["m1"]}`); rr.Code != http.StatusNoContent {
+		t.Fatalf("notified status = %d", rr.Code)
+	}
+	rr := do(t, srv, http.MethodGet, "/v1/relay/pending", tok, "")
+	var got struct {
+		Frames []json.RawMessage `json:"frames"`
+	}
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if len(got.Frames) != 1 {
+		t.Fatalf("after notified frames = %d, want 1 (notified must NOT dequeue)", len(got.Frames))
+	}
+
+	// The authoritative ack still dequeues it.
+	if rr := do(t, srv, http.MethodPost, "/v1/relay/ack", tok, `{"ids":["m1"]}`); rr.Code != http.StatusNoContent {
+		t.Fatalf("ack status = %d", rr.Code)
+	}
+	rr = do(t, srv, http.MethodGet, "/v1/relay/pending", tok, "")
+	_ = json.Unmarshal(rr.Body.Bytes(), &got)
+	if len(got.Frames) != 0 {
+		t.Fatalf("after ack frames = %d, want 0", len(got.Frames))
+	}
+}
+
 // TestRelayStatus proves GET /v1/relay/status (spec 2043) reports the queued count
 // and oldest-frame age with NO side effects, and returns a null oldest for an empty
 // queue. It powers the client zombie self-heal without dequeuing or emitting receipts.

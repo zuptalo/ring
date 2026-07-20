@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -369,6 +370,29 @@ func TestRecordSizeFor(t *testing.T) {
 		if got >= 512 {
 			t.Errorf("recordSizeFor(%q) = %d, want < 512", p, got)
 		}
+	}
+}
+
+// TestPreviewParamsConstantSize (spec 1055 SC-004 / FR-003) pins that every preview push
+// is padded to the SAME record size regardless of the sealed preview's length — so the
+// push service learns nothing about the message length — and carries NO Topic header
+// (each preview must survive independently; a shared Topic would collapse a burst).
+func TestPreviewParamsConstantSize(t *testing.T) {
+	small := previewParams([]byte(`{"h":{},"p":{"ct":"aa"}}`))
+	large := previewParams([]byte(`{"h":{"dh":"` + strings.Repeat("x", 800) + `"},"p":{"ct":"` + strings.Repeat("y", 1500) + `"}}`))
+	if pickRecordSize(small) != pickRecordSize(large) {
+		t.Errorf("preview record size varies with payload length: %d vs %d (leaks message size)",
+			pickRecordSize(small), pickRecordSize(large))
+	}
+	if pickRecordSize(small) != previewRecordSize {
+		t.Errorf("preview record size = %d, want the constant %d", pickRecordSize(small), previewRecordSize)
+	}
+	if small.topic != "" {
+		t.Errorf("preview push must carry NO Topic header, got %q", small.topic)
+	}
+	// A tickle still derives its size from the payload (spec 2046), unchanged.
+	if got := pickRecordSize(msgParams()); got != recordSizeFor(msgParams().payload) {
+		t.Errorf("tickle record size = %d, want payload-derived %d", got, recordSizeFor(msgParams().payload))
 	}
 }
 

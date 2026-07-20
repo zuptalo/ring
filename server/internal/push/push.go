@@ -127,6 +127,10 @@ type pushParams struct {
 	ttl     int
 	urgency webpush.Urgency
 	topic   string
+	// recordSize (spec 1055): fixed aes128gcm record size. 0 = derive from the payload
+	// length (recordSizeFor) — correct for content-free tickles. A preview push sets a
+	// CONSTANT here so its encrypted length reveals nothing about the message size.
+	recordSize uint32
 }
 
 var (
@@ -148,6 +152,22 @@ var (
 		return pushParams{payload: tickleVersion, ttl: versionTTL, urgency: webpush.UrgencyLow, topic: versionTopic}
 	}
 )
+
+// previewMaxPayload (spec 1055) is the largest inline preview push body we send; a
+// larger one falls back to the content-free tickle. previewRecordSize is the CONSTANT
+// aes128gcm record size every preview push is padded to, so its encrypted length is
+// identical regardless of message length (nothing leaks to the push service). It stays
+// well under the ~4 KB constrained-endpoint ceiling (spec 2046).
+const previewMaxPayload = 3072
+
+var previewRecordSize = uint32(previewMaxPayload + recordSizeOverhead)
+
+// previewParams: a message-urgency push carrying the sealed preview body, with NO Topic
+// header (each preview must survive independently — a shared Topic would collapse a
+// burst to only the last) and the constant record size.
+func previewParams(payload []byte) pushParams {
+	return pushParams{payload: payload, ttl: msgTTL, urgency: webpush.UrgencyHigh, topic: "", recordSize: previewRecordSize}
+}
 
 // SubStore is the subscription persistence the notifier needs.
 type SubStore interface {
@@ -185,6 +205,15 @@ func recordSizeFor(payload []byte) uint32 {
 	return uint32(len(payload)) + recordSizeOverhead
 }
 
+// pickRecordSize returns a params' explicit constant record size (spec 1055 preview
+// pushes) or, when unset, the payload-derived size for content-free tickles.
+func pickRecordSize(p pushParams) uint32 {
+	if p.recordSize > 0 {
+		return p.recordSize
+	}
+	return recordSizeFor(p.payload)
+}
+
 // attempt makes a single delivery and reports the HTTP status, any Retry-After
 // hint, and a transport error (status 0).
 func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p pushParams) (status int, retryAfter time.Duration, body []byte, err error) {
@@ -219,7 +248,9 @@ func (s *Sender) attempt(ctx context.Context, sub store.PushSubscription, p push
 		// service via the cleartext Topic header (sent for collapsing), and every payload
 		// is a fixed content-free marker. recordSizeFor keeps it strictly above the
 		// payload so encryption never underflows.
-		RecordSize: recordSizeFor(p.payload),
+		// (spec 1055) A preview push sets a CONSTANT recordSize so its encrypted length
+		// hides the message size; tickles leave it 0 → derive from the payload.
+		RecordSize: pickRecordSize(p),
 	})
 	if err != nil {
 		return 0, 0, nil, err
@@ -299,6 +330,24 @@ func (n *Notifier) NotifyFrame(ctx context.Context, userID, class, prid string) 
 // without racing the debounced network send.
 func (n *Notifier) allowFrame(ctx context.Context, userID, class, prid string) bool {
 	return AllowPush(class, prid, "", n.prefsFor(ctx, userID))
+}
+
+// NotifyFramePreview (spec 1055) inlines a sealed bounded preview in the push so the
+// recipient shows a rich notification without a fetch. It passes the IDENTICAL routing
+// gate as the tickle (a muted prid / classes-off → no push at all), and — unlike the
+// debounced tickle — sends immediately and undebounced, because each preview carries
+// its own unique ciphertext (a trailing debounce would drop distinct previews). An
+// oversized preview (beyond the constant record budget) falls back to the tickle, so
+// the message still notifies without ever sending an unpadded large push.
+func (n *Notifier) NotifyFramePreview(ctx context.Context, userID, class, prid string, preview []byte) {
+	if !n.allowFrame(ctx, userID, class, prid) {
+		return
+	}
+	if len(preview) == 0 || len(preview) > previewMaxPayload {
+		n.msgDeb.hit(userID) // fall back to the content-free tickle
+		return
+	}
+	n.notify(ctx, userID, previewParams(preview))
 }
 
 // NotifyCall pushes a content-free CALL tickle: short-lived (a stale ring is

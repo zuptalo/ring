@@ -550,7 +550,7 @@ async function sealAndEnqueue(
   try {
     const prid = await pridFor(chat);
     const sealed = await sealForChat(chat.id, peerUserId, chat.isGroup, { ...payload, prid });
-    if (sealed) await enqueue({ t: 'msg', id: messageId, to: sealed.to, ciphertext: sealed.packet, class: cls, prid });
+    if (sealed) await enqueue({ t: 'msg', id: messageId, to: sealed.to, ciphertext: sealed.packet, class: cls, prid, pushPreview: sealed.pushPreview });
     else if (!chat.isGroup) await detectTerminated(peerUserId); // no bundle → maybe deleted
   } catch (e) {
     console.warn('[messaging] seal/enqueue failed; message stays pending', e);
@@ -639,6 +639,8 @@ async function sealAndEnqueueGroup(
           // targets, bystander fan-out goes quiet — default 'message' otherwise.
           class: classFor ? classFor(member) : classifyGroupMessage(member, payload),
           prid,
+          // spec 1055: per-pairwise preview (each member's own ratchet seal).
+          pushPreview: sealed.pushPreview,
         });
       }
     } catch (e) {

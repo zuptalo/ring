@@ -29,6 +29,9 @@ import { attemptDeviceUnlock, getIdentityKeys } from './crypto/identity';
 import { ready as sodiumReady } from './crypto/primitives';
 import { openPostEngagement, openReceivedPost } from './posts';
 import { previewPacket } from './messaging';
+import { openPushPreview } from './crypto/push-preview';
+import type { Header } from './crypto/ratchet';
+import type { Envelope } from './crypto/envelope';
 import { readHiddenSet, readHiddenSetOrNull } from './hidden-chats';
 import { readSessionToken, readSessionUserId } from './session';
 import { get, getAll, put } from '@/db/idb';
@@ -1002,6 +1005,25 @@ export async function ackCall(): Promise<void> {
   }
 }
 
+/** Spec 1055: tell the server this device SHOWED a push preview for `id` (the recipient
+ *  has SEEN it but not durably downloaded). The server stamps notified_at and relays a
+ *  `notified` receipt to the sender — WITHOUT dequeuing (the full message is still owed).
+ *  Fires on decrypt regardless of the display outcome, so it never leaks mute/hidden.
+ *  Best-effort: a dropped notified is superseded by the later `delivered`. */
+export async function postNotified(id: string): Promise<void> {
+  const token = await readSessionToken();
+  if (!token || !id) return;
+  try {
+    await fetch(`${API}/relay/notified`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [id] }),
+    });
+  } catch {
+    /* best-effort: the sender still flips to "delivered" on the durable receipt */
+  }
+}
+
 /** Fetch the queued (undelivered) frames. Fetching is what tells the server the
  *  device received them (→ "delivered" receipts), so callers do it before any
  *  decryption or settings gate. Bounded so a cold-start fetch can't hang the
@@ -1210,6 +1232,94 @@ export async function previewPending(): Promise<PreviewResult> {
     reason,
     ...(callEvents.length ? { callEvents } : {}),
   };
+}
+
+/* ---- spec 1055: inline preview (rich notification from the push, no fetch) ---- */
+
+/** The bounded preview carried in a spec-1055 push: the frame id + sender (to address
+ *  the notification + resolve the session) and the sealed preview ({ h, p }). */
+export interface InlinePreview {
+  id: string;
+  from: string;
+  h: Header;
+  p: Envelope;
+}
+
+export interface InlineResult {
+  notes: SwNote[];
+  suppressed: boolean; // "Show notifications" off → caller shows nothing, no placeholder
+  silenced: boolean; // per-chat mute/off silenced it → caller shows nothing
+  ok: boolean; // decrypt succeeded; false → caller falls back to the show-first placeholder
+}
+
+/**
+ * Render a rich notification from a bounded preview carried IN the push — no
+ * /relay/pending fetch. Peek-decrypts the preview (openPushPreview loads a fresh
+ * session copy and NEVER persists — consumes nothing), then runs the SAME
+ * noteForPayload render as the fetch path, with the recipient's OWN prefs + hidden set
+ * (so a hidden chat → generic, "Show preview" off → hidden sender/body, muted →
+ * silenced — identical to today). `ok:false` (locked / decrypt failure) tells the
+ * caller to fall back to the spec-2048 show-first placeholder; it never ends silently.
+ */
+export async function previewInline(frame: InlinePreview): Promise<InlineResult> {
+  const miss = (ok: boolean): InlineResult => ({ notes: [], suppressed: false, silenced: false, ok });
+  if (!(await attemptDeviceUnlock().catch(() => false))) return miss(false); // PIN-locked → generic
+  const showMessages = await setting<boolean>('notifications.message.show', true);
+  const showGroups = await setting<boolean>('notifications.group.show', true);
+  const showPreview = await setting<boolean>('notifications.showPreview', true);
+  const [chats, contacts, hidden, selfId] = await Promise.all([
+    getAll<Chat>('chats'),
+    getAll<Contact>('contacts'),
+    readHiddenSet(), // spec 1019: hidden chats get a generic, content-free notification
+    readSessionUserId(), // spec 1020: "am I @mentioned?"
+  ]);
+
+  let payload: MessagePayload;
+  try {
+    const decrypted = await openPushPreview(sessionKeyForPeer(chats, frame.from), frame.h, frame.p);
+    if (!decrypted) return miss(false); // no session yet → generic, rich on open
+    payload = decrypted;
+  } catch (e) {
+    console.warn('[sw-inbox] inline preview decrypt failed → show-first fallback', e);
+    return miss(false);
+  }
+
+  const f: MsgFrame = { t: 'msg', id: frame.id, from: frame.from };
+  // Game / reaction context: the same read-only store prefetch previewPending does, so
+  // move/reaction notifications read identically on the inline path. IDB reads are fast
+  // (the slow /relay/pending fetch is what we removed), so a modern device stays inside
+  // its window; an unresolved target just falls back to the generic mover/silent-reaction.
+  const gameTargetId = payload.gameMove?.messageId ?? payload.gameAccept?.messageId;
+  const gameCtx = gameTargetId
+    ? {
+        row: await get<Message>('messages', gameTargetId),
+        prefs: {
+          turn: await setting<boolean>('notifications.games.turn', true),
+          challenges: await setting<boolean>('notifications.games.challenges', true),
+          followMoves: await setting<boolean>('notifications.games.followMoves', true),
+          followResults: await setting<boolean>('notifications.games.followResults', true),
+        },
+        follows: await setting<Record<string, number>>('games.follows', {}),
+      }
+    : undefined;
+  const reactionCtx = payload.reaction
+    ? {
+        row: await get<Message>('messages', payload.reaction.messageId),
+        prefs: {
+          dm: await setting<boolean>('notifications.message.reactions', true),
+          group: await setting<boolean>('notifications.group.reactions', true),
+          tone: await setting<string>('notifications.reactions.sound', 'pop'),
+        },
+      }
+    : undefined;
+
+  const { note, wasMessage, silenced } = noteForPayload(
+    f, payload, chats, contacts, showMessages, showPreview, hidden, selfId ?? '', gameCtx, reactionCtx, { showGroups },
+  );
+  if (note) return { notes: aggregate([note]), suppressed: false, silenced: false, ok: true };
+  if (silenced) return { notes: [], suppressed: false, silenced: true, ok: true }; // muted → nothing
+  if (wasMessage && !showMessages) return { notes: [], suppressed: true, silenced: false, ok: true };
+  return { notes: [], suppressed: false, silenced: false, ok: true }; // side-effect only → nothing to show
 }
 
 /* ---- call-event support for the SW (spec 1040) ---- */

@@ -130,6 +130,40 @@ func (h *Handlers) relayAck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// relayNotified (POST /v1/relay/notified) is posted by a recipient's service worker
+// when it shows a bounded PUSH PREVIEW (spec 1055) — the recipient has SEEN the message
+// but not durably downloaded it. It stamps the queued frame's notified_at (so the server
+// knows the frame is seen-but-still-owed) and relays a "notified" receipt to the sender,
+// WITHOUT dequeuing — the full message is delivered + dequeued only on the authoritative
+// ack. To the sender, "notified" renders the same as "delivered" (the recipient was
+// reached). Fires on DECRYPT regardless of the recipient's display prefs, so it never
+// leaks mute/hidden. Idempotent — an already-delivered id simply doesn't match.
+func (h *Handlers) relayNotified(w http.ResponseWriter, r *http.Request) {
+	uid, _ := auth.UserID(r.Context())
+	var req relayAckRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	for _, id := range req.IDs {
+		if id == "" {
+			continue
+		}
+		sender, found, err := h.Relay.StampNotified(r.Context(), uid, id)
+		if err != nil {
+			slog.Error("relay notified stamp failed", "err", err, "user", uid, "msg", id)
+			continue
+		}
+		if found && sender != "" {
+			receipt, _ := json.Marshal(map[string]any{
+				"t": "receipt", "messageId": id, "status": "notified", "at": time.Now().UnixMilli(), "from": uid,
+			})
+			h.Hub.Send(sender, receipt)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // callAck (POST /v1/call/ack) is posted by a callee's service worker when it shows
 // an incoming-call notification. It proves the device is reachable (it received the
 // ring push), so the server flips every caller currently ringing this user from

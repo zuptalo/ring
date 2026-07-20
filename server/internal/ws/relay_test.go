@@ -109,6 +109,16 @@ func (m *memRelay) DeleteRelay(_ context.Context, recipient, msgID string) (stri
 	return sender, true, nil
 }
 
+func (m *memRelay) StampNotified(_ context.Context, recipient, msgID string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sender, ok := m.senders[recipient][msgID]
+	if !ok {
+		return "", false, nil
+	}
+	return sender, true, nil // stamp only; frame stays queued (no dequeue)
+}
+
 func (m *memRelay) RecordDelivery(_ context.Context, sender, recipient, msgID string) error {
 	if sender == "" || recipient == "" || msgID == "" {
 		return nil
@@ -425,6 +435,9 @@ type fakeNotifier struct{ ch chan string }
 
 func (f *fakeNotifier) Notify(_ context.Context, userID string)            { f.ch <- userID }
 func (f *fakeNotifier) NotifyFrame(_ context.Context, userID, _, _ string)  { f.ch <- userID }
+func (f *fakeNotifier) NotifyFramePreview(_ context.Context, userID, _, _ string, _ []byte) {
+	f.ch <- userID
+}
 func (f *fakeNotifier) NotifyCall(_ context.Context, userID string)        { f.ch <- userID }
 func (f *fakeNotifier) NotifyConn(_ context.Context, userID string)        { f.ch <- userID }
 func (f *fakeNotifier) NotifyPost(_ context.Context, userID, _ string)     { f.ch <- userID }

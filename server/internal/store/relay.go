@@ -110,3 +110,21 @@ func (s *Store) DeleteRelay(ctx context.Context, recipient, msgID string) (sende
 	}
 	return sender, true, nil
 }
+
+// StampNotified (spec 1055) marks a queued frame as notified — the recipient showed a
+// push preview but has NOT durably downloaded it — WITHOUT dequeuing it, so the full
+// message is still delivered on the authoritative ack. Returns the sender so a
+// `notified` receipt can be relayed. found=false if nothing matched (already delivered
+// + dequeued, or an unknown id).
+func (s *Store) StampNotified(ctx context.Context, recipient, msgID string) (sender string, found bool, err error) {
+	err = s.pool.QueryRow(ctx,
+		`UPDATE relay_queue SET notified_at = now() WHERE recipient = $1 AND msg_id = $2 RETURNING sender::text`,
+		recipient, msgID).Scan(&sender)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return sender, true, nil
+}

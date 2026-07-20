@@ -28,13 +28,22 @@ export interface MsgFrame {
   // blind relay can gate the push tickle; they never affect delivery.
   class?: string;
   prid?: string;
+  // spec 1055: sealed bounded preview ({ h: ratchet header, p: preview AEAD }) for
+  // the ciphertext-in-push notification path. Opaque to the transport and the server
+  // (E2EE to the recipient device); forwarded into the RFC-8291-encrypted Web Push so
+  // the recipient SW shows a rich notification with no fetch. Absent for frames the
+  // sender chose not to preview (e.g. some housekeeping seals).
+  pushPreview?: unknown;
 }
 export interface ReceiptFrame {
   t: 'receipt';
   messageId: string;
   // 'downloaded' is recipient-originated like 'seen', but signals the media bytes are on
   // their device (not a UI tick) so the sender can delete the server blob.
-  status: 'sent' | 'delivered' | 'seen' | 'downloaded';
+  // 'notified' (spec 1055): the recipient showed a push preview but hasn't durably
+  // downloaded yet — to the sender it renders the same as 'delivered' (reached them),
+  // the split is only for the server to know what's still owed.
+  status: 'sent' | 'delivered' | 'seen' | 'downloaded' | 'notified';
   at: number;
   to?: string; // recipient (for client-originated seen receipts; routed by the server)
   from?: string; // server 'sent'/'delivered' receipts: WHICH recipient confirmed it
