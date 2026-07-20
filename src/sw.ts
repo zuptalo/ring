@@ -651,8 +651,13 @@ async function tryAuthoritativeDrain(ctx: WakeCtx): Promise<boolean> {
       // owed. A failure of the quiet note itself is contained by this function's
       // catch, which degrades to the preview flow — whose own quiet terminal
       // propagates (FR-005 carve-out).
-      let shown = accepted > 0;
-      if (!r.notes.length || accepted === 0) shown = (await showQuietUnlessVisible('msg')) || shown;
+      // (spec 1055) If this wake ALREADY ended visibly — the inline-preview path showed
+      // a placeholder/rich note before running the warm as a tail — do NOT add a second
+      // (quiet) notification: that produced a rich + generic double on modern devices.
+      // The warm still persisted + acked above; only the extra visible note is dropped.
+      const already = ctx.shown;
+      let shown = accepted > 0 || already;
+      if (!already && (!r.notes.length || accepted === 0)) shown = (await showQuietUnlessVisible('msg')) || shown;
       // (spec 2043) A fully-handled drain always ends satisfied (shown or licensed).
       ctx.shown = shown;
       ctx.satisfied = true;
@@ -983,38 +988,51 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
         return;
       }
       if (kind === 'msgx' && inline) {
-        // (spec 1055) The rich notification is decryptable from the push itself — show
-        // it WITHOUT any /relay/pending fetch, then best-effort warm the DB. Show first
-        // (the guaranteed, window-fitting part), warm second (pure upside), so a
-        // suspend during the warm can never cause a silent wake.
-        const result = await previewInline(inline);
-        if (result.ok && result.notes.length) {
-          await closeByTag(GENERIC_TAG); // in case a prior wake left a placeholder
-          const accepted = await showNotes(result.notes);
-          if (accepted > 0) {
+        // (spec 1055) The rich notification is decryptable from the push itself, but the
+        // ORDER matters (device-tested): decrypting on a cold/locked SW (device unlock +
+        // session read + context) can be slow or fail, so we MUST show a placeholder
+        // FIRST (spec 2048 ordering) — a fast, guaranteed visible ending — then UPGRADE
+        // it to the rich preview in place when the in-push decrypt lands, and warm last.
+        //
+        // A focused+visible page owns the in-app alert — defer to it (no OS notification),
+        // mirroring the plain message path below.
+        if (!shouldShowPlaceholderFirst(clients) && (await pageWillNotify(clients, 2200))) {
+          const nowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+          if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) {
+            await showQuietNote('msg');
             ctx.shown = true;
-            await markShown(allIds(result.notes)); // so the warm/open path won't re-notify (FR-012)
           }
-        } else if (result.ok && (result.silenced || result.suppressed)) {
-          // Muted / notifications-off: intentionally no content. On iOS the wake must
-          // still end visibly, so show the content-free quiet note unless a page is up.
-          ctx.shown = (await showQuietUnlessVisible('msg')) || ctx.shown;
-        } else {
-          // Locked / decrypt failure → spec-2048 show-first placeholder (rich on open).
-          try {
-            await showGeneric('inline-fallback');
-            ctx.shown = true;
-          } catch (e) {
-            console.warn('[sw] inline fallback placeholder failed', e);
-          }
+          ctx.satisfied = true;
+          void postNotified(inline.id); // the device received it → sender sees "delivered"
+          return;
         }
-        ctx.satisfied = true;
-        // notified receipt: the device DECRYPTED the preview (regardless of display),
-        // so the sender flips to "delivered" now — fire-and-forget, no mute/hidden leak.
-        if (result.ok) void postNotified(inline.id);
-        // Best-effort warm tail (spec 1032, default-on for non-legacy): persist + ack so
-        // the app opens warm. Runs AFTER the show; self-gates on eligibility; on the
-        // inline path its notify step is deduped by the markShown above (FR-012).
+        // No focused page: show the generic placeholder NOW (before the decrypt), and tell
+        // the sender we received it — fired REGARDLESS of decrypt, so a locked device that
+        // cannot decrypt in the background still flips the sender to "delivered" (parity
+        // with the legacy lite path, which reports delivered on the buzz).
+        for (const client of clients) client.postMessage({ type: 'ring:drain' });
+        try {
+          await showGeneric('show-first');
+          ctx.shown = ctx.satisfied = true;
+        } catch (e) {
+          console.warn('[sw] inline show-first placeholder failed', e);
+        }
+        void postNotified(inline.id);
+        // UPGRADE: peek-decrypt the in-push preview and REPLACE the placeholder with the
+        // rich note (fast — no fetch). If the SW cannot decrypt in the background (locked,
+        // key unavailable), the generic placeholder already shown stands.
+        try {
+          const result = await previewInline(inline);
+          if (result.ok && result.notes.length) {
+            await closeByTag(GENERIC_TAG);
+            const accepted = await showNotes(result.notes);
+            if (accepted > 0) await markShown(allIds(result.notes)); // warm/open won't re-notify (FR-012)
+          }
+        } catch (e) {
+          console.warn('[sw] inline preview upgrade failed (placeholder stands)', e);
+        }
+        // Warm the DB (persist + ack) so the app opens ready. ctx.shown is already true,
+        // so the warm adds NO second notification (fixed in tryAuthoritativeDrain).
         try {
           await tryAuthoritativeDrain(ctx);
         } catch (e) {
