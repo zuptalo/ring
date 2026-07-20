@@ -1311,6 +1311,11 @@ const statusLine = computed(() => {
   if (!peer) return '';
   const active = activityFor(peer); // reactive: peer's current activity (1:1 keyed by peer id)
   if (active.length) return activityKindLabel(active[0].kind);
+  // Re-evaluate on the 30s clock tick so the relative "last seen …" label stays current
+  // while the chat sits open (otherwise "just now" never becomes "2 minutes ago" until you
+  // leave and re-enter). peerPresence itself is reactive to actual presence changes; this
+  // adds the passage-of-time dependency the relative formatter needs.
+  void nowMs.value;
   return presenceLabel(peerPresence(peer));
 });
 
@@ -2725,14 +2730,19 @@ onMounted(() => {
 onUnmounted(() => clearInterval(ttlTick));
 
 // Compact "time left before this disappears" for a message's expiresAt (e.g. "1d", "3h", "5m", "9s").
+// The window counts DOWN, so the label rounds UP (ceil) on the hour/day so it reads the time
+// remaining honestly and never jumps early: a fresh 24h timer shows "1d" for its whole first hour
+// and only becomes "23h" once an hour has actually elapsed; "2h" holds until exactly 1h is left;
+// below an hour it counts whole minutes down (59, 58, …), and seconds only in the last minute.
 function ttlLeft(expiresAt: number): string {
-  const s = Math.max(0, Math.floor((expiresAt - nowMs.value) / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+  const ms = Math.max(0, expiresAt - nowMs.value);
+  const DAY = 24 * HOUR;
+  if (ms < MIN) return `${Math.floor(ms / 1000)}s`; // last minute: seconds
+  if (ms < HOUR) return `${Math.floor(ms / MIN)}m`; // last hour: whole minutes counting down
+  const ceilHours = Math.ceil(ms / HOUR);
+  if (ceilHours <= 23) return `${ceilHours}h`; // 23h … 1h (rounded up)
+  if (ceilHours === 24) return '1d'; // the first hour of a 1-day window (23h < left ≤ 24h)
+  return `${Math.ceil(ms / DAY)}d`; // more than a day
 }
 const msgTtlShort = computed(() => (effectiveTtlMs.value ? fmtTtl(effectiveTtlMs.value) : ''));
 const msgTtlLabel = computed(() => {
