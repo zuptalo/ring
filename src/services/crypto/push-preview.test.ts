@@ -132,7 +132,7 @@ describe('spec 1055: buildPreview', () => {
       body: '',
       kind: 'poll',
       timestamp: 1,
-      poll: { question: 'Lunch?', options: [{ id: '1', text: 'Pizza' }], votes: {} } as MessagePayload['poll'],
+      poll: { question: 'Lunch?', options: [{ id: '1', text: 'Pizza' }], votes: {} } as unknown as MessagePayload['poll'],
     });
     expect(p.poll).toEqual({ question: 'Lunch?' });
     expect(notifyPreview(p)).toBe('Poll: Lunch?');
@@ -146,7 +146,7 @@ describe('spec 1055: buildPreview', () => {
       groupId: 'g1',
       prid: 'route',
       mentions: ['u2'],
-      reply: { senderId: 'u2', messageId: 'm', body: 'quoted body that should be dropped' } as MessagePayload['reply'],
+      reply: { senderId: 'u2', messageId: 'm', body: 'quoted body that should be dropped' } as unknown as MessagePayload['reply'],
     });
     expect(p.groupId).toBe('g1');
     expect(p.prid).toBe('route');

@@ -51,6 +51,11 @@ type RelayStore interface {
 	// self-heal, with no payload and no side effects.
 	OldestPendingForRecipient(ctx context.Context, recipient string) (oldestMs int64, count int, err error)
 	DeleteRelay(ctx context.Context, recipient, msgID string) (sender string, found bool, err error)
+	// StampNotified (spec 1055) marks a still-queued frame as notified (the recipient
+	// showed a push preview) WITHOUT dequeuing it — the full message is still owed to the
+	// device. Returns the frame's sender so a `notified` receipt can be relayed. The
+	// frame is dequeued only on the authoritative `delivered` ack.
+	StampNotified(ctx context.Context, recipient, msgID string) (sender string, found bool, err error)
 	// RecordDelivery durably notes msgID (from sender) reached recipient, so the
 	// sender can reconcile a dropped 'delivered' receipt on reconnect.
 	RecordDelivery(ctx context.Context, sender, recipient, msgID string) error
@@ -92,6 +97,11 @@ type Notifier interface {
 	// NotifyFrame is the classed message tickle (spec 1050): class+prid feed the
 	// recipient's per-subscription routing gate; tag-less frames behave as Notify.
 	NotifyFrame(ctx context.Context, userID, class, prid string)
+	// NotifyFramePreview (spec 1055) is NotifyFrame carrying a sealed bounded preview
+	// to inline in the Web Push (rich notification, no fetch). Gated by the SAME routing
+	// as NotifyFrame — a muted prid / classes-off yields no push at all. The preview is
+	// opaque ciphertext, forwarded into the RFC-8291-encrypted push body.
+	NotifyFramePreview(ctx context.Context, userID, class, prid string, preview []byte)
 	NotifyCall(ctx context.Context, userID string)
 	NotifyConn(ctx context.Context, userID string)
 	// NotifyPost carries the post's author so per-friend post overrides apply (spec 1050).
@@ -117,6 +127,11 @@ type frame struct {
 	// Read once at enqueue time to gate the tickle; never persisted.
 	Class string `json:"class,omitempty"`
 	Prid  string `json:"prid,omitempty"`
+	// spec 1055: opaque sealed push preview ({ h: ratchet header, p: preview AEAD }).
+	// Read once at enqueue time and forwarded verbatim into the RFC-8291-encrypted Web
+	// Push so the recipient SW shows a rich notification without a fetch. Never persisted
+	// (the durable/queued `delivered` frame stays content-free); E2EE to the recipient.
+	PushPreview json.RawMessage `json:"pushPreview,omitempty"`
 	Status     string          `json:"status,omitempty"`
 	At         int64           `json:"at,omitempty"`
 	RefID      string          `json:"refId,omitempty"`
@@ -876,6 +891,45 @@ func (c *Client) notifyAsyncFrame(userID string, call bool, class, prid string) 
 	}()
 }
 
+// notifyAsyncFramePreview (spec 1055) is notifyAsyncFrame that inlines a sealed
+// bounded preview in the push (rich notification, no fetch). The preview push carries
+// the frame id + sender inside the (RFC-8291-encrypted) body so the SW can address the
+// notification and peek-decrypt; routing gating is identical to the tickle.
+func (c *Client) notifyAsyncFramePreview(userID, class, prid, msgID, from string, preview []byte) {
+	if c.notifier == nil {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("push: notify goroutine panicked", "recover", r, "stack", string(debug.Stack()))
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		c.notifier.NotifyFramePreview(ctx, userID, class, prid, buildPreviewPush(msgID, from, preview))
+	}()
+}
+
+// buildPreviewPush assembles the plaintext preview-push body: the discriminator, the
+// frame id + sender (so the SW can address + peek-decrypt), and the opaque sealed
+// preview ({h,p}). It is encrypted to the browser (RFC 8291) before it leaves the
+// server; the sealed preview inside is additionally E2EE to the recipient device.
+func buildPreviewPush(msgID, from string, preview []byte) []byte {
+	// preview is the client's raw {"h":...,"p":...} JSON, nested under "pv" so the
+	// server never has to parse it (forwarded verbatim).
+	out, err := json.Marshal(struct {
+		T    string          `json:"t"`
+		ID   string          `json:"id"`
+		From string          `json:"from"`
+		PV   json.RawMessage `json:"pv"`
+	}{T: "msgx", ID: msgID, From: from, PV: json.RawMessage(preview)})
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
 // IsActiveFresh reports whether the user has a foregrounded, provably-live
 // connection right now — the same signal the message push decision uses.
 // Exported for spec 1050: connection-event tickles are presence-gated too, so
@@ -1293,7 +1347,14 @@ func (c *Client) handleFrame(data []byte) {
 			if !c.hub.isActiveFresh(f.To) || !sent {
 				// spec 1050: the frame's class/prid gate the tickle against the
 				// recipient's routing prefs (delivery above is already done).
-				c.notifyAsyncFrame(f.To, false, f.Class, f.Prid)
+				// spec 1055: when the sender attached a sealed preview, inline it in the
+				// push so the recipient shows a rich notification with no fetch — gated by
+				// the SAME routing (a muted prid gets no push, preview or tickle).
+				if len(f.PushPreview) > 0 {
+					c.notifyAsyncFramePreview(f.To, f.Class, f.Prid, f.ID, c.userID, f.PushPreview)
+				} else {
+					c.notifyAsyncFrame(f.To, false, f.Class, f.Prid)
+				}
 			}
 		}
 		// Tell the sender the server accepted it.

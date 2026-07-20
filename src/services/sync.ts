@@ -110,9 +110,14 @@ async function mutateMessage(
 /** Apply one inbound frame to local storage. */
 export async function handleIncomingFrame(frame: Frame): Promise<void> {
   switch (frame.t) {
-    case 'receipt':
-      await applyReceipt(frame.messageId, frame.status, frame.at, frame.from);
+    case 'receipt': {
+      // (spec 1055) To the sender, a "notified" receipt (the recipient showed a push
+      // preview) means the same as "delivered" (they were reached) — the split exists
+      // only so the server knows the full message is still owed to the device.
+      const status = frame.status === 'notified' ? 'delivered' : frame.status;
+      await applyReceipt(frame.messageId, status, frame.at, frame.from);
       return;
+    }
     case 'records':
       if (frame.store) await mergeRecords(frame.store as StoreName, frame.rows as MergeRow[]);
       if (frame.cursor) await setSyncCursor(frame.cursor);

@@ -21,6 +21,7 @@ type fakeConnNotifier struct {
 
 func (f *fakeConnNotifier) Notify(context.Context, string)                     {}
 func (f *fakeConnNotifier) NotifyFrame(context.Context, string, string, string) {}
+func (f *fakeConnNotifier) NotifyFramePreview(context.Context, string, string, string, []byte) {}
 func (f *fakeConnNotifier) NotifyCall(context.Context, string)                 {}
 func (f *fakeConnNotifier) NotifyPost(context.Context, string, string)         {}
 func (f *fakeConnNotifier) NotifyPostActivity(context.Context, string, string) {}
