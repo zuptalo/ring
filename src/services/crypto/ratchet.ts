@@ -64,6 +64,16 @@ function msgKey(mk: Uint8Array): Uint8Array {
   return hkdf(mk, KEY_BYTES, new Uint8Array(32), utf8ToBytes('ring/dr/msg'));
 }
 
+// Message key -> AEAD content key for the spec-1055 push PREVIEW. Domain-separated
+// from msgKey ('ring/dr/msg') so the preview and the message never share a content
+// key: the sender seals a bounded display preview under THIS key alongside the full
+// message under msgKey, both from the same chain message key mk. Forward secrecy is
+// inherited — mk is deleted when the message is opened authoritatively, after which a
+// captured preview push (which never persisted anything) can no longer be decrypted.
+function previewKey(mk: Uint8Array): Uint8Array {
+  return hkdf(mk, KEY_BYTES, new Uint8Array(32), utf8ToBytes('ring/push-preview/v1'));
+}
+
 /* ---- X3DH ---- */
 
 export interface PreKeyBundlePub {
@@ -208,29 +218,31 @@ export function ratchetDecrypt(
  * Net effect: forward progress is persisted, but nothing this preview reads becomes
  * undecryptable for the authoritative receiver — it only ever ADDS to the cache.
  */
-export function ratchetDecryptPreview(
-  state: RatchetState,
-  header: Header,
-  env: Envelope,
-  ad: Uint8Array,
-): { plaintext: Uint8Array; advancedDh: boolean } {
+/**
+ * Peek-derive the chain message key `mk` for `header` WITHOUT consuming it: leaves
+ * the key retrievable in the skipped-key cache (the Double Ratchet's normal
+ * out-of-order mechanism) so a later authoritative openMessage of that very message
+ * re-finds it. Shared by ratchetDecryptPreview (message env) and ratchetOpenPreview
+ * (spec-1055 push preview env), which differ only in WHICH envelope they open with
+ * the derived key. Mutates `state` (advances the receiving chain / may DH-ratchet);
+ * callers that must not persist run it on a fresh, discarded session copy.
+ *
+ * `advancedDh` reports whether a DH-ratchet step was taken. A DH ratchet mints a
+ * FRESH sending keypair (DHs); a service-worker caller must NOT persist that, or the
+ * SW becomes a competing writer of the SENDING key and the page↔SW last-write-wins
+ * race can clobber the page's authoritative send-state. So SW callers persist ONLY
+ * same-chain advances (advancedDh === false): those are deterministic and purely
+ * ADDITIVE to the skipped-key cache, hence safe to converge via LWW.
+ */
+function deriveMessageKey(state: RatchetState, header: Header): { mk: Uint8Array; advancedDh: boolean } {
   const skKey = `${header.dh}:${header.n}`;
-  // Already in the cache (skipped over earlier): decrypt WITHOUT deleting, so the
-  // key stays available for the page's authoritative open. No DH step taken.
+  // Already in the cache (skipped over earlier): return WITHOUT deleting, so the key
+  // stays available for the page's authoritative open. No DH step taken.
   const cached = state.skipped.get(skKey);
-  if (cached) return { plaintext: open(msgKey(cached), env, concat(ad, headerBytes(header))), advancedDh: false };
+  if (cached) return { mk: cached, advancedDh: false };
   // Otherwise advance the receiving chain up to AND INCLUDING this message, caching
-  // every key (including this one) via skipMessageKeys. We deliberately reuse the
-  // skip path for header.n+1 so the current message's key lands in `skipped` rather
-  // than being consumed, then read it back from there.
-  //
-  // `advancedDh` reports whether we had to take a DH-ratchet step. A DH ratchet mints
-  // a FRESH sending keypair (DHs); the caller (previewPacket) must NOT persist that
-  // from the service worker, or the SW becomes a competing writer of the SENDING key
-  // and the page↔SW last-write-wins race can clobber the page's authoritative
-  // send-state (permanent outbound divergence — adversarial review). So the caller
-  // persists ONLY same-chain advances (advancedDh === false): those are deterministic
-  // and purely ADDITIVE to the skipped-key cache, hence safe to converge via LWW.
+  // every key (including this one) via skipMessageKeys, then read it back — never
+  // consuming it.
   const headerDh = b64urlToBytes(header.dh);
   let advancedDh = false;
   if (!state.DHr || !equalBytes(headerDh, state.DHr)) {
@@ -241,7 +253,61 @@ export function ratchetDecryptPreview(
   skipMessageKeys(state, header.n + 1); // caches keys Nr..n (incl. this message)
   const mk = state.skipped.get(skKey);
   if (!mk) throw new Error('preview: message key not derivable'); // unreachable in practice
+  return { mk, advancedDh };
+}
+
+export function ratchetDecryptPreview(
+  state: RatchetState,
+  header: Header,
+  env: Envelope,
+  ad: Uint8Array,
+): { plaintext: Uint8Array; advancedDh: boolean } {
+  const { mk, advancedDh } = deriveMessageKey(state, header);
   return { plaintext: open(msgKey(mk), env, concat(ad, headerBytes(header))), advancedDh };
+}
+
+/**
+ * Spec 1055 (sender): seal the full message under the message key AND a bounded
+ * display PREVIEW under a domain-separated key derived from the SAME chain message
+ * key mk — one chain step, two AEADs. Both bind the ratchet header as associated
+ * data, so a sealed preview cannot be swapped onto, or replayed against, a different
+ * frame. Mutates `state` exactly like ratchetEncrypt (advances the sending chain
+ * once); the send path calls THIS or ratchetEncrypt for a message, never both.
+ */
+export function ratchetEncryptWithPreview(
+  state: RatchetState,
+  plaintext: Uint8Array,
+  previewPlaintext: Uint8Array,
+  ad: Uint8Array,
+): { header: Header; env: Envelope; previewEnv: Envelope } {
+  if (!state.CKs) throw new Error('ratchet has no sending chain yet');
+  const [CKs, mk] = kdfCK(state.CKs);
+  state.CKs = CKs;
+  const header: Header = { dh: bytesToB64url(state.DHs.publicKey), pn: state.PN, n: state.Ns };
+  state.Ns += 1;
+  const aad = concat(ad, headerBytes(header));
+  const env = seal(msgKey(mk), plaintext, 'dr', aad);
+  const previewEnv = seal(previewKey(mk), previewPlaintext, 'pp', aad);
+  return { header, env, previewEnv };
+}
+
+/**
+ * Spec 1055 (recipient PEEK): derive mk for `header` and open the push PREVIEW
+ * envelope with the preview key. Consumes nothing durable — like ratchetDecryptPreview
+ * it only ADDS to the skipped-key cache; the caller runs it on a freshly loaded,
+ * to-be-discarded session copy and never persists. Forward secrecy: once the message
+ * is opened authoritatively (mk consumed, chain advanced past it), a fresh copy can
+ * no longer derive mk, so this throws — a captured preview push becomes undecryptable.
+ * Throws on a header mismatch or auth failure; the SW then falls back to a placeholder.
+ */
+export function ratchetOpenPreview(
+  state: RatchetState,
+  header: Header,
+  previewEnv: Envelope,
+  ad: Uint8Array,
+): Uint8Array {
+  const { mk } = deriveMessageKey(state, header);
+  return open(previewKey(mk), previewEnv, concat(ad, headerBytes(header)));
 }
 
 function skipMessageKeys(state: RatchetState, until: number): void {
