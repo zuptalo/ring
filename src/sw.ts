@@ -123,6 +123,14 @@ const GENERIC_TAG = 'ring-incoming';
 // upgrade (spec 2010 root-cause b). 12000 > 8000 leaves headroom for the decrypt +
 // the closeByTag/showNotes upgrade after the fetch resolves.
 const GENERIC_AFTER_MS = 7000;
+// (spec 1055, device-tuned) The inline-preview race deadline: show the rich note if it
+// decrypts within this budget, otherwise fall back to a single generic safety note —
+// never both (iOS won't close-and-replace a delivered notification). Tighter when no
+// window is visible (likely LOCKED → the SW gets the smallest execution slice, so the
+// safety generic must still land inside iOS's window); roomier when a window is visible
+// (unlocked/foregrounded), where the rich decrypt has time to win outright.
+const RICH_DEADLINE_HIDDEN_MS = 1500;
+const RICH_DEADLINE_VISIBLE_MS = 3000;
 // The content-upgrade window: after the generic placeholder shows, keep waiting
 // this long for the decrypt to land and replace it with the real sender+text.
 // Restored to a full window (was briefly cut to 3–4s while chasing an iOS-16
@@ -988,14 +996,16 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
         return;
       }
       if (kind === 'msgx' && inline) {
-        // (spec 1055) The rich notification is decryptable from the push itself, but the
-        // ORDER matters (device-tested): decrypting on a cold/locked SW (device unlock +
-        // session read + context) can be slow or fail, so we MUST show a placeholder
-        // FIRST (spec 2048 ordering) — a fast, guaranteed visible ending — then UPGRADE
-        // it to the rich preview in place when the in-push decrypt lands, and warm last.
+        // (spec 1055, device-tested) Background decrypt-while-locked WORKS on modern iOS,
+        // so the rich notification is the goal. But iOS won't honour close() to REPLACE a
+        // delivered notification, so a generic-then-rich sequence stacks two. Instead show
+        // EXACTLY ONE: race the rich preview against a deadline — rich wins the show when
+        // it decrypts in time; a generic SAFETY note fires only if rich misses the deadline
+        // or fails. Deadline is tighter when likely locked (no focused window). This gives
+        // rich-only in practice, with the generic as a pure timed fallback (no revocation
+        // risk from a stalled decrypt).
         //
-        // A focused+visible page owns the in-app alert — defer to it (no OS notification),
-        // mirroring the plain message path below.
+        // A focused+visible page owns the in-app alert — defer to it (no OS notification).
         if (!shouldShowPlaceholderFirst(clients) && (await pageWillNotify(clients, 2200))) {
           const nowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
           if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) {
@@ -1006,33 +1016,47 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
           void postNotified(inline.id); // the device received it → sender sees "delivered"
           return;
         }
-        // No focused page: show the generic placeholder NOW (before the decrypt), and tell
-        // the sender we received it — fired REGARDLESS of decrypt, so a locked device that
-        // cannot decrypt in the background still flips the sender to "delivered" (parity
-        // with the legacy lite path, which reports delivered on the buzz).
+        // No focused page. Tell the sender we received it (regardless of decrypt — parity
+        // with the legacy lite path's deliver-on-buzz) and nudge any client to drain.
         for (const client of clients) client.postMessage({ type: 'ring:drain' });
-        try {
-          await showGeneric('show-first');
-          ctx.shown = ctx.satisfied = true;
-        } catch (e) {
-          console.warn('[sw] inline show-first placeholder failed', e);
-        }
         void postNotified(inline.id);
-        // UPGRADE: peek-decrypt the in-push preview and REPLACE the placeholder with the
-        // rich note (fast — no fetch). If the SW cannot decrypt in the background (locked,
-        // key unavailable), the generic placeholder already shown stands.
-        try {
-          const result = await previewInline(inline);
-          if (result.ok && result.notes.length) {
-            await closeByTag(GENERIC_TAG);
-            const accepted = await showNotes(result.notes);
-            if (accepted > 0) await markShown(allIds(result.notes)); // warm/open won't re-notify (FR-012)
+        ctx.satisfied = true;
+
+        // Exactly-one-show race. `claim()` ensures only the first ready path shows.
+        let claimed = false;
+        const claim = (): boolean => (claimed ? false : (claimed = true));
+        const richDeadlineMs = shouldShowPlaceholderFirst(clients) ? RICH_DEADLINE_HIDDEN_MS : RICH_DEADLINE_VISIBLE_MS;
+        const richAttempt = previewInline(inline).catch((e) => {
+          console.warn('[sw] inline preview decrypt failed', e);
+          return null;
+        });
+        const raced = await Promise.race([
+          richAttempt.then((r) => ({ deadline: false as const, r })),
+          new Promise<{ deadline: true; r: null }>((res) => setTimeout(() => res({ deadline: true, r: null }), richDeadlineMs)),
+        ]);
+        // markShown ONLY on a successful show, so a rare rejected show still lets the warm
+        // tail (below) surface the message rather than silently swallowing it (FR-012 dedup
+        // must not cause a silent wake).
+        if (!raced.deadline && raced.r?.ok && raced.r.notes.length) {
+          // Rich decrypted in time → show ONLY the rich note.
+          if (claim()) {
+            const accepted = await showNotes(raced.r.notes);
+            if (accepted > 0) { ctx.shown = true; await markShown(allIds(raced.r.notes)); }
           }
-        } catch (e) {
-          console.warn('[sw] inline preview upgrade failed (placeholder stands)', e);
+        } else if (!raced.deadline && raced.r?.ok && (raced.r.silenced || raced.r.suppressed)) {
+          // Muted / notifications-off (rare — usually dropped server-side): end visibly
+          // with the quiet note, no loud generic.
+          if (claim() && (await showQuietUnlessVisible('msg'))) { ctx.shown = true; await markShown([inline.id]); }
+        } else {
+          // Deadline hit (rich too slow / still decrypting) OR decrypt failed → the single
+          // generic SAFETY note.
+          if (claim()) {
+            try { await showGeneric(raced.deadline ? 'rich-too-slow' : 'inline-fallback'); ctx.shown = true; await markShown([inline.id]); }
+            catch (e) { console.warn('[sw] safety generic failed', e); }
+          }
         }
-        // Warm the DB (persist + ack) so the app opens ready. ctx.shown is already true,
-        // so the warm adds NO second notification (fixed in tryAuthoritativeDrain).
+        // Warm the DB (persist + ack) so the app opens ready. ctx.shown already true and the
+        // id is markShown → the warm adds NO second notification.
         try {
           await tryAuthoritativeDrain(ctx);
         } catch (e) {
