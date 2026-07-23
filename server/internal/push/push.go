@@ -156,9 +156,15 @@ var (
 // previewMaxPayload (spec 1055) is the largest inline preview push body we send; a
 // larger one falls back to the content-free tickle. previewRecordSize is the CONSTANT
 // aes128gcm record size every preview push is padded to, so its encrypted length is
-// identical regardless of message length (nothing leaks to the push service). It stays
-// well under the ~4 KB constrained-endpoint ceiling (spec 2046).
-const previewMaxPayload = 3072
+// identical regardless of message length (nothing leaks to the push service).
+//
+// Sized to fit CONSTRAINED endpoints: a Mozilla autopush "constrained device" subscription
+// rejected the original 3200-byte record with 413 ("too long by 246 bytes" → a ~2954-byte
+// ceiling), so that device received no notifications at all. 1920 leaves a wide margin
+// below the observed ceiling (and below smaller constrained limits) while still comfortably
+// holding a real bounded preview (~1.3 KB) — so normal previews keep inlining; only an
+// unusually large one (e.g. a heavily-@mentioned group message) falls back to the tickle.
+const previewMaxPayload = 1792
 
 var previewRecordSize = uint32(previewMaxPayload + recordSizeOverhead)
 
