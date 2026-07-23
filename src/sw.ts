@@ -131,6 +131,17 @@ const GENERIC_AFTER_MS = 7000;
 // (unlocked/foregrounded), where the rich decrypt has time to win outright.
 const RICH_DEADLINE_HIDDEN_MS = 1500;
 const RICH_DEADLINE_VISIBLE_MS = 3000;
+// (iOS-16 rich attempt, revertable) The legacy lite path gives the in-push decrypt an
+// even TIGHTER budget — SW-context IndexedDB is unreliable on iOS ≤16 (spec 2044), so if
+// the crypto/reads can't complete fast we fall straight back to the generic. The deadline
+// guarantees a visible ending regardless, so trying rich here can never cause a silent
+// wake — the worst case is a wedged IDB degrading later wakes, which is why this is kept
+// as its own revertable change.
+const RICH_DEADLINE_LEGACY_MS = 1200;
+// The escape hatch: flip to false to INSTANTLY disable the iOS-16 rich attempt (revert to
+// pure spec-2044 generic lite) without touching anything else — if it ever destabilises
+// iOS ≤16 (SW IDB wedging), one-line change + release and the functional fixes all stay.
+const LEGACY_RICH_ENABLED = true;
 // The content-upgrade window: after the generic placeholder shows, keep waiting
 // this long for the decrypt to land and replace it with the real sender+text.
 // Restored to a full window (was briefly cut to 3–4s while chasing an iOS-16
@@ -904,6 +915,7 @@ async function dispatchLiteWake(
   kind: ReturnType<typeof pushKind>['kind'],
   clients: readonly Client[],
   ctx: WakeCtx,
+  inline?: InlinePreview, // (iOS-16 rich attempt) the in-push preview, if this was a msgx wake
 ): Promise<void> {
   if (kind === 'call') {
     // Generic ring immediately — no readRingShown dedup (an IDB read that can hang
@@ -955,10 +967,32 @@ async function dispatchLiteWake(
     ctx.satisfied = true;
     return;
   }
-  // Unclaimed: the generic shows NOW (bounded diagnostics read inside, spec 2044),
-  // before any keystore/decrypt work is even attempted.
-  await showGeneric('legacy-lite');
-  ctx.shown = true;
+  // (iOS-16 rich attempt, revertable) Unclaimed message. TRY the in-push rich preview on
+  // legacy iOS too — background peek-decrypt does no DB writes, so it MIGHT work on iOS 16
+  // (unverifiable except on-device). Race it against a tight deadline; rich wins the single
+  // show if it decrypts in time, else the generic fires. The deadline guarantees a visible
+  // ending, so this never risks a silent wake even if iOS-16 SW IDB stalls. To revert to
+  // the pure spec-2044 lite behaviour, delete this `if (inline)` block (the generic below
+  // stands on its own).
+  let claimed = false;
+  if (inline && LEGACY_RICH_ENABLED) {
+    const richAttempt = previewInline(inline).catch(() => null);
+    const raced = await Promise.race([
+      richAttempt.then((r) => ({ deadline: false as const, r })),
+      new Promise<{ deadline: true; r: null }>((res) => setTimeout(() => res({ deadline: true, r: null }), RICH_DEADLINE_LEGACY_MS)),
+    ]);
+    if (!raced.deadline && raced.r?.ok && raced.r.notes.length) {
+      const accepted = await showNotes(raced.r.notes);
+      if (accepted > 0) { claimed = true; ctx.shown = true; await markShown(allIds(raced.r.notes)); }
+    }
+  }
+  // The generic shows NOW (bounded diagnostics read inside, spec 2044) when rich didn't
+  // win — before any further keystore/decrypt work.
+  if (!claimed) {
+    await showGeneric('legacy-lite');
+    ctx.shown = true;
+    if (inline) await markShown([inline.id]); // a later fetch/open won't re-notify this id
+  }
   ctx.satisfied = true;
   // Best-effort delivered receipts AFTER the show: one bounded keystore read for the
   // token, one bounded fetch. The server emits 'delivered' for every queued frame on
@@ -967,9 +1001,20 @@ async function dispatchLiteWake(
   // them.
   try {
     const token = await withTimeout<string | null>(readSessionToken(), 3000, null);
-    if (token) await fetchPendingFrames(token);
+    if (token) {
+      const fetched = await fetchPendingFrames(token);
+      // (iOS-16 badge, revertable) setAppBadge IS exposed in the service worker on iOS
+      // 16.4+ (WebKit "Badging for Home Screen Web Apps") — the lite path simply never
+      // called it, so a closed iPhone-8 never badged from a push. Badge the undelivered
+      // backlog now, AFTER the show, bounded so a slow SW-context IDB read can't hang
+      // this best-effort tail. updateAppBadge is feature-checked → a true absence no-ops.
+      if ('frames' in fetched) {
+        const pending = fetched.frames.filter((f) => f.t === 'msg' && !!f.id).length;
+        await withTimeout(updateAppBadge(pending), 2500, undefined);
+      }
+    }
   } catch {
-    /* receipts are best-effort — the notification already showed */
+    /* receipts + badge are best-effort — the notification already showed */
   }
 }
 
@@ -990,9 +1035,10 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
       // subscription was dead within a burst. The gate is a pure UA parse that fails
       // toward modern, so devices on iOS 17+ never enter this branch.
       if (isLegacyIOS(self.navigator.userAgent)) {
-        // Legacy never decrypts (incl. the inline preview) — the lite path shows a
-        // generic first; a 'msgx' wake is just a message there.
-        await dispatchLiteWake(kind === 'msgx' ? 'msg' : kind, clients, ctx);
+        // (iOS-16 rich attempt) Pass the in-push preview so the lite path can TRY a rich
+        // decrypt on iOS ≤16 too (bounded, falling back to generic); a 'msgx' wake is a
+        // message there.
+        await dispatchLiteWake(kind === 'msgx' ? 'msg' : kind, clients, ctx, inline);
         return;
       }
       if (kind === 'msgx' && inline) {

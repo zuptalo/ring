@@ -2735,7 +2735,12 @@ onUnmounted(() => clearInterval(ttlTick));
 // and only becomes "23h" once an hour has actually elapsed; "2h" holds until exactly 1h is left;
 // below an hour it counts whole minutes down (59, 58, …), and seconds only in the last minute.
 function ttlLeft(expiresAt: number): string {
-  const ms = Math.max(0, expiresAt - nowMs.value);
+  // Reactivity trigger only: re-render on the 30s tick. The VALUE must use the live
+  // Date.now(), not the throttled nowMs — a just-sent message measured against a nowMs
+  // up to 30s stale over-reports the remaining time (a fresh 1-day timer read as 24h+30s
+  // → "2d", a 5m timer briefly reads high then jumps down as the clock catches up).
+  void nowMs.value;
+  const ms = Math.max(0, expiresAt - Date.now());
   const DAY = 24 * HOUR;
   if (ms < MIN) return `${Math.floor(ms / 1000)}s`; // last minute: seconds
   if (ms < HOUR) return `${Math.floor(ms / MIN)}m`; // last hour: whole minutes counting down
@@ -4168,6 +4173,13 @@ async function send() {
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
+  // Keep the keyboard up after sending. On Android, tapping the send button blurs the
+  // textarea and drops the soft keyboard; re-focusing restores it — but it MUST happen
+  // inside the send tap's user-activation (before the await below), or Android refuses to
+  // re-open the keyboard from script. (The media path above already does this after its
+  // re-mint; the text path was missing it, so the keyboard stayed dismissed until the user
+  // left and re-entered the chat.)
+  void nativeComposer().then((ta) => ta?.focus());
   await sendMessage(chatId, text, reply, mentions, everyone, msgTtl.value, preloadedPreview);
   await scrollToNewest();
 }
