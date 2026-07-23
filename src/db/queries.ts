@@ -4611,7 +4611,14 @@ export async function collectUnconfirmedOutgoing(): Promise<string[]> {
       // Group: any member not yet delivered (→ checkDeliveries) or not yet seen
       // (→ checkSeen) keeps this message in the reconcile set.
       if (recs.some((r) => !r.deliveredAt || !r.seenAt)) unconfirmed.push(m);
-    } else if (m.status === 'sent') {
+    } else if (m.status === 'sent' || m.status === 'delivered') {
+      // 1:1 message. 'sent' → checkDeliveries recovers a dropped 'delivered'; 'delivered'
+      // → checkSeen recovers a dropped 'seen' (the recipient opened the chat while WE were
+      // offline, so the live seen receipt was lost). Previously only 'sent' was re-checked,
+      // so a 1:1 message that reached 'delivered' NEVER reconciled its seen state — it sat
+      // at 'delivered' forever even though the peer saw it and the server durably recorded
+      // it. Both reconcileDeliveries and reconcileSeen consume this set, so a 'delivered'
+      // message is harmlessly re-confirmed by the former and correctly advanced by the latter.
       unconfirmed.push(m);
     }
   }
