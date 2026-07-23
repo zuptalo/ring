@@ -141,7 +141,12 @@ const RICH_DEADLINE_LEGACY_MS = 1200;
 // The escape hatch: flip to false to INSTANTLY disable the iOS-16 rich attempt (revert to
 // pure spec-2044 generic lite) without touching anything else — if it ever destabilises
 // iOS ≤16 (SW IDB wedging), one-line change + release and the functional fixes all stay.
-const LEGACY_RICH_ENABLED = true;
+// Device-verified 2026-07-23: iOS ≤16 cannot decrypt the in-push preview inside the SW
+// window (Argon2id unlock + libsodium + IDB too slow), so the attempt always timed out to
+// the generic — zero benefit, but it kept running the fragile SW-context crypto/IDB that
+// spec 2044 avoids. Disabled: the iPhone 8 rides the proven generic-lite path again. The
+// badge fix and the functional fixes stay. Flip back to true only if that constraint changes.
+const LEGACY_RICH_ENABLED = false;
 // The content-upgrade window: after the generic placeholder shows, keep waiting
 // this long for the decrypt to land and replace it with the real sender+text.
 // Restored to a full window (was briefly cut to 3–4s while chasing an iOS-16
