@@ -92,8 +92,14 @@ export function richNoteOptions(
   n: Pick<SwNote, 'body' | 'tag' | 'url' | 'silent'>,
   icon: string,
   badge: string,
+  // (desktop fix) renotify RE-ALERTS a same-tag notification (a new banner/sound for the
+  // next message in an already-notified chat). REQUIRED on Chromium — without it a second
+  // same-tag show silently replaces the first, so subsequent messages never banner. MUST
+  // stay off on iOS/WebKit, where renotify:true makes the notification never render at all
+  // (spec 2047). The caller passes platformTrustsSilence(ua): true=Chromium, false=WebKit.
+  renotify = false,
 ): NotificationOptions {
-  return {
+  const opts: NotificationOptions & { renotify?: boolean } = {
     body: n.body,
     icon,
     badge,
@@ -101,6 +107,8 @@ export function richNoteOptions(
     silent: n.silent === true,
     data: { url: n.url },
   };
+  if (renotify) opts.renotify = true; // only when trusted (Chromium); omitted on WebKit
+  return opts;
 }
 
 /** Background-preview result. `notes` are the displayable notifications, `pending`
