@@ -170,6 +170,11 @@ defineExpose({
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  color: var(--ion-text-color);
+  /* A pin tile is a bare <button>, which inherits Ionic's primary (blue) text
+     color. --ion-text-color is only defined by the dark palette, so on LIGHT it
+     was empty and the name fell through to that blue. --app-text is defined in
+     BOTH themes (black on light, white on dark) — the same var the rest of this
+     component uses — so the name matches the list rows on either theme. */
+  color: var(--app-text);
 }
 </style>
