@@ -23,7 +23,7 @@ import { ExpirationPlugin } from 'workbox-expiration';
 import {
   previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
-  mayEndWakeSilently, quietNote, stampPushWake, countAccepted,
+  mayEndWakeSilently, platformTrustsSilence, quietNote, stampPushWake, countAccepted,
   runGuardedWake, recordWake, type WakeCtx,
   isLegacyIOS, withTimeout, fetchPendingFrames, richNoteOptions, shouldShowPlaceholderFirst,
   previewCallRing, recordCallTickle, recordCallOutcome, withdrawCallBadgeUnit, callBadgeCount,
@@ -305,6 +305,10 @@ const titleWithCount = (n: SwNote): string => {
  *  quiet/fallback terminal instead of counting this batch as a visible ending. */
 async function showNotes(notes: SwNote[]): Promise<number> {
   const coalesced = await coalesceForShow(notes, Date.now());
+  // (desktop fix) Re-alert same-tag notifications on Chromium so the SECOND+ message in an
+  // already-notified chat still banners; kept off on iOS/WebKit (renotify:true breaks
+  // rendering there, spec 2047). platformTrustsSilence is exactly the Chromium/WebKit split.
+  const renotify = platformTrustsSilence(self.navigator.userAgent);
   return countAccepted(coalesced.map((n) => async () => {
     try {
       // (spec 2026) A missed/cancelled call note REPLACES the ring alert (spec
@@ -312,10 +316,10 @@ async function showNotes(notes: SwNote[]): Promise<number> {
       // Center entries instead of collapsing them, so close the ring explicitly
       // before showing its replacement.
       if (n.tag === 'ring-call') await closeByTag('ring-call');
-      // (spec 2047) Options via richNoteOptions — deliberately NO `renotify` (iOS 26 /
-      // iPadOS 27 accept but never render a renotify:true show; the per-chat `tag`
-      // still coalesces, exactly as the working generic does).
-      await self.registration.showNotification(titleWithCount(n), richNoteOptions(n, ICON, BADGE));
+      // (spec 2047 + desktop fix) renotify ONLY on Chromium (renotify) — re-alerts a
+      // same-tag show so subsequent messages in a chat still banner; on iOS/WebKit it stays
+      // omitted (renotify:true would make the show never render).
+      await self.registration.showNotification(titleWithCount(n), richNoteOptions(n, ICON, BADGE, renotify));
     } catch (e) {
       console.warn('[sw] showNotification failed', e);
       throw e; // rethrow so countAccepted doesn't count a rejected show
@@ -468,6 +472,26 @@ async function updateAppBadge(newCount: number): Promise<void> {
     console.info('[sw] setAppBadge', total);
   } catch (e) {
     console.warn('[sw] setAppBadge failed', e);
+  }
+}
+
+// (badge fix) Set the app badge from the current undelivered backlog, bounded so a slow SW
+// read/fetch can't hang the caller. Used where the authoritative warm CAN'T set it: the
+// legacy lite path (no warm), and multi-device accounts where sw.fullPersist degrades
+// (single-device precondition) so the msgx warm never persists → never badges. The fetch
+// also (idempotently) fires the server's delivered receipts. Best-effort, always AFTER the
+// visible show.
+async function badgeFromPending(): Promise<void> {
+  try {
+    const token = await withTimeout<string | null>(readSessionToken(), 3000, null);
+    if (!token) return;
+    const fetched = await fetchPendingFrames(token);
+    if ('frames' in fetched) {
+      const pending = fetched.frames.filter((f) => f.t === 'msg' && !!f.id).length;
+      await withTimeout(updateAppBadge(pending), 2500, undefined);
+    }
+  } catch {
+    /* badge + receipts are best-effort — the notification already showed */
   }
 }
 
@@ -999,28 +1023,12 @@ async function dispatchLiteWake(
     if (inline) await markShown([inline.id]); // a later fetch/open won't re-notify this id
   }
   ctx.satisfied = true;
-  // Best-effort delivered receipts AFTER the show: one bounded keystore read for the
-  // token, one bounded fetch. The server emits 'delivered' for every queued frame on
-  // fetch (idempotent, no ack/dequeue — the page drains durably on open). A hung
-  // token read just skips this wake's receipts; the next wake or app open recovers
-  // them.
-  try {
-    const token = await withTimeout<string | null>(readSessionToken(), 3000, null);
-    if (token) {
-      const fetched = await fetchPendingFrames(token);
-      // (iOS-16 badge, revertable) setAppBadge IS exposed in the service worker on iOS
-      // 16.4+ (WebKit "Badging for Home Screen Web Apps") — the lite path simply never
-      // called it, so a closed iPhone-8 never badged from a push. Badge the undelivered
-      // backlog now, AFTER the show, bounded so a slow SW-context IDB read can't hang
-      // this best-effort tail. updateAppBadge is feature-checked → a true absence no-ops.
-      if ('frames' in fetched) {
-        const pending = fetched.frames.filter((f) => f.t === 'msg' && !!f.id).length;
-        await withTimeout(updateAppBadge(pending), 2500, undefined);
-      }
-    }
-  } catch {
-    /* receipts + badge are best-effort — the notification already showed */
-  }
+  // Best-effort delivered receipts + app badge AFTER the show (bounded): the fetch emits
+  // the server's 'delivered' for every queued frame (idempotent, no ack — the page drains
+  // durably on open) and its backlog count sets the badge. setAppBadge IS exposed in the SW
+  // on iOS 16.4+ (WebKit) — the lite path just never called it, so a closed iPhone-8 never
+  // badged from a push. A hung read just skips this wake; the next wake / open recovers.
+  await badgeFromPending();
 }
 
 async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
@@ -1108,11 +1116,16 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
         }
         // Warm the DB (persist + ack) so the app opens ready. ctx.shown already true and the
         // id is markShown → the warm adds NO second notification.
+        let warmed = false;
         try {
-          await tryAuthoritativeDrain(ctx);
+          warmed = await tryAuthoritativeDrain(ctx);
         } catch (e) {
           console.warn('[sw] inline warm tail failed (DB warms on open)', e);
         }
+        // (badge fix) The warm sets the badge only when it fully persists — which it can't
+        // on a multi-device account — so the badge never updated from a push there. Set it
+        // directly from the backlog when the warm didn't handle it.
+        if (!warmed) await badgeFromPending();
         return;
       }
       if (kind === 'call') {
