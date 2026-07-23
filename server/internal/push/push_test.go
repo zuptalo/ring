@@ -396,6 +396,22 @@ func TestPreviewParamsConstantSize(t *testing.T) {
 	}
 }
 
+// TestPreviewRecordSizeFitsConstrained pins the constant preview record size below the
+// constrained-endpoint ceiling. A Mozilla autopush "constrained device" rejected a 3200-byte
+// record with 413 (~2954-byte ceiling), leaving that device with no notifications; the record
+// size must stay well under that so preview pushes reach constrained subscriptions.
+func TestPreviewRecordSizeFitsConstrained(t *testing.T) {
+	const constrainedCeiling = 2954 // observed in prod (413 "too long by 246" at record size 3200)
+	if previewRecordSize > constrainedCeiling {
+		t.Errorf("previewRecordSize = %d exceeds the observed constrained-endpoint ceiling %d — constrained devices will 413 and get no pushes",
+			previewRecordSize, constrainedCeiling)
+	}
+	// And it must still hold a real bounded preview (body ~256B + fields + header, ~1.3KB).
+	if previewMaxPayload < 1536 {
+		t.Errorf("previewMaxPayload = %d is too small to inline a normal bounded preview", previewMaxPayload)
+	}
+}
+
 // TestVersionPayloadContentFree asserts the version tickle carries ONLY the type marker —
 // no version string, notes, or any content (NFR-ZK-001). The device fetches the public
 // "what's new" itself; nothing about the release rides through the push service.
