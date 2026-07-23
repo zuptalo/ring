@@ -27,6 +27,17 @@ export function resolveDark(pref: ThemePref, prefersDark: boolean): boolean {
 // relaunch). IndexedDB stays the source of truth; this is a read-optimization for one frame.
 export const THEME_MIRROR_KEY = 'appearance.theme';
 
+// (follow-system flash fix) The RESOLVED dark/light decision, mirrored as '1'/'0'.
+// The pref mirror above isn't enough for 'system': the pre-paint has to re-derive
+// dark from matchMedia('(prefers-color-scheme: dark)'), and on an iOS PWA cold
+// relaunch that query briefly reports LIGHT before the OS scheme settles — so a
+// system-mode user saw a bright frame flash before useTheme corrected it (explicit
+// light/dark never flashed because they don't consult matchMedia). Storing the LAST
+// resolved value lets the pre-paint paint the correct palette with zero matchMedia
+// dependency; if the OS theme changed while the app was closed, the first frame is
+// one-frame stale and useTheme fixes it — far rarer than the every-launch flash.
+export const THEME_RESOLVED_KEY = 'appearance.theme.dark';
+
 export function useTheme(): void {
   const rows = useLiveQuery(
     () => getAll<Setting>('settings'),
@@ -41,9 +52,13 @@ export function useTheme(): void {
       'system';
     const dark = resolveDark(pref, mql.matches);
     document.documentElement.classList.toggle('ion-palette-dark', dark);
-    // Keep the synchronous mirror current so the NEXT cold start paints correctly.
+    // Keep the synchronous mirrors current so the NEXT cold start paints correctly:
+    // the pref (for reference) and the already-resolved dark decision (the one the
+    // pre-paint actually trusts, so it never re-consults the flaky cold-start
+    // matchMedia for 'system').
     try {
       localStorage.setItem(THEME_MIRROR_KEY, pref);
+      localStorage.setItem(THEME_RESOLVED_KEY, dark ? '1' : '0');
     } catch {
       /* storage blocked → pre-paint falls back to prefers-color-scheme */
     }

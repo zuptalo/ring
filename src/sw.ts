@@ -37,6 +37,7 @@ import { hasFreshRing, ringReassert, ringAlreadyNamed } from '@/services/call-ev
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
 import { resubscribePush } from '@/services/sw-push';
 import { setPendingNav } from '@/services/pending-nav';
+import { relevantNav, parseRelevantNav } from '@/services/nav-intent';
 import { userFacing, prettify, displayVersion } from '@/services/release-notes';
 
 declare const self: ServiceWorkerGlobalScope & {
@@ -173,7 +174,7 @@ const STRAGGLER_INTERVAL_MS = 4500;
 // notification for on-device diagnosis; production (same build) never shows internal reason text.
 const DEV_HOST = /(^|\.)ring-dev\./.test(self.location.hostname) || self.location.hostname === 'localhost' || self.location.hostname === '127.0.0.1';
 
-async function showGeneric(reason?: string): Promise<void> {
+async function showGeneric(reason?: string, navFrom?: string): Promise<void> {
   // (spec 2014 US1) Title is the STATUS, not the literal app name: iOS already shows "Ring" as its
   // forced app-name header, so titling this "Ring" too rendered the app name twice
   // ("Ring › Ring › New message"). (US2) The body carries WHY we fell back to generic so the
@@ -191,7 +192,11 @@ async function showGeneric(reason?: string): Promise<void> {
     icon: ICON,
     badge: BADGE,
     tag: GENERIC_TAG,
-    data: { url: '/tabs/chats' },
+    // (notify-nav fix) A generic note can't name the chat, but tapping it should still
+    // land on the conversation, not the list. Encode a "route to the relevant chat"
+    // intent the app resolves after unlock (with full DB access); when we know the push
+    // sender (the msgx fallback passes it) the app can target their 1:1 chat precisely.
+    data: { url: relevantNav(navFrom) },
   });
 }
 
@@ -345,13 +350,15 @@ async function showNotes(notes: SwNote[]): Promise<number> {
  *  where the wake is already visibly ended or re-routed (the settle downgrade of
  *  an accepted loud generic; the authoritative-drain degrade) contain it locally
  *  via their own existing catches. */
-async function showQuietNote(kind: 'msg' | 'activity'): Promise<void> {
+async function showQuietNote(kind: 'msg' | 'activity', navFrom?: string): Promise<void> {
   const n = quietNote(kind);
   await self.registration.showNotification(n.title, {
     ...n.options,
     icon: ICON,
     badge: BADGE,
-    data: { url: kind === 'msg' ? '/tabs/chats' : '/' },
+    // (notify-nav fix) A msg quiet note routes to the relevant chat (see showGeneric);
+    // 'activity' stays on the app root.
+    data: { url: kind === 'msg' ? relevantNav(navFrom) : '/' },
   });
 }
 
@@ -366,10 +373,10 @@ async function showQuietNote(kind: 'msg' | 'activity'): Promise<void> {
 // silence was licensed (trusted platform + focused & visible window) — the caller
 // treats that as satisfied-but-not-shown, so a clean wake doesn't trip the backstop
 // yet a reject/timeout still falls back (the wake produced no OS notification).
-async function showQuietUnlessVisible(kind: 'msg' | 'activity'): Promise<boolean> {
+async function showQuietUnlessVisible(kind: 'msg' | 'activity', navFrom?: string): Promise<boolean> {
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   if (mayEndWakeSilently(self.navigator.userAgent, clients)) return false; // licensed: trusted platform + focused & visible window
-  await showQuietNote(kind);
+  await showQuietNote(kind, navFrom);
   return true;
 }
 
@@ -990,7 +997,7 @@ async function dispatchLiteWake(
   if (clients.length && (await pageWillNotify(clients, 2200))) {
     const nowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) {
-      await showQuietNote('msg');
+      await showQuietNote('msg', inline?.from);
       ctx.shown = true;
     }
     ctx.satisfied = true;
@@ -1018,7 +1025,7 @@ async function dispatchLiteWake(
   // The generic shows NOW (bounded diagnostics read inside, spec 2044) when rich didn't
   // win — before any further keystore/decrypt work.
   if (!claimed) {
-    await showGeneric('legacy-lite');
+    await showGeneric('legacy-lite', inline?.from);
     ctx.shown = true;
     if (inline) await markShown([inline.id]); // a later fetch/open won't re-notify this id
   }
@@ -1068,7 +1075,7 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
         if (!shouldShowPlaceholderFirst(clients) && (await pageWillNotify(clients, 2200))) {
           const nowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
           if (!mayEndWakeSilently(self.navigator.userAgent, nowClients)) {
-            await showQuietNote('msg');
+            await showQuietNote('msg', inline.from);
             ctx.shown = true;
           }
           ctx.satisfied = true;
@@ -1105,12 +1112,12 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
         } else if (!raced.deadline && raced.r?.ok && (raced.r.silenced || raced.r.suppressed)) {
           // Muted / notifications-off (rare — usually dropped server-side): end visibly
           // with the quiet note, no loud generic.
-          if (claim() && (await showQuietUnlessVisible('msg'))) { ctx.shown = true; await markShown([inline.id]); }
+          if (claim() && (await showQuietUnlessVisible('msg', inline.from))) { ctx.shown = true; await markShown([inline.id]); }
         } else {
           // Deadline hit (rich too slow / still decrypting) OR decrypt failed → the single
           // generic SAFETY note.
           if (claim()) {
-            try { await showGeneric(raced.deadline ? 'rich-too-slow' : 'inline-fallback'); ctx.shown = true; await markShown([inline.id]); }
+            try { await showGeneric(raced.deadline ? 'rich-too-slow' : 'inline-fallback', inline.from); ctx.shown = true; await markShown([inline.id]); }
             catch (e) { console.warn('[sw] safety generic failed', e); }
           }
         }
@@ -1398,7 +1405,10 @@ self.addEventListener('notificationclick', (event) => {
       // and routes there. On platforms where openWindow honors the path it's a harmless no-op
       // (the app is already there; the consume just re-routes to the same place).
       if (data.url) await setPendingNav(data.url);
-      return self.clients.openWindow(data.url || '/');
+      // The "relevant chat" intent is a sentinel, not a real path — openWindow can't load it,
+      // so open the app root and let the stashed intent route after unlock.
+      const openTarget = !data.url || parseRelevantNav(data.url).relevant ? '/' : data.url;
+      return self.clients.openWindow(openTarget);
     })(),
   );
 });
