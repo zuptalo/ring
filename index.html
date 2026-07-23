@@ -23,13 +23,17 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Ring</title>
-    <!-- (spec 2045) Pre-paint theme: apply Ionic's dark palette class synchronously so a
-         cold relaunch (returning from the iOS app switcher after iOS killed the page)
-         never renders a frame in the LIGHT palette before useTheme's async settings read
-         resolves. useTheme mirrors the choice into localStorage on each apply; here we
-         re-resolve it (with 'system' → OS scheme) before first paint. Mirrors
-         resolveDark() in src/composables/useTheme.ts — keep the two in sync. Fails safe to
-         prefers-color-scheme if storage is blocked (private mode). -->
+    <!-- (spec 2045 + follow-system flash fix) Pre-paint theme: apply Ionic's dark palette
+         class synchronously so a cold relaunch (returning from the iOS app switcher after
+         iOS killed the page) never renders a frame in the LIGHT palette before useTheme's
+         async settings read resolves. useTheme mirrors BOTH the choice and the already-
+         RESOLVED dark decision into localStorage on each apply. We trust the resolved
+         mirror first: for 'system', re-deriving from matchMedia here is unreliable on an
+         iOS PWA cold launch (it briefly reports LIGHT before the OS scheme settles, which
+         WAS the every-launch bright flash) — the last resolved value has no such
+         dependency. Only when that mirror is absent (first-ever launch) do we fall back to
+         pref + matchMedia, and to prefers-color-scheme if storage is blocked (private
+         mode). Mirrors resolveDark() in src/composables/useTheme.ts — keep in sync. -->
     <script>
       (function () {
         function prefersDark() {
@@ -37,8 +41,13 @@
         }
         var dark;
         try {
-          var pref = localStorage.getItem('appearance.theme') || 'system';
-          dark = pref === 'dark' || (pref === 'system' && prefersDark());
+          var resolved = localStorage.getItem('appearance.theme.dark');
+          if (resolved === '1' || resolved === '0') {
+            dark = resolved === '1';
+          } else {
+            var pref = localStorage.getItem('appearance.theme') || 'system';
+            dark = pref === 'dark' || (pref === 'system' && prefersDark());
+          }
         } catch (e) {
           dark = prefersDark();
         }

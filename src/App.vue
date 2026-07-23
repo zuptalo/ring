@@ -72,6 +72,7 @@ import { useNotificationNudge } from '@/composables/useNotificationNudge';
 import { useAppUpdate, checkForUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
 import { takePendingNav } from '@/services/pending-nav';
+import { parseRelevantNav } from '@/services/nav-intent';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { setAutoplayGifsEnabled } from '@/directives/autoplay-visible';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
@@ -235,6 +236,23 @@ const settleFrames = (): Promise<void> =>
 // push behaviour.
 async function routeRelevant(url?: string, coldStart = false): Promise<void> {
   let target = url;
+  // (notify-nav fix) A generic notification can't name the chat, so it hands us a "route to
+  // the relevant chat" intent instead of a dead-end /tabs/chats. Resolve it HERE, where we
+  // have full DB access (the SW couldn't, on a locked device): land on the sender's 1:1 chat
+  // when we know them AND it's not hidden (listChats excludes hidden), else the newest unread
+  // chat, else the list. A group's id needs the decrypt we never had, so a group message
+  // resolves via newest-unread.
+  const intent = parseRelevantNav(url);
+  if (intent.relevant) {
+    target = undefined; // fall through to the resolvers below
+    if (intent.from) {
+      const chats = await listChats();
+      const direct = chats.find(
+        (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === intent.from,
+      );
+      if (direct) target = `/chat/${direct.id}`;
+    }
+  }
   if (!target) {
     if ((await countPendingRequests()) > 0) target = '/tabs/contacts';
     else {

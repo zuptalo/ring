@@ -2,7 +2,7 @@
 // and the index.html pre-paint inline script (first frame on a cold relaunch). Pinning it
 // here guards against the two drifting: whatever this asserts is what index.html must do.
 import { describe, it, expect } from 'vitest';
-import { resolveDark, THEME_MIRROR_KEY } from './useTheme';
+import { resolveDark, THEME_MIRROR_KEY, THEME_RESOLVED_KEY } from './useTheme';
 
 describe('spec 2045: resolveDark', () => {
   it('explicit dark is always dark, regardless of OS', () => {
@@ -22,5 +22,15 @@ describe('spec 2045: resolveDark', () => {
 describe('spec 2045: the mirror key matches the settings key the pre-paint script reads', () => {
   it('is exactly appearance.theme', () => {
     expect(THEME_MIRROR_KEY).toBe('appearance.theme');
+  });
+});
+
+describe('follow-system flash fix: the resolved-dark mirror the pre-paint trusts first', () => {
+  // index.html reads localStorage['appearance.theme.dark'] ('1'/'0') BEFORE consulting
+  // matchMedia, so a system-mode cold relaunch never flashes the light palette while iOS's
+  // cold-start prefers-color-scheme is still settling. If this key drifts, the pre-paint
+  // silently falls back to the flaky matchMedia path — keep them identical.
+  it('is exactly appearance.theme.dark', () => {
+    expect(THEME_RESOLVED_KEY).toBe('appearance.theme.dark');
   });
 });
