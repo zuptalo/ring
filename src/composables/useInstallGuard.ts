@@ -68,6 +68,19 @@ export function isAndroidWebView(ua: string): boolean {
   return /\bVersion\/[\d.]+/i.test(ua) && /\bChrome\/[\d.]+/i.test(ua);
 }
 
+/**
+ * Whether this is Firefox on Android. Firefox there does NOT fire `beforeinstallprompt`
+ * (that's Chromium-only), so Ring can't offer its one-tap install button; worse, its
+ * "Add to Home screen" makes a plain shortcut that reopens in Firefox rather than a
+ * standalone app, so the install gate never clears and Web Push stays unreliable. We
+ * steer those users to Chrome or Samsung Internet, where the WebAPK install works. Pure
+ * (UA-only) so it's unit-testable. Firefox's Gecko UA carries "Firefox/" and no "Chrome/"
+ * token, which cleanly separates it from Chrome / Samsung / Edge.
+ */
+export function isFirefoxAndroid(ua: string): boolean {
+  return /android/i.test(ua) && /\bFirefox\/[\d.]+/i.test(ua);
+}
+
 // Singleton state shared across the (single) guard component.
 const mustInstall = ref(false);
 const platform = ref<InstallPlatform>('desktop');
@@ -78,6 +91,10 @@ const canPrompt = ref(false);
 // (that was a false-negative source on capable Chrome — spec 2003). The guard uses it to
 // show accurate "open in your browser app" guidance instead of steps that won't work.
 const installUnavailable = ref(false);
+// Android only: true for Firefox, which can't install Ring as a real standalone app
+// (no beforeinstallprompt; "Add to Home" only makes a shortcut). The guard steers these
+// users to Chrome / Samsung Internet instead of showing steps that won't stick.
+const firefoxAndroid = ref(false);
 let deferredPrompt: BeforeInstallPromptEvent | null = null;
 let started = false;
 
@@ -91,6 +108,7 @@ function start(): void {
   // browser can (via its menu), even if `beforeinstallprompt` is slow or never auto-fires.
   if (platform.value === 'android' && mustInstall.value) {
     installUnavailable.value = isAndroidWebView(navigator.userAgent || '');
+    firefoxAndroid.value = isFirefoxAndroid(navigator.userAgent || '');
   }
 
   // If the page is ever (re)evaluated as standalone, drop the gate.
@@ -131,5 +149,5 @@ export async function promptInstall(): Promise<void> {
 
 export function useInstallGuard() {
   start();
-  return { mustInstall, platform, canPrompt, installUnavailable };
+  return { mustInstall, platform, canPrompt, installUnavailable, firefoxAndroid };
 }
