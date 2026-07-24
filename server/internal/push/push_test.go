@@ -332,6 +332,40 @@ func TestSendVersionHeaders(t *testing.T) {
 	}
 }
 
+// TestPostActivityTopicFitsApple guards the BadWebPushTopic regression: the per-post
+// activity topic is base64url-encoded by notify() before it goes on the wire, and Apple
+// 400s ({"reason":"BadWebPushTopic"}) on a topic that isn't decodable base64 OR exceeds 32
+// chars. postActivityTopic once returned a 28-char label that double-encoded to 38 chars,
+// silently dropping every Wall-activity push to iOS post owners (FCM is lenient, so only
+// Apple failed). Pin the FINAL wire topic to Apple's two constraints.
+func TestPostActivityTopicFitsApple(t *testing.T) {
+	cap := &capturedReq{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cap.record(r)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	p256dh, auth := newSubKeys(t)
+	st := &memSubStore{subs: map[string][]store.PushSubscription{
+		"owner": {{Endpoint: srv.URL, P256dh: p256dh, Auth: auth}},
+	}}
+	n := newNotifier(t, st)
+
+	// A realistic 36-char UUID post id — the worst case for topic length.
+	n.NotifyPostActivity(context.Background(), "owner", "a1b2c3d4-e5f6-7890-abcd-ef0123456789")
+
+	if cap.topic == "" {
+		t.Fatal("post-activity push carried no Topic (want a per-post collapse topic)")
+	}
+	if len(cap.topic) > 32 {
+		t.Errorf("post-activity Topic = %q is %d chars, Apple caps it at 32 (BadWebPushTopic)", cap.topic, len(cap.topic))
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(cap.topic); err != nil {
+		t.Errorf("post-activity Topic = %q is not decodable base64url (Apple rejects with BadWebPushTopic): %v", cap.topic, err)
+	}
+}
+
 // TestTickleBodyIsSmall (spec 2046) asserts the encrypted push body is sized to fit the
 // content-free tickle, not padded to webpush-go's 4096-byte default — the padding that made
 // constrained Firefox/Mozilla endpoints reject our sends with 413.

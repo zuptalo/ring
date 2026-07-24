@@ -64,6 +64,21 @@
         </div>
       </div>
 
+      <!-- Firefox on Android can't install Ring as a real app (no install prompt, and its
+           "Add to Home screen" only makes a shortcut that reopens in Firefox), so the gate
+           would never clear and notifications stay unreliable. Steer to Chrome / Samsung
+           Internet, where the WebAPK install works. -->
+      <div v-if="platform === 'android' && firefoxAndroid && !installUnavailable" class="ion-padding">
+        <div class="cant-install">
+          <ion-icon :icon="warningOutline" />
+          <span>
+            Firefox on Android can’t install Ring as an app, so notifications won’t work
+            reliably here. Open <strong>ring.zuptalo.com</strong> in Chrome or Samsung
+            Internet, then follow the steps below to install.
+          </span>
+        </div>
+      </div>
+
       <!-- Native install button (Chromium / Android, when available). -->
       <div v-if="canPrompt" class="ion-padding">
         <ion-button expand="block" shape="round" @click="install">
@@ -111,10 +126,10 @@
         <div class="install-help">
           <ion-icon :icon="informationCircleOutline" />
           <span>
-            If Android blocks Ring as “unsafe” or “built for an older version of Android,”
-            that’s a Google Play Protect quirk with installed web apps — not a problem with
-            Ring. Update Chrome and Google Play services, then try again. If it still shows,
-            tap “More details” → “Install anyway.”
+            If Android says Ring is “unsafe” or “built for an older version of Android,”
+            that’s a Google Play Protect quirk with installed web apps, not a problem with
+            Ring. Tap “Install anyway” (not “OK,” which cancels) to continue. If you don’t
+            see that option, update Chrome and Google Play services and try again.
           </span>
         </div>
       </div>
@@ -138,7 +153,7 @@ import {
 import { downloadOutline, shareOutline, warningOutline, informationCircleOutline } from 'ionicons/icons';
 import { useInstallGuard, promptInstall } from '@/composables/useInstallGuard';
 
-const { mustInstall, platform, canPrompt, installUnavailable } = useInstallGuard();
+const { mustInstall, platform, canPrompt, installUnavailable, firefoxAndroid } = useInstallGuard();
 
 const install = (): void => void promptInstall();
 
