@@ -49,6 +49,10 @@
             <span class="preview draft-text">{{ draft ? ': ' + draft : '' }}</span>
           </template>
           <template v-else>
+            <!-- spec 1062: WhatsApp-style delivery tick for our own last message,
+                 leading the preview. Renders nothing when the last message is
+                 incoming/failed (tier 'none'/'failed'). -->
+            <message-tick :tier="chat.lastTick ?? 'none'" size="15px" class="preview-tick" />
             <ion-icon
               v-if="previewIcon"
               :icon="previewIcon"
@@ -110,6 +114,7 @@ import {
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
 import EmojiText from '@/components/EmojiText.vue';
+import MessageTick from '@/components/MessageTick.vue';
 import { isHiddenId } from '@/services/hidden-state';
 import { peerPresence } from '@/composables/usePresence';
 import { activityFor, activityKindLabel } from '@/composables/useTyping';
@@ -286,6 +291,13 @@ ion-item-option ion-icon {
   flex: none;
   font-size: 16px;
   margin-top: 2px;
+  color: var(--app-text-muted);
+}
+/* spec 1062: leading delivery tick on the preview row. Muted like the kind icon for
+   pending/sent/delivered; the seen tier tints itself blue (MessageTick .tick.seen). */
+.preview-tick {
+  flex: none;
+  margin-top: 3px;
   color: var(--app-text-muted);
 }
 .preview.activity {
