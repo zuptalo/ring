@@ -72,7 +72,7 @@ import { useNotificationNudge } from '@/composables/useNotificationNudge';
 import { useAppUpdate, checkForUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
 import { takePendingNav } from '@/services/pending-nav';
-import { parseRelevantNav } from '@/services/nav-intent';
+import { isRelevantNav } from '@/services/nav-intent';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { setAutoplayGifsEnabled } from '@/directives/autoplay-visible';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
@@ -238,21 +238,13 @@ async function routeRelevant(url?: string, coldStart = false): Promise<void> {
   let target = url;
   // (notify-nav fix) A generic notification can't name the chat, so it hands us a "route to
   // the relevant chat" intent instead of a dead-end /tabs/chats. Resolve it HERE, where we
-  // have full DB access (the SW couldn't, on a locked device): land on the sender's 1:1 chat
-  // when we know them AND it's not hidden (listChats excludes hidden), else the newest unread
-  // chat, else the list. A group's id needs the decrypt we never had, so a group message
-  // resolves via newest-unread.
-  const intent = parseRelevantNav(url);
-  if (intent.relevant) {
-    target = undefined; // fall through to the resolvers below
-    if (intent.from) {
-      const chats = await listChats();
-      const direct = chats.find(
-        (c) => !c.isGroup && c.participantIds.length === 1 && c.participantIds[0] === intent.from,
-      );
-      if (direct) target = `/chat/${direct.id}`;
-    }
-  }
+  // have full DB access (the SW couldn't, on a locked device). Route to the newest UNREAD
+  // chat — the one that just received the triggering message, whether that's a 1:1 or a
+  // GROUP. We must NOT resolve by the push sender id: for a group message the sender is a
+  // group member, and landing on their 1:1 chat sent the tap to the wrong conversation.
+  // The newest-unread chat is correct for both kinds (hidden chats are excluded by
+  // listChats, so a hidden chat is never revealed by this route).
+  if (isRelevantNav(url)) target = undefined; // fall through to the newest-unread resolver
   if (!target) {
     if ((await countPendingRequests()) > 0) target = '/tabs/contacts';
     else {
