@@ -1,45 +1,35 @@
 // (notify-nav fix) A generic notification can't name the chat, so it encodes a
 // "route me to the relevant chat" intent instead of the dead-end /tabs/chats. The SW
-// builds it; the app parses it after unlock (with full DB access) to land on the
-// sender's 1:1 chat, or the newest unread chat. These are the pure build/parse
-// contracts both sides depend on.
+// builds it; the app resolves it after unlock (with full DB access) to the newest
+// unread chat — the one that just received the triggering message, 1:1 OR group. A
+// rich note's real /chat/<id> deep-link must NOT be intercepted.
 import { describe, it, expect } from 'vitest';
-import { relevantNav, parseRelevantNav } from './nav-intent';
+import { relevantNav, isRelevantNav } from './nav-intent';
 
 describe('nav-intent: relevant-chat notification routing', () => {
-  it('builds a bare intent when the sender is unknown', () => {
+  it('builds the relevant-chat intent', () => {
     expect(relevantNav()).toBe('ring-relevant');
-    expect(relevantNav(undefined)).toBe('ring-relevant');
   });
 
-  it('encodes the sender id when known', () => {
-    expect(relevantNav('user-42')).toBe('ring-relevant:user-42');
-  });
-
-  it('round-trips the sender id through parse', () => {
-    const { relevant, from } = parseRelevantNav(relevantNav('user-42'));
-    expect(relevant).toBe(true);
-    expect(from).toBe('user-42');
-  });
-
-  it('parses the bare intent as relevant with no sender', () => {
-    expect(parseRelevantNav('ring-relevant')).toEqual({ relevant: true, from: undefined });
+  it('recognizes the intent it builds', () => {
+    expect(isRelevantNav(relevantNav())).toBe(true);
   });
 
   it('does NOT treat a real deep-link route as a relevant intent', () => {
-    // A rich note carries /chat/<id> — it must route verbatim, never be intercepted.
-    expect(parseRelevantNav('/chat/abc123')).toEqual({ relevant: false });
-    expect(parseRelevantNav('/tabs/chats')).toEqual({ relevant: false });
-    expect(parseRelevantNav('/tabs/contacts')).toEqual({ relevant: false });
+    // A rich note carries /chat/<id> (1:1 or group) — it must route verbatim.
+    expect(isRelevantNav('/chat/abc123')).toBe(false);
+    expect(isRelevantNav('/chat/group-xyz')).toBe(false);
+    expect(isRelevantNav('/tabs/chats')).toBe(false);
+    expect(isRelevantNav('/tabs/contacts')).toBe(false);
   });
 
   it('treats an absent url as not-relevant (no crash)', () => {
-    expect(parseRelevantNav(undefined)).toEqual({ relevant: false });
-    expect(parseRelevantNav('')).toEqual({ relevant: false });
+    expect(isRelevantNav(undefined)).toBe(false);
+    expect(isRelevantNav('')).toBe(false);
   });
 
   it('does not false-match a route that merely starts with the word', () => {
-    // Defensive: only the exact sentinel or `sentinel:` prefix count.
-    expect(parseRelevantNav('/ring-relevant-lookalike').relevant).toBe(false);
+    expect(isRelevantNav('/ring-relevant-lookalike')).toBe(false);
+    expect(isRelevantNav('ring-relevant:from=x')).toBe(false);
   });
 });
