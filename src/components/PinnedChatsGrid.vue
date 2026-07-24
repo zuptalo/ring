@@ -35,6 +35,12 @@
             <message-tick :tier="byId[id].lastTick ?? 'none'" size="13px" />
           </span>
           <span v-if="isOnline(byId[id])" class="pin-presence" aria-hidden="true" />
+          <!-- spec 1062: groups show a compact online count instead of a single dot. -->
+          <span
+            v-else-if="byId[id].isGroup && groupOnlineCount(byId[id])"
+            class="pin-online-count"
+            aria-label="online"
+          >{{ groupOnlineCount(byId[id]) }}</span>
         </div>
         <span class="pin-name" dir="auto">{{ byId[id].name }}</span>
       </button>
@@ -54,12 +60,28 @@ import { IonBadge } from '@ionic/vue';
 import UserAvatar from '@/components/UserAvatar.vue';
 import MessageTick from '@/components/MessageTick.vue';
 import { peerPresence } from '@/composables/usePresence';
-import type { Chat } from '@/db/types';
+import { groupOnline } from '@/composables/group-online';
+import { useLiveQuery } from '@/composables/useLiveQuery';
+import { listAllContacts } from '@/db/queries';
+import { getSelfUserId } from '@/services/auth';
+import type { Chat, Contact } from '@/db/types';
 
 // spec 1062: 1:1 online presence for the tile's bottom-right dot (groups get an
-// online count in US3, not a dot). Reactive via the presence map.
+// online count instead — see groupOnlineCount). Reactive via the presence map.
 function isOnline(chat: Chat): boolean {
   return !chat.isGroup && !!peerPresence(chat.participantIds[0])?.online;
+}
+
+// Shared contact set for group counts (one liveQuery for the whole grid — the tiles
+// are one component, so we can't call useGroupPresence per tile). Pure groupOnline()
+// keeps the zero-knowledge rule: only members who are my contacts + online are counted.
+const selfId = getSelfUserId() ?? '';
+const contacts = useLiveQuery(() => listAllContacts(), ['contacts', 'chats'], [] as Contact[]);
+const contactIds = computed(() => new Set(contacts.value.map((c) => c.id)));
+function groupOnlineCount(chat: Chat): number {
+  if (!chat.isGroup) return 0;
+  const members = chat.participantIds.filter((id) => id !== selfId);
+  return groupOnline(members, contactIds.value, (id) => !!peerPresence(id)?.online).count;
 }
 
 const props = defineProps<{
@@ -204,6 +226,25 @@ defineExpose({
   border-radius: 50%;
   background: var(--ion-color-success, #2dd36f);
   border: 2.5px solid var(--ion-background-color, #000);
+  box-sizing: border-box;
+}
+/* spec 1062: group online count pill at the tile's bottom-right. */
+.pin-online-count {
+  position: absolute;
+  bottom: 2px;
+  inset-inline-end: 2px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 4px;
+  border-radius: 10px;
+  background: var(--ion-color-success, #2dd36f);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--ion-background-color, #000);
   box-sizing: border-box;
 }
 .pin-name {
