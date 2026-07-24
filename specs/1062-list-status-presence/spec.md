@@ -146,7 +146,7 @@ Inside a group conversation, a member's avatar shows the same green online dot (
 - **FR-014**: When a group's visible online count is zero or unknown, the system MUST show no online count on any surface (header, list row, pinned tile) — staying quiet rather than showing "0 online".
 - **FR-015**: The system MUST show the group online count inside the group conversation header (where a 1:1 conversation header shows the peer's online/last-seen status, groups currently show nothing).
 - **FR-016**: The system MUST show a space-appropriate form of the group online count on the group's Chats-list row and pinned tile, consistent with the header value.
-- **FR-017**: To power the group count, the client MUST subscribe to presence for group members; the server MUST continue to gate each member's presence by the existing 1:1 contact graph, so a member who is not the user's contact always resolves to offline/unknown and never contributes to the count.
+- **FR-017**: The group count MUST be composed from presence the client already receives. Because the server reveals presence only for the user's contacts and the client already subscribes to all contacts, every group member the user is permitted to see is already present in the local presence map; the count is that set intersected with the group roster. The client MAY additionally issue a bounded presence subscription for the members of the currently-open group only (to catch an inbound-only contact edge), but MUST NOT broadly subscribe to group members across the whole list. The server MUST continue to gate each member's presence by the 1:1 contact graph, so a non-contact member always resolves to offline/unknown and never contributes to the count.
 
 **Per-member online dots inside a group (Story 4)**
 
