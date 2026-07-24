@@ -38,6 +38,12 @@ export const THEME_MIRROR_KEY = 'appearance.theme';
 // one-frame stale and useTheme fixes it — far rarer than the every-launch flash.
 export const THEME_RESOLVED_KEY = 'appearance.theme.dark';
 
+// (spec 2049) Ring defaults to the dark palette when the user has never chosen a
+// theme. 'system' remains an explicit choice for anyone who wants OS-following;
+// it is just no longer the default. Kept in sync with the pre-paint fallback in
+// index.html (`|| 'dark'`) and the schema default for `appearance.theme`.
+export const DEFAULT_PREF: ThemePref = 'dark';
+
 export function useTheme(): void {
   const rows = useLiveQuery(
     () => getAll<Setting>('settings'),
@@ -47,9 +53,18 @@ export function useTheme(): void {
   const mql = window.matchMedia('(prefers-color-scheme: dark)');
 
   const apply = () => {
+    // (spec 2049) Until the settings live query resolves, `rows.value` is still
+    // the empty initial array. Guessing a theme from it would compute DEFAULT_PREF
+    // and TOGGLE OFF the `ion-palette-dark` class the index.html pre-paint script
+    // already set correctly — flashing the wrong palette for a frame on every cold
+    // launch. This is the flash two earlier fixes missed: it only hit users whose
+    // explicit choice differs from their OS scheme (a 'system' user's guess happens
+    // to match, so they never saw it). The pre-paint owns the first frame; wait for
+    // the real preference (rows.loaded) before ever touching the class.
+    if (!rows.loaded.value) return;
     const pref =
       (rows.value.find((r) => r.key === 'appearance.theme')?.value as ThemePref) ??
-      'system';
+      DEFAULT_PREF;
     const dark = resolveDark(pref, mql.matches);
     document.documentElement.classList.toggle('ion-palette-dark', dark);
     // Keep the synchronous mirrors current so the NEXT cold start paints correctly:
@@ -60,7 +75,7 @@ export function useTheme(): void {
       localStorage.setItem(THEME_MIRROR_KEY, pref);
       localStorage.setItem(THEME_RESOLVED_KEY, dark ? '1' : '0');
     } catch {
-      /* storage blocked → pre-paint falls back to prefers-color-scheme */
+      /* storage blocked → pre-paint falls back to the dark default (spec 2049) */
     }
   };
 

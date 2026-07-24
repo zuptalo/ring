@@ -133,3 +133,4 @@ Specs are grouped by category band; status moves
 | [2046](specs/2046-version-announcement-push/spec.md) | Push tickles fit constrained push endpoints | 🟡 in-progress |
 | [2047](specs/2047-modern-iphones-and/spec.md) | Modern iPhones/iPads actually display push notifications | 🟡 in-progress |
 | [2048](specs/2048-notifications-not-appear/spec.md) | Show-first notifications (work when locked, keep the subscription alive) | 🟡 in-progress |
+| [2049](specs/2049-dark-default-flash/spec.md) | Default to dark theme and fix the startup theme flash | 🟡 in-progress |
