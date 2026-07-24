@@ -8,6 +8,7 @@ import {
   applyStatusReceipt,
   applyDownloadedReceipt,
   groupProgress,
+  lastMessageTick,
 } from './message-status';
 
 // Minimal outgoing-message factory. The reducers only read status/receipts/*At/
@@ -258,5 +259,64 @@ describe('groupProgress (complete-the-tier counter, spec 1010 FR-004/005)', () =
     // delivered → plain), never a "Seen X/N".
     const partial = msg({ receipts: roster([{ d: true, s: true }, { d: true }]) });
     expect(groupProgress(partial, false)).toEqual({ tier: 'delivered', label: null });
+  });
+});
+
+describe('spec 1062: lastMessageTick (shared list/tile tick tier)', () => {
+  // Local receipt roster: {d,s} → deliveredAt/seenAt set. (The identically-named
+  // helper above is scoped to another describe block, so we define our own here.)
+  const roster = (rs: { d?: boolean; s?: boolean }[]): Receipt[] =>
+    rs.map((r, i) => ({
+      contactId: `u${i}`,
+      deliveredAt: r.d ? 1 : undefined,
+      seenAt: r.s ? 1 : undefined,
+    }));
+
+  it('renders nothing for an incoming or absent last message', () => {
+    expect(lastMessageTick(undefined)).toBe('none');
+    expect(lastMessageTick(null)).toBe('none');
+    expect(lastMessageTick(msg({ outgoing: false, status: 'seen' }))).toBe('none');
+  });
+
+  it('failed outgoing sends show no success tick', () => {
+    expect(lastMessageTick(msg({ status: 'failed' }))).toBe('failed');
+  });
+
+  it('pre-send states map to pending (clock)', () => {
+    expect(lastMessageTick(msg({ status: 'pending' }))).toBe('pending');
+    expect(lastMessageTick(msg({ status: 'compressing' }))).toBe('pending');
+  });
+
+  it('1:1 maps status straight through', () => {
+    expect(lastMessageTick(msg({ status: 'sent' }))).toBe('sent');
+    expect(lastMessageTick(msg({ status: 'delivered' }))).toBe('delivered');
+    expect(lastMessageTick(msg({ status: 'seen' }))).toBe('seen');
+  });
+
+  it('1:1 seen caps at delivered when seen-receipts are off (reciprocity)', () => {
+    expect(lastMessageTick(msg({ status: 'seen' }), false)).toBe('delivered');
+    // sent/delivered are unaffected by the gate
+    expect(lastMessageTick(msg({ status: 'delivered' }), false)).toBe('delivered');
+  });
+
+  // isGroup is a lastMessageTick input flag, not a Message field — attach it to the
+  // spread message rather than the Partial<Message> factory.
+  const group = (over: Partial<Message>) => ({ ...msg(over), isGroup: true });
+
+  it('groups derive the tier from the receipt roster (via groupProgress)', () => {
+    const allDelivered = group({ status: 'delivered', receipts: roster([{ d: true }, { d: true }]) });
+    expect(lastMessageTick(allDelivered)).toBe('delivered');
+
+    const partialDelivered = group({ status: 'sent', receipts: roster([{ d: true }, {}]) });
+    // partial delivery still shows the delivered tier (fraction is a bubble-only detail)
+    expect(lastMessageTick(partialDelivered)).toBe('delivered');
+
+    const allSeen = group({ status: 'seen', receipts: roster([{ d: true, s: true }, { d: true, s: true }]) });
+    expect(lastMessageTick(allSeen)).toBe('seen');
+  });
+
+  it('group seen tier is suppressed when seen-receipts are off', () => {
+    const allSeen = group({ status: 'seen', receipts: roster([{ d: true, s: true }, { d: true, s: true }]) });
+    expect(lastMessageTick(allSeen, false)).toBe('delivered');
   });
 });

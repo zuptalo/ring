@@ -47,6 +47,14 @@ export interface Contact {
   updatedAt: number;
 }
 
+// spec 1062: the display tier of a chat's LAST message, denormalized onto the Chat
+// summary so the Chats list / pinned tiles can show the WhatsApp-style tick without a
+// per-row message lookup. 'none' = the last message is incoming/absent or a failed send
+// (render nothing). Derived on the client (see lastMessageTick in message-status.ts);
+// device-local + recomputable, never synced. Defined here (not in message-status.ts) so
+// Chat can reference it without a circular import.
+export type LastTick = 'none' | 'pending' | 'sent' | 'delivered' | 'seen' | 'failed';
+
 export interface Chat {
   id: string;
   name: string;
@@ -76,6 +84,10 @@ export interface Chat {
     | 'game'
     | 'call';
   lastMessageTime: number; // epoch ms
+  // spec 1062: display tier of the last message when it is our own outgoing message
+  // (pending/sent/delivered/seen), else 'none'. Drives the list-row / pinned-tile tick.
+  // Optional: legacy records without it fall back to 'none'/lazy recompute on read.
+  lastTick?: LastTick;
   unread: number;
   interactions?: number; // messages sent/received, drives "Frequently contacted"
   updatedAt: number;

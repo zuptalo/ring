@@ -81,6 +81,7 @@ Specs are grouped by category band; status moves
 | [1053](specs/1053-composer-buttons-transition/spec.md) | Composer Buttons Transition Like WhatsApp | 🟢 shipped |
 | [1054](specs/1054-pick-emoji-contact/spec.md) | Emoji contact photos + reset to their photo | 🟢 shipped |
 | [1055](specs/1055-ciphertext-push-instant/spec.md) | Instant rich notifications (bounded encrypted preview in push) | 🟡 in-progress |
+| [1062](specs/1062-list-status-presence/spec.md) | Message status and presence on the chat list | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
@@ -133,4 +134,4 @@ Specs are grouped by category band; status moves
 | [2046](specs/2046-version-announcement-push/spec.md) | Push tickles fit constrained push endpoints | 🟡 in-progress |
 | [2047](specs/2047-modern-iphones-and/spec.md) | Modern iPhones/iPads actually display push notifications | 🟡 in-progress |
 | [2048](specs/2048-notifications-not-appear/spec.md) | Show-first notifications (work when locked, keep the subscription alive) | 🟡 in-progress |
-| [2049](specs/2049-dark-default-flash/spec.md) | Default to dark theme and fix the startup theme flash | 🟡 in-progress |
+| [2049](specs/2049-dark-default-flash/spec.md) | Default to dark theme and fix the startup theme flash | 🟢 shipped |

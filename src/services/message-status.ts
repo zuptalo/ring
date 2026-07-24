@@ -15,7 +15,7 @@
 // `updatedAt` is intentionally NOT touched here — that's the persistence layer's
 // job (it stamps it only when a write actually happens).
 
-import type { Message, Receipt } from '@/db/types';
+import type { LastTick, Message, Receipt } from '@/db/types';
 
 /** Monotonic rank of each displayed status. Pre-send states (compressing/pending/
  *  failed) sit below `sent` so a server ack advances them; status never regresses
@@ -158,6 +158,39 @@ export function applyDownloadedReceipt(
   if (already) return { msg, allDownloaded: true };
   const downloadedBy = [...new Set([...(msg.downloadedBy ?? []), recipient])];
   return { msg: { ...msg, downloadedBy }, allDownloaded: true };
+}
+
+/** (spec 1062) The display tier of a chat's LAST message, for the Chats list row and
+ *  pinned tile — the single source of truth shared with the in-conversation `tickInfo`.
+ *  `none` when the last message is incoming/absent or a failed send (render nothing).
+ *
+ *  Mirrors `tickInfo`/`statusIcon` in ChatDetailPage.vue exactly:
+ *   - pre-send (compressing/pending) → 'pending' (clock)
+ *   - group → the roster-derived `groupProgress` tier (sent/delivered/seen), already
+ *     reciprocity-gated by `seenReceiptsOn` (seen tier suppressed → caps at delivered)
+ *   - 1:1 → status maps straight through, with 'seen' capped to 'delivered' when
+ *     `seenReceiptsOn` is false (the reciprocity DISPLAY gate, spec 1010 FR-009).
+ *  Pure: no Vue/IDB — unit-testable, and reused by the summary maintenance in queries.ts. */
+export function lastMessageTick(
+  msg:
+    | (Pick<Message, 'outgoing' | 'status' | 'receipts'> & { isGroup?: boolean })
+    | null
+    | undefined,
+  seenReceiptsOn = true,
+): LastTick {
+  if (!msg || !msg.outgoing) return 'none';
+  const { status, receipts, isGroup } = msg;
+  if (status === 'failed') return 'failed';
+  if (status === 'compressing' || status === 'pending') return 'pending';
+  if (isGroup && receipts && receipts.length) {
+    // groupProgress already caps the seen tier when seenReceiptsOn is false.
+    const p = groupProgress({ receipts }, seenReceiptsOn);
+    return p ? p.tier : 'sent';
+  }
+  if (status === 'sent') return 'sent';
+  if (status === 'delivered') return 'delivered';
+  if (status === 'seen') return seenReceiptsOn ? 'seen' : 'delivered';
+  return 'none';
 }
 
 /** Which tier's icon/colour a group bubble shows. `sent` = single tick; `delivered`

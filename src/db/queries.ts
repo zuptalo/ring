@@ -20,6 +20,7 @@ import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
 import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
 import { recordStaleDrain, recordMissedWakeDrain, STALE_MSG_MS } from '@/services/push';
 import { sealForChat, openPacket } from '@/services/messaging';
+import { lastMessageTick } from '@/services/message-status';
 import { withInboundLock } from '@/services/cross-lock';
 import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
@@ -473,6 +474,7 @@ export async function sendMessage(
     chat.lastMessage = body;
     chat.lastKind = 'text';
     chat.lastMessageTime = ts;
+    chat.lastTick = 'pending'; // spec 1062: our new outgoing message → clock; receipts advance it
     chat.unread = 0;
     chat.interactions = (chat.interactions ?? 0) + 1;
     chat.updatedAt = ts;
@@ -878,6 +880,7 @@ async function bumpOutgoing(chat: Chat | undefined, kind: Chat['lastKind'], prev
   chat.lastMessage = preview;
   chat.lastKind = kind;
   chat.lastMessageTime = ts;
+  chat.lastTick = 'pending'; // spec 1062: outgoing (location/poll/contact/game) → clock, advanced by receipts
   chat.unread = 0;
   chat.interactions = (chat.interactions ?? 0) + 1;
   chat.updatedAt = ts;
@@ -1632,6 +1635,35 @@ async function refreshChatPreview(chatId: string): Promise<void> {
       : previewKind(newest.kind, newest.albumName, newest.videoNote);
     chat.lastMessageTime = newest.timestamp;
   }
+  // spec 1062: keep the denormalized list/tile tick in sync with the newest message.
+  const seenOn = await getSetting<boolean>('privacy.seenReceipts', true);
+  chat.lastTick = lastMessageTick(
+    newest
+      ? { outgoing: newest.outgoing, status: newest.status, receipts: newest.receipts, isGroup: chat.isGroup }
+      : undefined,
+    seenOn,
+  );
+  chat.updatedAt = now();
+  await put('chats', chat);
+}
+
+/** (spec 1062) Advance a chat's denormalized `lastTick` when a receipt changed the
+ *  status of its NEWEST message — so the Chats-list row / pinned tile tick climbs
+ *  pending→sent→delivered→seen live, without reopening the chat. Lean by design:
+ *  no full message scan — it only acts when the changed message IS the newest (its
+ *  timestamp matches the summary) and the tier actually moved, so receipts on older
+ *  messages and duplicate/late frames write nothing (no spurious list re-render). */
+export async function refreshChatTickFor(m: Message): Promise<void> {
+  if (!m.outgoing) return;
+  const chat = await getChat(m.chatId);
+  if (!chat || m.timestamp !== chat.lastMessageTime) return; // not the newest → tick unaffected
+  const seenOn = await getSetting<boolean>('privacy.seenReceipts', true);
+  const tick = lastMessageTick(
+    { outgoing: m.outgoing, status: m.status, receipts: m.receipts, isGroup: chat.isGroup },
+    seenOn,
+  );
+  if (chat.lastTick === tick) return; // no change → skip the write + notification
+  chat.lastTick = tick;
   chat.updatedAt = now();
   await put('chats', chat);
 }
@@ -2317,6 +2349,7 @@ export async function sendMediaMessage(
         : caption || mediaPreview(kind, durationSec, name, opts?.videoNote);
     chat.lastKind = previewKind(kind, opts?.albumName, opts?.videoNote);
     chat.lastMessageTime = ts;
+    chat.lastTick = 'pending'; // spec 1062: outgoing media starts compressing/pending → clock
     chat.unread = 0;
     chat.interactions = (chat.interactions ?? 0) + 1;
     chat.updatedAt = ts;
@@ -6362,6 +6395,7 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
     chat.lastMessage = isGroupMsg ? `${contact.name.split(' ')[0]}: ${preview}` : preview;
     chat.lastKind = previewKind(kind, payload.albumName, payload.videoNote);
     chat.lastMessageTime = ts;
+    chat.lastTick = 'none'; // spec 1062: newest is an incoming message → no outgoing tick
     chat.interactions = (chat.interactions ?? 0) + 1;
     // If the user is actively viewing this chat, the message is seen on arrival
     // (the open chat sends the read receipt), so don't grow the unread badge.
