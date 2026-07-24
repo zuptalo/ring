@@ -27,4 +27,10 @@ await poll(aMsgs, statusIs('seen'), { label: 'Alice → seen', timeout: 20000 })
 );
 await shot(a, 'us1-list-tick-seen', { route: '/tabs/chats' });
 
+// US2: pin the chat → the tile shows the tick (bottom-left) + online dot (bottom-right).
+// Bob is still on the chat page (foregrounded → online), so his dot should show.
+await a.page.evaluate((c) => window.__ringTest.pinChat(c, true), aChat);
+await a.page.waitForTimeout(500);
+await shot(a, 'us2-pinned-tile', { route: '/tabs/chats' });
+
 await sweep([a, b]);
