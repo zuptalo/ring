@@ -49,6 +49,10 @@
             <span class="preview draft-text">{{ draft ? ': ' + draft : '' }}</span>
           </template>
           <template v-else>
+            <!-- spec 1062: WhatsApp-style delivery tick for our own last message,
+                 leading the preview. Renders nothing when the last message is
+                 incoming/failed (tier 'none'/'failed'). -->
+            <message-tick :tier="chat.lastTick ?? 'none'" size="15px" class="preview-tick" />
             <ion-icon
               v-if="previewIcon"
               :icon="previewIcon"
@@ -64,6 +68,15 @@
       <div class="meta" slot="end">
         <ion-note :class="{ unread: unread }">{{ formatTime(chat.lastMessageTime) }}</ion-note>
         <div class="meta-icons">
+          <!-- spec 1062: compact honest online count for group rows ("3 online" /
+               "3 online contacts"); nothing when no visible member is online. -->
+          <span
+            v-if="chat.isGroup && groupOnline.count"
+            class="group-online"
+            :aria-label="groupOnline.label"
+          >
+            <span class="go-dot" aria-hidden="true" />{{ groupOnline.count }}
+          </span>
           <ion-icon v-if="isHidden" :icon="eyeOffOutline" class="meta-ico hidden-ico" aria-label="Hidden chat" />
           <ion-icon v-if="muted" :icon="notificationsOffOutline" class="meta-ico" aria-hidden="true" />
           <ion-icon v-if="chat.locked" :icon="lockClosedOutline" class="meta-ico" aria-hidden="true" />
@@ -110,8 +123,10 @@ import {
 } from '@/db/queries';
 import { appToast } from '@/services/toast';
 import EmojiText from '@/components/EmojiText.vue';
+import MessageTick from '@/components/MessageTick.vue';
 import { isHiddenId } from '@/services/hidden-state';
 import { peerPresence } from '@/composables/usePresence';
+import { useGroupPresence } from '@/composables/useGroupPresence';
 import { activityFor, activityKindLabel } from '@/composables/useTyping';
 import { formatTime } from '@/utils/time';
 import type { Chat } from '@/db/types';
@@ -154,6 +169,8 @@ const muted = computed(() => !!props.chat.mutedUntil && props.chat.mutedUntil > 
 const isOnline = computed(
   () => !props.chat.isGroup && !!peerPresence(props.chat.participantIds?.[0] ?? '')?.online,
 );
+// spec 1062: honest group online count for a compact indicator on group rows.
+const groupOnline = useGroupPresence(() => props.chat);
 // While the 1:1 peer is composing, the row shows their activity ("typing…",
 // "recording audio…", …) in place of the last-message preview (spec 1009).
 // Group rows keep the preview (per-sender group activity is US5).
@@ -287,6 +304,28 @@ ion-item-option ion-icon {
   font-size: 16px;
   margin-top: 2px;
   color: var(--app-text-muted);
+}
+/* spec 1062: leading delivery tick on the preview row. Muted like the kind icon for
+   pending/sent/delivered; the seen tier tints itself blue (MessageTick .tick.seen). */
+.preview-tick {
+  flex: none;
+  margin-top: 3px;
+  color: var(--app-text-muted);
+}
+/* spec 1062: compact group online count in the meta row — a small green dot + number. */
+.group-online {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ion-color-success, #2dd36f);
+}
+.go-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ion-color-success, #2dd36f);
 }
 .preview.activity {
   color: var(--ion-color-primary, #10b981);

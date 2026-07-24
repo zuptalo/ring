@@ -171,14 +171,22 @@
           <!-- Group chats: the sender's avatar next to their messages (shown once
                per consecutive run; a spacer keeps continuation bubbles aligned). -->
           <template v-if="chat?.isGroup && !m.outgoing">
-            <img
+            <!-- spec 1062: the sender's online dot on their avatar (proportional to the
+                 34px avatar), shown when they're a visible-online contact and NOT
+                 currently composing (activity takes precedence, FR-024). -->
+            <span
               v-if="groupRunStart(i) && senderAvatar(m.senderId)"
-              class="msg-avatar"
-              :src="senderAvatar(m.senderId)"
-              :alt="m.senderName"
-              role="button"
-              @click.stop="openSenderProfile(m.senderId)"
-            />
+              class="msg-avatar-wrap"
+            >
+              <img
+                class="msg-avatar"
+                :src="senderAvatar(m.senderId)"
+                :alt="m.senderName"
+                role="button"
+                @click.stop="openSenderProfile(m.senderId)"
+              />
+              <span v-if="memberOnline(m.senderId)" class="msg-presence-dot" aria-hidden="true" />
+            </span>
             <span v-else class="msg-avatar avatar-spacer" aria-hidden="true" />
           </template>
           <!-- Send failed (3 retries) → a red retry button in front of the bubble. -->
@@ -1284,6 +1292,7 @@ import {
 import { isUnlocked, isUnlockedNow } from '@/services/crypto/identity';
 import { reportSeenUpTo, sendDownloadedReceipts, sendActivity, sendGroupActivity, useSync } from '@/composables/useSync';
 import { peerPresence, presenceLabel } from '@/composables/usePresence';
+import { useGroupPresence } from '@/composables/useGroupPresence';
 import { activityFor, activityKindLabel, coalescedActivityLabel } from '@/composables/useTyping';
 import { ACTIVITY, type ActivityKind, type ActivityState } from '@/services/transport';
 import { startDirectCall, startGroupCall } from '@/composables/useCall';
@@ -1297,15 +1306,32 @@ const router = useRouter();
 const chatId = route.params.id as string;
 
 // Online / last-seen line under the contact name (1:1 only; '' when unknown).
+// spec 1062: honest group online count for the header + per-member dots (US3/US4).
+// Getter form (not the ref directly) — `chat` is declared later; the closure defers
+// access until the computed runs, matching how statusLine references it.
+const groupPresence = useGroupPresence(() => chat.value);
+
+// A group member's avatar shows the online dot when they're in the visible-online set
+// AND not currently composing — the typing/recording activity takes precedence (FR-024).
+function memberOnline(id: string): boolean {
+  return groupPresence.value.onlineIds.includes(id) && activityFor(id).length === 0;
+}
+
 // While the peer is composing, a transient activity indicator ("typing…",
 // "recording audio…", "recording video…") OVERRIDES the presence line (spec 1009).
 const statusLine = computed(() => {
   const c = chat.value;
   if (!c) return '';
   if (c.isGroup) {
-    // Groups have no presence line; show per-sender activity only while someone's
-    // composing — "Alice is typing…" / "Alice, Bob…" / "several people…" (US5).
-    return coalescedActivityLabel(c.id, (id) => contactsMap.value.get(id)?.name ?? 'Someone');
+    // Per-sender activity overrides everything while someone's composing —
+    // "Alice is typing…" / "Alice, Bob…" / "several people…" (US5).
+    const activity = coalescedActivityLabel(c.id, (id) => contactsMap.value.get(id)?.name ?? 'Someone');
+    if (activity) return activity;
+    // spec 1062: otherwise show the honest online count ("N online" / "N online
+    // contacts"), or nothing when no one visible is online. Reactive to presence;
+    // the 30s tick keeps parity with the 1:1 branch (harmless for a bare count).
+    void nowMs.value;
+    return groupPresence.value.label;
   }
   const peer = c.participantIds[0];
   if (!peer) return '';
@@ -5393,6 +5419,28 @@ function cancelRecording() {
   align-self: flex-start;
   background: var(--app-bubble-in);
   cursor: pointer;
+}
+/* spec 1062: wrapper so the sender's online dot can pin to the avatar's bottom-right.
+   The wrapper carries the avatar's spacing; the img inside drops its own margin. */
+.msg-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  margin: 2px 7px 0 0;
+  align-self: flex-start;
+}
+.msg-avatar-wrap .msg-avatar {
+  margin: 0;
+}
+.msg-presence-dot {
+  position: absolute;
+  bottom: 0;
+  inset-inline-end: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--ion-color-success, #2dd36f);
+  border: 2px solid var(--ion-background-color, #000);
+  box-sizing: border-box;
 }
 .avatar-spacer {
   visibility: hidden;

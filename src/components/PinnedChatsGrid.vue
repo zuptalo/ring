@@ -29,6 +29,18 @@
           <user-avatar :src="byId[id].avatar" :alt="byId[id].name" :attention="byId[id].unread > 0" />
           <ion-badge v-if="byId[id].unread" color="primary" class="pin-badge">{{ byId[id].unread }}</ion-badge>
           <span v-else-if="byId[id].manualUnread" class="pin-dot" aria-hidden="true" />
+          <!-- spec 1062: last-outgoing-message tick at the avatar's bottom-left (a pinned
+               tile has no preview row), and the online presence dot at the bottom-right. -->
+          <span v-if="(byId[id].lastTick ?? 'none') !== 'none'" class="pin-tick">
+            <message-tick :tier="byId[id].lastTick ?? 'none'" size="13px" />
+          </span>
+          <span v-if="isOnline(byId[id])" class="pin-presence" aria-hidden="true" />
+          <!-- spec 1062: groups show a compact online count instead of a single dot. -->
+          <span
+            v-else-if="byId[id].isGroup && groupOnlineCount(byId[id])"
+            class="pin-online-count"
+            aria-label="online"
+          >{{ groupOnlineCount(byId[id]) }}</span>
         </div>
         <span class="pin-name" dir="auto">{{ byId[id].name }}</span>
       </button>
@@ -46,7 +58,31 @@
 import { computed, ref } from 'vue';
 import { IonBadge } from '@ionic/vue';
 import UserAvatar from '@/components/UserAvatar.vue';
-import type { Chat } from '@/db/types';
+import MessageTick from '@/components/MessageTick.vue';
+import { peerPresence } from '@/composables/usePresence';
+import { groupOnline } from '@/composables/group-online';
+import { useLiveQuery } from '@/composables/useLiveQuery';
+import { listAllContacts } from '@/db/queries';
+import { getSelfUserId } from '@/services/auth';
+import type { Chat, Contact } from '@/db/types';
+
+// spec 1062: 1:1 online presence for the tile's bottom-right dot (groups get an
+// online count instead — see groupOnlineCount). Reactive via the presence map.
+function isOnline(chat: Chat): boolean {
+  return !chat.isGroup && !!peerPresence(chat.participantIds[0])?.online;
+}
+
+// Shared contact set for group counts (one liveQuery for the whole grid — the tiles
+// are one component, so we can't call useGroupPresence per tile). Pure groupOnline()
+// keeps the zero-knowledge rule: only members who are my contacts + online are counted.
+const selfId = getSelfUserId() ?? '';
+const contacts = useLiveQuery(() => listAllContacts(), ['contacts', 'chats'], [] as Contact[]);
+const contactIds = computed(() => new Set(contacts.value.map((c) => c.id)));
+function groupOnlineCount(chat: Chat): number {
+  if (!chat.isGroup) return 0;
+  const members = chat.participantIds.filter((id) => id !== selfId);
+  return groupOnline(members, contactIds.value, (id) => !!peerPresence(id)?.online).count;
+}
 
 const props = defineProps<{
   /** Pinned chats in the user's (rank) order. */
@@ -163,6 +199,53 @@ defineExpose({
   height: 10px;
   border-radius: 50%;
   background: var(--ion-color-primary);
+}
+/* spec 1062: last-outgoing tick at the avatar's bottom-left, in a small chip that
+   backs it against the app background so it reads over any avatar. */
+.pin-tick {
+  position: absolute;
+  bottom: -1px;
+  inset-inline-start: -1px;
+  display: flex;
+  align-items: center;
+  padding: 1px 3px;
+  border-radius: 999px;
+  background: var(--ion-background-color, #000);
+  color: var(--app-text-muted);
+  line-height: 0;
+}
+/* spec 1062: online dot at the avatar's bottom-right — the list-row .presence-dot
+   pattern, scaled up for the 88px tile with a background-coloured ring to separate
+   it from the avatar edge. */
+.pin-presence {
+  position: absolute;
+  bottom: 3px;
+  inset-inline-end: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ion-color-success, #2dd36f);
+  border: 2.5px solid var(--ion-background-color, #000);
+  box-sizing: border-box;
+}
+/* spec 1062: group online count pill at the tile's bottom-right. */
+.pin-online-count {
+  position: absolute;
+  bottom: 2px;
+  inset-inline-end: 2px;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 4px;
+  border-radius: 10px;
+  background: var(--ion-color-success, #2dd36f);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--ion-background-color, #000);
+  box-sizing: border-box;
 }
 .pin-name {
   max-width: 100%;

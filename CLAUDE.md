@@ -281,5 +281,5 @@ but the subject is the real lever.)
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/1055-ciphertext-push-instant/plan.md`
+`specs/1062-list-status-presence/plan.md`
 <!-- SPECKIT END -->
