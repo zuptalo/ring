@@ -81,7 +81,7 @@ Specs are grouped by category band; status moves
 | [1053](specs/1053-composer-buttons-transition/spec.md) | Composer Buttons Transition Like WhatsApp | 🟢 shipped |
 | [1054](specs/1054-pick-emoji-contact/spec.md) | Emoji contact photos + reset to their photo | 🟢 shipped |
 | [1055](specs/1055-ciphertext-push-instant/spec.md) | Instant rich notifications (bounded encrypted preview in push) | 🟡 in-progress |
-| [1062](specs/1062-list-status-presence/spec.md) | Message status and presence on the chat list | 🟡 in-progress |
+| [1062](specs/1062-list-status-presence/spec.md) | Message status and presence on the chat list | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
