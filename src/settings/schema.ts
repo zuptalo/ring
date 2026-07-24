@@ -490,7 +490,10 @@ export const SETTINGS: Record<string, SettingNode> = {
           {
             type: 'choice',
             key: 'appearance.theme',
-            default: 'system',
+            // (spec 2049) Ring defaults to dark; 'system' stays available to follow
+            // the device. Kept in sync with DEFAULT_PREF in useTheme.ts and the
+            // pre-paint fallback in index.html.
+            default: 'dark',
             options: [
               { value: 'system', label: 'System default', note: 'Follow your device appearance' },
               { value: 'light', label: 'Light' },
