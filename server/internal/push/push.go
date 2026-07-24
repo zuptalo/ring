@@ -385,15 +385,21 @@ func (n *Notifier) NotifyPost(ctx context.Context, userID, author string) {
 	n.notify(ctx, userID, postParams())
 }
 
-// postActivityTopic derives the per-post Web Push collapse topic. RFC 8030 caps a
-// topic at 32 URL-safe base64 characters and a raw uuid is 36, so use a base64url
-// SHA-256 prefix: bursts on ONE post collapse to a single wake per device while
-// activity on different posts still wakes separately. The hash also keeps the raw
-// post id out of the (push-service-visible) topic header — the payload itself is
-// encrypted, the topic is not.
+// postActivityTopic derives the per-post Web Push collapse label: bursts on ONE post
+// collapse to a single wake per device while activity on different posts still wakes
+// separately. The SHA-256 hash also keeps the raw post id out of the
+// (push-service-visible) topic header — the payload itself is encrypted, the topic is not.
+//
+// This returns the RAW label; notify() base64url-encodes EVERY topic before sending it,
+// because Apple 400s ({"reason":"BadWebPushTopic"}) on a topic that isn't decodable
+// base64. Apple ALSO caps the topic at 32 chars, so the raw label must stay <= 24 bytes
+// (24 * 4/3 = 32 after encoding). "act-" + 16 chars = 20 bytes → 27 chars encoded. A
+// longer prefix here was double-encoded to 38 chars, which WAS the BadWebPushTopic
+// regression that silently dropped every Wall-activity push to iOS post owners (FCM is
+// lenient about topic length, so only Apple endpoints failed).
 func postActivityTopic(postID string) string {
 	sum := sha256.Sum256([]byte(postID))
-	return "act-" + base64.RawURLEncoding.EncodeToString(sum[:])[:24]
+	return "act-" + base64.RawURLEncoding.EncodeToString(sum[:])[:16]
 }
 
 // NotifyPostActivity wakes the POST OWNER's devices for engagement (a reaction or a
