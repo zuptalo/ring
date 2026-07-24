@@ -2,7 +2,7 @@
 // and the index.html pre-paint inline script (first frame on a cold relaunch). Pinning it
 // here guards against the two drifting: whatever this asserts is what index.html must do.
 import { describe, it, expect } from 'vitest';
-import { resolveDark, THEME_MIRROR_KEY, THEME_RESOLVED_KEY } from './useTheme';
+import { resolveDark, DEFAULT_PREF, THEME_MIRROR_KEY, THEME_RESOLVED_KEY } from './useTheme';
 
 describe('spec 2045: resolveDark', () => {
   it('explicit dark is always dark, regardless of OS', () => {
@@ -16,6 +16,19 @@ describe('spec 2045: resolveDark', () => {
   it('system follows the OS color scheme', () => {
     expect(resolveDark('system', true)).toBe(true);
     expect(resolveDark('system', false)).toBe(false);
+  });
+});
+
+describe('spec 2049: dark is the default theme', () => {
+  // When the user has never chosen a theme, Ring defaults to dark — the schema
+  // default for `appearance.theme`, useTheme's DEFAULT_PREF, and the index.html
+  // pre-paint fallback (`|| 'dark'`) must all agree, or a fresh install flashes.
+  it('DEFAULT_PREF is dark', () => {
+    expect(DEFAULT_PREF).toBe('dark');
+  });
+  it('the default resolves to dark even on a light-OS device (no white first frame)', () => {
+    expect(resolveDark(DEFAULT_PREF, false)).toBe(true);
+    expect(resolveDark(DEFAULT_PREF, true)).toBe(true);
   });
 });
 

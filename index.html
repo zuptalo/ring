@@ -32,8 +32,9 @@
          iOS PWA cold launch (it briefly reports LIGHT before the OS scheme settles, which
          WAS the every-launch bright flash) — the last resolved value has no such
          dependency. Only when that mirror is absent (first-ever launch) do we fall back to
-         pref + matchMedia, and to prefers-color-scheme if storage is blocked (private
-         mode). Mirrors resolveDark() in src/composables/useTheme.ts — keep in sync. -->
+         pref + matchMedia — and pref itself now defaults to DARK (spec 2049), so a fresh
+         install paints dark, not a white flash; storage-blocked (private mode) also defaults
+         dark. Mirrors resolveDark() and DEFAULT_PREF in src/composables/useTheme.ts — keep in sync. -->
     <script>
       (function () {
         function prefersDark() {
@@ -45,11 +46,16 @@
           if (resolved === '1' || resolved === '0') {
             dark = resolved === '1';
           } else {
-            var pref = localStorage.getItem('appearance.theme') || 'system';
+            // (spec 2049) No resolved mirror yet (first-ever launch): dark is the
+            // default choice, so an absent pref resolves to dark rather than the OS
+            // scheme — the worst-case first frame is a dark frame on a dark app, not
+            // a white flash. An explicitly stored 'system'/'light' is still honoured.
+            var pref = localStorage.getItem('appearance.theme') || 'dark';
             dark = pref === 'dark' || (pref === 'system' && prefersDark());
           }
         } catch (e) {
-          dark = prefersDark();
+          // Storage blocked (private mode): fall back to the dark default. (spec 2049)
+          dark = true;
         }
         if (dark) document.documentElement.classList.add('ion-palette-dark');
       })();
