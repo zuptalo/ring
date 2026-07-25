@@ -334,7 +334,10 @@ export interface Message {
   sentAt?: number; // when the server actually accepted it (shown as the send time)
   compressQuality?: 'sd' | 'hd' | 'fhd'; // the quality to (re)compress at, drives resume
   jobAttempts?: number; // background-job (compress + seal/upload) failure count
-  failReason?: 'too-large'; // why a send failed permanently (drives a specific toast)
+  // why a send failed permanently (drives a specific toast). 'cant-convert' (spec 2050):
+  // a non-portable media (e.g. webm) couldn't be transcoded to a browser-portable form,
+  // so it was NOT sent raw (which would be unplayable on Safari/iOS).
+  failReason?: 'too-large' | 'cant-convert';
   deliveredAt?: number; // 1:1: when the peer's device confirmed delivery
   seenAt?: number; // 1:1: when the peer opened/saw it
   // Spec 1013: when THIS device sent a 'seen' receipt for this INCOMING message (epoch ms).

@@ -11,6 +11,8 @@
  * their heavy code/wasm only loads when a video is actually compressed.
  */
 
+import { isPortableVideo } from './media-portability';
+
 export interface VideoPreset {
   maxEdge: number; // longest side, px
   bitrate: number; // target video bitrate, bits/s
@@ -227,6 +229,12 @@ export async function compressVideoAdaptive(
  *  same jetsam kill the streaming transcode removed. A clean, explained failure
  *  card beats a crashed app. */
 function originalOrThrow(blob: Blob): Blob {
+  // (spec 2050) A non-portable container (e.g. webm) is unplayable on Safari/iOS as raw
+  // bytes — there is no safe "ship the original". Reaching here for a non-portable
+  // container means conversion failed, so fail honestly rather than send an unplayable tile.
+  if (!isPortableVideo(blob.type)) {
+    throw new Error('This video needs converting to send and converting failed on this device. Try a shorter clip or a different format.');
+  }
   if (blob.size > ORIGINAL_MAX_BYTES) {
     throw new Error('This video is too big to send without converting and converting failed on this device. Try a shorter or smaller clip.');
   }

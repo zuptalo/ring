@@ -179,6 +179,13 @@ function failedMessageText(msgs: Message[]): string {
   if (n > 0 && msgs.every((m) => m.failReason === 'too-large')) {
     return n === 1 ? 'A file is too large to send.' : `${n} files are too large to send.`;
   }
+  // spec 2050: a non-portable media (e.g. a webm video) that couldn't be converted to a
+  // format that plays on all devices — not sent (rather than delivered as an unplayable tile).
+  if (n > 0 && msgs.every((m) => m.failReason === 'cant-convert')) {
+    return n === 1
+      ? "A video couldn't be converted to send."
+      : `${n} files couldn't be converted to send.`;
+  }
   return n === 1 ? "A message couldn't be sent." : `${n} messages couldn't be sent.`;
 }
 // Re-run when the set of failed messages changes by COUNT or reason, so the wording
