@@ -21,7 +21,7 @@ import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryU
 import { recordStaleDrain, recordMissedWakeDrain, STALE_MSG_MS } from '@/services/push';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { lastMessageTick } from '@/services/message-status';
-import { needsMandatoryTranscode, isPortableVideo } from '@/services/media-portability';
+import { needsMandatoryTranscode, isPortableVideo, isHeic } from '@/services/media-portability';
 import { withInboundLock } from '@/services/cross-lock';
 import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
@@ -2446,15 +2446,20 @@ async function runMediaJob(messageId: string): Promise<void> {
       const mustTranscodeVideo =
         message.kind === 'video' &&
         needsMandatoryTranscode(media.blob.type, message.compressQuality ?? 'original');
+      // (spec 2050) HEIC/HEIF must be decoded to JPEG before send (viewable everywhere),
+      // even at 'original' quality; if it can't be decoded we fail honestly, never ship raw.
+      const mustConvertImage = message.kind === 'image' && isHeic(media.blob.type);
       // --- encode phase --- (for portable formats compression NEVER fails the job → send
-      // the original; a mandatory transcode is the exception — see the catch below)
+      // the original; a mandatory transcode/convert is the exception — see the catch below)
       if (
         (message.compressQuality && (message.kind === 'image' || message.kind === 'video')) ||
-        mustTranscodeVideo
+        mustTranscodeVideo ||
+        mustConvertImage
       ) {
         try {
           if (message.kind === 'image') {
-            // (image only enters this block when compressQuality is set; ?? satisfies the type)
+            // ?? 'original' satisfies the type; for HEIC at 'original' compressImage still
+            // decodes to JPEG (the decode runs before the quality passthrough).
             uploadBlob = await compressImage(media.blob, message.compressQuality ?? 'original');
           } else {
             // Force a real transcode for a mandatory case even when quality is 'original'
@@ -2463,9 +2468,10 @@ async function runMediaJob(messageId: string): Promise<void> {
             uploadBlob = await compressVideo(media.blob, q, (p) => setCompressProgress(messageId, p));
           }
         } catch (e) {
-          if (mustTranscodeVideo) {
-            // A non-portable container we couldn't convert must NOT be sent raw.
-            console.warn('[media-job] mandatory video transcode failed; failing honestly', e);
+          if (mustTranscodeVideo || mustConvertImage) {
+            // A non-portable media we couldn't convert must NOT be sent raw (unplayable/
+            // unviewable on other browsers).
+            console.warn('[media-job] mandatory media conversion failed; failing honestly', e);
             await failMediaPermanently(messageId, 'cant-convert');
             return;
           }
