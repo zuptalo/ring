@@ -6,6 +6,7 @@
  * send is never blocked by compression.
  */
 import { compressVideoAdaptive } from './media-video';
+import { isHeic } from './media-portability';
 
 export type Quality = 'sd' | 'hd' | 'fhd' | 'original';
 export type Tier = Exclude<Quality, 'original'>;
@@ -81,12 +82,21 @@ export function isPreservedImageMime(mime: string): boolean {
  *  blob for 'original', for animated/efficient formats (GIF/WebP), if the re-encode
  *  would be larger, or on any error. */
 export async function compressImage(blob: Blob, quality: Quality): Promise<Blob> {
-  if (quality === 'original') return blob;
-  if (isPreservedImageMime(blob.type)) return blob; // keep GIF/WebP animation + alpha
+  // (spec 2050) HEIC/HEIF → JPEG first, on ALL senders, so the photo is viewable on every
+  // browser (raw HEIC renders only on Safari). Done BEFORE the quality/preserve checks and
+  // OUTSIDE the fallback try below: a genuine decode failure must propagate so the caller
+  // can fail the send honestly rather than upload raw HEIC.
+  let src = blob;
+  if (isHeic(blob.type)) {
+    const { decodeHeicToJpeg } = await import('./heic-decode');
+    src = await decodeHeicToJpeg(blob);
+  }
+  if (quality === 'original') return src;
+  if (isPreservedImageMime(src.type)) return src; // keep GIF/WebP animation + alpha
   const preset = IMAGE_PRESETS[quality];
-  if (!preset) return blob;
+  if (!preset) return src;
   try {
-    const bitmap = await createImageBitmap(blob);
+    const bitmap = await createImageBitmap(src);
     const longest = Math.max(bitmap.width, bitmap.height);
     const scale = Math.min(1, preset.maxEdge / longest);
     const w = Math.max(1, Math.round(bitmap.width * scale));
@@ -95,16 +105,37 @@ export async function compressImage(blob: Blob, quality: Quality): Promise<Blob>
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return blob;
+    if (!ctx) return src;
     ctx.drawImage(bitmap, 0, 0, w, h);
     bitmap.close?.();
-    const out = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/jpeg', preset.quality),
-    );
+    // (spec 2050) Preserve transparency: a PNG with an alpha channel is exported as PNG
+    // (alpha-capable), never flattened to an opaque JPEG. Opaque images (incl. opaque PNGs)
+    // keep the smaller JPEG downscale.
+    const keepAlpha = /png/i.test(src.type) && canvasHasAlpha(ctx, w, h);
+    const out = keepAlpha
+      ? await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+      : await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', preset.quality));
     // Keep whichever is smaller; re-encoding an already-tiny/optimized image can grow it.
-    return out && out.size < blob.size ? out : blob;
+    // For an alpha PNG that grew, we still return the ORIGINAL (which keeps its transparency).
+    return out && out.size < src.size ? out : src;
   } catch {
-    return blob;
+    return src;
+  }
+}
+
+/** (spec 2050) Whether the drawn canvas has any non-opaque pixel. Early-exits on the first
+ *  transparent pixel, so a transparent logo/sticker is detected fast; a fully-opaque image
+ *  scans through (bounded, one-time per send). */
+function canvasHasAlpha(ctx: CanvasRenderingContext2D, w: number, h: number): boolean {
+  try {
+    const data = ctx.getImageData(0, 0, w, h).data;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < 255) return true;
+    }
+    return false;
+  } catch {
+    // getImageData can throw on a tainted canvas; assume no alpha (fall back to JPEG).
+    return false;
   }
 }
 

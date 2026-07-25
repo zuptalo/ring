@@ -216,6 +216,12 @@ export async function isAnimatedImage(mime: string, blob: Blob): Promise<boolean
 }
 
 async function generateImageThumbUnlimited(blob: Blob, maxEdge: number): Promise<Blob | undefined> {
+  // (spec 2050) SVG: createImageBitmap on an SVG blob is unreliable across browsers, so
+  // SVGs produced no thumbnail. Rasterize via an <img> (which renders SVG everywhere)
+  // onto a canvas instead. The original SVG is still sent + opens full in the viewer.
+  if (/svg/i.test(blob.type)) {
+    return rasterizeSvgThumb(blob, maxEdge);
+  }
   try {
     const bmp = await createImageBitmap(blob);
     const big = Math.max(bmp.width, bmp.height);
@@ -239,6 +245,35 @@ async function generateImageThumbUnlimited(blob: Blob, maxEdge: number): Promise
     return await jpegBlobUnderBudget(c);
   } catch {
     return undefined;
+  }
+}
+
+/** (spec 2050) Rasterize an SVG blob to a thumbnail via an <img> element (reliable SVG
+ *  rendering) → canvas. SVGs without intrinsic dimensions default to a square canvas. */
+async function rasterizeSvgThumb(blob: Blob, maxEdge: number): Promise<Blob | undefined> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('svg load failed'));
+      img.src = url;
+    });
+    const iw = img.naturalWidth || img.width || maxEdge;
+    const ih = img.naturalHeight || img.height || maxEdge;
+    const big = Math.max(iw, ih) || maxEdge;
+    const scale = Math.min(1, maxEdge / big);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(iw * scale));
+    c.height = Math.max(1, Math.round(ih * scale));
+    const cx = c.getContext('2d');
+    if (!cx) return undefined;
+    cx.drawImage(img, 0, 0, c.width, c.height);
+    return await jpegBlobUnderBudget(c);
+  } catch {
+    return undefined;
+  } finally {
+    URL.revokeObjectURL(url);
   }
 }
 

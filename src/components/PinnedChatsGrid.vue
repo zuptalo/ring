@@ -210,7 +210,7 @@ defineExpose({
   align-items: center;
   padding: 1px 3px;
   border-radius: 999px;
-  background: var(--ion-background-color, #000);
+  background: var(--ion-background-color, #fff);
   color: var(--app-text-muted);
   line-height: 0;
 }
@@ -225,7 +225,7 @@ defineExpose({
   height: 16px;
   border-radius: 50%;
   background: var(--ion-color-success, #2dd36f);
-  border: 2.5px solid var(--ion-background-color, #000);
+  border: 2.5px solid var(--ion-background-color, #fff);
   box-sizing: border-box;
 }
 /* spec 1062: group online count pill at the tile's bottom-right. */
@@ -244,7 +244,7 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid var(--ion-background-color, #000);
+  border: 2px solid var(--ion-background-color, #fff);
   box-sizing: border-box;
 }
 .pin-name {
