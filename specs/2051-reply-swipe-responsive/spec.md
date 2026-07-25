@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-25
 
-**Status**: in-review
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
@@ -40,7 +40,7 @@ A user swipes right on an incoming message to reply; the gesture engages across 
 
 ## Requirements *(mandatory)*
 
-- **FR-001**: The inert (non-reply) region of an **incoming** bubble MUST be the left 35% of that bubble's width (was 55%); the right 65% MUST engage the reply-swipe.
+- **FR-001**: The inert (non-reply) region of an **incoming** bubble MUST be the left 25% of that bubble's width (tuned on-device 55% → 35% → 25%); the right 75% MUST engage the reply-swipe. 0.25 is the practical floor for the fraction approach.
 - **FR-002**: Outgoing bubbles MUST remain fully swipeable (unchanged).
 - **FR-003**: A right-swipe that begins in the reserved left region MUST NOT arm a reply, preserving the OS back-swipe (no stray draft on back-navigation).
 - **FR-004**: The reply fire threshold, max travel, direction lock, and delete-swipe behavior are unchanged.
@@ -57,5 +57,5 @@ None. This is a client-only touch-gesture threshold change; nothing crosses the 
 
 ## Assumptions
 
-- 0.35 is a first, low-risk step chosen for on-device tuning; the exact safe value depends on iOS's back-swipe lane width, which can only be confirmed on a real iPhone.
-- The screen-edge-lane alternative remains available as a follow-up if 0.35 proves too aggressive on narrow left-edge bubbles.
+- On-device tuning: 0.55 → 0.35 (1.0.24, confirmed no back-swipe interference) → 0.25 (1.0.25). The exact safe value depends on iOS's back-swipe lane width, confirmable only on a real iPhone.
+- 0.25 is the practical floor for the fraction approach; the screen-edge-lane alternative remains available if even more responsiveness is wanted on narrow left-edge bubbles.

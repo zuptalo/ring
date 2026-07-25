@@ -2481,12 +2481,12 @@ const SWIPE_TRIGGER = 70; // release past this fires the action
 // drop a stray draft as the page navigates away). Only the bubble's right portion
 // starts a reply. Outgoing bubbles hug the right edge, clear of the back-swipe
 // lane, so they stay fully swipeable.
-// (spec 2050 follow-up) Left fraction of an incoming bubble that ignores swipe-right, so
-// an edge back-swipe never arms a reply. Reduced 0.55 → 0.35 to make incoming bubbles more
-// responsive to reply-swipes (active zone grows from the right 45% to the right 65%) while
-// still keeping the left third — the part most likely to sit in the OS back-swipe lane —
-// inert. If a back-swipe ever leaks into a reply on a narrow left-edge bubble, nudge back up.
-const REPLY_DEAD_ZONE_FRAC = 0.35;
+// (spec 2051) Left fraction of an incoming bubble that ignores swipe-right, so an edge
+// back-swipe never arms a reply. Tuned on-device 0.55 → 0.35 → 0.25: the reply-active zone
+// is now the right 75% of an incoming bubble, keeping only the left quarter inert. 0.25 is
+// the practical floor for this fraction approach — going lower risks narrow left-edge 1:1
+// bubbles overlapping the OS back-swipe lane, at which point a screen-edge lane is the move.
+const REPLY_DEAD_ZONE_FRAC = 0.25;
 const swipeId = ref<string | null>(null); // the message currently being dragged
 const swipeDx = ref(0); // its current x offset
 const swipeReleasing = ref(false); // animate the snap-back
