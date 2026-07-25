@@ -7,7 +7,7 @@
  * Today it runs against MockTransport (see services/transport.ts); the same
  * code drives the real WebSocket transport later. The cursor API is preserved.
  */
-import { getSetting, setSetting, getMessage, receiveIncoming, markSendFailed } from '@/db/queries';
+import { getSetting, setSetting, getMessage, receiveIncoming, markSendFailed, refreshChatTickFor } from '@/db/queries';
 import { get, bulkPut, remove, type StoreName } from '@/db/idb';
 import { listOutbox, removeOutbox, removeOutboxByFrameId, markOutboxSent } from '@/db/outbox';
 import { recordTombstone, isTombstoned } from '@/db/tombstones';
@@ -189,7 +189,12 @@ async function applyReceipt(
   // mutateMessage serializes the read-modify-write so a concurrent cleanup or local
   // write can't clobber it. The reducer no-ops (same reference) on a duplicate/late
   // frame, so no spurious write/notification happens.
-  await mutateMessage(messageId, (m) => applyStatusReceipt(m, status as ReceiptStatus, at, recipient));
+  const updated = await mutateMessage(messageId, (m) =>
+    applyStatusReceipt(m, status as ReceiptStatus, at, recipient),
+  );
+  // spec 1062: if that receipt advanced the chat's NEWEST outgoing message, climb the
+  // denormalized list/tile tick so it updates live (no-op when it wasn't the newest).
+  if (updated) await refreshChatTickFor(updated);
 }
 
 /** A recipient confirmed they hold our media's bytes. Once EVERY recipient has, delete the
