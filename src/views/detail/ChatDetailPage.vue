@@ -5439,7 +5439,10 @@ function cancelRecording() {
   height: 11px;
   border-radius: 50%;
   background: var(--ion-color-success, #2dd36f);
-  border: 2px solid var(--ion-background-color, #000);
+  /* #fff fallback (not #000): Ring only defines --ion-background-color via the dark
+     palette, so in light theme the ring must fall back to the light page colour —
+     matching the list-row .presence-dot. (spec 1062 light-theme fix) */
+  border: 2px solid var(--ion-background-color, #fff);
   box-sizing: border-box;
 }
 .avatar-spacer {
