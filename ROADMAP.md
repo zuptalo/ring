@@ -136,3 +136,4 @@ Specs are grouped by category band; status moves
 | [2048](specs/2048-notifications-not-appear/spec.md) | Show-first notifications (work when locked, keep the subscription alive) | 🟡 in-progress |
 | [2049](specs/2049-dark-default-flash/spec.md) | Default to dark theme and fix the startup theme flash | 🟢 shipped |
 | [2050](specs/2050-media-interop/spec.md) | Make pasted and sent media interoperable across browsers | 🔵 in-review |
+| [2051](specs/2051-reply-swipe-responsive/spec.md) | Make incoming messages more responsive to swipe-to-reply | 🔵 in-review |
