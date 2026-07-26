@@ -21,7 +21,7 @@ import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryU
 import { recordStaleDrain, recordMissedWakeDrain, STALE_MSG_MS } from '@/services/push';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { lastMessageTick } from '@/services/message-status';
-import { needsMandatoryTranscode, isPortableVideo, isHeic } from '@/services/media-portability';
+import { needsMandatoryTranscode, isHeic } from '@/services/media-portability';
 import { withInboundLock } from '@/services/cross-lock';
 import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
@@ -2443,17 +2443,21 @@ async function runMediaJob(messageId: string): Promise<void> {
       // before send, regardless of quality — even at 'original' (where the encode phase
       // is otherwise skipped). Raw webm is unplayable on Safari/iOS, so if it can't be
       // converted we fail honestly rather than ship an unplayable tile.
-      const mustTranscodeVideo =
+      // (spec 2050 revised) Best-effort transcode for a non-portable video container (webm):
+      // attempt it even at 'original' quality so Safari/iOS recipients get a playable MP4 when
+      // it works — but if the transcode can't run, send the RAW file rather than blocking (a
+      // webm still plays on Chrome/Firefox/Android; a blocked send helps no one). The video
+      // fallback is handled inside compressVideoAdaptive, which returns the original on failure.
+      const attemptVideoTranscode =
         message.kind === 'video' &&
         needsMandatoryTranscode(media.blob.type, message.compressQuality ?? 'original');
-      // (spec 2050) HEIC/HEIF must be decoded to JPEG before send (viewable everywhere),
-      // even at 'original' quality; if it can't be decoded we fail honestly, never ship raw.
+      // HEIC/HEIF: decode to JPEG before send (raw HEIC is unviewable on most browsers), even
+      // at 'original'. This one DOES fail honestly if it truly can't be decoded.
       const mustConvertImage = message.kind === 'image' && isHeic(media.blob.type);
-      // --- encode phase --- (for portable formats compression NEVER fails the job → send
-      // the original; a mandatory transcode/convert is the exception — see the catch below)
+      // --- encode phase ---
       if (
         (message.compressQuality && (message.kind === 'image' || message.kind === 'video')) ||
-        mustTranscodeVideo ||
+        attemptVideoTranscode ||
         mustConvertImage
       ) {
         try {
@@ -2462,28 +2466,21 @@ async function runMediaJob(messageId: string): Promise<void> {
             // decodes to JPEG (the decode runs before the quality passthrough).
             uploadBlob = await compressImage(media.blob, message.compressQuality ?? 'original');
           } else {
-            // Force a real transcode for a mandatory case even when quality is 'original'
-            // (compressVideo no-ops on 'original'); 'fhd' preserves the most quality.
+            // Attempt a real transcode even at 'original' (compressVideo no-ops on 'original');
+            // 'fhd' preserves the most quality. On failure it returns the original best-effort.
             const q = message.compressQuality ?? 'fhd';
             uploadBlob = await compressVideo(media.blob, q, (p) => setCompressProgress(messageId, p));
           }
         } catch (e) {
-          if (mustTranscodeVideo || mustConvertImage) {
-            // A non-portable media we couldn't convert must NOT be sent raw (unplayable/
-            // unviewable on other browsers).
-            console.warn('[media-job] mandatory media conversion failed; failing honestly', e);
+          if (mustConvertImage) {
+            // A HEIC we couldn't decode would be unviewable for most recipients — fail honestly.
+            console.warn('[media-job] HEIC decode failed; failing honestly', e);
             await failMediaPermanently(messageId, 'cant-convert');
             return;
           }
+          // Video/other: best-effort — send the original rather than blocking the send.
           console.warn('[media-job] compression failed; sending original', e);
           uploadBlob = media.blob;
-        }
-        // Defence in depth: if a mandatory transcode somehow returned the original
-        // non-portable bytes (no engine succeeded but didn't throw), fail rather than ship.
-        if (mustTranscodeVideo && !isPortableVideo(uploadBlob.type)) {
-          console.warn('[media-job] mandatory transcode did not yield a portable video; failing honestly');
-          await failMediaPermanently(messageId, 'cant-convert');
-          return;
         }
       }
       setCompressProgress(messageId, 1); // encoding done

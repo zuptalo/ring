@@ -206,7 +206,10 @@ export async function compressVideoAdaptive(
   // 2. ffmpeg.wasm universal path.
   try {
     const { ffmpegTranscode } = await import('./media-video-ffmpeg');
-    const out = await ffmpegTranscode(blob, preset, onProgress);
+    // Non-portable source (webm): keep the mp4 for interop even if not smaller.
+    const out = await ffmpegTranscode(blob, preset, onProgress, {
+      keepEvenIfLarger: !isPortableVideo(blob.type),
+    });
     console.info('[video] ffmpeg output', { bytes: out.size, vs: blob.size });
     if (out !== blob && !(await transcodeOutputPlayable(out))) {
       console.warn('[video] ffmpeg output unreadable; sending original');
@@ -229,14 +232,12 @@ export async function compressVideoAdaptive(
  *  same jetsam kill the streaming transcode removed. A clean, explained failure
  *  card beats a crashed app. */
 function originalOrThrow(blob: Blob): Blob {
-  // (spec 2050) A non-portable container (e.g. webm) is unplayable on Safari/iOS as raw
-  // bytes — there is no safe "ship the original". Reaching here for a non-portable
-  // container means conversion failed, so fail honestly rather than send an unplayable tile.
-  if (!isPortableVideo(blob.type)) {
-    throw new Error('This video needs converting to send and converting failed on this device. Try a shorter clip or a different format.');
-  }
+  // (spec 2050 revised) Best-effort: if conversion couldn't run, still SEND the original
+  // rather than blocking. A raw webm plays on Chrome/Firefox/Android (only Safari/iOS can't
+  // decode VP8/VP9) — not being able to send at all is worse. We only refuse an original
+  // that is too large to seal without risking an OOM crash (unchanged memory-safety guard).
   if (blob.size > ORIGINAL_MAX_BYTES) {
-    throw new Error('This video is too big to send without converting and converting failed on this device. Try a shorter or smaller clip.');
+    throw new Error('This video is too big to send. Try a shorter or smaller clip.');
   }
   return blob;
 }
