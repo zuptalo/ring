@@ -2505,16 +2505,34 @@ function swipeStyle(id: string): Record<string, string> | undefined {
   };
 }
 
-// (spec 1063) Per-message CSS vars for full-size, aspect-preserving media: --ar (width/height)
-// drives the frame's true ratio and the height cap (calc(60vh * --ar)); --nw (native width px)
-// caps the width so small media isn't upscaled. Undefined for non-media or dimension-less legacy
-// messages, where the CSS falls back to a square frame.
+// (spec 1063) Reactive viewport size so media sizing recomputes on resize/rotate.
+const vpW = ref(typeof window !== 'undefined' ? window.innerWidth : 393);
+const vpH = ref(typeof window !== 'undefined' ? window.innerHeight : 852);
+function onViewportResize(): void {
+  vpW.value = window.innerWidth;
+  vpH.value = window.innerHeight;
+}
+onMounted(() => window.addEventListener('resize', onViewportResize));
+onUnmounted(() => window.removeEventListener('resize', onViewportResize));
+
+// (spec 1063) Per-message CSS vars for full-size, aspect-preserving media.
+//  --ar     = width/height → the frame's true aspect ratio (frame is width:100%, height from --ar).
+//  --media-w = the DEFINITE px bubble/media width: width-driven up to min(75vw, 330px), switched to
+//             height-driven (capped 60vh → maxH*ar) for tall clips. A plain px value (not a
+//             vw/min() expression) so it caps the bubble's intrinsic width and a long caption wraps
+//             at the photo edge (spec 2027). The frame always fills this width — small media is
+//             shown at full size (a tiny/degenerate image is not rendered as a 1px, untappable
+//             sliver). Undefined for non-media / dimension-less legacy messages → CSS 246px fallback.
 function mediaVars(m: Message): Record<string, string> | undefined {
   if (!mediaBubble(m)) return undefined;
   const w = m.mediaWidth ?? 0;
   const h = m.mediaHeight ?? 0;
   if (w <= 0 || h <= 0) return undefined;
-  return { '--ar': String(w / h), '--nw': String(w) };
+  const ar = w / h;
+  const maxW = Math.min(vpW.value * 0.75, 330);
+  const maxH = vpH.value * 0.6;
+  const width = Math.max(1, Math.round(Math.min(maxW, maxH * ar)));
+  return { '--ar': String(ar), '--media-w': `${width}px` };
 }
 function onSwipeStart(e: TouchEvent, m: Message): void {
   if (m.deleted || selecting.value) return;
@@ -5400,16 +5418,16 @@ function cancelRecording() {
    floating quick-forward button ~100px off the bubble (spec 2028). The separate
    max-width keeps narrow viewports working: media and bubble shrink together. */
 .bubble-media {
-  /* spec 1063: the media (and therefore the bubble) width. Width-driven up to min(75vw, 330px),
-     but clamped by calc(60vh * --ar) so a tall clip is HEIGHT-driven (never runs off the visible
-     chat area), and by the native width so small media isn't upscaled. --ar (=w/h) and --nw
-     (native width px) are set inline per message; both fall back gracefully for legacy media.
-     Still a definite length (min() of lengths, no percentages) so a long caption can't inflate
-     the bubble's intrinsic width — the reason the old fixed 246px existed (spec 2028). */
-  --media-w: min(75vw, 330px, calc(60vh * var(--ar, 1)), calc(var(--nw, 99999) * 1px));
+  /* spec 1063: the media (and therefore the bubble) width. --media-w is a DEFINITE px value
+     computed in JS (mediaVars) from the media's real ratio + the viewport (width-driven up to
+     min(75vw,330px), height-driven & capped at 60vh for tall clips, never upscaled past native).
+     It MUST be a plain px length, not a min()/vw expression: only a definite width caps the
+     bubble's intrinsic max-content, so a long caption wraps at the photo edge instead of
+     stretching the bubble (spec 2027/2028). Falls back to 246px until dimensions are known
+     (also prevents a 0-width collapse before the media resolves). */
   padding: 3px;
   gap: 0;
-  width: var(--media-w);
+  width: var(--media-w, 246px);
   max-width: 100%;
 }
 .bubble-media .bubble-image {
