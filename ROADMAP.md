@@ -135,5 +135,6 @@ Specs are grouped by category band; status moves
 | [2047](specs/2047-modern-iphones-and/spec.md) | Modern iPhones/iPads actually display push notifications | 🟡 in-progress |
 | [2048](specs/2048-notifications-not-appear/spec.md) | Show-first notifications (work when locked, keep the subscription alive) | 🟡 in-progress |
 | [2049](specs/2049-dark-default-flash/spec.md) | Default to dark theme and fix the startup theme flash | 🟢 shipped |
-| [2050](specs/2050-media-interop/spec.md) | Make pasted and sent media interoperable across browsers | 🔵 in-review |
+| [2050](specs/2050-media-interop/spec.md) | Make pasted and sent media interoperable across browsers | 🟢 shipped |
 | [2051](specs/2051-reply-swipe-responsive/spec.md) | Make incoming messages more responsive to swipe-to-reply | 🟢 shipped |
+| [2052](specs/2052-webm-best-effort/spec.md) | Send webm best-effort instead of hard-failing when it can't transcode | 🔵 in-review |
