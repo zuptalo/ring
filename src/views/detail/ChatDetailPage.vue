@@ -211,7 +211,7 @@
               class="bubble"
               :class="{ out: m.outgoing, 'bubble-plain': m.videoNote && !m.deleted, 'bubble-media': mediaBubble(m), 'bubble-unseen': !m.outgoing && !m.deleted && m.seenReportedAt == null }"
               :data-mid="m.id"
-              :style="swipeStyle(m.id)"
+              :style="[swipeStyle(m.id), mediaVars(m)]"
               @touchstart.passive="onSwipeStart($event, m)"
               @touchmove.passive="onSwipeMove($event)"
               @touchend.passive="onSwipeEnd()"
@@ -266,7 +266,9 @@
                   :poster-url="mediaInfo[m.mediaId]!.posterUrl"
                   alt="gif"
                 />
-                <img v-else-if="mediaInfo[m.mediaId]?.posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId]!.posterUrl" alt="photo" loading="lazy" decoding="async" />
+                <!-- spec 1063: render the FULL downloaded media (crisp on retina) once its
+                     window is resolved; the poster is the pre-download placeholder. -->
+                <img v-else-if="mediaInfo[m.mediaId]?.url || mediaInfo[m.mediaId]?.posterUrl" class="bubble-image" :src="mediaInfo[m.mediaId]?.url || mediaInfo[m.mediaId]!.posterUrl" alt="photo" loading="lazy" decoding="async" />
                 <ion-skeleton-text v-else :animated="true" class="media-skel" />
                 <!-- Send in flight: the cloud waterline in the thumbnail centre (see CloudFill). -->
                 <span v-if="m.status === 'compressing'" class="upload-cloud"><cloud-fill :progress="uploadFrac(m)" /></span>
@@ -2501,6 +2503,18 @@ function swipeStyle(id: string): Record<string, string> | undefined {
     transform: `translateX(${swipeDx.value}px)`,
     transition: swipeReleasing.value ? 'transform 0.2s ease' : 'none',
   };
+}
+
+// (spec 1063) Per-message CSS vars for full-size, aspect-preserving media: --ar (width/height)
+// drives the frame's true ratio and the height cap (calc(60vh * --ar)); --nw (native width px)
+// caps the width so small media isn't upscaled. Undefined for non-media or dimension-less legacy
+// messages, where the CSS falls back to a square frame.
+function mediaVars(m: Message): Record<string, string> | undefined {
+  if (!mediaBubble(m)) return undefined;
+  const w = m.mediaWidth ?? 0;
+  const h = m.mediaHeight ?? 0;
+  if (w <= 0 || h <= 0) return undefined;
+  return { '--ar': String(w / h), '--nw': String(w) };
 }
 function onSwipeStart(e: TouchEvent, m: Message): void {
   if (m.deleted || selecting.value) return;
@@ -5386,9 +5400,16 @@ function cancelRecording() {
    floating quick-forward button ~100px off the bubble (spec 2028). The separate
    max-width keeps narrow viewports working: media and bubble shrink together. */
 .bubble-media {
+  /* spec 1063: the media (and therefore the bubble) width. Width-driven up to min(75vw, 330px),
+     but clamped by calc(60vh * --ar) so a tall clip is HEIGHT-driven (never runs off the visible
+     chat area), and by the native width so small media isn't upscaled. --ar (=w/h) and --nw
+     (native width px) are set inline per message; both fall back gracefully for legacy media.
+     Still a definite length (min() of lengths, no percentages) so a long caption can't inflate
+     the bubble's intrinsic width — the reason the old fixed 246px existed (spec 2028). */
+  --media-w: min(75vw, 330px, calc(60vh * var(--ar, 1)), calc(var(--nw, 99999) * 1px));
   padding: 3px;
   gap: 0;
-  width: 246px;
+  width: var(--media-w);
   max-width: 100%;
 }
 .bubble-media .bubble-image {
@@ -5622,9 +5643,12 @@ function cancelRecording() {
 .media-wrap,
 .video-poster {
   position: relative;
-  width: 240px;
+  /* spec 1063: full-size, aspect-preserving. Fill the bubble's media width (--media-w, set
+     on .bubble-media from the media's real ratio) and take the height from the true ratio
+     (--ar = width/height). No more fixed 240px square / object-fit crop. */
+  width: 100%;
   max-width: 100%;
-  aspect-ratio: 1;
+  aspect-ratio: var(--ar, 1);
   border-radius: 12px;
   overflow: hidden;
   background: rgba(127, 127, 127, 0.15);
