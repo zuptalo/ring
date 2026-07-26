@@ -71,6 +71,8 @@ import { useSync, nudgeReconnect } from '@/composables/useSync';
 import { useNotificationNudge } from '@/composables/useNotificationNudge';
 import { useAppUpdate, checkForUpdate } from '@/composables/useAppUpdate';
 import { countPendingRequests, listChats, listFailedMessages, retryAllFailed, syncPosts } from '@/db/queries';
+import { isHiddenId } from '@/services/hidden-state';
+import { pickFailedJumpTarget } from '@/utils/failed-send-target';
 import { takePendingNav } from '@/services/pending-nav';
 import { isRelevantNav } from '@/services/nav-intent';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
@@ -196,12 +198,20 @@ watch(
   () => {
     const msgs = failedSends.value;
     if (msgs.length > 0) {
+      // Jump target excludes hidden chats (see pickFailedJumpTarget): a hidden-only failure set
+      // yields no target → the card carries no onOpen and stays informative-only.
+      const target = pickFailedJumpTarget(msgs, isHiddenId);
       showActionBanner({
         url: FAILED_SENDS_URL,
         tone: 'danger',
         icon: alertCircleOutline,
         name: failedMessageText(msgs),
         body: '',
+        // Tap the card to jump to the failing media (auto-scrolls via ?jump). Omitted for a
+        // hidden-chat-only failure set → the card stays informative and doesn't navigate.
+        onOpen: target
+          ? () => void router.push(`/chat/${target.chatId}?jump=${target.messageId}`)
+          : undefined,
         // Sticky (no duration) but dismissible: Retry re-sends, Dismiss closes it.
         actions: [
           { text: 'Retry', handler: () => void retryAllFailed() },

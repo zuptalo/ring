@@ -38,6 +38,7 @@ import { wallActivityAlert } from '@/services/wall-activity-policy';
 import { compressImage, compressVideo, achievedQuality } from '@/services/media-encode';
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
+import { createLimiter, createByteBudget, raceTimeout } from '@/utils/concurrency';
 import { THUMB_TIERS } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/link-preview';
@@ -2440,15 +2441,63 @@ async function sealMediaAndEnqueue(
 /* ---- background media jobs (compress → upload), with retry + resume ---- */
 const MAX_JOB_ATTEMPTS = 3;
 const jobsInFlight = new Set<string>();
-// Run media jobs one at a time. Several large videos encoding/encrypting/
-// uploading at once contends for memory + bandwidth on a phone (and would clash
-// on the single ffmpeg.wasm instance); sequential is far more reliable.
-let jobChain: Promise<void> = Promise.resolve();
 
-/** Queue a media job; jobs run sequentially. */
+// Media jobs run on two independent lanes so a slow video can't block an image (or vice
+// versa). The split is by resource constraint, not by kind alone:
+//   • HEAVY (concurrency 1): jobs that run a VIDEO TRANSCODE. ffmpeg.wasm is a single shared
+//     instance with fixed virtual-FS filenames + one progress handler (media-video-ffmpeg.ts),
+//     so two transcodes at once corrupt each other — this lane keeps them strictly serial.
+//   • LIGHT (concurrency 3): images (incl. pass-through GIF/animated WebP) and videos that ship
+//     as-is (no ffmpeg). Cheap canvas/thumbnail work; safe to run a few at once.
+// Before this split, ONE serial chain meant a multi-minute transcode stalled every later send;
+// now only other transcodes wait behind it, and a batch of images flows a few at a time.
+const heavyLane = createLimiter(1);
+const lightLane = createLimiter(3);
+
+// Peak-memory guard shared across BOTH lanes. Sealing holds plaintext + ciphertext in the heap
+// together (encryptBlob), so several large uploads at once is the jetsam (OOM) risk spec 2041
+// fought. The seal+upload phase of every job acquires from this budget: small items parallelize,
+// big ones serialize behind it. ~96 MiB leaves headroom under the 128 MiB original-video cap.
+const UPLOAD_MEMORY_BUDGET = 96 << 20;
+const uploadBudget = createByteBudget(UPLOAD_MEMORY_BUDGET);
+
+// The encode/transcode phase of a single job is time-bounded so a hung ffmpeg/decode can't hold
+// its lane forever — on timeout the job falls back to best-effort (send the original) rather than
+// wedging. Scaled with source size so a legitimately long transcode of a big clip isn't cut off;
+// the upload phase keeps its own separate size-scaled timeout in uploadBlob().
+function jobEncodeTimeoutMs(bytes: number): number {
+  const mib = Math.ceil(bytes / (1024 * 1024));
+  return Math.min(600_000, Math.max(30_000, mib * 6_000));
+}
+
+/** Whether a job will run a VIDEO TRANSCODE (→ heavy lane) vs. cheap/as-is work (→ light lane).
+ *  A shrink tier re-encodes; a non-portable container (webm) must transcode to MP4 even at
+ *  'original'. A portable clip at 'original', and every image, ship without ffmpeg → light. */
+function jobIsHeavy(message: Message, mime: string): boolean {
+  if (message.kind !== 'video') return false;
+  return !!message.compressQuality || needsMandatoryTranscode(mime, message.compressQuality ?? 'original');
+}
+
+/** Queue a media job on the lane its cost warrants (heavy = video transcode, light = the rest).
+ *  Fire-and-forget by callers; the returned promise settles when the job finishes. */
 export function processMediaJob(messageId: string): Promise<void> {
-  jobChain = jobChain.then(() => runMediaJob(messageId)).catch(() => {});
-  return jobChain;
+  return scheduleMediaJob(messageId).catch(() => {});
+}
+
+async function scheduleMediaJob(messageId: string): Promise<void> {
+  // Classify from the stored message + source mime BEFORE entering a lane, so the choice never
+  // waits behind the very lane it's picking. Best-effort: default to the light lane.
+  let heavy = false;
+  try {
+    const m = await getMessage(messageId);
+    if (m?.mediaId) {
+      const media = await get<Media>('media', m.mediaId);
+      if (media?.blob) heavy = jobIsHeavy(m, media.blob.type);
+    }
+  } catch {
+    /* classification is best-effort */
+  }
+  await (heavy ? heavyLane : lightLane)(() => runMediaJob(messageId));
 }
 
 /** Compress (with progress) then upload a 'compressing' message; on success it
@@ -2485,16 +2534,29 @@ async function runMediaJob(messageId: string): Promise<void> {
         attemptVideoTranscode ||
         mustConvertImage
       ) {
+        // Time-bound the encode/transcode so a hung ffmpeg.wasm or image decode can't hold this
+        // lane forever (the head-of-line freeze). On timeout raceTimeout rejects into the catch
+        // below, which — for everything but HEIC — best-efforts the original so the send still
+        // completes and the lane frees.
+        const encodeBudgetMs = jobEncodeTimeoutMs(media.blob.size);
         try {
           if (message.kind === 'image') {
             // ?? 'original' satisfies the type; for HEIC at 'original' compressImage still
             // decodes to JPEG (the decode runs before the quality passthrough).
-            uploadBlob = await compressImage(media.blob, message.compressQuality ?? 'original');
+            uploadBlob = await raceTimeout(
+              compressImage(media.blob, message.compressQuality ?? 'original'),
+              encodeBudgetMs,
+              'image encode timed out',
+            );
           } else {
             // Attempt a real transcode even at 'original' (compressVideo no-ops on 'original');
             // 'fhd' preserves the most quality. On failure it returns the original best-effort.
             const q = message.compressQuality ?? 'fhd';
-            uploadBlob = await compressVideo(media.blob, q, (p) => setCompressProgress(messageId, p));
+            uploadBlob = await raceTimeout(
+              compressVideo(media.blob, q, (p) => setCompressProgress(messageId, p)),
+              encodeBudgetMs,
+              'video transcode timed out',
+            );
           }
         } catch (e) {
           if (mustConvertImage) {
@@ -2504,7 +2566,7 @@ async function runMediaJob(messageId: string): Promise<void> {
             return;
           }
           // Video/other: best-effort — send the original rather than blocking the send.
-          console.warn('[media-job] compression failed; sending original', e);
+          console.warn('[media-job] compression failed/timed out; sending original', e);
           uploadBlob = media.blob;
         }
       }
@@ -2525,45 +2587,52 @@ async function runMediaJob(messageId: string): Promise<void> {
         achieved: message.mediaQuality,
       });
       // Tag the bubble with resolution / length / size (persisted FIRST so the badge
-      // shows even if the thumbnail step is slow), then best-effort thumbnail.
-      if (message.kind === 'video') {
-        const meta = await readVideoMeta(uploadBlob);
-        message.mediaWidth = meta.width;
-        message.mediaHeight = meta.height;
-        message.durationSec = meta.durationSec ?? message.durationSec;
-        message.mediaSize = uploadBlob.size;
-        await put('messages', message);
-        // Embed a first-frame poster for ALL videos, including round video notes, so
-        // they show a thumbnail before/without playback (otherwise iOS shows nothing).
-        // Skip if a poster is already embedded (e.g. the live frame the video-note
-        // recorder captured) — don't overwrite a good frame with the often-black
-        // first frame of the clip (camera warm-up).
-        if (!message.posterData) {
-          const poster = await generateVideoPoster(uploadBlob);
-          if (poster) {
-            message.posterData = poster;
-            await put('messages', message);
+      // shows even if the thumbnail step is slow), then best-effort thumbnail. This whole
+      // block is STRICTLY NON-FATAL: metadata + poster are nice-to-haves (the recipient still
+      // downloads and renders the full media), so a failure here must never abort or retry the
+      // send — it just ships without the poster. Every decode inside is already time-bounded.
+      try {
+        if (message.kind === 'video') {
+          const meta = await readVideoMeta(uploadBlob);
+          message.mediaWidth = meta.width;
+          message.mediaHeight = meta.height;
+          message.durationSec = meta.durationSec ?? message.durationSec;
+          message.mediaSize = uploadBlob.size;
+          await put('messages', message);
+          // Embed a first-frame poster for ALL videos, including round video notes, so
+          // they show a thumbnail before/without playback (otherwise iOS shows nothing).
+          // Skip if a poster is already embedded (e.g. the live frame the video-note
+          // recorder captured) — don't overwrite a good frame with the often-black
+          // first frame of the clip (camera warm-up).
+          if (!message.posterData) {
+            const poster = await generateVideoPoster(uploadBlob);
+            if (poster) {
+              message.posterData = poster;
+              await put('messages', message);
+            }
+          }
+        } else if (message.kind === 'image') {
+          const meta = await readImageMeta(uploadBlob);
+          message.mediaWidth = meta.width;
+          message.mediaHeight = meta.height;
+          message.mediaSize = uploadBlob.size;
+          await put('messages', message);
+          // Spec 1014: generate the bubble tier — it rides MediaRef.poster (so the recipient previews
+          // before downloading the full image) and seeds the local tiers (posterBlob + derived
+          // grid/strip). An image already within the bubble size IS its own bubble (small upload).
+          if (!message.posterData && message.mediaId) {
+            const big = Math.max(meta.width ?? 0, meta.height ?? 0);
+            let bubble = await makeImageThumb(uploadBlob, THUMB_TIERS.bubble);
+            if (!bubble && big > 0 && big <= THUMB_TIERS.bubble) bubble = uploadBlob;
+            if (bubble) {
+              message.posterData = await blobToDataUrl(bubble);
+              await put('messages', message);
+              await applyThumbTiers(message.mediaId, bubble);
+            }
           }
         }
-      } else if (message.kind === 'image') {
-        const meta = await readImageMeta(uploadBlob);
-        message.mediaWidth = meta.width;
-        message.mediaHeight = meta.height;
-        message.mediaSize = uploadBlob.size;
-        await put('messages', message);
-        // Spec 1014: generate the bubble tier — it rides MediaRef.poster (so the recipient previews
-        // before downloading the full image) and seeds the local tiers (posterBlob + derived
-        // grid/strip). An image already within the bubble size IS its own bubble (small upload).
-        if (!message.posterData && message.mediaId) {
-          const big = Math.max(meta.width ?? 0, meta.height ?? 0);
-          let bubble = await makeImageThumb(uploadBlob, THUMB_TIERS.bubble);
-          if (!bubble && big > 0 && big <= THUMB_TIERS.bubble) bubble = uploadBlob;
-          if (bubble) {
-            message.posterData = await blobToDataUrl(bubble);
-            await put('messages', message);
-            await applyThumbTiers(message.mediaId, bubble);
-          }
-        }
+      } catch (e) {
+        console.warn('[media-job] metadata/thumbnail step failed (non-fatal); sending without it', e);
       }
       // --- upload phase --- (only the upload/seal can fail the job → retry/failed)
       // Pre-check against the server's cap so an oversize attachment (e.g. an
@@ -2580,7 +2649,11 @@ async function runMediaJob(messageId: string): Promise<void> {
         return;
       }
       console.info('[media-job] uploading', { id: messageId, bytes: uploadBlob.size });
-      await sealMediaAndEnqueue(message, uploadBlob, (p) => setUploadProgress(messageId, p));
+      // Acquire from the shared memory budget for the seal+upload (plaintext+ciphertext in the
+      // heap together): keeps two lanes from OOM-ing the phone by encrypting big blobs at once.
+      await uploadBudget(uploadBlob.size, () =>
+        sealMediaAndEnqueue(message, uploadBlob, (p) => setUploadProgress(messageId, p)),
+      );
       console.info('[media-job] uploaded', { id: messageId });
       // Replace the sender's local copy with what was ACTUALLY sent (spec 2007): we
       // keep the original blob during the encode/upload so a retry can re-encode it,

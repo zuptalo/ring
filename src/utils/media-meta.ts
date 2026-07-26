@@ -4,8 +4,15 @@
  * that never fires its load/seek event (common on iOS for large clips) must not
  * hang the send pipeline, so each call resolves on a timeout with whatever it has.
  */
-import { createLimiter } from '@/utils/concurrency';
+import { createLimiter, withTimeout } from '@/utils/concurrency';
 import { THUMB_TIERS, THUMB_MAX_BYTES, chooseJpegQuality, dataUrlBytes } from '@/utils/thumbs';
+
+// A hard cap on any single image decode. On WebKit, `createImageBitmap` on certain animated
+// WebPs never settles (neither resolves nor rejects) — the send pipeline's thumbnail step
+// awaited it with no bound, which wedged the whole media job (and starved this limiter's slots).
+// Bounding it here — the same discipline readImageMeta/generateVideoPoster already use — means a
+// hung decode resolves to "no thumbnail" and releases its slot instead of hanging forever.
+const IMAGE_DECODE_TIMEOUT_MS = 10000;
 
 /** Encode a canvas to a JPEG data URL at the crispest quality within the poster byte budget
  *  (spec 1018). Re-encodes per quality step via toDataURL; the chosen step's URL is the last one
@@ -223,7 +230,11 @@ async function generateImageThumbUnlimited(blob: Blob, maxEdge: number): Promise
     return rasterizeSvgThumb(blob, maxEdge);
   }
   try {
-    const bmp = await createImageBitmap(blob);
+    // Bounded decode: a hang (some animated WebPs on WebKit) resolves to `undefined` (no
+    // thumbnail) rather than wedging the caller. createImageBitmap has no cancel, so the
+    // abandoned decode is simply left to finish/GC on its own; the send no longer waits on it.
+    const bmp = await withTimeout(createImageBitmap(blob), IMAGE_DECODE_TIMEOUT_MS, undefined);
+    if (!bmp) return undefined; // decode timed out
     const big = Math.max(bmp.width, bmp.height);
     if (big <= maxEdge) {
       bmp.close?.();
@@ -254,11 +265,18 @@ async function rasterizeSvgThumb(blob: Blob, maxEdge: number): Promise<Blob | un
   const url = URL.createObjectURL(blob);
   try {
     const img = new Image();
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error('svg load failed'));
-      img.src = url;
-    });
+    // Bounded like the raster decode above: a never-firing load/error (a pathological SVG)
+    // resolves to `false` so we skip the poster instead of hanging the send.
+    const loaded = await withTimeout(
+      new Promise<boolean>((resolve) => {
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = url;
+      }),
+      IMAGE_DECODE_TIMEOUT_MS,
+      false,
+    );
+    if (!loaded) return undefined;
     const iw = img.naturalWidth || img.width || maxEdge;
     const ih = img.naturalHeight || img.height || maxEdge;
     const big = Math.max(iw, ih) || maxEdge;

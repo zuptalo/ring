@@ -160,6 +160,10 @@ export interface NotifyBanner {
   durationMs?: number; // custom auto-dismiss (status toasts are shorter than message banners)
   tone?: 'danger' | 'success'; // status banners: colour variant (error = red), else the green theme
   onDismiss?: () => void; // fired when the banner is removed (mirror of toast.onDidDismiss)
+  // An 'action' card is normally non-navigating (it carries its own buttons). Supplying onOpen
+  // makes its body tappable and runs this instead of a route push — e.g. the failed-send card
+  // jumps to the failing message. Omitted → the card stays purely informative (hidden chats).
+  onOpen?: () => void;
 }
 // Live list the overlay renders. Capped + deduped by target so a chatty
 // conversation collapses to one banner instead of stacking.
@@ -235,6 +239,7 @@ export function showActionBanner(opts: {
   icon?: string;
   actions: NotifyAction[];
   onDismiss?: () => void;
+  onOpen?: () => void; // makes the card body tappable (e.g. jump to the failing message)
   url?: string; // defaults to the single update prompt; pass a distinct id for other action cards
   tone?: 'danger' | 'success'; // e.g. the failed-send retry card is 'danger'
 }): void {
@@ -249,6 +254,7 @@ export function showActionBanner(opts: {
     persistent: true,
     tone: opts.tone,
     onDismiss: opts.onDismiss,
+    onOpen: opts.onOpen,
   });
 }
 
