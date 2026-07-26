@@ -133,8 +133,10 @@ const banners = notifyBanners;
 
 // A static (non-clickable) card carries its own content rather than linking to a chat:
 // the update prompt ('action') with its buttons, and transient functional notices ('status').
+// An action card that supplies onOpen is the exception — it IS tappable (e.g. the failed-send
+// card jumps to the failing message), so it is not static.
 function isStatic(b: NotifyBanner): boolean {
-  return b.kind === 'action' || b.kind === 'status';
+  return (b.kind === 'action' && !b.onOpen) || b.kind === 'status';
 }
 
 // The glyph for a banner with no avatar: a system / action / status notice carries its own
@@ -187,7 +189,10 @@ function open(b: NotifyBanner): void {
   replyUrl.value = null;
   draft.value = '';
   dismissBanner(b.id);
-  void router.push(b.url);
+  // An action card can carry a custom open handler (e.g. the failed-send card jumps to the
+  // failing message) instead of navigating to its url (which is just a dedup key, not a route).
+  if (b.onOpen) b.onOpen();
+  else void router.push(b.url);
 }
 
 function openReply(b: NotifyBanner): void {

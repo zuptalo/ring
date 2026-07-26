@@ -139,3 +139,4 @@ Specs are grouped by category band; status moves
 | [2050](specs/2050-media-interop/spec.md) | Make pasted and sent media interoperable across browsers | 🟢 shipped |
 | [2051](specs/2051-reply-swipe-responsive/spec.md) | Make incoming messages more responsive to swipe-to-reply | 🟢 shipped |
 | [2052](specs/2052-webm-best-effort/spec.md) | Send webm best-effort instead of hard-failing when it can't transcode | 🔵 in-review |
+| [2053](specs/2053-media-send-lanes/spec.md) | Stuck media sends no longer block every later send | 🔵 in-review |

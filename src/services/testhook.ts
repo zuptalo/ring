@@ -901,6 +901,41 @@ export function installTestHook(): void {
       });
       return msgId;
     },
+    /** Spec 2053: seed a FAILED outgoing media message straight into a chat so the app's
+     *  "couldn't be sent" banner renders — used to verify the banner's tap-to-jump and its
+     *  hidden-chat carve-out, without having to actually make a send fail. */
+    seedFailedMedia: async (
+      chatId: string,
+      reason: 'too-large' | 'cant-convert' = 'cant-convert',
+    ): Promise<string> => {
+      const now = Date.now();
+      const mediaId = uid();
+      await put<Media>('media', {
+        id: mediaId,
+        kind: 'image',
+        mime: 'image/png',
+        name: 'stuck.png',
+        size: 4,
+        blob: new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/png' }),
+        updatedAt: now,
+      });
+      const msgId = uid();
+      await put<Message>('messages', {
+        id: msgId,
+        chatId,
+        senderId: 'me',
+        senderName: 'You',
+        body: '',
+        kind: 'image',
+        mediaId,
+        timestamp: now,
+        outgoing: true,
+        status: 'failed',
+        failReason: reason,
+        updatedAt: now,
+      });
+      return msgId;
+    },
     /** Send `count` real images sharing one albumId → they render as a single grouped album
      *  bubble. Used to exercise "Go to message" on a non-first album photo (spec 1014 follow-up). */
     sendAlbum: async (chatId: string, count = 3): Promise<void> => {
