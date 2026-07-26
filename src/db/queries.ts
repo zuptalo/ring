@@ -2305,6 +2305,28 @@ export async function sendMediaMessage(
 
   const compressible = (kind === 'image' || kind === 'video') && !!opts?.quality && opts.quality !== 'original';
 
+  // (spec 1063) Stamp the media's dimensions up front, read from the SOURCE blob, so the
+  // outgoing bubble renders at its true aspect ratio the instant it appears — instead of the
+  // square placeholder that snapped to the real ratio only once the background job's encode
+  // phase filled these in. The encoded result has the same aspect ratio, so the job's later
+  // refresh (runMediaJob) is a no-op for layout. Metadata-only reads (fast, decode no frames);
+  // best-effort — a failed/unknown read just falls back to the square, exactly as before.
+  // Short timeout: a normal photo/clip resolves its metadata in well under a second, so this
+  // is imperceptible; a rare undecodable file (e.g. a Safari-undecodable webm) caps the wait
+  // and then falls back to the square placeholder (which the encode job later fills), rather
+  // than stalling the optimistic echo for the readers' full 6–8s default.
+  let srcW: number | undefined;
+  let srcH: number | undefined;
+  if (kind === 'image') {
+    const meta = await readImageMeta(blob, 2500).catch(() => undefined);
+    srcW = meta?.width;
+    srcH = meta?.height;
+  } else if (kind === 'video') {
+    const meta = await readVideoMeta(blob, 2500).catch(() => undefined);
+    srcW = meta?.width;
+    srcH = meta?.height;
+  }
+
   const chat = await getChat(chatId);
   const message: Message = {
     id: uid(),
@@ -2315,6 +2337,9 @@ export async function sendMediaMessage(
     kind,
     mediaId,
     durationSec,
+    // (spec 1063) True aspect ratio from the source, so the sending bubble isn't a square.
+    mediaWidth: srcW,
+    mediaHeight: srcH,
     timestamp: ts,
     outgoing: true,
     // All media goes through the background job (compress if needed → upload),
