@@ -54,6 +54,10 @@ export async function ffmpegTranscode(
   blob: Blob,
   preset: VideoPreset,
   onProgress?: (p: number) => void,
+  // (spec 2050) For a non-portable source (e.g. webm) we want the MP4 for interop even if
+  // it isn't smaller than the source — portability beats size there. Portable re-encodes
+  // keep the "only if smaller" rule so we never grow an already-fine mp4.
+  opts?: { keepEvenIfLarger?: boolean },
 ): Promise<Blob> {
   // Refuse oversize inputs BEFORE loading the 30 MB core or decoding a frame — a 4K
   // decode here would OOM-crash the tab (see FFMPEG_MAX_INPUT_BYTES). Throwing lets the
@@ -83,7 +87,11 @@ export async function ffmpegTranscode(
       // spec 1018 FR-014: drop all source container metadata (GPS location, device id, creation
       // time) — ffmpeg copies it by default. The re-encoded clip carries only what's needed to play.
       '-map_metadata', '-1',
-      '-movflags', '+faststart',
+      // (spec 2050) NO -movflags +faststart: relocating the moov atom over the whole output at
+      // finalize is a second in-memory pass that OOM-`Aborted()` the single-threaded wasm core on
+      // larger clips (observed on a 1920p/~25s webm — full encode, then abort at mux). Chat videos
+      // are fully downloaded before playback, so progressive-start buys nothing here; dropping it
+      // makes the transcode actually complete.
       output,
     ], FFMPEG_TIMEOUT_MS);
     // (spec 2038) ffmpeg.wasm's exec RESOLVES with an exit code — it never
@@ -96,8 +104,11 @@ export async function ffmpegTranscode(
     }
     const data = (await ff.readFile(output)) as Uint8Array;
     const out = new Blob([data.buffer as ArrayBuffer], { type: 'video/mp4' });
-    // Keep whichever is smaller (re-encoding a small clip can grow it).
-    return out.size > 0 && out.size < blob.size ? out : blob;
+    if (out.size === 0) return blob;
+    // Non-portable source: keep the mp4 for interop regardless of size. Portable source:
+    // keep whichever is smaller (re-encoding a small clip can grow it).
+    if (opts?.keepEvenIfLarger) return out;
+    return out.size < blob.size ? out : blob;
   } finally {
     if (onProgress) ff.off('progress', onProg);
     await ff.deleteFile(input).catch(() => {});
