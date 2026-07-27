@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { THUMB_TIERS, thumbDims, THUMB_MAX_BYTES, JPEG_QUALITY_STEPS, dataUrlBytes, chooseJpegQuality } from './thumbs';
+import { THUMB_TIERS, thumbDims, THUMB_MAX_BYTES, JPEG_QUALITY_STEPS, dataUrlBytes, chooseJpegQuality, isOwnThumbnail } from './thumbs';
 
 // Pure tier-size math for spec 1014's three image thumbnail tiers (bubble/grid/strip).
 // The actual downscaling (canvas/createImageBitmap) lives in media-meta.ts (needs the DOM);
@@ -75,5 +75,32 @@ describe('thumbnail size budget (spec 1018)', () => {
   it('chooseJpegQuality falls back to the lowest (smallest) step when nothing fits', () => {
     const pick = chooseJpegQuality(() => 500_000, 40 * 1024); // everything over budget
     expect(pick.quality).toBe(JPEG_QUALITY_STEPS[JPEG_QUALITY_STEPS.length - 1]);
+  });
+});
+
+describe('isOwnThumbnail (spec 2055) — an image may stand in as its own bubble tier', () => {
+  const MAX = THUMB_TIERS.bubble; // 512
+
+  it('accepts an image small in BOTH dimensions and bytes', () => {
+    expect(isOwnThumbnail(400, 20 * 1024, MAX)).toBe(true);
+    expect(isOwnThumbnail(MAX, THUMB_MAX_BYTES, MAX)).toBe(true); // exactly at both limits
+  });
+
+  it('REJECTS a small-dimension but large-byte image (the animated GIF/WebP trap)', () => {
+    // The shape that wedged sends: 480x480 but multi-megabyte, because an animation's size
+    // lives in its frame COUNT. Treating this as its own thumbnail embedded the whole file in
+    // the sealed message and blew the server's 1 MiB frame limit.
+    expect(isOwnThumbnail(480, 3 * 1024 * 1024, MAX)).toBe(false);
+    expect(isOwnThumbnail(100, THUMB_MAX_BYTES + 1, MAX)).toBe(false);
+  });
+
+  it('rejects an image larger than the tier, however small its bytes', () => {
+    expect(isOwnThumbnail(MAX + 1, 1024, MAX)).toBe(false);
+    expect(isOwnThumbnail(4000, 10 * 1024, MAX)).toBe(false);
+  });
+
+  it('rejects degenerate/unknown dimensions rather than guessing', () => {
+    expect(isOwnThumbnail(0, 1024, MAX)).toBe(false);
+    expect(isOwnThumbnail(-5, 1024, MAX)).toBe(false);
   });
 });
