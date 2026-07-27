@@ -39,7 +39,7 @@ import { compressImage, compressVideo, achievedQuality } from '@/services/media-
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
 import { createLimiter, createByteBudget, raceTimeout } from '@/utils/concurrency';
-import { THUMB_TIERS } from '@/utils/thumbs';
+import { THUMB_TIERS, isOwnThumbnail } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/link-preview';
 import { inSafeMode } from '@/services/boot-guard';
@@ -2400,6 +2400,22 @@ async function sealMediaAndEnqueue(
   if (!chat || !peerUserId) throw new Error('no chat/peer for media send');
   const media = message.mediaId ? await get<Media>('media', message.mediaId) : undefined;
   const name = media?.name ?? 'attachment';
+  // (spec 2055) LAST-RESORT wire guard. The poster travels INSIDE the sealed message, and the
+  // server drops a websocket frame over 1 MiB — an oversized poster therefore never gets acked
+  // and the send sits on the clock forever, with retry re-sending the same doomed frame. The
+  // tiering above already keeps posters within THUMB_MAX_BYTES; this is the backstop that makes
+  // "a poster can never block a send" true no matter how the poster was produced. Dropping the
+  // preview is always better than not delivering: the recipient still downloads the full media.
+  const poster =
+    message.posterData && message.posterData.length > POSTER_WIRE_MAX_BYTES
+      ? undefined
+      : message.posterData;
+  if (message.posterData && !poster) {
+    console.warn('[media-job] poster too large for the wire; sending without a preview', {
+      id: message.id,
+      posterBytes: message.posterData.length,
+    });
+  }
   const mediaRef = await prepareOutgoingMedia(
     uploadBlob,
     name,
@@ -2407,7 +2423,7 @@ async function sealMediaAndEnqueue(
     {
       width: message.mediaWidth,
       height: message.mediaHeight,
-      poster: message.posterData,
+      poster,
       quality: message.mediaQuality,
     },
     onUploadProgress,
@@ -2439,6 +2455,14 @@ async function sealMediaAndEnqueue(
 }
 
 /* ---- background media jobs (compress → upload), with retry + resume ---- */
+
+// (spec 2055) Hard ceiling for an embedded poster (the data-URL string length) before it is
+// dropped from the wire. The server closes a websocket frame over 1 MiB (ws/hub.go
+// maxMessageSize), and the poster is the only unbounded-by-construction part of a sealed media
+// message. 128 KiB leaves the sealed envelope far under that limit while comfortably clearing
+// the ~40 KiB tier budget, so this only ever fires on a genuinely pathological poster.
+const POSTER_WIRE_MAX_BYTES = 128 * 1024;
+
 const MAX_JOB_ATTEMPTS = 3;
 const jobsInFlight = new Set<string>();
 
@@ -2623,7 +2647,14 @@ async function runMediaJob(messageId: string): Promise<void> {
           if (!message.posterData && message.mediaId) {
             const big = Math.max(meta.width ?? 0, meta.height ?? 0);
             let bubble = await makeImageThumb(uploadBlob, THUMB_TIERS.bubble);
-            if (!bubble && big > 0 && big <= THUMB_TIERS.bubble) bubble = uploadBlob;
+            // (spec 2055) Reuse the original as its own bubble tier ONLY when it is small in
+            // BYTES as well as pixels — see isOwnThumbnail. Without the size half of that test, a
+            // small-dimension/large-byte animated GIF or WebP became its own multi-MB "poster"
+            // and rode the sealed message over the server's 1 MiB frame cap, so the send sat on
+            // the clock forever.
+            if (!bubble && isOwnThumbnail(big, uploadBlob.size, THUMB_TIERS.bubble)) {
+              bubble = uploadBlob;
+            }
             if (bubble) {
               message.posterData = await blobToDataUrl(bubble);
               await put('messages', message);
