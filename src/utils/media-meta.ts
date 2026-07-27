@@ -5,7 +5,7 @@
  * hang the send pipeline, so each call resolves on a timeout with whatever it has.
  */
 import { createLimiter, withTimeout } from '@/utils/concurrency';
-import { THUMB_TIERS, THUMB_MAX_BYTES, chooseJpegQuality, dataUrlBytes } from '@/utils/thumbs';
+import { THUMB_TIERS, THUMB_MAX_BYTES, chooseJpegQuality, dataUrlBytes, isOwnThumbnail } from '@/utils/thumbs';
 
 // A hard cap on any single image decode. On WebKit, `createImageBitmap` on certain animated
 // WebPs never settles (neither resolves nor rejects) — the send pipeline's thumbnail step
@@ -236,11 +236,19 @@ async function generateImageThumbUnlimited(blob: Blob, maxEdge: number): Promise
     const bmp = await withTimeout(createImageBitmap(blob), IMAGE_DECODE_TIMEOUT_MS, undefined);
     if (!bmp) return undefined; // decode timed out
     const big = Math.max(bmp.width, bmp.height);
-    if (big <= maxEdge) {
+    // (spec 2055) "Already small" must mean small in BOTH dimensions AND bytes. The old check
+    // looked at pixels only and told the caller to reuse the original — but an ANIMATED GIF or
+    // WebP is typically small-dimension and very large-byte (many frames), so a multi-MB file
+    // was handed back as the "thumbnail" and embedded in the sealed message, blowing the
+    // server's 1 MiB frame limit and wedging the send. When the bytes are over budget we
+    // re-encode (a flat JPEG still frame) even at unchanged dimensions, so the poster always
+    // fits the wire budget. Animation is not lost: the poster is only the preview; the full
+    // original is downloaded separately and rendered animated.
+    if (isOwnThumbnail(big, blob.size, maxEdge)) {
       bmp.close?.();
-      return undefined; // already small — no point storing a second copy
+      return undefined; // small in pixels and bytes — the original IS its own thumbnail
     }
-    const scale = maxEdge / big;
+    const scale = Math.min(1, maxEdge / big); // never upscale a small-but-heavy source
     const c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(bmp.width * scale));
     c.height = Math.max(1, Math.round(bmp.height * scale));

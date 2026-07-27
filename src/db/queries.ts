@@ -39,7 +39,8 @@ import { compressImage, compressVideo, achievedQuality } from '@/services/media-
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
 import { createLimiter, createByteBudget, raceTimeout } from '@/utils/concurrency';
-import { THUMB_TIERS } from '@/utils/thumbs';
+import { resolveIncomingTimestamp, senderClockIsSkewed } from '@/utils/message-time';
+import { THUMB_TIERS, isOwnThumbnail } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/link-preview';
 import { inSafeMode } from '@/services/boot-guard';
@@ -315,6 +316,7 @@ export async function clearChat(chatId: string): Promise<void> {
   if (chat) {
     chat.lastMessage = '';
     chat.lastKind = undefined;
+    chat.lastTick = 'none'; // (spec 2054) history wiped → no message left to carry a tick
     chat.unread = 0;
     delete chat.manualUnread;
     chat.updatedAt = now();
@@ -753,6 +755,11 @@ export async function reactToMessage(
     chat.lastMessage = `You reacted ${emoji} to "${previewText(message)}"`;
     chat.lastKind = 'reaction';
     chat.lastMessageTime = at;
+    // (spec 2054) The row preview is now an ACTIVITY, not the outgoing message it replaced, so
+    // drop that message's delivery tick — otherwise the row keeps a stale ✓/✓✓ beside a preview
+    // it doesn't describe. A reaction rides its own signal and carries no receipts of its own,
+    // so there is no tick to show for it. Same reasoning at every activity-preview site below.
+    chat.lastTick = 'none';
     chat.updatedAt = at;
     await put('chats', chat);
   }
@@ -791,6 +798,10 @@ async function handleReaction(from: string, signal: ReactionSignal): Promise<voi
       chat.lastMessage = `${name.split(' ')[0]} reacted ${signal.emoji} to "${previewText(message)}"`;
       chat.lastKind = 'reaction';
       chat.lastMessageTime = signal.at;
+      // (spec 2054) THE reported bug: an INCOMING reaction left the previous outgoing message's
+      // tick in place, so the row read "✓ Kambiz reacted 👍 to …" — a delivery mark on someone
+      // else's activity. Incoming activity never shows a tick.
+      chat.lastTick = 'none';
       chat.updatedAt = signal.at;
       await put('chats', chat);
 
@@ -1106,6 +1117,7 @@ async function bumpOwnGamePreview(m: Message, action: 'move' | 'resign', at: num
   chat.lastMessage = text;
   chat.lastKind = 'game';
   chat.lastMessageTime = at;
+  chat.lastTick = 'none'; // (spec 2054) game activity, not a receipt-tracked message → no tick
   chat.updatedAt = at;
   await put('chats', chat);
 }
@@ -1488,6 +1500,7 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   chat.lastMessage = text;
   chat.lastKind = 'game';
   chat.lastMessageTime = signal.at;
+  chat.lastTick = 'none'; // (spec 2054) incoming game activity → never a delivery tick
   chat.updatedAt = signal.at;
   await put('chats', chat);
 
@@ -1641,7 +1654,13 @@ async function refreshChatPreview(chatId: string): Promise<void> {
   const seenOn = await getSetting<boolean>('privacy.seenReceipts', true);
   chat.lastTick = lastMessageTick(
     newest
-      ? { outgoing: newest.outgoing, status: newest.status, receipts: newest.receipts, isGroup: chat.isGroup }
+      ? {
+          outgoing: newest.outgoing,
+          status: newest.status,
+          receipts: newest.receipts,
+          isGroup: chat.isGroup,
+          callLog: newest.callLog, // (spec 2054) call entries are informational → no tick
+        }
       : undefined,
     seenOn,
   );
@@ -2400,6 +2419,22 @@ async function sealMediaAndEnqueue(
   if (!chat || !peerUserId) throw new Error('no chat/peer for media send');
   const media = message.mediaId ? await get<Media>('media', message.mediaId) : undefined;
   const name = media?.name ?? 'attachment';
+  // (spec 2055) LAST-RESORT wire guard. The poster travels INSIDE the sealed message, and the
+  // server drops a websocket frame over 1 MiB — an oversized poster therefore never gets acked
+  // and the send sits on the clock forever, with retry re-sending the same doomed frame. The
+  // tiering above already keeps posters within THUMB_MAX_BYTES; this is the backstop that makes
+  // "a poster can never block a send" true no matter how the poster was produced. Dropping the
+  // preview is always better than not delivering: the recipient still downloads the full media.
+  const poster =
+    message.posterData && message.posterData.length > POSTER_WIRE_MAX_BYTES
+      ? undefined
+      : message.posterData;
+  if (message.posterData && !poster) {
+    console.warn('[media-job] poster too large for the wire; sending without a preview', {
+      id: message.id,
+      posterBytes: message.posterData.length,
+    });
+  }
   const mediaRef = await prepareOutgoingMedia(
     uploadBlob,
     name,
@@ -2407,7 +2442,7 @@ async function sealMediaAndEnqueue(
     {
       width: message.mediaWidth,
       height: message.mediaHeight,
-      poster: message.posterData,
+      poster,
       quality: message.mediaQuality,
     },
     onUploadProgress,
@@ -2439,6 +2474,14 @@ async function sealMediaAndEnqueue(
 }
 
 /* ---- background media jobs (compress → upload), with retry + resume ---- */
+
+// (spec 2055) Hard ceiling for an embedded poster (the data-URL string length) before it is
+// dropped from the wire. The server closes a websocket frame over 1 MiB (ws/hub.go
+// maxMessageSize), and the poster is the only unbounded-by-construction part of a sealed media
+// message. 128 KiB leaves the sealed envelope far under that limit while comfortably clearing
+// the ~40 KiB tier budget, so this only ever fires on a genuinely pathological poster.
+const POSTER_WIRE_MAX_BYTES = 128 * 1024;
+
 const MAX_JOB_ATTEMPTS = 3;
 const jobsInFlight = new Set<string>();
 
@@ -2623,7 +2666,14 @@ async function runMediaJob(messageId: string): Promise<void> {
           if (!message.posterData && message.mediaId) {
             const big = Math.max(meta.width ?? 0, meta.height ?? 0);
             let bubble = await makeImageThumb(uploadBlob, THUMB_TIERS.bubble);
-            if (!bubble && big > 0 && big <= THUMB_TIERS.bubble) bubble = uploadBlob;
+            // (spec 2055) Reuse the original as its own bubble tier ONLY when it is small in
+            // BYTES as well as pixels — see isOwnThumbnail. Without the size half of that test, a
+            // small-dimension/large-byte animated GIF or WebP became its own multi-MB "poster"
+            // and rode the sealed message over the server's 1 MiB frame cap, so the send sat on
+            // the clock forever.
+            if (!bubble && isOwnThumbnail(big, uploadBlob.size, THUMB_TIERS.bubble)) {
+              bubble = uploadBlob;
+            }
             if (bubble) {
               message.posterData = await blobToDataUrl(bubble);
               await put('messages', message);
@@ -6160,8 +6210,18 @@ async function markInboundSeen(id: string): Promise<void> {
 // timeout (only the SW side must degrade rather than stall its push budget), and
 // where Web Locks don't exist the helper is just this chain again.
 let inboundSerial: Promise<void> = Promise.resolve();
-export function receiveIncoming(from: string, remoteId: string, ciphertext: unknown): Promise<void> {
-  const run = inboundSerial.then(() => withInboundLock(() => receiveIncomingInner(from, remoteId, ciphertext)));
+export function receiveIncoming(
+  from: string,
+  remoteId: string,
+  ciphertext: unknown,
+  // (spec 2056) When the relay accepted this frame (epoch ms). Optional: the service-worker
+  // drain and older servers don't supply it, and without it we simply keep trusting the
+  // sender's own timestamp exactly as before.
+  relayedAt?: number,
+): Promise<void> {
+  const run = inboundSerial.then(() =>
+    withInboundLock(() => receiveIncomingInner(from, remoteId, ciphertext, relayedAt)),
+  );
   inboundSerial = run.then(
     () => undefined,
     () => undefined,
@@ -6169,7 +6229,12 @@ export function receiveIncoming(from: string, remoteId: string, ciphertext: unkn
   return run;
 }
 
-async function receiveIncomingInner(from: string, remoteId: string, ciphertext: unknown): Promise<void> {
+async function receiveIncomingInner(
+  from: string,
+  remoteId: string,
+  ciphertext: unknown,
+  relayedAt?: number,
+): Promise<void> {
   if (!from) return;
   // Drop anything from a peer we've blocked, a backstop for frames that slipped
   // through before the server-side block took effect (or were already queued).
@@ -6386,17 +6451,33 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   const targetChatId = payload.groupId ?? chatId;
   if (payload.groupId) await ensureGroupChat(payload.groupId, from);
 
-  const ts = payload.timestamp || now();
+  // (spec 2056) The sender's own clock decides both the displayed time and where the message
+  // sorts in the conversation, so a device with a wrong clock (stale timezone data on an old
+  // phone, say) made its messages land an hour into the past — above older messages instead of
+  // at the end, easy to miss entirely. Reconcile the sender's claim against when the RELAY
+  // accepted the frame, which separates "genuinely queued while we were offline" (claim agrees
+  // with the relay → keep it old) from "the sender's clock is wrong" (they disagree → use the
+  // relay's time). Falls back to the old behaviour when no relay time is available.
+  const claimedTs = payload.timestamp || now();
+  const ts = resolveIncomingTimestamp(claimedTs, relayedAt);
   // (spec 1037) A message that sat queued past the staleness bar means a push
   // SHOULD have woken this device while it was away — record the signature so
   // the next subscription check can detect a zombie and rotate. Harmless for a
   // merely-offline phone: its held pushes arrive on reconnect and stamp a
   // fresh wake, which invalidates the marker.
-  if (now() - ts > STALE_MSG_MS) void recordStaleDrain(ts);
-  // The WEAK signature too (iOS 16.x zombies dodge the 10-min bar on a
-  // frequently-checked phone): every drained message that should have woken us
-  // counts toward a streak; three no-wake sessions rotate the subscription.
-  void recordMissedWakeDrain(ts);
+  //
+  // (spec 2056) Skip both signals when the sender's clock is the thing that's wrong: these
+  // heuristics infer "this sat queued for ages" from the message's age, so a sender running an
+  // hour behind would otherwise forge that evidence on every message and push this device
+  // toward a needless subscription rotation. `ts` is corrected above, but the skew check is
+  // what tells us the age was never real.
+  if (!senderClockIsSkewed(claimedTs, relayedAt)) {
+    if (now() - ts > STALE_MSG_MS) void recordStaleDrain(ts);
+    // The WEAK signature too (iOS 16.x zombies dodge the 10-min bar on a
+    // frequently-checked phone): every drained message that should have woken us
+    // counts toward a streak; three no-wake sessions rotate the subscription.
+    void recordMissedWakeDrain(ts);
+  }
   const kind = (payload.kind as MessageKind) || 'text';
 
   // If the message carries media, download + decrypt the ciphertext and store
@@ -6832,6 +6913,7 @@ export async function logCallToChat(chatId: string, log: CallLog): Promise<void>
   chat.lastMessage = preview;
   chat.lastKind = 'call';
   chat.lastMessageTime = ts;
+  chat.lastTick = 'none'; // (spec 2054) a call is informational — no receipts, so no tick
   chat.updatedAt = ts;
   await put('chats', chat);
 }

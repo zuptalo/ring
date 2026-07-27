@@ -23,6 +23,10 @@ export interface MsgFrame {
   to?: string; // recipient user id (set when sending)
   from?: string; // sender user id (set by the server on delivery)
   ciphertext?: unknown; // sealed wire packet, opaque to the transport
+  // (spec 2056) Epoch ms at which the RELAY accepted this frame, stamped by the server on both
+  // live and queued delivery. The recipient checks the sender's own timestamp against it to
+  // catch a skewed sender clock (see utils/message-time). Absent from an older server.
+  relayedAt?: number;
   // spec 1050: sender-set coarse push class + opaque conversation route id.
   // Plaintext BY DESIGN (the user-approved routing leak): they exist so the
   // blind relay can gate the push tickle; they never affect delivery.

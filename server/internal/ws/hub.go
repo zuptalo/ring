@@ -135,6 +135,10 @@ type frame struct {
 	Status     string          `json:"status,omitempty"`
 	At         int64           `json:"at,omitempty"`
 	RefID      string          `json:"refId,omitempty"`
+	// (spec 2056) t:"msg" only — epoch ms at which the relay accepted this frame. The
+	// recipient compares it with the sender's own claimed timestamp to spot a skewed sender
+	// clock; see the stamping site in the "msg" case for why this is the neutral reference.
+	RelayedAt int64 `json:"relayedAt,omitempty"`
 	// Presence fields. For outbound t:"presence", Online is omitted (→ false on
 	// the client) when not shared, and LastSeen is omitted (→ null) when not
 	// shared or never set. For inbound prefs/self the bools default to false.
@@ -1327,7 +1331,22 @@ func (c *Client) handleFrame(data []byte) {
 		if b, err := c.store.IsBlocked(ctx, f.To, c.userID); err == nil {
 			blocked = b
 		}
-		delivered := frame{T: "msg", ID: f.ID, From: c.userID, Ciphertext: f.Ciphertext}
+		// (spec 2056) Stamp when the RELAY received this frame. The recipient uses it as a
+		// neutral reference to detect a sender whose device clock is wrong: message order and
+		// timestamps come from the sender's own clock, so a phone with stale timezone data (an
+		// old Android still applying an abolished DST rule, say) made its messages sort an hour
+		// into the past on every recipient's screen — new messages landed above older ones
+		// instead of at the end. Comparing the sender's claimed time against this one separates
+		// "genuinely old, queued while you were offline" from "the sender's clock is wrong",
+		// which the recipient cannot tell apart on its own.
+		//
+		// Stamped HERE, where the frame is built, so the identical value reaches both the live
+		// socket below and the durable copy replayed by flushPending — no schema change, and a
+		// queued frame keeps the time it actually arrived rather than the time it was drained.
+		// Zero-knowledge: the relay already knows when it accepted a frame (it stores created_at
+		// and the ciphertext stays opaque); this only hands the recipient a fact the server
+		// already had, and no new plaintext or metadata is derived.
+		delivered := frame{T: "msg", ID: f.ID, From: c.userID, Ciphertext: f.Ciphertext, RelayedAt: time.Now().UnixMilli()}
 		payload, err := json.Marshal(delivered)
 		if err != nil {
 			return

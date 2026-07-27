@@ -37,6 +37,24 @@ export const THUMB_MAX_BYTES = 40 * 1024;
 export const JPEG_QUALITY_STEPS = [0.82, 0.72, 0.62, 0.5] as const;
 
 /**
+ * (spec 2055) Whether a source image can serve as its OWN bubble-tier thumbnail, so we skip
+ * generating (and storing, and transmitting) a second copy.
+ *
+ * It qualifies only when it is small in BOTH dimensions and BYTES. The dimension test alone —
+ * which is what this used to be — is a trap for **animated** formats: a GIF or animated WebP is
+ * routinely 480x480 but several MB, because the size is in the frame count, not the frame size.
+ * Treating such a file as its own thumbnail embedded the whole animation in the sealed message's
+ * `MediaRef.poster`, which blew the server's 1 MiB websocket frame limit — the message was never
+ * acked and sat on the sending clock forever, with retry re-sending the same doomed frame.
+ *
+ * Pure so the rule is unit-testable and shared by the generator (media-meta) and the send path
+ * (queries), which must agree — if they disagree, the oversize poster comes back.
+ */
+export function isOwnThumbnail(longEdge: number, bytes: number, maxEdge: number): boolean {
+  return longEdge > 0 && longEdge <= maxEdge && bytes <= THUMB_MAX_BYTES;
+}
+
+/**
  * Estimate the decoded byte length of a base64 `data:` URL (e.g. a JPEG produced by
  * canvas.toDataURL) WITHOUT allocating the bytes — base64 encodes 3 bytes per 4 chars, minus any
  * `=` padding. Returns 0 for a string that isn't a data URL. Pure (DOM-free) so it's unit-testable.
