@@ -130,7 +130,9 @@ export async function handleIncomingFrame(frame: Frame): Promise<void> {
       // (so seen receipts we send back correlate on their side). The ack (which
       // clears the server queue and triggers the sender's delivered receipt) is
       // sent by useSync after this resolves.
-      await receiveIncoming(frame.from ?? '', frame.id, frame.ciphertext);
+      // (spec 2056) Pass the relay's receive time through: receiveIncoming uses it to tell a
+      // genuinely-old queued message from one sent by a device whose clock is wrong.
+      await receiveIncoming(frame.from ?? '', frame.id, frame.ciphertext, frame.relayedAt);
       return;
     case 'presence':
       applyPresenceFrame(frame);

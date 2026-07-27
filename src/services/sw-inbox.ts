@@ -60,6 +60,10 @@ export interface MsgFrame {
   id?: string;
   from?: string;
   ciphertext?: unknown;
+  // (spec 2056) Epoch ms at which the relay accepted the frame. Stamped into the stored payload
+  // at enqueue, so it rides both the websocket delivery and this REST replay. The authoritative
+  // SW drain uses it to correct a skewed sender clock exactly as the page does.
+  relayedAt?: number;
 }
 
 /** A ready-to-show notification. `ids` are the relay frame ids this note covers

@@ -39,6 +39,7 @@ import { compressImage, compressVideo, achievedQuality } from '@/services/media-
 import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgress } from '@/services/media-jobs';
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
 import { createLimiter, createByteBudget, raceTimeout } from '@/utils/concurrency';
+import { resolveIncomingTimestamp, senderClockIsSkewed } from '@/utils/message-time';
 import { THUMB_TIERS, isOwnThumbnail } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/link-preview';
@@ -6191,8 +6192,18 @@ async function markInboundSeen(id: string): Promise<void> {
 // timeout (only the SW side must degrade rather than stall its push budget), and
 // where Web Locks don't exist the helper is just this chain again.
 let inboundSerial: Promise<void> = Promise.resolve();
-export function receiveIncoming(from: string, remoteId: string, ciphertext: unknown): Promise<void> {
-  const run = inboundSerial.then(() => withInboundLock(() => receiveIncomingInner(from, remoteId, ciphertext)));
+export function receiveIncoming(
+  from: string,
+  remoteId: string,
+  ciphertext: unknown,
+  // (spec 2056) When the relay accepted this frame (epoch ms). Optional: the service-worker
+  // drain and older servers don't supply it, and without it we simply keep trusting the
+  // sender's own timestamp exactly as before.
+  relayedAt?: number,
+): Promise<void> {
+  const run = inboundSerial.then(() =>
+    withInboundLock(() => receiveIncomingInner(from, remoteId, ciphertext, relayedAt)),
+  );
   inboundSerial = run.then(
     () => undefined,
     () => undefined,
@@ -6200,7 +6211,12 @@ export function receiveIncoming(from: string, remoteId: string, ciphertext: unkn
   return run;
 }
 
-async function receiveIncomingInner(from: string, remoteId: string, ciphertext: unknown): Promise<void> {
+async function receiveIncomingInner(
+  from: string,
+  remoteId: string,
+  ciphertext: unknown,
+  relayedAt?: number,
+): Promise<void> {
   if (!from) return;
   // Drop anything from a peer we've blocked, a backstop for frames that slipped
   // through before the server-side block took effect (or were already queued).
@@ -6417,17 +6433,33 @@ async function receiveIncomingInner(from: string, remoteId: string, ciphertext: 
   const targetChatId = payload.groupId ?? chatId;
   if (payload.groupId) await ensureGroupChat(payload.groupId, from);
 
-  const ts = payload.timestamp || now();
+  // (spec 2056) The sender's own clock decides both the displayed time and where the message
+  // sorts in the conversation, so a device with a wrong clock (stale timezone data on an old
+  // phone, say) made its messages land an hour into the past — above older messages instead of
+  // at the end, easy to miss entirely. Reconcile the sender's claim against when the RELAY
+  // accepted the frame, which separates "genuinely queued while we were offline" (claim agrees
+  // with the relay → keep it old) from "the sender's clock is wrong" (they disagree → use the
+  // relay's time). Falls back to the old behaviour when no relay time is available.
+  const claimedTs = payload.timestamp || now();
+  const ts = resolveIncomingTimestamp(claimedTs, relayedAt);
   // (spec 1037) A message that sat queued past the staleness bar means a push
   // SHOULD have woken this device while it was away — record the signature so
   // the next subscription check can detect a zombie and rotate. Harmless for a
   // merely-offline phone: its held pushes arrive on reconnect and stamp a
   // fresh wake, which invalidates the marker.
-  if (now() - ts > STALE_MSG_MS) void recordStaleDrain(ts);
-  // The WEAK signature too (iOS 16.x zombies dodge the 10-min bar on a
-  // frequently-checked phone): every drained message that should have woken us
-  // counts toward a streak; three no-wake sessions rotate the subscription.
-  void recordMissedWakeDrain(ts);
+  //
+  // (spec 2056) Skip both signals when the sender's clock is the thing that's wrong: these
+  // heuristics infer "this sat queued for ages" from the message's age, so a sender running an
+  // hour behind would otherwise forge that evidence on every message and push this device
+  // toward a needless subscription rotation. `ts` is corrected above, but the skew check is
+  // what tells us the age was never real.
+  if (!senderClockIsSkewed(claimedTs, relayedAt)) {
+    if (now() - ts > STALE_MSG_MS) void recordStaleDrain(ts);
+    // The WEAK signature too (iOS 16.x zombies dodge the 10-min bar on a
+    // frequently-checked phone): every drained message that should have woken us
+    // counts toward a streak; three no-wake sessions rotate the subscription.
+    void recordMissedWakeDrain(ts);
+  }
   const kind = (payload.kind as MessageKind) || 'text';
 
   // If the message carries media, download + decrypt the ciphertext and store
