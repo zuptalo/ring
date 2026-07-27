@@ -21,7 +21,14 @@ So a reaction from the very device 2056 was written for — a phone whose clock 
 
 This is the same class of defect as 2056 and the same fix: reconcile the sender's claim against when the relay accepted the frame.
 
-**Not established:** the reporter also describes the preview text refreshing only after switching tabs and returning. That specific symptom could not be reproduced on the dev stack (the rendered row updated within ~1s in both a cold-open and an open-chat-then-back flow), so it is deliberately NOT claimed as fixed here. The ordering defect above is real, measured, and fixed; whether it fully accounts for what the reporter saw needs their confirmation.
+**This also explains the reported symptom, which is not a rendering bug at all.** The report reads as "the preview doesn't update until I leave the list and come back", and no re-render fault could be found — the row's text updates within ~1s in every flow tried. An A/B run on a realistic three-chat list settles it:
+
+| | list order after the reaction | reacted chat's position |
+|---|---|---|
+| before the fix | Dave, Carol, **Bob** | 2 (bottom) |
+| after the fix | **Bob**, Dave, Carol | 0 (top) |
+
+The row's preview text refreshed live in **both** runs. What failed was the chat's POSITION: with its summary time pushed an hour into the past, the chat stayed where it was — near the bottom — instead of jumping to the top on a new interaction. To a reader scanning the top of the Chats list, an updated row sitting far down the list is indistinguishable from a row that never updated.
 
 **Rider (visual):** in the launch montage, every intermediate silhouette is uniform-scaled so its LONGEST edge hits one shared box. That punishes a wide, short shape: the controller is 90×49 raw, so fitting its width to 66 left it ~36 tall — the shortest symbol in the montage, against the camera's ~41 and the resolved shield's ~70. That is the "game pad height is too little" report.
 
@@ -33,7 +40,7 @@ Someone reacts to my message; that chat moves to the top of the Chats list as th
 
 **Why this priority**: The reported defect. A new interaction that sorts into the past is effectively invisible in the list.
 
-**Independent Test**: With a reactor whose clock is an hour behind, react to a message and confirm the chat's summary time does not move backwards.
+**Independent Test**: On a multi-chat list, have a reactor whose clock is an hour behind react to an older conversation, and confirm that chat jumps to the top rather than staying put.
 
 **Acceptance Scenarios**:
 
@@ -104,6 +111,5 @@ The controller in the launch montage looks the same visual size as the phone, ch
 
 ## Out of Scope
 
-- The reporter's "preview only refreshes after switching tabs" symptom — not reproducible on the dev stack; see Context. Needs confirmation before any change is attempted.
 - Reconciling signal times used purely for per-signal last-write-wins.
 - Redrawing any montage silhouette; this only changes how they are scaled.
