@@ -282,6 +282,16 @@ describe('spec 1062: lastMessageTick (shared list/tile tick tier)', () => {
     expect(lastMessageTick(msg({ status: 'failed' }))).toBe('failed');
   });
 
+  // (spec 2054) A call entry is stored as a message so it appears in the timeline, but it is
+  // informational — never enqueued, no receipts — so it must never render a delivery tick,
+  // even though an outgoing call is flagged outgoing with status 'seen'.
+  it('a call-log entry never shows a tick, even when outgoing', () => {
+    expect(lastMessageTick({ ...msg({ status: 'seen' }), callLog: { direction: 'outgoing' } })).toBe('none');
+    expect(lastMessageTick({ ...msg({ status: 'delivered' }), callLog: {} })).toBe('none');
+    // …while an ordinary outgoing message is unaffected.
+    expect(lastMessageTick(msg({ status: 'seen' }))).toBe('seen');
+  });
+
   it('pre-send states map to pending (clock)', () => {
     expect(lastMessageTick(msg({ status: 'pending' }))).toBe('pending');
     expect(lastMessageTick(msg({ status: 'compressing' }))).toBe('pending');

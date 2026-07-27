@@ -516,6 +516,13 @@ export function installTestHook(): void {
     hiddenReset: () => hcReset(),
     /** Visible chat ids right now (what `listChats` returns) — for exclusion asserts. */
     visibleChatIds: async (): Promise<string[]> => (await listChats()).map((c) => c.id),
+    /** (spec 2054) A chat's denormalized list-row summary — the preview text/kind plus the
+     *  delivery tick tier the Chats row and pinned tile render. Lets a test assert that an
+     *  INCOMING activity preview (a reaction, a game move, a call) carries no tick. */
+    chatRow: async (chatId: string): Promise<{ lastMessage?: string; lastKind?: string; lastTick?: string } | null> => {
+      const c = (await listChats()).find((x) => x.id === chatId);
+      return c ? { lastMessage: c.lastMessage, lastKind: c.lastKind, lastTick: c.lastTick } : null;
+    },
     /** The unread badge total (countUnread) — for hidden-chat badge-mode asserts. */
     unreadBadge: (): Promise<number> => dbCountUnread(),
 

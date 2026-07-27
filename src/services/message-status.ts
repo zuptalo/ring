@@ -170,15 +170,20 @@ export function applyDownloadedReceipt(
  *     reciprocity-gated by `seenReceiptsOn` (seen tier suppressed → caps at delivered)
  *   - 1:1 → status maps straight through, with 'seen' capped to 'delivered' when
  *     `seenReceiptsOn` is false (the reciprocity DISPLAY gate, spec 1010 FR-009).
+ *  (spec 2054) A call-log entry is stored as a message for the timeline but is purely
+ *  informational — never enqueued, no receipts — so it carries NO tick, even though it is
+ *  flagged outgoing for an outgoing call. Without this, a "Call · 0:06" row rendered a blue
+ *  double tick it never earned.
+ *
  *  Pure: no Vue/IDB — unit-testable, and reused by the summary maintenance in queries.ts. */
 export function lastMessageTick(
   msg:
-    | (Pick<Message, 'outgoing' | 'status' | 'receipts'> & { isGroup?: boolean })
+    | (Pick<Message, 'outgoing' | 'status' | 'receipts'> & { isGroup?: boolean; callLog?: unknown })
     | null
     | undefined,
   seenReceiptsOn = true,
 ): LastTick {
-  if (!msg || !msg.outgoing) return 'none';
+  if (!msg || !msg.outgoing || msg.callLog) return 'none';
   const { status, receipts, isGroup } = msg;
   if (status === 'failed') return 'failed';
   if (status === 'compressing' || status === 'pending') return 'pending';
