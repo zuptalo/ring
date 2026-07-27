@@ -142,3 +142,4 @@ Specs are grouped by category band; status moves
 | [2053](specs/2053-media-send-lanes/spec.md) | Stuck media sends no longer block every later send | 🔵 in-review |
 | [2054](specs/2054-incoming-tick/spec.md) | No delivery tick beside an incoming activity in the chats list | 🔵 in-review |
 | [2055](specs/2055-poster-budget/spec.md) | An oversized preview must never block a send | 🔵 in-review |
+| [2056](specs/2056-sender-clock-skew/spec.md) | Messages from a device with a wrong clock must not sort into the past | 🔵 in-review |

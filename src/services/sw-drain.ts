@@ -31,6 +31,7 @@ import { readSessionToken, readSessionUserId } from './session';
 import { readHiddenSetOrNull } from './hidden-chats';
 import { resolveInboundDirectChat } from './hidden-pair';
 import { fetchPendingFrames, noteForPayload, aggregate, setting, loadShown, type MsgFrame, type SwNote } from './sw-inbox';
+import { resolveIncomingTimestamp } from '@/utils/message-time';
 import { chatListPreview, previewKind } from './message-preview';
 import { transact, getAll, get } from '@/db/idb';
 import type { Chat, Contact, Message, Setting } from '@/db/types';
@@ -229,7 +230,9 @@ async function applyOne(f: MsgFrame, ctx: ApplyCtx): Promise<ApplyOutcome> {
       if (cls.verdict === 'defer') return { kind: 'defer' as const, why: cls.why };
       const targetChatId = cls.targetChatId ?? direct.id;
 
-      const ts = payload.timestamp || Date.now();
+      // (spec 2056) Same clock reconciliation the page path does, so a message committed here
+      // by the service worker sorts identically to one committed by the page.
+      const ts = resolveIncomingTimestamp(payload.timestamp || Date.now(), f.relayedAt);
       const kind = (payload.kind as Message['kind']) || 'text';
       const isGroupMsg = !!payload.groupId;
       // Media bytes are NEVER downloaded in the SW (no canvas pipeline, tight
