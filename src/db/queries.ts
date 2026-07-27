@@ -785,7 +785,7 @@ export async function reactToMessage(
  *  notifyIncoming so mute / per-chat prefs / hidden / settle all apply and the
  *  alert can NEVER escalate (a reaction is not a mention). Deliberately no unread
  *  or badge change: a reaction is not a message (spec 1048 clarification). */
-async function handleReaction(from: string, signal: ReactionSignal): Promise<void> {
+async function handleReaction(from: string, signal: ReactionSignal, relayedAt?: number): Promise<void> {
   const message = await getMessage(signal.messageId);
   if (!message) return; // we don't have that message (yet), drop it
   applyReaction(message, from, signal.emoji, !!signal.remove, signal.at);
@@ -797,12 +797,18 @@ async function handleReaction(from: string, signal: ReactionSignal): Promise<voi
       const name = (await getContact(from))?.name ?? 'Someone';
       chat.lastMessage = `${name.split(' ')[0]} reacted ${signal.emoji} to "${previewText(message)}"`;
       chat.lastKind = 'reaction';
-      chat.lastMessageTime = signal.at;
+      // (spec 2057) `signal.at` is the REACTOR's clock. Spec 2056 reconciled message timestamps
+      // against the relay's receive time but not signals, so a reaction from a device running an
+      // hour behind drove this chat's lastMessageTime an hour BACKWARDS — and since the chats
+      // list sorts on it, the chat sank down the list instead of rising to the top on a brand-new
+      // interaction. Reconcile it the same way.
+      const reactedAt = resolveIncomingTimestamp(signal.at, relayedAt);
+      chat.lastMessageTime = reactedAt;
       // (spec 2054) THE reported bug: an INCOMING reaction left the previous outgoing message's
       // tick in place, so the row read "✓ Kambiz reacted 👍 to …" — a delivery mark on someone
       // else's activity. Incoming activity never shows a tick.
       chat.lastTick = 'none';
-      chat.updatedAt = signal.at;
+      chat.updatedAt = reactedAt; // (spec 2057) same reconciled time — this drives own-sync LWW
       await put('chats', chat);
 
       const selfId = getSelfUserId() ?? '';
@@ -1419,7 +1425,7 @@ export async function resignGame(chatId: string, messageId: string): Promise<voi
  *  (data-model rule 1). 1:1 sessions: only the conversation's peer plays.
  *  Explicit-players sessions (spec 0009 challenges): seats map by userId and
  *  non-players are dropped, never out-of-sync. */
-async function handleGameMove(from: string, signal: GameMoveSignal): Promise<void> {
+async function handleGameMove(from: string, signal: GameMoveSignal, relayedAt?: number): Promise<void> {
   const message = await getMessage(signal.messageId);
   if (!message?.game) return;
   const chat = await getChat(message.chatId);
@@ -1499,9 +1505,12 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
             : `${by}made a move 🎲`;
   chat.lastMessage = text;
   chat.lastKind = 'game';
-  chat.lastMessageTime = signal.at;
+  // (spec 2057) Reconciled against the relay's receive time, like every other incoming
+  // activity: a mover whose clock runs behind must not drag this chat down the list.
+  const movedAt = resolveIncomingTimestamp(signal.at, relayedAt);
+  chat.lastMessageTime = movedAt;
   chat.lastTick = 'none'; // (spec 2054) incoming game activity → never a delivery tick
-  chat.updatedAt = signal.at;
+  chat.updatedAt = movedAt;
   await put('chats', chat);
 
   // NOTIFICATIONS (spec 0009 FR-005/FR-006/FR-009): players get their turn and
@@ -6372,7 +6381,7 @@ async function receiveIncomingInner(
   // Emoji reactions → mutate the target message, never a stored message. (A group
   // reaction also carries groupId; the messageId lookup handles either case.)
   if (payload.reaction) {
-    await handleReaction(from, payload.reaction);
+    await handleReaction(from, payload.reaction, relayedAt);
     if (remoteId) await markInboundSeen(remoteId);
     return;
   }
@@ -6384,7 +6393,7 @@ async function receiveIncomingInner(
   }
   // Game moves/resignations → mutate the target game bubble, never a stored message.
   if (payload.gameMove) {
-    await handleGameMove(from, payload.gameMove);
+    await handleGameMove(from, payload.gameMove, relayedAt);
     if (remoteId) await markInboundSeen(remoteId);
     return;
   }

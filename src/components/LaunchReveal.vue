@@ -96,6 +96,14 @@ const MARK = 84; // px, the morphing symbol inside the 128px tile
 // is deliberately left as-is: it already matches the real app icon.
 const NCENTER = { x: 50, y: 49 };
 const NSIZE = 66; // target max( width, height ) in the 0–100 viewBox
+// (spec 2057) …but scaling by the LONGEST edge alone punishes a wide, short silhouette: the
+// controller is 90×49 raw, so fitting its width to 66 left it only ~36 tall — visibly squat
+// next to the camera (~41) and half the resolved shield (~70), which is what "the game pad
+// height is too little" refers to. Floor the normalized HEIGHT so a wide shape is allowed to
+// exceed NSIZE in width rather than collapse vertically. It only affects shapes that would
+// land under the floor (the controller, and the camera by a hair); the bubble and handset are
+// already well above it, and the shield finale is untouched as ever.
+const NMIN_H = 44;
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 function pathBox(d: string): { cx: number; cy: number; w: number; h: number } {
   const n = (d.match(/-?\d*\.?\d+/g) ?? []).map(Number);
@@ -126,7 +134,10 @@ function mapPath(d: string, fn: (x: number, y: number) => [number, number]): str
 }
 function normScale(d: string): number {
   const b = pathBox(d);
-  return NSIZE / Math.max(b.w, b.h);
+  const s = NSIZE / Math.max(b.w, b.h);
+  // Raise a shape that would end up shorter than the floor, keeping its own aspect (it simply
+  // grows wider too) — uniform scale is preserved, only the fitted dimension changes.
+  return b.h > 0 && b.h * s < NMIN_H ? NMIN_H / b.h : s;
 }
 function normalize(d: string): string {
   const b = pathBox(d), s = normScale(d);
