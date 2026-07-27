@@ -140,7 +140,7 @@ Specs are grouped by category band; status moves
 | [2051](specs/2051-reply-swipe-responsive/spec.md) | Make incoming messages more responsive to swipe-to-reply | 🟢 shipped |
 | [2052](specs/2052-webm-best-effort/spec.md) | Send webm best-effort instead of hard-failing when it can't transcode | 🟢 shipped |
 | [2053](specs/2053-media-send-lanes/spec.md) | Stuck media sends no longer block every later send | 🟢 shipped |
-| [2054](specs/2054-incoming-tick/spec.md) | No delivery tick beside an incoming activity in the chats list | 🔵 in-review |
-| [2055](specs/2055-poster-budget/spec.md) | An oversized preview must never block a send | 🔵 in-review |
-| [2056](specs/2056-sender-clock-skew/spec.md) | Messages from a device with a wrong clock must not sort into the past | 🔵 in-review |
+| [2054](specs/2054-incoming-tick/spec.md) | No delivery tick beside an incoming activity in the chats list | 🟢 shipped |
+| [2055](specs/2055-poster-budget/spec.md) | An oversized preview must never block a send | 🟢 shipped |
+| [2056](specs/2056-sender-clock-skew/spec.md) | Messages from a device with a wrong clock must not sort into the past | 🟢 shipped |
 | [2057](specs/2057-signal-clock/spec.md) | Reactions and game moves still trust the sender's clock | 🔵 in-review |
