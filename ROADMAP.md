@@ -143,3 +143,4 @@ Specs are grouped by category band; status moves
 | [2054](specs/2054-incoming-tick/spec.md) | No delivery tick beside an incoming activity in the chats list | 🔵 in-review |
 | [2055](specs/2055-poster-budget/spec.md) | An oversized preview must never block a send | 🔵 in-review |
 | [2056](specs/2056-sender-clock-skew/spec.md) | Messages from a device with a wrong clock must not sort into the past | 🔵 in-review |
+| [2057](specs/2057-signal-clock/spec.md) | Reactions and game moves still trust the sender's clock | 🔵 in-review |
