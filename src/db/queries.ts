@@ -315,6 +315,7 @@ export async function clearChat(chatId: string): Promise<void> {
   if (chat) {
     chat.lastMessage = '';
     chat.lastKind = undefined;
+    chat.lastTick = 'none'; // (spec 2054) history wiped → no message left to carry a tick
     chat.unread = 0;
     delete chat.manualUnread;
     chat.updatedAt = now();
@@ -753,6 +754,11 @@ export async function reactToMessage(
     chat.lastMessage = `You reacted ${emoji} to "${previewText(message)}"`;
     chat.lastKind = 'reaction';
     chat.lastMessageTime = at;
+    // (spec 2054) The row preview is now an ACTIVITY, not the outgoing message it replaced, so
+    // drop that message's delivery tick — otherwise the row keeps a stale ✓/✓✓ beside a preview
+    // it doesn't describe. A reaction rides its own signal and carries no receipts of its own,
+    // so there is no tick to show for it. Same reasoning at every activity-preview site below.
+    chat.lastTick = 'none';
     chat.updatedAt = at;
     await put('chats', chat);
   }
@@ -791,6 +797,10 @@ async function handleReaction(from: string, signal: ReactionSignal): Promise<voi
       chat.lastMessage = `${name.split(' ')[0]} reacted ${signal.emoji} to "${previewText(message)}"`;
       chat.lastKind = 'reaction';
       chat.lastMessageTime = signal.at;
+      // (spec 2054) THE reported bug: an INCOMING reaction left the previous outgoing message's
+      // tick in place, so the row read "✓ Kambiz reacted 👍 to …" — a delivery mark on someone
+      // else's activity. Incoming activity never shows a tick.
+      chat.lastTick = 'none';
       chat.updatedAt = signal.at;
       await put('chats', chat);
 
@@ -1106,6 +1116,7 @@ async function bumpOwnGamePreview(m: Message, action: 'move' | 'resign', at: num
   chat.lastMessage = text;
   chat.lastKind = 'game';
   chat.lastMessageTime = at;
+  chat.lastTick = 'none'; // (spec 2054) game activity, not a receipt-tracked message → no tick
   chat.updatedAt = at;
   await put('chats', chat);
 }
@@ -1488,6 +1499,7 @@ async function handleGameMove(from: string, signal: GameMoveSignal): Promise<voi
   chat.lastMessage = text;
   chat.lastKind = 'game';
   chat.lastMessageTime = signal.at;
+  chat.lastTick = 'none'; // (spec 2054) incoming game activity → never a delivery tick
   chat.updatedAt = signal.at;
   await put('chats', chat);
 
@@ -1641,7 +1653,13 @@ async function refreshChatPreview(chatId: string): Promise<void> {
   const seenOn = await getSetting<boolean>('privacy.seenReceipts', true);
   chat.lastTick = lastMessageTick(
     newest
-      ? { outgoing: newest.outgoing, status: newest.status, receipts: newest.receipts, isGroup: chat.isGroup }
+      ? {
+          outgoing: newest.outgoing,
+          status: newest.status,
+          receipts: newest.receipts,
+          isGroup: chat.isGroup,
+          callLog: newest.callLog, // (spec 2054) call entries are informational → no tick
+        }
       : undefined,
     seenOn,
   );
@@ -6832,6 +6850,7 @@ export async function logCallToChat(chatId: string, log: CallLog): Promise<void>
   chat.lastMessage = preview;
   chat.lastKind = 'call';
   chat.lastMessageTime = ts;
+  chat.lastTick = 'none'; // (spec 2054) a call is informational — no receipts, so no tick
   chat.updatedAt = ts;
   await put('chats', chat);
 }
