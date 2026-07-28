@@ -83,6 +83,7 @@ Specs are grouped by category band; status moves
 | [1055](specs/1055-ciphertext-push-instant/spec.md) | Instant rich notifications (bounded encrypted preview in push) | 🟡 in-progress |
 | [1062](specs/1062-list-status-presence/spec.md) | Message status and presence on the chat list | 🟢 shipped |
 | [1063](specs/1063-full-size-media/spec.md) | Full-size aspect-preserving media thumbnails in chat | 🟡 in-progress |
+| [1064](specs/1064-mention-names/spec.md) | Mentions show the name you know someone by, and stay readable | 🔵 in-review |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
@@ -143,4 +144,4 @@ Specs are grouped by category band; status moves
 | [2054](specs/2054-incoming-tick/spec.md) | No delivery tick beside an incoming activity in the chats list | 🟢 shipped |
 | [2055](specs/2055-poster-budget/spec.md) | An oversized preview must never block a send | 🟢 shipped |
 | [2056](specs/2056-sender-clock-skew/spec.md) | Messages from a device with a wrong clock must not sort into the past | 🟢 shipped |
-| [2057](specs/2057-signal-clock/spec.md) | Reactions and game moves still trust the sender's clock | 🔵 in-review |
+| [2057](specs/2057-signal-clock/spec.md) | Reactions and game moves still trust the sender's clock | 🟢 shipped |

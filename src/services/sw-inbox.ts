@@ -36,6 +36,7 @@ import { readHiddenSet, readHiddenSetOrNull } from './hidden-chats';
 import { readSessionToken, readSessionUserId } from './session';
 import { get, getAll, put } from '@/db/idb';
 import { notifyPreview } from '@/utils/notify-preview';
+import { substituteMentionNames, mentionNameResolver } from '@/utils/mention';
 import { GAMES } from '@/games/registry';
 import { applySignal as applyGameSignal, deriveStatus as deriveGameStatus } from '@/games/session';
 import { playerIndexOf, lockOpponent, buildWallSession, challengePhase, type WallGameRow } from '@/games/challenge';
@@ -367,6 +368,9 @@ export function noteForPayload(
   const showGroups = surfaces?.showGroups !== false;
   const from = f.from as string;
   const known = contacts.find((c) => c.id === from)?.name;
+  // (spec 1064) Show @mentions by the name this device knows the person by — including a local
+  // rename — so a push reads like the chat bubble instead of exposing a raw directory handle.
+  const mentionNames = (t: string): string => substituteMentionNames(t, mentionNameResolver(contacts));
 
   // Friend request (ContactCard 'request') always surfaces, like the live path.
   if (payload.card) {
@@ -664,7 +668,9 @@ export function noteForPayload(
       note: {
         ids: [f.id as string],
         title: groupChat?.name || 'Group',
-        body: showText ? `${senderName} ${verb}: ${notifyPreview(payload)}` : `${senderName} ${verb}`,
+        body: showText
+          ? `${senderName} ${verb}: ${mentionNames(notifyPreview(payload))}`
+          : `${senderName} ${verb}`,
         url: chat?.id ? `/chat/${chat.id}` : '/tabs/chats',
         tag: chat?.id ? `ring:${chat.id}` : `ring:from:${from}`,
       },
@@ -682,7 +688,7 @@ export function noteForPayload(
   // Show the decrypted text only when the chat allows full content AND the global
   // "Show preview" is on (most-private-wins); otherwise a content-free placeholder.
   const showText = content === 'full' && showPreview;
-  const preview = showText ? notifyPreview(payload) : 'New message';
+  const preview = showText ? mentionNames(notifyPreview(payload)) : 'New message';
   const chatId = chat?.id;
   // "Show preview" off hides WHO it's from too, not just the body: use a generic title instead of
   // the sender / group name. (Hidden chats and @mentions are handled above and keep their own rules.)

@@ -27,6 +27,13 @@
      bleed through the text. Incoming = light grey, outgoing = soft green. */
   --app-bubble-in: #e7e8ec;
   --app-bubble-out: #d6f3cc;
+  /* (spec 1064) @mention accent. The brand green is the right colour for a mention, but it is a
+     LIGHT green: on the pale bubbles it lands at ~2.1:1, which is unreadable. So light mode uses a
+     darkened brand green (~5.4:1 on both bubbles) while dark mode keeps the brand green itself
+     (~5.0–5.5:1 there). --app-mention-contrast is the text colour for the filled "mentions me"
+     pill, which flips with the accent's own lightness rather than being assumed white. */
+  --app-mention: #0a6b48;
+  --app-mention-contrast: #ffffff;
   /* Wall pending/unfinished post card — a warm amber so an unsent, uploading or failed post reads
      as "not final yet" against the settled green posts. Opaque, like the bubbles, for legible text. */
   --app-bubble-pending: #ffe6ad;
@@ -63,6 +70,10 @@
   /* Opaque dark bubbles (WhatsApp-style): grey incoming, deep-green outgoing. */
   --app-bubble-in: #232d33;
   --app-bubble-out: #103a2c;
+  /* (spec 1064) On the dark bubbles the brand green IS the readable choice. The pill's text goes
+     BLACK here: white on the brand green is only ~2.5:1, whereas black reaches ~8.3:1. */
+  --app-mention: var(--ion-color-primary);
+  --app-mention-contrast: #000000;
   /* Deep amber pending card for dark mode (mirrors the light --app-bubble-pending). */
   --app-bubble-pending: #43320c;
   /* Game cards, dark (spec 1033 handoff). */

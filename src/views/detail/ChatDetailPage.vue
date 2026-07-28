@@ -1270,6 +1270,7 @@ import { generateVideoPoster, generateImageThumb, isAnimatedImage } from '@/util
 import { type Quality } from '@/services/media-encode';
 import { openExternal } from '@/utils/external';
 import { segmentContacts, telHref, mailtoHref } from '@/utils/linkify';
+import { findMentions, mentionQueryAt, replaceMentionQuery } from '@/utils/mention';
 import { firstLink, buildLinkPreview } from '@/services/link-preview';
 import type { LinkPreview } from '@/services/crypto/message';
 import { presentEntityActions, type ContactEntity } from '@/services/entity-actions';
@@ -1879,7 +1880,6 @@ interface BodySeg {
   everyone?: boolean;
   contact?: ContactEntity; // spec 1029: a tappable phone number / email address
 }
-const MENTION_RE = /@([a-zA-Z0-9_]+)/g;
 
 // Split a message body into render segments. @mentions (spec 1020): an "@handle" token
 // becomes a mention chip ONLY when it resolves to a member this message actually mentions
@@ -1912,18 +1912,18 @@ function bodyParts(m: Message): BodySeg[] {
     }
     const text = p.text ?? '';
     let last = 0;
-    let mm: RegExpExecArray | null;
-    MENTION_RE.lastIndex = 0;
-    while ((mm = MENTION_RE.exec(text))) {
-      const handle = mm[1].toLowerCase();
+    // (spec 1064) Tokens come from the shared parser, so the handle charset here is exactly the
+    // one the send path resolved against — they can no longer disagree about where a handle ends.
+    for (const tok of findMentions(text)) {
+      const handle = tok.handle.toLowerCase();
       const isEveryone = handle === 'everyone' && !!m.mentionsEveryone;
       const member = members.get(handle);
       const isMember = !!member && mentioned.has(member.id);
       if (!isEveryone && !isMember) continue; // plain "@word", leave in text
-      if (mm.index > last) emit(text.slice(last, mm.index));
+      if (tok.start > last) emit(text.slice(last, tok.start));
       if (isEveryone) out.push({ everyone: true });
       else out.push({ mention: { id: member!.id, name: member!.name, me: member!.id === selfId } });
-      last = mm.index + mm[0].length;
+      last = tok.end;
     }
     if (last < text.length) emit(text.slice(last));
   }
@@ -1959,11 +1959,10 @@ const mentionCandidates = computed<MentionCandidate[]>(() => {
 // An "@token" at the end of the draft (assumed cursor position) starts an autocomplete.
 function updateMentionQuery(): void {
   if (!chat.value?.isGroup) { mentionQuery.value = null; return; }
-  const m = /(?:^|\s)@([a-zA-Z0-9_]*)$/.exec(draft.value);
-  mentionQuery.value = m ? m[1] : null;
+  mentionQuery.value = mentionQueryAt(draft.value);
 }
 function pickMention(c: MentionCandidate): void {
-  draft.value = draft.value.replace(/(^|\s)@([a-zA-Z0-9_]*)$/, `$1@${c.username} `);
+  draft.value = replaceMentionQuery(draft.value, c.username);
   mentionQuery.value = null;
   void composerEl.value?.$el?.setFocus?.();
 }
@@ -1972,8 +1971,8 @@ function resolveMentions(text: string): { mentions: string[]; everyone: boolean 
   const byU = new Map(groupMembers.value.map((m) => [m.username.toLowerCase(), m.id]));
   const ids = new Set<string>();
   let everyone = false;
-  for (const mm of text.matchAll(/(?:^|\s)@([a-zA-Z0-9_]+)/g)) {
-    const h = mm[1].toLowerCase();
+  for (const mm of findMentions(text)) {
+    const h = mm.handle.toLowerCase();
     if (h === 'everyone' && isGroupOwner.value) everyone = true;
     else {
       const id = byU.get(h);
@@ -5878,13 +5877,15 @@ function cancelRecording() {
 /* @mention chip (spec 1020): a highlighted, tappable name. A mention of ME is
    emphasized (filled pill) so "this is about me" pops at a glance. */
 .mention {
-  color: var(--ion-color-primary);
-  font-weight: 600;
+  /* (spec 1064) Theme-aware accent: the brand green reads well on the dark bubbles but is
+     unreadable (~2.1:1) on the pale ones, so light mode substitutes a darkened brand green. */
+  color: var(--app-mention);
+  font-weight: 700;
   cursor: pointer;
 }
 .mention.me {
-  background: var(--ion-color-primary);
-  color: #fff;
+  background: var(--app-mention);
+  color: var(--app-mention-contrast);
   border-radius: 6px;
   padding: 0 4px;
 }
