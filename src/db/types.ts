@@ -363,6 +363,18 @@ export interface Message {
   // Set on a received media message that hasn't been downloaded yet (auto-download
   // off / deferred): the encrypted reference used to fetch it on demand.
   pendingMedia?: import('@/services/crypto/message').MediaRef;
+  // Spec 2058: when the most recent attempt to fetch `pendingMedia` FAILED (epoch ms).
+  // Cleared back to undefined the moment a fetch succeeds. Drives the bubble's "couldn't
+  // load this, tap to retry" face, so a failed fetch is visible instead of leaving the
+  // attachment looking like it is still loading forever.
+  //
+  // Persisted (rather than a component-local map) because the failure must still read as a
+  // failure when you leave the chat and come back. Device-local: never sent, never
+  // own-data-synced (ownsync only carries contacts/chats/chatlists), never server-derived.
+  // The companion auto-retry COUNT is deliberately NOT stored — it lives in memory for the
+  // session, so a message that burned its retries while offline gets a fresh chance on the
+  // next launch instead of being stuck on manual-tap forever.
+  dlFailedAt?: number;
   // Sender side: the server blob id we uploaded for this message's media, kept so we can
   // DELETE it once every recipient has downloaded the bytes (and on chat delete). Cleared
   // to undefined once the blob is deleted, so we never try twice.
