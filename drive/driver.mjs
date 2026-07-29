@@ -126,17 +126,19 @@ export async function newClient({ mobile = false, label = '?' } = {}) {
  * context and return the Client. Always mints a fresh dev invite code, so reruns
  * never collide. Optionally sets a display name (+ a blank avatar).
  */
-export async function createAccount({ mobile = false, name, label } = {}) {
+export async function createAccount({ mobile = false, name, label, username } = {}) {
   const c = await newClient({ mobile, label: label ?? name ?? 'acct' });
   await c.page.goto('/');
   await c.page.waitForFunction(() => !!window.__ringTest, null, { timeout: 30_000 }); // sync predicate → OK
-  await c.page.evaluate(async (nm) => {
+  await c.page.evaluate(async ([nm, un]) => {
     const t = window.__ringTest;
     const code = await t.freshCode();
-    await t.register(code);
+    // `username` lets a scenario pin the directory handle — e.g. one containing a DOT, which
+    // is legal but was mishandled by the mention parser (spec 1064).
+    await t.register(code, un ?? undefined);
     await t.createAuto();
     if (nm) await t.setProfile(nm, 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>');
-  }, name);
+  }, [name, username]);
   await poll(() => c.page.evaluate(() => window.__ringTest.isUnlocked()), (v) => v === true, { label: `${c.label} unlocked` });
   c.id = await c.page.evaluate(() => window.__ringTest.selfId());
   if (!c.id) throw new Error(`${c.label}: no self id after registration`);
