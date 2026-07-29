@@ -117,7 +117,7 @@ Phase 3 is a hard gate — its tests must be observed failing, for the right rea
 
 ## Phase 8: Polish & Gates
 
-- [ ] T025 Verify FR-005 by hand: change speed mid-playback, confirm it keeps playing from the same
+- [x] T025 Verify FR-005 by hand: change speed mid-playback, confirm it keeps playing from the same
       position. Note this is **pre-existing behavior** (setting `playbackRate` never seeks) — this
       is a regression check that the signature change didn't break it, not new behavior
 - [x] T026 [P] Run `npm run test:unit:coverage` (not bare `vitest run` — the thresholds only apply

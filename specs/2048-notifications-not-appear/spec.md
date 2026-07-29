@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-19
 
-**Status**: in-progress
+**Status**: shipped
 
 **Input**: Methodical device testing isolated the real failure: on modern iOS/iPadOS,
 message notifications work fine while the **screen is on** (even backgrounded/closed), but

@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-19
 
-**Status**: in-progress
+**Status**: shipped
 
 **Input**: On modern iOS/iPadOS (iOS 26, iPadOS 27), background push notifications for
 messages **silently fail to appear on the lock screen**, even though the service worker
