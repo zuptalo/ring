@@ -145,7 +145,7 @@ import { resetHiddenChats as hcReset } from '@/services/hidden-chats-reset';
 import { canHide, canUnhide } from '@/services/hidden-pair';
 import { hiddenIdsSync } from '@/services/hidden-state';
 import { revealWithPin as hcReveal, relockHidden as hcRelock } from '@/composables/useHiddenChats';
-import { downloadBlob } from '@/services/media-transfer';
+import { downloadBlob, prepareOutgoingMedia } from '@/services/media-transfer';
 import {
   chatMatchesFilter,
   type FilterId,
@@ -160,7 +160,7 @@ import { isUnlockedNow } from '@/services/crypto/identity';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { recordCues, recordedCues } from '@/services/sound';
 import { syncContactEdges } from '@/services/directory';
-import { audioTrack, audioCurId, audioPlaying } from '@/composables/useAudioPlayer';
+import { audioTrack, audioCurId, audioPlaying, audioElementRateNow } from '@/composables/useAudioPlayer';
 import appRouter from '@/router';
 import {
   requestConnect as storeRequestConnect, acceptConnect as storeAcceptConnect,
@@ -557,6 +557,11 @@ export function installTestHook(): void {
         status: m.status,
         hasPoster: !!m.posterData, // spec 1014: the bubble-tier preview rode the sealed envelope
         seenReportedAt: m.seenReportedAt ?? null, // spec 1013: this device reported it Seen
+        // (spec 2058) attachment state, so a test can tell "bytes are here" from "still
+        // pending" from "the fetch failed" without a second call per row.
+        pending: !!m.pendingMedia,
+        hasMedia: !!m.mediaId,
+        dlFailedAt: m.dlFailedAt ?? null,
         senderId: m.senderId,
         outgoing: m.outgoing,
         reactions: m.reactions ?? [],
@@ -799,6 +804,15 @@ export function installTestHook(): void {
     },
     /** Forward a message by id (games must be a no-op — asserting FR-014). */
     forwardMessage: (messageId: string, chatIds: string[]) => dbForwardMessage(messageId, chatIds),
+    /** Send a VOICE message (spec 2059). `sendAudio` below covers shared audio files; nothing
+     *  covered voice, so no test could exercise the voice player at all. */
+    sendVoice: (chatId: string, name = 'voice-message', durationSec = 6) =>
+      dbSendMediaMessage(chatId, 'voice', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' }), name, durationSec),
+    /** The shared audio element's LIVE playback rate (spec 2059). The element is created at
+     *  module scope and never attached to the DOM, so a test cannot reach it by selector —
+     *  without this, an assertion about playback speed can only read the pill's label, and a
+     *  fix that never applied the rate to any element would pass. */
+    audioElementRate: (): number => audioElementRateNow(),
     sendAudio: (chatId: string, name: string, title: string, artist: string) =>
       dbSendMediaMessage(chatId, 'audio', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/mpeg' }), name, 12, {
         audio: { title, artist },
@@ -1138,6 +1152,57 @@ export function installTestHook(): void {
         isGroup: c.isGroup,
       })),
 
+    /* ---- pending incoming media (spec 2058) ---- */
+    /** Seed an INCOMING message whose attachment bytes are not on the device yet — the exact
+     *  state a voice message lands in when it arrives while the app is closed (the push drain
+     *  stores the reference and never fetches bytes) or when a fetch fails.
+     *
+     *  `seedMedia` below cannot produce this: it always sets `mediaId` and `outgoing: true`.
+     *
+     *  By default the reference is REAL — the blob is encrypted and genuinely uploaded — so a
+     *  fetch can actually succeed and the recovery path is exercisable. That matters: with a
+     *  fabricated reference every fetch fails, and a test suite built on it could only ever
+     *  prove the failure half of the feature while quietly never testing the half that
+     *  matters. Pass `broken: true` to get an unfetchable reference on purpose, for the
+     *  failure cases. */
+    seedPendingIncoming: async (
+      chatId: string,
+      kind: 'voice' | 'video' | 'image' | 'audio' | 'file' = 'voice',
+      opts: { broken?: boolean; videoNote?: boolean; durationSec?: number; agedMs?: number } = {},
+    ): Promise<string> => {
+      const durationSec = opts.durationSec ?? 4;
+      // A tiny payload is enough — nothing decodes it; the test asserts on the bubble, and
+      // the fetch either resolves bytes or it doesn't.
+      const blob = new Blob([new Uint8Array(256)], { type: kind === 'voice' ? 'audio/webm' : 'application/octet-stream' });
+      const ref = await prepareOutgoingMedia(blob, `seed-pending.${kind}`, durationSec);
+      if (opts.broken) {
+        // Point at a blob id that was never uploaded. The fileKey stays valid, so the failure
+        // is a genuine "the bytes aren't there" 404 rather than a decrypt error.
+        ref.blobId = `never-uploaded-${uid()}`;
+      }
+      const id = uid();
+      // `agedMs` backdates the row so a test can seed a message that was stranded by an older
+      // build, rather than one that just arrived (FR-013).
+      const when = Date.now() - (opts.agedMs ?? 0);
+      await put<Message>('messages', {
+        id,
+        chatId,
+        senderId: 'peer',
+        senderName: 'Peer',
+        body: '',
+        kind,
+        durationSec,
+        timestamp: when,
+        outgoing: false,
+        status: 'delivered',
+        videoNote: opts.videoNote || undefined,
+        mediaSize: ref.size,
+        pendingMedia: ref,
+        updatedAt: when,
+      });
+      return id;
+    },
+
     /* ---- media storage cleanup ---- */
     /** Seed a fake media blob + a message linking it (for storage tests). */
     seedMedia: async (chatId: string, kind: Media['kind'], bytes: number): Promise<void> => {
@@ -1475,6 +1540,22 @@ export function installTestHook(): void {
     },
     /** Compose + share an ALBUM post of `n` tiny images through the REAL createPost path
      *  (compress → seal N refs → upload → register), so e2e exercises album round-trip. */
+    /** A VOICE post on the Wall (spec 2059). Every other Wall seam is image/video, so the
+     *  Wall voice player — which shares the chat one, and its bug — had no test path. */
+    postVoice: async (body?: string, durationSec = 6): Promise<string> => {
+      const p = await dbCreatePost({
+        body,
+        audience: 'friends',
+        lifetime: '24h',
+        media: {
+          blob: new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' }),
+          kind: 'voice' as const,
+          name: 'voice-post.webm',
+          durationSec,
+        },
+      });
+      return p.id;
+    },
     postAlbum: async (n: number, body?: string): Promise<string> => {
       const png = Uint8Array.from(
         atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),

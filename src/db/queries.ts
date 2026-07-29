@@ -2507,6 +2507,15 @@ const jobsInFlight = new Set<string>();
 const heavyLane = createLimiter(1);
 const lightLane = createLimiter(3);
 
+// Those two lanes govern SENDING. Receiving had no limiter at all: every path that fetches a
+// deferred attachment went straight at the network, and the app-start backfill fired one
+// unawaited fetch per pending message on the device. That was survivable only because
+// fetches were rare. Spec 2058 makes pending attachments recover whenever their bubble
+// scrolls into view, so a chat full of them would otherwise open a fetch each, all at once.
+// Every download now funnels through here — the choke point sits INSIDE
+// downloadMessageMedia, so callers can't forget it and nothing double-wraps.
+const downloadLane = createLimiter(3);
+
 // Peak-memory guard shared across BOTH lanes. Sealing holds plaintext + ciphertext in the heap
 // together (encryptBlob), so several large uploads at once is the jetsam (OOM) risk spec 2041
 // fought. The seal+upload phase of every job acquires from this budget: small items parallelize,
@@ -2859,7 +2868,7 @@ function onUnmeteredOrUnknown(): boolean {
  *  auto-download (a per-kind 'never' | 'wifi' | 'wifi-cellular' choice), the network, AND a size
  *  limit (anything larger is left for a manual tap). Voice notes and round video notes always
  *  download — they're small and expected to play instantly. Uses the media metadata (kind + size). */
-async function shouldAutoDownloadMedia(kind: MessageKind, videoNote: boolean, size: number): Promise<boolean> {
+export async function shouldAutoDownloadMedia(kind: MessageKind, videoNote: boolean, size: number): Promise<boolean> {
   if (kind === 'voice') return true; // voice messages are always downloaded
   if (kind === 'video' && videoNote) return true; // round video notes always download
   const key =
@@ -2944,8 +2953,23 @@ export async function downloadMessageMedia(
   const m = await getMessage(messageId);
   if (!m?.pendingMedia || m.mediaId) return;
   const ref = m.pendingMedia;
-  const blob = await receiveIncomingMedia(ref, onProgress);
-  if (!blob) throw new Error('download failed');
+  let blob: Blob | null;
+  try {
+    // (spec 2058) Through the lane: recovery can now fire for every pending attachment
+    // scrolled into view, so without a cap a chat full of them would open a fetch each.
+    blob = await downloadLane(() => receiveIncomingMedia(ref, onProgress));
+  } catch (e) {
+    await markDownloadFailed(messageId);
+    throw e;
+  }
+  if (!blob) {
+    // The bytes are genuinely not there (blob aged off the relay, or never finished
+    // uploading). Remember that we tried and lost, so the bubble can say so instead of
+    // sitting there looking like it is still loading (spec 2058, FR-008). pendingMedia is
+    // deliberately kept — dropping it would make the message permanently unrecoverable.
+    await markDownloadFailed(messageId);
+    throw new Error('download failed');
+  }
   const mediaId = uid();
   await put<Media>('media', {
     id: mediaId,
@@ -2960,7 +2984,19 @@ export async function downloadMessageMedia(
   await applyThumbTiers(mediaId, await bubbleFromDataUrl(ref.poster)); // spec 1014 tiers from the sent poster
   m.mediaId = mediaId;
   m.pendingMedia = undefined;
+  m.dlFailedAt = undefined; // it worked — clear any earlier failure (spec 2058)
   m.updatedAt = now();
+  await put('messages', m);
+}
+
+/** (spec 2058) Mark a message's attachment fetch as failed, so its bubble shows a retry
+ *  affordance rather than a perpetual loading state. Re-read inside so a fetch that raced a
+ *  concurrent success doesn't resurrect a failure on an already-resolved message. */
+async function markDownloadFailed(messageId: string): Promise<void> {
+  const m = await getMessage(messageId);
+  if (!m || m.mediaId || !m.pendingMedia) return; // resolved or gone in the meantime
+  m.dlFailedAt = now();
+  m.updatedAt = now(); // bumps the bubble's v-memo key so the row repaints
   await put('messages', m);
 }
 

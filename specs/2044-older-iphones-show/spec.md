@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-19
 
-**Status**: in-progress
+**Status**: shipped
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
