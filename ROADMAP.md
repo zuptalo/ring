@@ -83,7 +83,7 @@ Specs are grouped by category band; status moves
 | [1055](specs/1055-ciphertext-push-instant/spec.md) | Instant rich notifications (bounded encrypted preview in push) | 🟡 in-progress |
 | [1062](specs/1062-list-status-presence/spec.md) | Message status and presence on the chat list | 🟢 shipped |
 | [1063](specs/1063-full-size-media/spec.md) | Full-size aspect-preserving media thumbnails in chat | 🟡 in-progress |
-| [1064](specs/1064-mention-names/spec.md) | Mentions show the name you know someone by, and stay readable | 🔵 in-review |
+| [1064](specs/1064-mention-names/spec.md) | Mentions show the name you know someone by, and stay readable | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
