@@ -54,10 +54,11 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play } from 'ionicons/icons';
 import SpeedPill from '@/components/SpeedPill.vue';
-import { nextRate, playWhenReady } from '@/utils/playback';
+import { nextRate, playWhenReady, type PlaybackRate } from '@/utils/playback';
+import { cycleRateFor, rateFor, touchRate } from '@/composables/usePlaybackRates';
 import { useScrub } from '@/composables/useScrub';
 
-const props = defineProps<{ src: string; poster?: string; embedded?: boolean; chromeHidden?: boolean; startAt?: number }>();
+const props = defineProps<{ src: string; id?: string; poster?: string; embedded?: boolean; chromeHidden?: boolean; startAt?: number }>();
 const emit = defineEmits<{ (e: 'tap'): void; (e: 'time', seconds: number): void }>();
 
 const el = ref<HTMLVideoElement>();
@@ -65,7 +66,13 @@ const playing = ref(false);
 const elapsed = ref(0);
 const total = ref(0);
 const progress = ref(0);
-const rate = ref(1);
+// (spec 2059) This clip's OWN speed, kept outside the component. The rate used to live in
+// a local ref, so the media viewer tearing this player down on swipe silently threw the
+// chosen speed away — you came back to 1x with no idea why.
+const rate = computed(() => (props.id ? rateFor(props.id) : localRate.value));
+// A player with no id (should not happen in the viewer, but the prop is optional) keeps the
+// old component-local behaviour rather than sharing one anonymous entry with every other.
+const localRate = ref<PlaybackRate>(1);
 const pipActive = ref(false);
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -83,8 +90,9 @@ function onSurfaceClick(): void {
   else toggle();
 }
 function cycleRate(): void {
-  rate.value = nextRate(rate.value);
-  if (el.value) el.value.playbackRate = rate.value;
+  const next = props.id ? cycleRateFor(props.id) : nextRate(localRate.value);
+  if (!props.id) localRate.value = next;
+  if (el.value) el.value.playbackRate = next;
 }
 function seekTo(ratio: number): void {
   const v = el.value;
@@ -136,6 +144,11 @@ function onMeta(): void {
     v.currentTime = props.startAt;
     onTime();
   }
+  // (spec 2059) Restore the remembered SPEED too, not just the position. playbackRate used to
+  // be written only when the pill was tapped, so a player rebuilt after a swipe would show
+  // "1.5x" while actually playing at 1x — the pill right, the playback wrong.
+  v.playbackRate = rate.value;
+  if (props.id) touchRate(props.id);
 }
 function onTime(): void {
   const v = el.value;

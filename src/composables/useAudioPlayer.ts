@@ -12,7 +12,8 @@
  * with their track and read `audioCurId` to know whether they're the active one.
  */
 import { ref } from 'vue';
-import { nextRate, playWhenReady } from '@/utils/playback';
+import { playWhenReady } from '@/utils/playback';
+import { cycleRateFor, rateFor, touchRate } from '@/composables/usePlaybackRates';
 
 export interface AudioTrackMeta {
   id: string; // the message id — the unit of "now playing"
@@ -33,7 +34,6 @@ el.loop = false; // never loop (FR-007)
 export const audioCurId = ref<string | null>(null);
 export const audioPlaying = ref(false);
 export const audioProgress = ref(0); // 0..1
-export const audioRate = ref(1);
 export const audioTrack = ref<AudioTrackMeta | null>(null);
 // The id of a track whose OWN inline player is currently on screen (a Wall voice post the user
 // is looking at) — the floating controller hides for it, since the inline player is right there.
@@ -66,12 +66,23 @@ export function playAudio(meta: AudioTrackMeta, onEnded?: () => void): void {
     return;
   }
   el.src = meta.url;
-  el.playbackRate = audioRate.value;
+  // (spec 2059) This track's OWN speed, not an app-wide one. Set before play so the opening
+  // moments aren't at the wrong speed, and count the play as "using" it so a message you
+  // actually listen to outlives one you merely scrolled past.
+  el.playbackRate = rateFor(meta.id);
+  touchRate(meta.id);
   audioCurId.value = meta.id;
   audioProgress.value = 0;
   audioTrack.value = meta;
   endedCb = onEnded ?? null;
   void playWhenReady(el);
+}
+
+/** The shared element's live playback rate. Exists for the dev-only test hook (spec 2059):
+ *  the element is module-scoped and never in the DOM, so a test has no other way to check
+ *  that a chosen speed was actually applied to playback rather than merely displayed. */
+export function audioElementRateNow(): number {
+  return el.playbackRate;
 }
 
 export function toggleAudioPlayback(): void {
@@ -83,9 +94,12 @@ export function seekAudioFrac(frac: number): void {
   if (el.duration) el.currentTime = Math.min(1, Math.max(0, frac)) * el.duration;
 }
 
-export function cycleAudioRate(): void {
-  audioRate.value = nextRate(audioRate.value);
-  el.playbackRate = audioRate.value;
+/** Advance ONE message's playback speed (spec 2059). Only touches the shared element when
+ *  that message is the one currently playing — changing the speed of some other message in
+ *  the list must not reach into what you are listening to right now. */
+export function cycleAudioRate(id: string): void {
+  const next = cycleRateFor(id);
+  if (audioCurId.value === id) el.playbackRate = next;
 }
 
 /** Stop playback entirely and clear the now-playing state (hides the controller). */

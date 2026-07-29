@@ -72,6 +72,7 @@
               v-else-if="i === index || nearby(i)"
               :ref="(c) => bindVideo(c, i)"
               :src="it.url"
+              :id="it.id"
               :poster="it.thumb"
               :embedded="true"
               :chrome-hidden="chromeHidden"

@@ -34,8 +34,9 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { IonIcon } from '@ionic/vue';
 import { play, pause, mic } from 'ionicons/icons';
 import SpeedPill from '@/components/SpeedPill.vue';
+import { rateFor } from '@/composables/usePlaybackRates';
 import {
-  audioCurId, audioPlaying, audioProgress, audioRate, controllerHiddenForId,
+  audioCurId, audioPlaying, audioProgress, controllerHiddenForId,
   playAudio, seekAudioFrac, cycleAudioRate,
 } from '@/composables/useAudioPlayer';
 
@@ -70,7 +71,9 @@ const progress = computed(() => (isActive.value ? audioProgress.value : 0)); // 
 // What the wave paints: the upload waterline while the send is in flight, playback after.
 const paint = computed(() => props.uploadProgress ?? progress.value);
 const elapsed = computed(() => progress.value * total.value);
-const rate = computed(() => audioRate.value);
+// (spec 2059) THIS message's speed. It used to read one app-wide value, which is why
+// changing the speed on one voice message changed the pill on all of them.
+const rate = computed(() => rateFor(props.mid));
 
 const barHeight = (h: number) => `${Math.round(3 + h * 17)}px`;
 
@@ -114,7 +117,7 @@ function toggle(): void {
   playAudio({ id: props.mid, url: props.src, title: 'Voice message', subtitle: props.sender, isVoice: true, chatId: props.chatId });
 }
 function cycleRate(): void {
-  cycleAudioRate();
+  cycleAudioRate(props.mid);
 }
 
 const waveEl = ref<HTMLElement>();

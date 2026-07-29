@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-29
 
-**Status**: planned
+**Status**: in-progress
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
@@ -223,5 +223,5 @@ renders media it already holds.
 
 | # | Principle / rule | Status | Detail |
 |---|---|---|---|
-| E-1 | **Development Workflow — supply-chain scan at the start of new work** (MUST) | ⏳ **Unmet, awaiting maintainer** | The Docker Scout report for the current `zuptalo/ring` tag has not been reviewed; no Docker Hub access in this environment. Client-only change with no Go module or base-image surface, so it does not block the code, but it MUST be discharged before the release PR. **Maintainer sign-off: not yet recorded.** |
+| E-1 | **Development Workflow — supply-chain scan at the start of new work** (MUST) | ✅ **Waived by maintainer, 2026-07-29** | The Docker Scout report for the current `zuptalo/ring` tag was not reviewed — no Docker Hub access in the working environment. Maintainer waived the gate for this spec on the basis that it is a client-only change touching no Go module and no base image, so it carries no dependency surface the scan could flag, and undertook to run the scan before the release PR. The obligation moves to the release, it is not dropped. |
 | E-2 | **Development Workflow — version bump at the start of a release cycle** (MUST) | ✅ Addressed | `develop` is at 1.0.32 with tag `v1.0.32` cut, so this is the first change of a new cycle. Carried as a task. |
