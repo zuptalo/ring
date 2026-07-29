@@ -40,6 +40,7 @@ import { setCompressProgress, setUploadProgress, resetJobProgress, clearJobProgr
 import { readVideoMeta, readImageMeta, generateVideoPoster, makeImageThumb, deriveTiers, blobToDataUrl } from '@/utils/media-meta';
 import { createLimiter, createByteBudget, raceTimeout } from '@/utils/concurrency';
 import { resolveIncomingTimestamp, senderClockIsSkewed } from '@/utils/message-time';
+import { substituteMentionNames, mentionNameResolver } from '@/utils/mention';
 import { THUMB_TIERS, isOwnThumbnail } from '@/utils/thumbs';
 import { notifyPreview } from '@/utils/notify-preview';
 import { firstLink, buildLinkPreview, shouldBuildLinkPreview } from '@/services/link-preview';
@@ -6639,6 +6640,16 @@ async function receiveIncomingInner(
   // incoming item is never acked/drained before it has been surfaced to the user
   // (the message is also already persisted above, so it is never lost either way).
   // A notify error must never block the ack/dedup that follow, so it's swallowed.
+  // (spec 1064) Render @mentions in the notification with the name this device knows the person
+  // by (a local rename included), matching the chat bubble. Only the ids this message actually
+  // mentions are looked up — usually none, at most a couple — so the receive path stays light.
+  let notifyBody = notifyPreview(payload);
+  if (payload.mentions?.length) {
+    const named = (await Promise.all(payload.mentions.map((id) => getContact(id)))).filter(
+      (c): c is Contact => !!c,
+    );
+    notifyBody = substituteMentionNames(notifyBody, mentionNameResolver(named));
+  }
   await notifyIncoming({
     kind: 'message',
     chatId: targetChatId,
@@ -6647,7 +6658,7 @@ async function receiveIncomingInner(
     name: chat?.isGroup ? chat.name : contact.name,
     // The notification spells out shared location / contact / poll (no icon to lean
     // on), unlike the terser `preview` used for the chats list above.
-    body: isGroupMsg ? `${contact.name}: ${notifyPreview(payload)}` : notifyPreview(payload) || 'New message',
+    body: isGroupMsg ? `${contact.name}: ${notifyBody}` : notifyBody || 'New message',
     // @mentions (spec 1020): a mention escalates past mute/quiet and names the mentioner.
     // A direct reply to my message (spec 1048) escalates identically, with its own wording.
     mention: selfMentioned,

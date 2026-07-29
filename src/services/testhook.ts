@@ -560,6 +560,10 @@ export function installTestHook(): void {
         senderId: m.senderId,
         outgoing: m.outgoing,
         reactions: m.reactions ?? [],
+        // (spec 1064) the resolved @mention ids — what actually drives the mention
+        // notification, the mute-piercing frame class and the "@" badge.
+        mentions: m.mentions ?? [],
+        mentionsEveryone: !!m.mentionsEveryone,
         replyTo: m.replyTo ?? null,
         albumId: m.albumId ?? null,
         expiresAt: m.expiresAt ?? null, // disappearing messages: when this self-destructs
@@ -1049,6 +1053,9 @@ export function installTestHook(): void {
     /** A contact's display name (to verify profiles propagated), or '' if none.
      *  Reads the contact record directly (listContacts hides ghosted ones). */
     contactName: async (id: string): Promise<string> => (await dbGetContact(id))?.name ?? '',
+    /** (spec 1064) A contact's directory handle, or '' until it has been hydrated. Mentions
+     *  resolve by handle, so a test must wait for this before composing one. */
+    contactUsername: async (id: string): Promise<string> => (await dbGetContact(id))?.username ?? '',
     /** Set a LOCAL name/avatar override for a contact. */
     setContactLocalProfile: (id: string, name?: string, avatar?: string) => dbSetContactLocalProfile(id, { name, avatar }),
     /** Reset a contact to the peer's CURRENT name/photo (revert + re-pull from directory). */
