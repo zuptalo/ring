@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-19
 
-**Status**: in-progress
+**Status**: shipped
 
 **Input**: Prod logs show `push: non-success status=413 body="…Payload Too Large… Converted
 buffer is too long by 1441 bytes" endpoint=updates.push.services.mozilla.com` — a Firefox

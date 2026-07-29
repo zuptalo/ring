@@ -80,9 +80,9 @@ Specs are grouped by category band; status moves
 | [1052](specs/1052-group-adds-you/spec.md) | Group Adds You Can Trust | 🟢 shipped |
 | [1053](specs/1053-composer-buttons-transition/spec.md) | Composer Buttons Transition Like WhatsApp | 🟢 shipped |
 | [1054](specs/1054-pick-emoji-contact/spec.md) | Emoji contact photos + reset to their photo | 🟢 shipped |
-| [1055](specs/1055-ciphertext-push-instant/spec.md) | Instant rich notifications (bounded encrypted preview in push) | 🟡 in-progress |
+| [1055](specs/1055-ciphertext-push-instant/spec.md) | Instant rich notifications (bounded encrypted preview in push) | 🟢 shipped |
 | [1062](specs/1062-list-status-presence/spec.md) | Message status and presence on the chat list | 🟢 shipped |
-| [1063](specs/1063-full-size-media/spec.md) | Full-size aspect-preserving media thumbnails in chat | 🟡 in-progress |
+| [1063](specs/1063-full-size-media/spec.md) | Full-size aspect-preserving media thumbnails in chat | 🟢 shipped |
 | [1064](specs/1064-mention-names/spec.md) | Mentions show the name you know someone by, and stay readable | 🟢 shipped |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
@@ -130,12 +130,12 @@ Specs are grouped by category band; status moves
 | [2039](specs/2039-boot-loop-safe/spec.md) | Boot-Loop Safe Mode | 🟢 shipped |
 | [2040](specs/2040-recovered-devices-rebuild/spec.md) | Recovered Devices Rebuild Their Friends Ledger | 🟢 shipped |
 | [2041](specs/2041-video-post-memory/spec.md) | Video Posts Must Not Exhaust iPhone Memory | 🟢 shipped |
-| [2043](specs/2043-push-zombie-subscriptions/spec.md) | Push zombie subscriptions & silent-wake strikes | 🟡 in-progress |
-| [2044](specs/2044-older-iphones-show/spec.md) | Legacy-iOS lite push path — older iPhones always show a notification | 🟡 in-progress |
-| [2045](specs/2045-brief-light-theme/spec.md) | No light-theme flash returning to the app | 🟡 in-progress |
-| [2046](specs/2046-version-announcement-push/spec.md) | Push tickles fit constrained push endpoints | 🟡 in-progress |
-| [2047](specs/2047-modern-iphones-and/spec.md) | Modern iPhones/iPads actually display push notifications | 🟡 in-progress |
-| [2048](specs/2048-notifications-not-appear/spec.md) | Show-first notifications (work when locked, keep the subscription alive) | 🟡 in-progress |
+| [2043](specs/2043-push-zombie-subscriptions/spec.md) | Push zombie subscriptions & silent-wake strikes | 🟢 shipped |
+| [2044](specs/2044-older-iphones-show/spec.md) | Legacy-iOS lite push path — older iPhones always show a notification | 🟢 shipped |
+| [2045](specs/2045-brief-light-theme/spec.md) | No light-theme flash returning to the app | 🟢 shipped |
+| [2046](specs/2046-version-announcement-push/spec.md) | Push tickles fit constrained push endpoints | 🟢 shipped |
+| [2047](specs/2047-modern-iphones-and/spec.md) | Modern iPhones/iPads actually display push notifications | 🟢 shipped |
+| [2048](specs/2048-notifications-not-appear/spec.md) | Show-first notifications (work when locked, keep the subscription alive) | 🟢 shipped |
 | [2049](specs/2049-dark-default-flash/spec.md) | Default to dark theme and fix the startup theme flash | 🟢 shipped |
 | [2050](specs/2050-media-interop/spec.md) | Make pasted and sent media interoperable across browsers | 🟢 shipped |
 | [2051](specs/2051-reply-swipe-responsive/spec.md) | Make incoming messages more responsive to swipe-to-reply | 🟢 shipped |
@@ -145,5 +145,5 @@ Specs are grouped by category band; status moves
 | [2055](specs/2055-poster-budget/spec.md) | An oversized preview must never block a send | 🟢 shipped |
 | [2056](specs/2056-sender-clock-skew/spec.md) | Messages from a device with a wrong clock must not sort into the past | 🟢 shipped |
 | [2057](specs/2057-signal-clock/spec.md) | Reactions and game moves still trust the sender's clock | 🟢 shipped |
-| [2058](specs/2058-voice-messages-arrive/spec.md) | Voice messages never arrive as an empty bubble | 🟡 in-progress |
-| [2059](specs/2059-playback-speed-shared/spec.md) | Playback speed belongs to the message you set it on | 🟡 in-progress |
+| [2058](specs/2058-voice-messages-arrive/spec.md) | Voice messages never arrive as an empty bubble | 🟢 shipped |
+| [2059](specs/2059-playback-speed-shared/spec.md) | Playback speed belongs to the message you set it on | 🟢 shipped |

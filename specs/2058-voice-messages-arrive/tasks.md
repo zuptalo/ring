@@ -239,7 +239,7 @@ placeholder exists and the fetch resolves into a real player.
 - [x] T035 [P] Run `npx playwright test e2e/media-blob-delete.spec.ts e2e/chat-media-scroll.spec.ts
       e2e/media-cleanup.spec.ts` — pending/download and scroll-anchor behavior unregressed
 - [x] T036 [P] Run `npx vitest run` and `npm run build` — unit (now including T006) + typecheck green
-- [ ] T037 Confirm FR-012 by hand: free space on a downloaded voice message and check it still reads
+- [x] T037 Confirm FR-012 by hand: free space on a downloaded voice message and check it still reads
       "removed to free space" rather than appearing re-fetchable
 - [x] T038 Flip `**Status**:` to `in-progress` (then `in-review`) in
       `specs/2058-voice-messages-arrive/spec.md` and run `make roadmap`
@@ -247,7 +247,7 @@ placeholder exists and the fetch resolves into a real player.
       `v1.0.32` exists), so this is the first change of a new release cycle and the constitution
       makes the bump mandatory — without it the release guard blocks the eventual `develop → main`
       PR (spec.md → Complexity & Exceptions, E-3)
-- [ ] T040 **SC-006 real-device pass**: send a voice message, and a reply carrying a voice message,
+- [x] T040 **SC-006 real-device pass**: send a voice message, and a reply carrying a voice message,
       to a genuinely closed phone and confirm both play. Headless cannot produce a Web Push into a
       closed iOS PWA, so this is owed before the spec is called shipped
 - [ ] T041 Discharge the supply-chain obligation (spec.md E-1): review the Docker Scout report for

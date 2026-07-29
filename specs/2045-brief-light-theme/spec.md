@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-19
 
-**Status**: in-progress
+**Status**: shipped
 
 **Input**: On iOS, occasionally (~1% of app-switcher returns / cold relaunches) Ring
 paints in the light theme for one frame before correcting to dark, even though the OS is
