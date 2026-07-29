@@ -36,6 +36,7 @@ export default defineConfig({
       // covered behaviorally by identity.test.ts + the e2e suite; fold them into
       // this gate as they gain dedicated unit tests. Ratchet the floor upward then.
       include: [
+        'src/composables/usePlaybackRates.ts', // spec 2059: pure per-message rate registry
         'src/services/crypto/primitives.ts',
         'src/services/crypto/envelope.ts',
         'src/services/crypto/message.ts',

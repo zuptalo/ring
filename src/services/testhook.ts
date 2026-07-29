@@ -160,7 +160,7 @@ import { isUnlockedNow } from '@/services/crypto/identity';
 import { recoverInterruptedPosts } from '@/services/pending-posts';
 import { recordCues, recordedCues } from '@/services/sound';
 import { syncContactEdges } from '@/services/directory';
-import { audioTrack, audioCurId, audioPlaying } from '@/composables/useAudioPlayer';
+import { audioTrack, audioCurId, audioPlaying, audioElementRateNow } from '@/composables/useAudioPlayer';
 import appRouter from '@/router';
 import {
   requestConnect as storeRequestConnect, acceptConnect as storeAcceptConnect,
@@ -804,6 +804,15 @@ export function installTestHook(): void {
     },
     /** Forward a message by id (games must be a no-op — asserting FR-014). */
     forwardMessage: (messageId: string, chatIds: string[]) => dbForwardMessage(messageId, chatIds),
+    /** Send a VOICE message (spec 2059). `sendAudio` below covers shared audio files; nothing
+     *  covered voice, so no test could exercise the voice player at all. */
+    sendVoice: (chatId: string, name = 'voice-message', durationSec = 6) =>
+      dbSendMediaMessage(chatId, 'voice', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' }), name, durationSec),
+    /** The shared audio element's LIVE playback rate (spec 2059). The element is created at
+     *  module scope and never attached to the DOM, so a test cannot reach it by selector —
+     *  without this, an assertion about playback speed can only read the pill's label, and a
+     *  fix that never applied the rate to any element would pass. */
+    audioElementRate: (): number => audioElementRateNow(),
     sendAudio: (chatId: string, name: string, title: string, artist: string) =>
       dbSendMediaMessage(chatId, 'audio', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/mpeg' }), name, 12, {
         audio: { title, artist },
@@ -1531,6 +1540,22 @@ export function installTestHook(): void {
     },
     /** Compose + share an ALBUM post of `n` tiny images through the REAL createPost path
      *  (compress → seal N refs → upload → register), so e2e exercises album round-trip. */
+    /** A VOICE post on the Wall (spec 2059). Every other Wall seam is image/video, so the
+     *  Wall voice player — which shares the chat one, and its bug — had no test path. */
+    postVoice: async (body?: string, durationSec = 6): Promise<string> => {
+      const p = await dbCreatePost({
+        body,
+        audience: 'friends',
+        lifetime: '24h',
+        media: {
+          blob: new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' }),
+          kind: 'voice' as const,
+          name: 'voice-post.webm',
+          durationSec,
+        },
+      });
+      return p.id;
+    },
     postAlbum: async (n: number, body?: string): Promise<string> => {
       const png = Uint8Array.from(
         atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),

@@ -334,11 +334,11 @@
                   :active="audioCurId === m.id"
                   :playing="audioCurId === m.id && audioPlaying"
                   :progress="audioCurId === m.id ? audioProgress : 0"
-                  :rate="audioRate"
+                  :rate="rateFor(m.id)"
                   :upload-progress="m.status === 'compressing' ? uploadFrac(m) : undefined"
                   @toggle="toggleAudio(m.id)"
                   @seek="(f) => seekAudio(m.id, f)"
-                  @cycle-speed="cycleAudioRate"
+                  @cycle-speed="cycleAudioRate(m.id)"
                 />
                 <a
                   v-else-if="m.kind === 'file'"
@@ -1305,6 +1305,7 @@ import LocationComposer from '@/components/LocationComposer.vue';
 import AudioCard from '@/components/AudioCard.vue';
 import CloudFill from '@/components/CloudFill.vue';
 import SpeedPill from '@/components/SpeedPill.vue';
+import { rateFor } from '@/composables/usePlaybackRates'; // spec 2059: speed is per message
 import { nextRate, playWhenReady } from '@/utils/playback';
 import AudioReview from '@/components/AudioReview.vue';
 import Emoji from '@/components/Emoji.vue';
@@ -1335,7 +1336,7 @@ import { pickAnchor, resolveAnchorDelta, shouldDeferScrollWrite, isSelfEcho } fr
 import { isRunStart as isRunStartEdge, showDay as showDayEdge } from '@/utils/chat-grouping';
 import { jumpButtonVisible, unreadSince, seenFrontier } from '@/utils/chat-unread';
 import {
-  audioCurId, audioPlaying, audioProgress, audioRate,
+  audioCurId, audioPlaying, audioProgress,
   playAudio, seekAudioFrac, cycleAudioRate, stopAudio, detachAudioEnded,
   type AudioTrackMeta,
 } from '@/composables/useAudioPlayer';
