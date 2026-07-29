@@ -359,6 +359,7 @@
               <div
                 v-if="((m.kind === 'video' && !m.videoNote) || m.kind === 'image') && !m.mediaId && m.pendingMedia"
                 class="video-poster pending"
+                :class="{ failed: !!m.dlFailedAt && !(m.id in downloadProgress) }"
                 @click.stop="downloadPendingMedia(m.id)"
               >
                 <img v-if="m.posterData" class="bubble-image" :src="m.posterData" :alt="m.kind" />
@@ -369,7 +370,7 @@
                     <circle class="dl-ring-track" cx="18" cy="18" r="16" pathLength="100" />
                     <circle class="dl-ring-fill" cx="18" cy="18" r="16" pathLength="100" :stroke-dasharray="`${(downloadProgress[m.id] || 0) * 100} 100`" />
                   </svg>
-                  <ion-icon :icon="downloadOutline" />
+                  <ion-icon :icon="m.dlFailedAt && !(m.id in downloadProgress) ? refreshOutline : downloadOutline" />
                 </span>
                 <!-- Attachment size (climbs live while downloading), so a large clip is obvious
                      before you spend the data. -->
@@ -380,6 +381,7 @@
                 v-else-if="(m.kind === 'audio' || m.kind === 'file') && !m.mediaId && m.pendingMedia"
                 type="button"
                 class="file-chip pending-chip"
+                :class="{ failed: !!m.dlFailedAt && !(m.id in downloadProgress) }"
                 @click.stop="downloadPendingMedia(m.id)"
               >
                 <span class="chip-ico">
@@ -387,10 +389,53 @@
                     <circle class="dl-ring-track" cx="18" cy="18" r="16" pathLength="100" />
                     <circle class="dl-ring-fill" cx="18" cy="18" r="16" pathLength="100" :stroke-dasharray="`${(downloadProgress[m.id] || 0) * 100} 100`" />
                   </svg>
-                  <ion-icon :icon="m.id in downloadProgress ? downloadOutline : (m.kind === 'audio' ? musicalNotesOutline : downloadOutline)" />
+                  <ion-icon :icon="m.dlFailedAt && !(m.id in downloadProgress) ? refreshOutline : (m.id in downloadProgress ? downloadOutline : (m.kind === 'audio' ? musicalNotesOutline : downloadOutline))" />
                 </span>
                 <span>{{ m.pendingMedia.name || (m.kind === 'audio' ? 'Audio' : 'File') }}</span>
                 <span v-if="m.mediaSize" class="chip-size">{{ dlSizeLabel(m) }}</span>
+              </button>
+              <!-- Voice message whose audio isn't on the device yet (spec 2058). Without this
+                   branch the bubble rendered COMPLETELY EMPTY — the voice player above needs
+                   the resolved blob, and neither pending fallback matched 'voice', so nothing
+                   was drawn at all. Shaped to VoicePlayer's row (disc + wave strip + time) so
+                   the swap to the real player doesn't change the bubble's height; a chip here
+                   would reflow the list mid-scroll, which is the trap spec 1011 documents. -->
+              <button
+                v-else-if="m.kind === 'voice' && !m.mediaId && m.pendingMedia"
+                type="button"
+                class="vp-pending"
+                :class="{ failed: !!m.dlFailedAt && !(m.id in downloadProgress) }"
+                :aria-label="pendingVoiceLabel(m)"
+                @click.stop="downloadPendingMedia(m.id)"
+              >
+                <span class="vpp-disc">
+                  <svg v-if="m.id in downloadProgress" class="dl-ring" viewBox="0 0 36 36" aria-hidden="true">
+                    <circle class="dl-ring-track" cx="18" cy="18" r="16" pathLength="100" />
+                    <circle class="dl-ring-fill" cx="18" cy="18" r="16" pathLength="100" :stroke-dasharray="`${(downloadProgress[m.id] || 0) * 100} 100`" />
+                  </svg>
+                  <ion-icon :icon="m.dlFailedAt && !(m.id in downloadProgress) ? refreshOutline : micOutline" />
+                </span>
+                <!-- Inert flat bars: the same visual footprint the real waveform will occupy. -->
+                <span class="vpp-wave" aria-hidden="true"><i v-for="n in 28" :key="n"></i></span>
+                <span class="vpp-time">{{ pendingVoiceTime(m) }}</span>
+              </button>
+              <!-- Round video note, same story (spec 2058). Kept as its own branch rather than
+                   folded into the square photo/video block above: that frame is a square
+                   poster box, and a round note's bubble is already chromeless, so reusing it
+                   would render a square patch where a circle belongs. -->
+              <button
+                v-else-if="m.kind === 'video' && m.videoNote && !m.mediaId && m.pendingMedia"
+                type="button"
+                class="note-pending"
+                :class="{ failed: !!m.dlFailedAt && !(m.id in downloadProgress) }"
+                :aria-label="m.dlFailedAt ? 'Video note — couldn\'t load, tap to try again' : 'Video note — tap to load'"
+                @click.stop="downloadPendingMedia(m.id)"
+              >
+                <svg v-if="m.id in downloadProgress" class="dl-ring" viewBox="0 0 36 36" aria-hidden="true">
+                  <circle class="dl-ring-track" cx="18" cy="18" r="16" pathLength="100" />
+                  <circle class="dl-ring-fill" cx="18" cy="18" r="16" pathLength="100" :stroke-dasharray="`${(downloadProgress[m.id] || 0) * 100} 100`" />
+                </svg>
+                <ion-icon :icon="m.dlFailedAt && !(m.id in downloadProgress) ? refreshOutline : videocamOutline" />
               </button>
 
               <!-- Media removed from THIS device to free space: a placeholder so the
@@ -1226,7 +1271,9 @@ import {
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
   backfillThumbTiers, getDraft, saveDraft, clearDraft, getDraftMedia, saveDraftMedia, clearDraftMedia,
+  shouldAutoDownloadMedia,
 } from '@/db/queries';
+import { shouldAutoRetry } from '@/utils/media-retry'; // spec 2058: bound the automatic refetch
 import { appToast } from '@/services/toast';
 import { describeMediaError } from '@/services/media-errors';
 import { hasRoomFor } from '@/services/storage-estimate';
@@ -1280,7 +1327,7 @@ import { vEnterSend } from '@/directives/enter-send';
 import { formatBytes } from '@/utils/bytes';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
-import type { Chat, Contact, Media, Message, MessageStatus, Reaction, ReplyRef, SharedContact, DraftMediaItem } from '@/db/types';
+import type { Chat, Contact, Media, Message, MessageKind, MessageStatus, Reaction, ReplyRef, SharedContact, DraftMediaItem } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useChatHistory } from '@/composables/useChatHistory';
 import { LOOK_AHEAD_PX } from '@/utils/chat-window';
@@ -1438,13 +1485,28 @@ function closeSearch() {
 // Per-message download progress (0..1) while a deferred attachment is being fetched; presence in the
 // map means "downloading now" and drives the circular progress ring on the download button.
 const downloadProgress = reactive<Record<string, number>>({});
-async function downloadPendingMedia(id: string): Promise<void> {
+async function downloadPendingMedia(id: string, opts: { silent?: boolean } = {}): Promise<void> {
   if (id in downloadProgress) return;
   downloadProgress[id] = 0;
   try {
     await downloadMessageMedia(id, (f) => (downloadProgress[id] = f));
+    // (spec 2058) Resolve the freshly-stored blob into an object URL right now.
+    // The bubble needs BOTH the row's new mediaId and an entry in mediaInfo before it can
+    // draw the player; mediaInfo is otherwise only rebuilt by a watcher over the visible
+    // window, which doesn't observe a row being patched in place. Without this the bubble
+    // goes from placeholder to EMPTY the moment the fetch lands and stays that way until the
+    // chat is reopened — the very blank this spec is here to remove (FR-007).
+    const fresh = await getMessage(id);
+    if (fresh?.mediaId) await resolveMediaFor([fresh]);
   } catch {
-    /* leave it pending so the user can tap again */
+    // (spec 2058) The attachment stays pending so it can be tapped again, and the message is
+    // now marked failed so the bubble SHOWS that rather than looking eternally busy. When the
+    // person asked for this themselves, say so at the moment it happens — a silent no-op after
+    // a deliberate tap reads as the app ignoring them. Automatic recovery stays quiet: it
+    // fires on scroll, and toasting for something they never asked for would be noise.
+    if (!opts.silent) {
+      void appToast({ message: "Couldn't load this. Tap to try again.", duration: 2000, color: 'danger' });
+    }
   } finally {
     delete downloadProgress[id];
   }
@@ -1456,6 +1518,24 @@ function dlSizeLabel(m: Message): string {
   if (!total) return '';
   const p = downloadProgress[m.id];
   return p === undefined ? formatBytes(total) : `${formatBytes(p * total)} / ${formatBytes(total)}`;
+}
+
+// (spec 2058) The length shown on a voice message whose audio hasn't arrived yet. The sender
+// puts the duration in the message itself, so we can say how long it is before we hold a
+// single byte of the audio. Older rows may not carry one — then we say what it IS, rather
+// than leaving an empty slot where a number should be (FR-002).
+function pendingVoiceTime(m: Message): string {
+  const s = Math.round(m.durationSec || 0);
+  if (!s) return 'Voice message';
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+// Spoken label for the same control. The failed wording matters: "couldn't load" tells the
+// person the app tried and lost, rather than implying they never asked.
+function pendingVoiceLabel(m: Message): string {
+  const len = m.durationSec ? `, ${pendingVoiceTime(m)}` : '';
+  return m.dlFailedAt
+    ? `Voice message${len} — couldn't load, tap to try again`
+    : `Voice message${len} — tap to load`;
 }
 
 
@@ -3281,7 +3361,15 @@ function setupBubbleObserver(root: HTMLElement | null): void {
   // The observer is just a cheap TRIGGER: any bubble crossing in/out re-runs the authoritative
   // geometry scan in markVisibleSeen. (We don't trust the observer's own ratio bookkeeping, which
   // can lag a programmatic jump.)
-  bubbleVisObs = new IntersectionObserver(() => markVisibleSeen(), { root, threshold: [0, 0.5, 1] });
+  // (spec 2058) The same trigger also drives pending-attachment recovery — separate handler,
+  // separate debounce, so a fetch can never perturb the Seen path.
+  bubbleVisObs = new IntersectionObserver(
+    () => {
+      markVisibleSeen();
+      recoverVisiblePending();
+    },
+    { root, threshold: [0, 0.5, 1] },
+  );
   observeBubbles();
 }
 function observeBubbles(): void {
@@ -3325,6 +3413,51 @@ async function runMarkVisibleSeen(): Promise<void> {
   if (!newestId) return;
   await reportSeenUpTo(chatId, newestId);
   await recomputeUnread(); // the marks dropped the not-yet-Seen count → shrink the pill
+}
+
+// (spec 2058) Fetch the attachments of pending messages that are on screen.
+//
+// The common way a voice message ends up with no audio is that it arrived while the app was
+// closed: the push path stores the reference and never fetches bytes, because a notification
+// wake-up has neither the time nor the media pipeline to do it. The bytes are collected at
+// next app start — but until then the bubble has nothing to play, and if that fetch fails
+// nothing ever tries again. Recovering what you are actually looking at closes both gaps.
+//
+// Deliberately a SEPARATE handler from markVisibleSeen rather than folded into it: the Seen
+// path is delicate (settle/seek/visibility gates, receipt writes) and has its own e2e, and a
+// fetch has no business being able to perturb it.
+let recoverTimer: ReturnType<typeof setTimeout> | undefined;
+// Attempts live for the session only. Persisting them would mean a message that used up its
+// tries during one offline stretch is stuck on manual-tap for good — the opposite of what a
+// message stranded by an older build needs (FR-013).
+const autoFetchAttempts = new Map<string, number>();
+function recoverVisiblePending(): void {
+  clearTimeout(recoverTimer);
+  recoverTimer = setTimeout(() => void runRecoverVisiblePending(), 260);
+}
+async function runRecoverVisiblePending(): Promise<void> {
+  if (!viewActive.value || document.visibilityState !== 'visible') return;
+  const el = scrollEl;
+  if (!el) return;
+  const vTop = el.getBoundingClientRect().top;
+  const vBot = vTop + el.clientHeight;
+  for (const n of Array.from(listEl.value?.querySelectorAll<HTMLElement>('.bubble[data-mid]') ?? [])) {
+    const r = n.getBoundingClientRect();
+    if (r.height <= 0) continue;
+    if (r.bottom < vTop || r.top > vBot) continue; // off screen
+    const mid = n.dataset.mid;
+    const m = mid ? rows.value.find((x) => x.id === mid) : undefined;
+    if (!m || m.outgoing || m.mediaId || !m.pendingMedia || m.deleted) continue;
+    if (m.expiresAt && m.expiresAt <= Date.now()) continue; // about to vanish; don't fetch for it
+    if (m.id in downloadProgress) continue; // already fetching (shared guard with the tap path)
+    const tries = autoFetchAttempts.get(m.id) ?? 0;
+    if (!shouldAutoRetry(tries)) continue; // gave up automatically; the tap still works
+    // Whether this KIND should fetch itself is not our call to re-invent — the same rule the
+    // arrival path uses decides, so a photo the user chose to leave deferred stays deferred.
+    if (!(await shouldAutoDownloadMedia(m.kind as MessageKind, !!m.videoNote, m.pendingMedia.size))) continue;
+    autoFetchAttempts.set(m.id, tries + 1);
+    void downloadPendingMedia(m.id, { silent: true }); // automatic: never interrupts with a toast
+  }
 }
 // Re-attempt Seen for what's on screen when the transport reconnects (offline sends are retried).
 const { syncState } = useSync();
@@ -5771,6 +5904,106 @@ function cancelRecording() {
 .chip-ico .dl-ring-fill {
   stroke: var(--ion-color-primary);
 }
+
+/* (spec 2058) Voice message whose audio hasn't arrived yet. The metrics deliberately mirror
+   VoicePlayer's .vp row — 34px disc, 24px wave strip, same gap and vertical padding — so
+   when the audio lands and the real player takes over, the bubble doesn't change height.
+   A different-sized placeholder would shove every message below it as each one resolved. */
+.vp-pending {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.vpp-disc {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--ion-color-primary);
+  color: #fff;
+  font-size: 18px;
+}
+/* The inert stand-in for the waveform: same 24px strip the real bars occupy, held at a low
+   flat height so it reads as "not here yet" rather than as a real, playable waveform. */
+.vpp-wave {
+  flex: 1;
+  min-width: 40px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+.vpp-wave i {
+  flex: 1;
+  height: 4px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.28;
+}
+.vpp-time {
+  min-width: 32px;
+  font-size: 12px;
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+/* Tried and lost. Warm colour + a retry glyph in the disc, so it reads as something that
+   went wrong and can be poked, not as something still quietly loading. */
+.vp-pending.failed .vpp-disc {
+  background: var(--ion-color-warning, #e0a030);
+}
+.vp-pending.failed .vpp-time {
+  opacity: 0.85;
+}
+
+/* (spec 2058) The same "we tried and lost" treatment for the kinds that already had a pending
+   presentation. They were silent about failure too — a tap that failed simply did nothing. */
+.video-poster.pending.failed .dl-btn,
+.pending-chip.failed .chip-ico {
+  color: var(--ion-color-warning, #e0a030);
+}
+.pending-chip.failed {
+  border-color: var(--ion-color-warning, #e0a030);
+}
+
+/* (spec 2058) Round video note, same idea — circular so it matches the note it becomes. */
+.note-pending {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--ion-color-primary);
+  font-size: 30px;
+  cursor: pointer;
+}
+.note-pending.failed {
+  color: var(--ion-color-warning, #e0a030);
+}
+.note-pending .dl-ring {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+
 /* Link preview card (privacy-safe: domain + icon, no remote fetch). */
 .link-card {
   display: flex;
