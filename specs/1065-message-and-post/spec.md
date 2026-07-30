@@ -59,6 +59,14 @@ Two boundaries shape every decision:
   at most once per person for all time, so only genuinely new posts cost a
   request and re-scrolling an old feed costs nothing.
 
+- Q: The server routes push but cannot read the sealed parent reference, so how
+  does "someone replied to your comment" reach a closed app? → A: The reply
+  tells the server who to wake. This is a deliberate, eyes-open exception
+  recorded as FR-031b: the server learns who a reply is addressed to, though
+  still not which comment it answers. The alternative of waking everyone who
+  has commented would have added no metadata at all but would have woken people
+  the notification rules do not name.
+
 Three further decisions were settled while writing the spec and are stated
 directly in the requirements they govern: the feed seen threshold (FR-014),
 one-level reply nesting (FR-025), and the sealed parent reference (FR-031).
@@ -401,8 +409,18 @@ that re-tapping removes your own reaction.
   engagement, and MUST be able to reach further back on demand when a reply's
   parent falls outside the loaded page, so a reply is never stranded merely
   because its parent is older than the window.
+- **FR-031b**: As the one named exception to FR-031, a reply MAY carry a
+  cleartext list of the people to wake, because the server routes push and can
+  only route to someone it can name. The server therefore learns, per reply,
+  who it is addressed to. It still learns nothing about which comment was
+  answered, the text of anything, or the size or shape of any thread. The
+  hint MUST be validated against the post's audience so it cannot be used to
+  wake anyone who is not already entitled to see the post, MUST be limited to
+  the people the notification rules actually name, and MUST NOT be stored
+  beyond what routing the push requires.
 - **FR-032**: No new plaintext field may be added to what the server stores
-  without being named and justified in this spec.
+  without being named and justified in this spec. The only such field is the
+  wake hint of FR-031b.
 - **FR-033**: A post's viewer identities MUST stay readable only by the post
   author, enforced on the server and not merely hidden in the app.
 
