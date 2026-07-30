@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -23,11 +25,11 @@ type recordingNotifier struct {
 	activity []string // "<userID>:<postID>" per NotifyPostActivity call
 }
 
-func (n *recordingNotifier) Notify(context.Context, string)                      {}
-func (n *recordingNotifier) NotifyFrame(context.Context, string, string, string) {}
+func (n *recordingNotifier) Notify(context.Context, string)                                     {}
+func (n *recordingNotifier) NotifyFrame(context.Context, string, string, string)                {}
 func (n *recordingNotifier) NotifyFramePreview(context.Context, string, string, string, []byte) {}
-func (n *recordingNotifier) NotifyCall(context.Context, string) {}
-func (n *recordingNotifier) NotifyConn(context.Context, string) {}
+func (n *recordingNotifier) NotifyCall(context.Context, string)                                 {}
+func (n *recordingNotifier) NotifyConn(context.Context, string)                                 {}
 func (n *recordingNotifier) NotifyPost(_ context.Context, userID, _ string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -93,9 +95,9 @@ func (c *fakePostConn) ConnectionState(context.Context, string, string) (string,
 func (c *fakePostConn) RequestConnection(context.Context, string, string) (string, error) {
 	return "pending", nil
 }
-func (c *fakePostConn) AcceptConnection(context.Context, string, string) error        { return nil }
-func (c *fakePostConn) RejectConnection(context.Context, string, string, bool) error  { return nil }
-func (c *fakePostConn) WithdrawConnection(context.Context, string, string) error      { return nil }
+func (c *fakePostConn) AcceptConnection(context.Context, string, string) error       { return nil }
+func (c *fakePostConn) RejectConnection(context.Context, string, string, bool) error { return nil }
+func (c *fakePostConn) WithdrawConnection(context.Context, string, string) error     { return nil }
 func (c *fakePostConn) IncomingRequests(context.Context, string) ([]store.ConnectionReq, error) {
 	return nil, nil
 }
@@ -219,8 +221,40 @@ func (f *fakePostStore) SubmitEngagement(_ context.Context, postID, id, actor, k
 	f.eng[postID] = append(f.eng[postID], store.PostEngagementRow{ID: id, Actor: actor, Kind: kind, Payload: payload})
 	return nil
 }
-func (f *fakePostStore) ListEngagement(_ context.Context, postID string) ([]store.PostEngagementRow, error) {
-	return f.eng[postID], nil
+
+// seedEngagement adds a row with an explicit timestamp so paging tests can build
+// deliberate ties on created_at (the reason the cursor is a pair, not a scalar).
+func (f *fakePostStore) seedEngagement(postID, id, actor, kind string, createdMs int64) {
+	f.eng[postID] = append(f.eng[postID], store.PostEngagementRow{
+		ID: id, Actor: actor, Kind: kind, Payload: "x", CreatedMs: createdMs,
+	})
+}
+func (f *fakePostStore) ListEngagement(_ context.Context, postID string, page store.EngagementPage) ([]store.PostEngagementRow, error) {
+	// Mirror the real query: newest first by (createdMs, id), keyset-filtered.
+	rows := append([]store.PostEngagementRow(nil), f.eng[postID]...)
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].CreatedMs != rows[j].CreatedMs {
+			return rows[i].CreatedMs > rows[j].CreatedMs
+		}
+		return rows[i].ID > rows[j].ID
+	})
+	if page.BeforeID != "" {
+		var kept []store.PostEngagementRow
+		for _, r := range rows {
+			if r.CreatedMs < page.BeforeMs || (r.CreatedMs == page.BeforeMs && r.ID < page.BeforeID) {
+				kept = append(kept, r)
+			}
+		}
+		rows = kept
+	}
+	limit := page.Limit
+	if limit <= 0 {
+		limit = store.DefaultEngagementLimit
+	}
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
 }
 func (f *fakePostStore) ListPosts(_ context.Context, recipient string, _ int64) ([]store.PostForRecipient, error) {
 	var out []store.PostForRecipient
@@ -478,8 +512,8 @@ func TestCommentTombstoneAuthz(t *testing.T) {
 	conn := newFakePostConn()
 	srv := newPostTestServer(conn, newFakePostStore())
 	tokA, aliceID, _ := registerNamed(t, srv, "alice") // post author
-	tokB, bobID, _ := registerNamed(t, srv, "bob")      // commenter
-	tokC, carolID, _ := registerNamed(t, srv, "carol")  // other audience member
+	tokB, bobID, _ := registerNamed(t, srv, "bob")     // commenter
+	tokC, carolID, _ := registerNamed(t, srv, "carol") // other audience member
 	conn.befriend(aliceID, bobID)
 	conn.befriend(aliceID, carolID)
 
@@ -1067,5 +1101,141 @@ func TestCreatePostRejectsForeignIDReuse(t *testing.T) {
 	conn.befriend(bobID, aliceID)
 	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokB, bodyB); rr.Code != http.StatusForbidden {
 		t.Errorf("foreign id reuse status = %d, want 403; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+/* ---- spec 1065: bounded engagement paging ---- */
+
+// engagementFixture: a post Alice authored and Bob can see, seeded with `n`
+// engagement rows. Rows deliberately SHARE timestamps in pairs, because that is
+// exactly what a cursor on created_at alone gets wrong — it either skips a row
+// or serves it twice at the seam.
+func engagementFixture(t *testing.T, n int) (http.Handler, *fakePostStore, string, string) {
+	t.Helper()
+	conn := newFakePostConn()
+	fp := newFakePostStore()
+	srv := newPostTestServer(conn, fp)
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	_, bobID, _ := registerNamed(t, srv, "bob")
+	conn.befriend(aliceID, bobID)
+
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d", rr.Code)
+	}
+	for i := 0; i < n; i++ {
+		fp.seedEngagement(postID, fmt.Sprintf("%08d-0000-0000-0000-000000000000", i), aliceID, "reaction", int64(1_000_000+(i/2)*10))
+	}
+	return srv, fp, tokA, bobID
+}
+
+type engPage struct {
+	Items []struct {
+		ID string `json:"id"`
+	} `json:"items"`
+	Cursor  string `json:"cursor"`
+	HasMore bool   `json:"hasMore"`
+}
+
+func getEngagement(t *testing.T, srv http.Handler, tok, query string) (int, engPage) {
+	t.Helper()
+	url := "/v1/posts/" + postID + "/engagement"
+	if query != "" {
+		url += "?" + query
+	}
+	rr := do(t, srv, http.MethodGet, url, tok, "")
+	var p engPage
+	if rr.Code == http.StatusOK {
+		if err := json.Unmarshal(rr.Body.Bytes(), &p); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+	}
+	return rr.Code, p
+}
+
+// A caller that sends neither parameter must still work — paging is additive.
+func TestListEngagementDefaultsStayCompatible(t *testing.T) {
+	srv, _, tokA, _ := engagementFixture(t, 5)
+	code, p := getEngagement(t, srv, tokA, "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if len(p.Items) != 5 {
+		t.Fatalf("items = %d, want 5", len(p.Items))
+	}
+	if p.HasMore {
+		t.Errorf("hasMore = true, want false for a short page")
+	}
+}
+
+func TestListEngagementLimitCapsThePage(t *testing.T) {
+	srv, _, tokA, _ := engagementFixture(t, 10)
+	code, p := getEngagement(t, srv, tokA, "limit=4")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	if len(p.Items) != 4 {
+		t.Fatalf("items = %d, want 4", len(p.Items))
+	}
+	if !p.HasMore || p.Cursor == "" {
+		t.Errorf("hasMore=%v cursor=%q — a full page must offer a way to continue", p.HasMore, p.Cursor)
+	}
+}
+
+// The regression this whole keyset design exists for: walking the cursor must
+// visit every row exactly once, including across created_at ties.
+func TestListEngagementCursorWalksBackWithoutGapsOrRepeats(t *testing.T) {
+	const total, page = 10, 3
+	srv, _, tokA, _ := engagementFixture(t, total)
+
+	seen := map[string]bool{}
+	query := "limit=" + strconv.Itoa(page)
+	for i := 0; i < 10; i++ { // bounded so a broken cursor fails rather than hangs
+		code, p := getEngagement(t, srv, tokA, query)
+		if code != http.StatusOK {
+			t.Fatalf("page %d: status = %d", i, code)
+		}
+		for _, it := range p.Items {
+			if seen[it.ID] {
+				t.Fatalf("row %s served twice — the cursor repeats across a created_at tie", it.ID)
+			}
+			seen[it.ID] = true
+		}
+		if !p.HasMore {
+			break
+		}
+		query = "limit=" + strconv.Itoa(page) + "&before=" + p.Cursor
+	}
+	if len(seen) != total {
+		t.Fatalf("walked %d rows, want %d — the cursor skipped rows at a timestamp tie", len(seen), total)
+	}
+}
+
+func TestListEngagementRejectsBadPagingParams(t *testing.T) {
+	srv, _, tokA, _ := engagementFixture(t, 3)
+	for _, q := range []string{
+		"limit=0", "limit=-1", "limit=201", "limit=abc",
+		"before=nonsense", "before=123", "before=.abc", "before=abc.not-a-uuid",
+	} {
+		if code, _ := getEngagement(t, srv, tokA, q); code != http.StatusBadRequest {
+			t.Errorf("query %q: status = %d, want 400", q, code)
+		}
+	}
+}
+
+// Paging must not widen who can read a post's engagement.
+func TestListEngagementStillRefusesOutsiders(t *testing.T) {
+	conn := newFakePostConn()
+	fp := newFakePostStore()
+	srv := newPostTestServer(conn, fp)
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	_, bobID, _ := registerNamed(t, srv, "bob")
+	tokC, _, _ := registerNamed(t, srv, "carol")
+	conn.befriend(aliceID, bobID)
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[{"recipient":"` + bobID + `","wrappedKey":"WK"}]}`
+	do(t, srv, http.MethodPost, "/v1/posts", tokA, body)
+
+	if code, _ := getEngagement(t, srv, tokC, "limit=2"); code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", code)
 	}
 }

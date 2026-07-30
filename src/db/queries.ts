@@ -17,7 +17,7 @@ import { callLogPreview } from './calllog';
 import { uid } from '@/utils/uid';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost, type ServerEngagement } from '@/services/api';
 import { recordStaleDrain, recordMissedWakeDrain, STALE_MSG_MS } from '@/services/push';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { lastMessageTick } from '@/services/message-status';
@@ -4224,13 +4224,29 @@ export interface FreshEngagement {
  *  comments (append, keyed by engagement id), and tombstones (mark target removed).
  *  Returns the items it NEWLY applied so the caller can alert the post owner about
  *  fresh reactions/comments (spec 1031); existing callers may ignore the return. */
-export async function syncEngagement(postId: string): Promise<FreshEngagement[]> {
+export async function syncEngagement(
+  postId: string,
+  opts: { pages?: number } = {},
+): Promise<FreshEngagement[]> {
   if (!isUnlockedNow()) return [];
   const post = await get<Post>('posts', postId);
   if (!post?.postKey) return [];
   const applied: FreshEngagement[] = [];
   try {
-    const { items } = await apiListEngagement(postId);
+    // Bounded fetch (spec 1065 FR-035). This used to pull a post's entire
+    // engagement history on every change notification, which a busy post makes
+    // expensive. One page of newest-first rows covers the ordinary case; a
+    // caller that needs to reach further back (a reply whose parent is older
+    // than the window) asks for more pages explicitly.
+    const maxPages = Math.max(1, opts.pages ?? 1);
+    const items: ServerEngagement[] = [];
+    let before: string | undefined;
+    for (let i = 0; i < maxPages; i++) {
+      const page = await apiListEngagement(postId, { before });
+      items.push(...page.items);
+      if (!page.hasMore || !page.cursor) break;
+      before = page.cursor;
+    }
     let latestActivity = 0; // newest reaction/comment time seen → keep-alive
     for (const it of items) {
       if (it.kind === 'reaction') {

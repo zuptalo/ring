@@ -1,12 +1,13 @@
 package api
 
 import (
-	"errors"
-	"log/slog"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"ring/server/internal/auth"
@@ -394,6 +395,30 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, map[string]any{"id": req.ID})
 }
 
+// The engagement cursor is "<createdMs>.<id>" — the (created_at, id) keyset pair.
+// Opaque to clients by contract; the format is an implementation detail.
+func formatEngagementCursor(ms int64, id string) string {
+	return strconv.FormatInt(ms, 10) + "." + id
+}
+
+func parseEngagementCursor(s string) (int64, string, error) {
+	dot := strings.IndexByte(s, '.')
+	if dot <= 0 || dot == len(s)-1 {
+		return 0, "", errBadCursor
+	}
+	ms, err := strconv.ParseInt(s[:dot], 10, 64)
+	if err != nil || ms < 0 {
+		return 0, "", errBadCursor
+	}
+	id := s[dot+1:]
+	if !uuidRE.MatchString(id) {
+		return 0, "", errBadCursor
+	}
+	return ms, id, nil
+}
+
+var errBadCursor = errors.New("bad engagement cursor")
+
 type engagementOut struct {
 	ID        string `json:"id"`
 	Actor     string `json:"actor"`
@@ -424,7 +449,28 @@ func (h *Handlers) listEngagement(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "not in this post's audience")
 		return
 	}
-	rows, err := h.Posts.ListEngagement(r.Context(), postID)
+	// Paging is additive (spec 1065): a caller that sends neither parameter still
+	// gets a working `items` array, now bounded rather than the post's whole
+	// history. `cursor` is opaque on purpose — it encodes (created_at, id), and
+	// clients have no business parsing it.
+	page := store.EngagementPage{Limit: store.DefaultEngagementLimit}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > store.MaxEngagementLimit {
+			httpx.Error(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		page.Limit = n
+	}
+	if raw := r.URL.Query().Get("before"); raw != "" {
+		ms, id, err := parseEngagementCursor(raw)
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, "invalid before")
+			return
+		}
+		page.BeforeMs, page.BeforeID = ms, id
+	}
+	rows, err := h.Posts.ListEngagement(r.Context(), postID, page)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not list engagement")
 		return
@@ -433,7 +479,16 @@ func (h *Handlers) listEngagement(w http.ResponseWriter, r *http.Request) {
 	for _, e := range rows {
 		items = append(items, engagementOut{ID: e.ID, Actor: e.Actor, Kind: e.Kind, Payload: e.Payload, CreatedAt: e.CreatedMs})
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"items": items})
+	out := map[string]any{"items": items}
+	// A full page means there may be more; a short one is definitively the end.
+	if len(rows) == page.Limit && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		out["cursor"] = formatEngagementCursor(last.CreatedMs, last.ID)
+		out["hasMore"] = true
+	} else {
+		out["hasMore"] = false
+	}
+	httpx.JSON(w, http.StatusOK, out)
 }
 
 // recordView (POST /v1/posts/{id}/view) records that the caller viewed a post,
