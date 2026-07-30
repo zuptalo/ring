@@ -77,8 +77,15 @@
           <ion-icon :icon="timeOutline" /> Disappears in {{ leftLabel }}
         </p>
 
-        <!-- Reactions (audience-visible): pills + the shared quick-react picker. -->
+        <!-- Reactions (audience-visible): pills + the shared quick-react picker.
+             The AUTHOR can additionally open the pills to see who reacted, with what
+             and when (spec 1065 US3); everyone else keeps tap-to-toggle. -->
         <div class="reactions">
+          <button
+            v-if="post.outgoing && grouped.length"
+            class="whoreacted"
+            @click="reactorsOpen = true"
+          >See who reacted</button>
           <div class="rrow">
             <button
               v-for="g in grouped"
@@ -91,7 +98,7 @@
               <ion-icon :icon="happyOutline" />
             </button>
           </div>
-          <ul v-if="grouped.length" class="rlist">
+          <ul v-if="grouped.length && !post.outgoing" class="rlist">
             <li v-for="g in grouped" :key="g.emoji">
               <Emoji class="e" :emoji="g.emoji" />
               <span class="who">{{ g.who }}</span>
@@ -157,6 +164,15 @@
         </div>
 
         <audience-sheet
+          :is-open="reactorsOpen"
+          title="Reactions"
+          :rows="reactorRows"
+          :by-emoji="true"
+          empty-text="No reactions yet"
+          @dismiss="reactorsOpen = false"
+        />
+
+        <audience-sheet
           :is-open="viewersOpen"
           title="Seen by"
           :rows="viewerRows"
@@ -198,6 +214,8 @@ import MediaViewer, { type ViewerItem } from '@/components/MediaViewer.vue';
 // page's old local copy kept counting days forever ("400d").
 import { timeLeft, formatPostDateTime, ago } from '@/utils/post-time';
 import AudienceSheet from '@/components/AudienceSheet.vue';
+import { attributedReactions } from '@/utils/reaction-groups';
+import { initialsAvatar } from '@/db/avatars';
 import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
@@ -368,6 +386,20 @@ async function confirmDeleteComment(c: PostEngagement): Promise<void> {
 // Author-only view list.
 const viewers = ref<PostViewer[]>([]);
 const viewersOpen = ref(false);
+const reactorsOpen = ref(false);
+
+// Who reacted, with what and when. Author-only by where it is rendered, not by
+// where the data lives: reactions are sealed under a key every audience member
+// holds, so this is a presentation rule, not a protection the server provides
+// (FR-033a). The viewer list above IS server-enforced; this one is not, and
+// saying so plainly beats implying a guarantee we cannot make.
+const reactorRows = computed(() =>
+  attributedReactions(
+    reactions.value.map((r) => ({ actor: r.actor, emoji: r.emoji, at: r.at, deleted: r.deleted })),
+    (id) => nameOf(id),
+    (id) => avatarOf(id) || initialsAvatar(nameOf(id)),
+  ).map((r) => ({ ...r, when: ago(r.at) })),
+);
 /** Offline the list is simply unavailable — it is author-only server-held data we
  *  deliberately never cache, so there is nothing honest to show (FR-037a). */
 const viewersOffline = ref(false);
@@ -483,6 +515,17 @@ async function confirmDelete(): Promise<void> {
 </script>
 
 <style scoped>
+.whoreacted {
+  display: block;
+  margin: 0 0 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ion-color-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
 .wrap {
   padding: 16px 20px;
 }
