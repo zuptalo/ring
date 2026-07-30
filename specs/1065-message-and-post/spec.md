@@ -340,6 +340,12 @@ that re-tapping removes your own reaction.
 - **FR-014**: A post MUST be counted as seen when at least half of it has been
   on screen in the feed for a continuous second, and immediately when its detail
   page is opened. A post that scrolls past faster than that MUST NOT be counted.
+- **FR-014a**: Counting feed sightings widens what the server records from
+  "posts this person deliberately opened" to "posts this person scrolled past".
+  That is a real broadening of what the view data says about someone's browsing
+  and MUST be acknowledged rather than treated as a free change. It is bounded
+  by FR-013 and FR-015: at most one row per person per post for all time, and
+  nothing at all from someone who does not share seen receipts.
 - **FR-015**: View reporting MUST stay gated on the existing reciprocal Seen
   receipts setting, so someone who does not share their own seen status is
   neither counted nor listed.
@@ -387,6 +393,12 @@ that re-tapping removes your own reaction.
   held and attached when the parent arrives, never rendered detached and never
   silently dropped.
 - **FR-029**: Deleting a comment MUST remove its reactions along with it.
+- **FR-029c**: Removing a deleted comment's reactions MUST NOT emit a deletion
+  marker per reaction. Those markers name their target in the clear, so one per
+  reaction would publish exactly the reaction-to-comment mapping the sealed
+  parent exists to hide. Deleting a comment emits the single existing marker for
+  the comment itself, and every device then drops that comment's reactions by
+  reading their sealed parent locally.
 - **FR-029a**: A reply MUST notify the post owner and the person whose comment
   it answers, and nobody else. A reaction on a comment MUST notify that
   comment's author, matching how a reaction on a message behaves today.
@@ -418,11 +430,30 @@ that re-tapping removes your own reaction.
   wake anyone who is not already entitled to see the post, MUST be limited to
   the people the notification rules actually name, and MUST NOT be stored
   beyond what routing the push requires.
+- **FR-031c**: The wake hint has two derived disclosures that MUST be stated
+  rather than glossed over. Because a top-level comment names only the post
+  owner while a reply names someone else, the server can tell that a comment is
+  a reply. And because it can count the replies addressed to a given person on
+  a given post, it can approximate how much answering a person's comments
+  attract. It still cannot learn which comment was answered, the contents of
+  anything, or the size of any individual thread.
+- **FR-031d**: Every reaction payload MUST be padded to one named constant
+  plaintext length before sealing, whether it targets a post or a comment, so
+  the two cannot be told apart by ciphertext size. The emoji a reaction may
+  carry MUST be bounded so that a legitimate reaction can never exceed that
+  budget, and a payload that somehow would MUST be refused rather than sent
+  unpadded or silently truncated.
 - **FR-032**: No new plaintext field may be added to what the server stores
   without being named and justified in this spec. The only such field is the
   wake hint of FR-031b.
 - **FR-033**: A post's viewer identities MUST stay readable only by the post
   author, enforced on the server and not merely hidden in the app.
+- **FR-033a**: Reaction attribution is, by contrast, a presentation rule the app
+  enforces over data every audience member already holds, because reactions are
+  sealed under a key the whole audience has. This limit MUST be stated honestly
+  rather than described as a protection the server provides. A determined
+  audience member can already see who reacted to what; the rule keeps it out of
+  the interface, and the viewer list is the thing the server actually guards.
 
 #### Truthfulness and scale
 

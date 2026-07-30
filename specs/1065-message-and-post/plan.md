@@ -94,12 +94,23 @@ key material and no new key exchange.
 |---|---|---|
 | that a row exists, its `post_id`, `actor`, `created_at` | yes | yes, unchanged |
 | `kind` (`comment` / `reaction` / `tombstone`) | yes | yes, **no new value** |
-| whether a comment is a reply | no | **still no** |
 | which comment a reply answers | no | **still no** |
-| the size or shape of a thread | no | **still no** |
+| the size of an individual thread | no | **still no** |
 | whether a reaction targets a post or a comment | no | **still no** (constant-length padding) |
-| tombstone target id | yes, cleartext | yes, unchanged, not reused |
+| tombstone target id | yes, cleartext | yes, unchanged, not reused, and **not** emitted per comment reaction |
 | who a reply is addressed to | no | **yes, the new exception** |
+| whether a comment is a reply | no | **yes, derived** — see below |
+| roughly how much answering a person attracts on a post | no | **yes, derived** — see below |
+
+**Two derived disclosures, stated plainly.** An earlier draft of this table
+claimed the server still could not tell a reply from a plain comment. That was
+false the moment the wake hint was accepted. A top-level comment names only the
+post owner; a reply names someone else. The contents of the hint therefore
+distinguish them, and counting replies addressed to a given person on a given
+post approximates how much answering that person's comments attract. Sealing the
+parent still hides which comment was answered, all content, and the size of any
+individual thread. Recorded as FR-031c rather than left as a comfortable
+untruth.
 
 **Why the exception is necessary**: push routing is server-side.
 `NotifyPostActivity` takes a user id. There is no way to wake a specific person
@@ -116,8 +127,21 @@ cannot be used to probe membership, used only for routing, and never written to
 the database.
 
 **What it does not reveal**: which comment was answered, any text, any emoji,
-and the size or shape of any thread. The server learns a person, not a
+and the size of any individual thread. The server learns a person, not a
 conversation.
+
+**Three further requirements came out of the crypto/ZK checklist** and are part
+of this design, not afterthoughts:
+
+- The hint must never reach a server log, metric, or error payload. A recipient
+  list is exactly the field that ends up in a request log by accident.
+- Deleting a comment must not emit a cleartext deletion marker per comment
+  reaction. One marker per reaction would publish the reaction-to-comment
+  mapping at comment granularity, which is worse than the accepted exception.
+  Devices drop those reactions locally by reading the sealed parent (FR-029c).
+- Reaction attribution is a client-side presentation rule over data the whole
+  audience already holds, not a server-enforced protection. The viewer list is
+  the thing the server actually guards. Stated honestly as FR-033a.
 
 ## Project Structure
 
