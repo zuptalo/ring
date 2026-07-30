@@ -26,6 +26,7 @@ import { withInboundLock } from '@/services/cross-lock';
 import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
 import { wallSyncedOnce } from '@/services/wall-load';
+import { mayReportView } from '@/utils/feed-impression';
 import { buildPost, wrapForNewAudience, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
 import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
@@ -78,7 +79,7 @@ import { mostUrgentFirst, overlayGameEntry, type OngoingOverlayGame } from '@/ga
 import { gameCueFor, playGameCue } from '@/services/game-sounds';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, OutboxItem, ChatDraft,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, PostViewer, OutboxPost, OutboxItem, ChatDraft,
   DraftMedia, DraftMediaItem,
 } from './types';
 
@@ -4130,6 +4131,7 @@ export async function sweepExpiredPosts(): Promise<void> {
       }
     }
   }
+  await pruneReportedViews();
 }
 
 /* ---- engagement: reactions (spec 0003, US4) ---- */
@@ -4508,26 +4510,63 @@ export async function deleteComment(postId: string, commentId: string): Promise<
 
 /* ---- view receipts (spec 0003, US7) ---- */
 
+/** Posts this device has already reported a view for, so a post costs one request
+ *  for all time (spec 1065 FR-017a). The server is already first-write-wins, so a
+ *  repeat POST is harmless — this exists to stop the feed making one per scroll.
+ *  Bounded and pruned alongside expired posts, like the SW's shown-ledger. */
+const VIEWS_REPORTED_KEY = 'wall.viewsReported';
+const VIEWS_REPORTED_CAP = 500;
+
+async function reportedViews(): Promise<string[]> {
+  return await getSetting<string[]>(VIEWS_REPORTED_KEY, []);
+}
+
 /** Record that we viewed a post — only if our seen-receipts setting is on (reciprocal
- *  with the chat setting) and it isn't our own post. */
+ *  with the chat setting) and it isn't our own post.
+ *
+ *  Spec 1065: the feed now calls this too, once a post has been meaningfully on
+ *  screen, not just when its detail page opens. Every caller MUST come through
+ *  here rather than reaching for the API directly, because the reciprocity gate
+ *  below is the only thing enforcing FR-015 — it is client-side on both sides and
+ *  the server knows nothing about it. */
 export async function recordPostView(postId: string): Promise<void> {
   const post = await get<Post>('posts', postId);
-  if (!post || post.outgoing) return;
-  if (!(await getSetting<boolean>('privacy.seenReceipts', true))) return;
+  if (!post) return;
+  const seen = await reportedViews();
+  const allowed = mayReportView({
+    outgoing: !!post.outgoing,
+    seenReceiptsOn: await getSetting<boolean>('privacy.seenReceipts', true),
+    alreadyReported: seen.includes(postId),
+  });
+  if (!allowed) return;
   try {
     await apiRecordPostView(postId);
+    // Record only after the server took it, so a failed report retries later.
+    await setSetting(VIEWS_REPORTED_KEY, [...seen, postId].slice(-VIEWS_REPORTED_CAP));
   } catch {
-    /* best effort */
+    /* best effort — offline, the next sighting reports it */
   }
 }
 
+/** Drop reported-view entries for posts we no longer hold, so the ledger cannot
+ *  grow without bound. Called from the post sweep. */
+export async function pruneReportedViews(): Promise<void> {
+  const seen = await reportedViews();
+  if (!seen.length) return;
+  const live = new Set((await getAll<Post>('posts')).map((p) => p.id));
+  const kept = seen.filter((id) => live.has(id));
+  if (kept.length !== seen.length) await setSetting(VIEWS_REPORTED_KEY, kept);
+}
+
 /** Author-only view list for our own post, gated by our own seen-receipts setting
- *  (reciprocity). Returns viewer ids (resolve names in the UI). */
-export async function listPostViews(postId: string): Promise<string[]> {
+ *  (reciprocity). Carries each viewer's FIRST sighting — the server's primary key
+ *  is (post, viewer) and the insert is do-nothing-on-conflict, so `viewedAt` is
+ *  the first time they saw it, across every device they own (FR-013). */
+export async function listPostViews(postId: string): Promise<PostViewer[]> {
   if (!(await getSetting<boolean>('privacy.seenReceipts', true))) return [];
   try {
     const { views } = await apiListPostViews(postId);
-    return views.map((v) => v.viewer);
+    return views;
   } catch {
     return [];
   }

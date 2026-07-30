@@ -547,6 +547,15 @@ export interface OutboxItem {
  *  comments are append-only with a uuid id. `deleted` tombstones a comment (removed
  *  by its author or the post author) — content cannot be cryptographically recalled,
  *  so this is best-effort propagation. */
+/** One person's first sighting of a post. Author-only, server-held, never cached
+ *  on disk: a list of who read what is not something to leave lying around for no
+ *  benefit (spec 1065 FR-037a). */
+export interface PostViewer {
+  viewer: string;
+  /** The FIRST time they saw it. Never overwritten by a later view (FR-013). */
+  viewedAt: number;
+}
+
 export interface PostEngagement {
   id: string;
   postId: string;

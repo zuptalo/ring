@@ -140,11 +140,30 @@
           </div>
         </div>
 
-        <!-- Author-only: who viewed this post (seen-receipts gated). -->
-        <div v-if="post.outgoing && viewers.length" class="viewers">
-          <h3>Viewed by</h3>
-          <p>{{ viewers.map(nameOf).join(', ') }}</p>
+        <!-- Author-only: how many people have seen this post, and who (spec 1065
+             US2). Nobody but the author sees this row, or any hint that it exists.
+             It used to be a run-on line of names with no count and no times. -->
+        <div v-if="post.outgoing" class="viewers">
+          <ion-item
+            class="seen-row"
+            :button="viewers.length > 0"
+            :detail="viewers.length > 0"
+            lines="none"
+            @click="viewers.length && (viewersOpen = true)"
+          >
+            <ion-icon slot="start" :icon="eyeOutline" />
+            <ion-label>{{ seenLine }}</ion-label>
+          </ion-item>
         </div>
+
+        <audience-sheet
+          :is-open="viewersOpen"
+          title="Seen by"
+          :rows="viewerRows"
+          subtitle="Counts the people who share their seen receipts with you."
+          empty-text="No one yet"
+          @dismiss="viewersOpen = false"
+        />
       </div>
       <div v-else class="missing">This post is no longer available.</div>
     </ion-content>
@@ -173,11 +192,12 @@ import {
   onIonViewWillEnter, onIonViewWillLeave, alertController,
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
-import { trashOutline, happyOutline, timeOutline, playCircleOutline } from 'ionicons/icons';
+import { trashOutline, happyOutline, timeOutline, playCircleOutline, eyeOutline } from 'ionicons/icons';
 import MediaViewer, { type ViewerItem } from '@/components/MediaViewer.vue';
 // `ago` is the shared one: it falls back to a date past a week, where this
 // page's old local copy kept counting days forever ("400d").
 import { timeLeft, formatPostDateTime, ago } from '@/utils/post-time';
+import AudienceSheet from '@/components/AudienceSheet.vue';
 import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
@@ -192,7 +212,7 @@ import {
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { useSelfProfile } from '@/composables/useSelfProfile';
-import type { Post, PostEngagement, Contact } from '@/db/types';
+import type { Post, PostEngagement, PostViewer, Contact } from '@/db/types';
 
 const route = useRoute();
 const router = useRouter();
@@ -346,7 +366,26 @@ async function confirmDeleteComment(c: PostEngagement): Promise<void> {
 }
 
 // Author-only view list.
-const viewers = ref<string[]>([]);
+const viewers = ref<PostViewer[]>([]);
+const viewersOpen = ref(false);
+/** Offline the list is simply unavailable — it is author-only server-held data we
+ *  deliberately never cache, so there is nothing honest to show (FR-037a). */
+const viewersOffline = ref(false);
+
+const seenLine = computed(() => {
+  if (viewersOffline.value) return 'Seen by: not available offline';
+  return viewers.value.length ? `Seen by ${viewers.value.length}` : 'No one has seen this yet';
+});
+
+const viewerRows = computed(() =>
+  viewers.value.map((v) => ({
+    id: v.viewer,
+    name: nameOf(v.viewer),
+    avatar: avatarOf(v.viewer),
+    at: v.viewedAt,
+    when: ago(v.viewedAt),
+  })),
+);
 
 onIonViewWillEnter(async () => {
   void syncEngagement(postId); // refresh reactions from the server
@@ -387,7 +426,12 @@ onIonViewWillEnter(async () => {
   }
   // Views: record ours on someone else's post; load the list on our own.
   if (post.value.outgoing) {
-    viewers.value = await listPostViews(postId);
+    try {
+      viewers.value = await listPostViews(postId);
+      viewersOffline.value = false;
+    } catch {
+      viewersOffline.value = true;
+    }
   } else {
     void recordPostView(postId);
   }

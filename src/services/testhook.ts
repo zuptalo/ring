@@ -1712,8 +1712,9 @@ export function installTestHook(): void {
     deletePostComment: (postId: string, commentId: string) => dbDeleteComment(postId, commentId),
     /** Record that we viewed a post (gated by the seen-receipts setting). */
     recordPostView: (postId: string) => dbRecordPostView(postId),
-    /** A post's viewer ids (author-only server-side). */
-    postViews: (postId: string): Promise<string[]> => dbListPostViews(postId),
+    /** A post's viewers with each one's FIRST sighting (author-only server-side). */
+    postViews: (postId: string): Promise<Array<{ viewer: string; viewedAt: number }>> =>
+      dbListPostViews(postId),
     /** Toggle a contact's close-friend flag (demoting revokes close-only posts). */
     setCloseFriend: (id: string, value: boolean) => dbSetCloseFriend(id, value),
     /** Ids of the current close friends. */
