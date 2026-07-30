@@ -46,6 +46,23 @@ Two boundaries shape every decision:
   author alone. Nobody else learns how far a post travelled, not even the
   people in the audience.
 
+## Clarifications
+
+### Session 2026-07-30
+
+- Q: Who gets notified when someone replies to a comment on a post? → A: The
+  post owner, and the person whose comment is being answered. Nobody else.
+- Q: Who can see who reacted to a comment, and when? → A: The comment's own
+  author and the post owner. Everyone else sees the tally only.
+- Q: How should feed views reach the server? → A: One request per post, sent
+  as soon as it crosses the seen threshold. Accepted because a post is reported
+  at most once per person for all time, so only genuinely new posts cost a
+  request and re-scrolling an old feed costs nothing.
+
+Three further decisions were settled while writing the spec and are stated
+directly in the requirements they govern: the feed seen threshold (FR-014),
+one-level reply nesting (FR-025), and the sealed parent reference (FR-031).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - See exactly when each group member got it and saw it (Priority: P1)
@@ -188,19 +205,22 @@ every member of the audience, including someone who loads the post fresh.
 1. **Given** a post with comments, **When** a member of the audience taps reply
    on a comment and sends, **Then** their reply appears attached to that comment
    for them and for everyone else in the audience.
-2. **Given** a comment with several replies, **When** anyone opens the post,
+2. **Given** a reply to someone's comment, **When** it is sent, **Then** the
+   post owner and the person being answered are both notified, and no other
+   member of the audience is.
+3. **Given** a comment with several replies, **When** anyone opens the post,
    **Then** the replies appear under their parent in the order they were sent,
    not scattered through the top-level list.
-3. **Given** a comment with many replies, **When** anyone opens the post,
+4. **Given** a comment with many replies, **When** anyone opens the post,
    **Then** a bounded number of replies show with a plain way to reveal the
    rest, so one loud thread cannot bury the others.
-4. **Given** someone replying to a reply, **When** they send it, **Then** it
+5. **Given** someone replying to a reply, **When** they send it, **Then** it
    joins the same thread at the same indent under the top-level comment and
    names the person it answers, rather than indenting a further step.
-5. **Given** a parent comment that its author deletes, **When** anyone views the
+6. **Given** a parent comment that its author deletes, **When** anyone views the
    post, **Then** the replies remain readable under a plain "This comment was
    deleted" placeholder rather than vanishing or detaching.
-6. **Given** a reply arriving while its parent has not yet synced, **When** the
+7. **Given** a reply arriving while its parent has not yet synced, **When** the
    client renders the post, **Then** the reply is held and attaches once the
    parent arrives rather than rendering as an orphan or being lost.
 
@@ -229,9 +249,12 @@ that re-tapping removes your own reaction.
    emoji again, **Then** your reaction is removed and the tally drops.
 3. **Given** a comment that is deleted, **When** anyone views the post,
    **Then** its reactions are gone along with it.
-4. **Given** the post author, **When** they open a comment's tally, **Then**
-   they see who reacted, with what, and when, matching the post-level behaviour
-   in story 3.
+4. **Given** a comment you wrote that people have reacted to, **When** you open
+   its tally, **Then** you see who reacted, with what, and when. The post owner
+   sees the same. Everyone else in the audience sees only the tally.
+5. **Given** someone reacts to your comment, **When** the reaction arrives,
+   **Then** you are notified, unless it is your own reaction or you have muted
+   the post.
 
 ---
 
@@ -317,6 +340,11 @@ that re-tapping removes your own reaction.
   stay honest without being alarming.
 - **FR-017**: The viewer list MUST show each viewer once, with their avatar,
   name, and first-seen moment.
+- **FR-017a**: A view MUST be reported as soon as the post crosses the seen
+  threshold, one post at a time. Because FR-013 makes the first view the only
+  one that counts, a post MUST be reported at most once per person for all
+  time, so scrolling past posts already seen costs nothing.
+- **FR-017b**: The author MUST NOT appear in their own viewer list or count.
 
 #### Post and comment reaction attribution
 
@@ -329,6 +357,9 @@ that re-tapping removes your own reaction.
 - **FR-021**: Someone who removes their reaction MUST disappear from the list
   and from the count.
 - **FR-022**: Attributed reaction lists MUST group by emoji, most-used first.
+- **FR-022a**: A comment's reactions MUST be attributable to the comment's own
+  author as well as to the post owner. Everyone else in the audience sees the
+  tally only.
 
 #### Comment replies and comment reactions
 
@@ -348,6 +379,13 @@ that re-tapping removes your own reaction.
   held and attached when the parent arrives, never rendered detached and never
   silently dropped.
 - **FR-029**: Deleting a comment MUST remove its reactions along with it.
+- **FR-029a**: A reply MUST notify the post owner and the person whose comment
+  it answers, and nobody else. A reaction on a comment MUST notify that
+  comment's author, matching how a reaction on a message behaves today.
+- **FR-029b**: Both notifications MUST obey the existing wall notification
+  settings and muting, and MUST NOT fire for your own reply or your own
+  reaction. When the post owner is also the person being answered, they MUST
+  receive one notification rather than two.
 
 #### Zero-knowledge and data minimisation
 
@@ -426,7 +464,11 @@ that re-tapping removes your own reaction.
   beyond the bounded window actually rendered.
 - **SC-009**: A device with a clock set two hours fast produces no visible
   future time anywhere in these lists.
-- **SC-010**: Every list, tier, and thread has a written empty state, and a
+- **SC-010**: In a staged run where a third person replies to someone's comment
+  on a fourth person's post, exactly two people are notified: the post owner and
+  the person answered. A run where the post owner replies to their own post
+  produces no notification to themselves.
+- **SC-011**: Every list, tier, and thread has a written empty state, and a
   review of the feature's copy finds no em-dashes, no semicolons, and no
   internal jargon.
 
@@ -457,4 +499,11 @@ that re-tapping removes your own reaction.
   are one view.
 - Reaction attribution on posts is author-only for now, matching view
   visibility, even though the aggregate pills stay public. Widening it later is
-  a deliberate, separate decision.
+  a deliberate, separate decision. Comment reactions are the one deliberate
+  exception (FR-022a): your own comment's reactions are yours to see.
+- Reply and comment-reaction notifications reuse the existing wall notification
+  machinery, its settings, and its muting, rather than introducing a new
+  notification class or a new toggle.
+- Groups have no enforced size cap in Ring today, so "large group" means
+  whatever people actually create. The 60-member figure in SC-001 is a test
+  point, not a limit.
