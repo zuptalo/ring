@@ -175,7 +175,9 @@ import {
 import { useRoute, useRouter } from 'vue-router';
 import { trashOutline, happyOutline, timeOutline, playCircleOutline } from 'ionicons/icons';
 import MediaViewer, { type ViewerItem } from '@/components/MediaViewer.vue';
-import { timeLeft, formatPostDateTime } from '@/utils/post-time';
+// `ago` is the shared one: it falls back to a date past a week, where this
+// page's old local copy kept counting days forever ("400d").
+import { timeLeft, formatPostDateTime, ago } from '@/utils/post-time';
 import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
@@ -412,13 +414,6 @@ function initial(name: string): string {
 }
 function when(ts: number): string {
   return formatPostDateTime(ts);
-}
-function ago(ts: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (s < 60) return 'now';
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
 }
 
 async function confirmDelete(): Promise<void> {

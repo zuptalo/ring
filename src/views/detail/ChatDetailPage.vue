@@ -1334,6 +1334,7 @@ import { vEnterSend } from '@/directives/enter-send';
 import { formatBytes } from '@/utils/bytes';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
 import { get, put } from '@/db/idb';
+import { initialsAvatar } from '@/db/avatars';
 import type { Chat, Contact, Media, Message, MessageKind, MessageStatus, Reaction, ReplyRef, SharedContact, DraftMediaItem } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useChatHistory } from '@/composables/useChatHistory';
@@ -2749,11 +2750,18 @@ async function openReactionDetails(m: Message) {
     (m.reactions ?? [])
       .slice()
       .sort((a, b) => a.at - b.at)
-      .map(async (r) => ({
-        name: r.userId === selfId ? 'You' : (await getContact(r.userId))?.name ?? r.userId.slice(0, 8),
-        emoji: r.emoji,
-        when: formatStamp(r.at),
-      })),
+      .map(async (r) => {
+        const contact = r.userId === selfId ? undefined : await getContact(r.userId);
+        const name = r.userId === selfId ? 'You' : contact?.name ?? r.userId.slice(0, 8);
+        return {
+          id: `${r.userId}:${r.emoji}`, // one person may hold several emoji
+          name,
+          avatar: contact?.avatar || initialsAvatar(name),
+          emoji: r.emoji,
+          at: r.at,
+          when: formatStamp(r.at),
+        };
+      }),
   );
   const popover = await popoverController.create({
     component: ReactionDetails,
