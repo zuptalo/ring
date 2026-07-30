@@ -413,9 +413,12 @@ that re-tapping removes your own reaction.
   reply body. This is unchanged from today and MUST survive every addition here.
 - **FR-031**: The reference that ties a reply or a comment reaction to its
   parent comment MUST be sealed inside the encrypted payload. The server MUST
-  NOT be able to tell a reply from a plain comment, tell which comment anything
-  answers, or reconstruct the shape or size of any thread. This adds no new
-  metadata to what the server already holds.
+  NOT be able to tell which comment anything answers, read anything it carries,
+  or learn the size of any individual thread. The stored row MUST be
+  indistinguishable from a plain comment or a post reaction: the same `kind`
+  values, no new column, and no length difference. What the wake hint of
+  FR-031b nonetheless discloses is stated in FR-031c, and FR-031 does not
+  claim otherwise.
 - **FR-031a**: Because the server cannot group a thread, the app MUST assemble
   threads on the device from a bounded, recency-ordered page of a post's
   engagement, and MUST be able to reach further back on demand when a reply's
@@ -465,8 +468,13 @@ that re-tapping removes your own reaction.
   every reaction, comment, and view a post has ever accumulated in one go.
 - **FR-036**: The feed MUST NOT hold every engagement record for every post in
   memory at once in order to render its summaries.
-- **FR-037**: All new counts, lists, and threads MUST work offline from what the
-  device already holds, and reconcile when the device reconnects.
+- **FR-037**: Comment threads, reaction tallies, and group receipt tiers MUST
+  work offline from what the device already holds, and reconcile on reconnect.
+- **FR-037a**: The post viewer list and its count are the deliberate exception.
+  They are author-only data held by the server and are never cached on the
+  device, because caching them would put a list of who read what on disk for no
+  benefit. Offline, the author MUST see a plain "not available offline" line
+  rather than a stale count or an error.
 
 ### Key Entities
 
