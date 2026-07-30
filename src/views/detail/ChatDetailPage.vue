@@ -153,6 +153,12 @@
           v-memo="[
             m.updatedAt,
             mediaInfo[m.mediaId!]?.posterUrl,
+            // (spec 2060) Also depend on the resolved playback URL, not just the poster. Voice
+            // messages and audio cards have NO poster, so posterUrl never changes when their
+            // media resolves — a bubble that first painted before resolution (which is what
+            // happens when you open a chat by tapping it in the list) would stay frozen empty.
+            // Photos/videos escaped this via their poster; voice/audio need the url signal.
+            mediaInfo[m.mediaId!]?.url,
             swipeId === m.id ? swipeDx : 0,
             selecting,
             isSelected(m.id),
