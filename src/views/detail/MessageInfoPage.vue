@@ -143,6 +143,7 @@
             <ion-label>Seen by</ion-label>
           </ion-list-header>
           <ion-item
+            class="tier-row"
             :button="seenByIds.length > 0"
             :detail="seenByIds.length > 0"
             lines="none"
@@ -167,6 +168,7 @@
             <ion-label>Delivered</ion-label>
           </ion-list-header>
           <ion-item
+            class="tier-row"
             :button="deliveredIds.length > 0"
             :detail="deliveredIds.length > 0"
             lines="none"
@@ -191,6 +193,7 @@
             <ion-label>Not yet delivered</ion-label>
           </ion-list-header>
           <ion-item
+            class="tier-row"
             :button="notDeliveredIds.length > 0"
             :detail="notDeliveredIds.length > 0"
             lines="none"
