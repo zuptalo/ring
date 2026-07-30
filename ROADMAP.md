@@ -147,3 +147,4 @@ Specs are grouped by category band; status moves
 | [2057](specs/2057-signal-clock/spec.md) | Reactions and game moves still trust the sender's clock | 🟢 shipped |
 | [2058](specs/2058-voice-messages-arrive/spec.md) | Voice messages never arrive as an empty bubble | 🟢 shipped |
 | [2059](specs/2059-playback-speed-shared/spec.md) | Playback speed belongs to the message you set it on | 🟢 shipped |
+| [2060](specs/2060-voice-and-audio/spec.md) | Voice and audio messages must not render blank when you open a chat from the list | 🟢 shipped |
