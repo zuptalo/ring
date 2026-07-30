@@ -84,6 +84,7 @@ Specs are grouped by category band; status moves
 | [1062](specs/1062-list-status-presence/spec.md) | Message status and presence on the chat list | 🟢 shipped |
 | [1063](specs/1063-full-size-media/spec.md) | Full-size aspect-preserving media thumbnails in chat | 🟢 shipped |
 | [1064](specs/1064-mention-names/spec.md) | Mentions show the name you know someone by, and stay readable | 🟢 shipped |
+| [1065](specs/1065-message-and-post/spec.md) | Message and Post Audience Insight | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
