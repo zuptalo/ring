@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Message, Receipt } from '@/db/types';
+import { CLOCK_SKEW_TOLERANCE_MS } from '@/utils/message-time';
 import {
   STATUS_ORDER,
   statusRank,
@@ -9,6 +10,8 @@ import {
   applyDownloadedReceipt,
   groupProgress,
   lastMessageTick,
+  clampedSeen,
+  receiptTiers,
 } from './message-status';
 
 // Minimal outgoing-message factory. The reducers only read status/receipts/*At/
@@ -328,5 +331,93 @@ describe('spec 1062: lastMessageTick (shared list/tile tick tier)', () => {
   it('group seen tier is suppressed when seen-receipts are off', () => {
     const allSeen = group({ status: 'seen', receipts: roster([{ d: true, s: true }, { d: true, s: true }]) });
     expect(lastMessageTick(allSeen, false)).toBe('delivered');
+  });
+});
+
+/* ---- spec 1065: display-time clamps and roster tiers ---- */
+
+describe('clampedSeen (spec 1065 FR-034)', () => {
+  const NOW = 1_800_000_000_000;
+  const SENT = NOW - 60 * 60_000; // an hour ago
+  const DELIVERED = SENT + 5_000;
+  const base = { sentAt: SENT } as Pick<Message, 'sentAt'>;
+
+  it('passes a sane time through untouched', () => {
+    const seen = DELIVERED + 30_000;
+    expect(clampedSeen({ contactId: 'a', deliveredAt: DELIVERED, seenAt: seen }, base, NOW)).toBe(seen);
+  });
+
+  it('returns undefined when the member has not seen it', () => {
+    expect(clampedSeen({ contactId: 'a', deliveredAt: DELIVERED }, base, NOW)).toBeUndefined();
+  });
+
+  it('clamps a seen time that precedes that member’s own delivery', () => {
+    // deliveredAt is a server clock; seenAt on the live path is the viewer's own.
+    // Seeing something before it arrived is impossible, so delivery wins.
+    const seen = DELIVERED - 10 * 60_000;
+    expect(clampedSeen({ contactId: 'a', deliveredAt: DELIVERED, seenAt: seen }, base, NOW)).toBe(DELIVERED);
+  });
+
+  it('clamps a seen time that precedes the message being sent', () => {
+    const seen = SENT - 10 * 60_000;
+    expect(clampedSeen({ contactId: 'a', seenAt: seen }, base, NOW)).toBe(SENT);
+  });
+
+  it('clamps a future seen time to now', () => {
+    const seen = NOW + 2 * 60 * 60_000; // a phone two hours fast
+    expect(clampedSeen({ contactId: 'a', deliveredAt: DELIVERED, seenAt: seen }, base, NOW)).toBe(NOW);
+  });
+
+  it('tolerates drift inside the shared skew tolerance rather than snapping', () => {
+    const seen = DELIVERED - (CLOCK_SKEW_TOLERANCE_MS - 1_000);
+    expect(clampedSeen({ contactId: 'a', deliveredAt: DELIVERED, seenAt: seen }, base, NOW)).toBe(seen);
+  });
+
+  it('survives a message with no sentAt', () => {
+    const seen = NOW - 1_000;
+    expect(clampedSeen({ contactId: 'a', seenAt: seen }, {}, NOW)).toBe(seen);
+  });
+});
+
+describe('receiptTiers (spec 1065 FR-011)', () => {
+  const R = (contactId: string, d?: number, s?: number): Receipt => ({
+    contactId,
+    deliveredAt: d,
+    seenAt: s,
+  });
+
+  it('splits the roster into seen, delivered and not-yet', () => {
+    const t = receiptTiers([R('a', 10, 20), R('b', 10), R('c')], ['a', 'b', 'c'], true);
+    expect(t.seen.map((r) => r.contactId)).toEqual(['a']);
+    expect(t.delivered.map((r) => r.contactId)).toEqual(['b']);
+    expect(t.notDelivered.map((r) => r.contactId)).toEqual(['c']);
+  });
+
+  it('derives not-yet from the SEND-TIME roster, so a later joiner is absent', () => {
+    // The bug this replaces read chat.participantIds, which grows over time, so
+    // someone who joined after the send was stranded under "Not yet delivered".
+    const t = receiptTiers([R('a', 10)], ['a', 'newcomer'], true);
+    expect(t.notDelivered).toEqual([]);
+    expect(t.seen.length + t.delivered.length + t.notDelivered.length).toBe(1);
+  });
+
+  it('keeps a member who left the group, flagged', () => {
+    const t = receiptTiers([R('a', 10, 20), R('gone', 10)], ['a'], true);
+    expect(t.delivered.map((r) => r.contactId)).toEqual(['gone']);
+    expect(t.left.has('gone')).toBe(true);
+    expect(t.left.has('a')).toBe(false);
+  });
+
+  it('folds seen back into delivered when seen receipts are off', () => {
+    const t = receiptTiers([R('a', 10, 20), R('b', 10)], ['a', 'b'], false);
+    expect(t.seen).toEqual([]);
+    expect(t.delivered.map((r) => r.contactId)).toEqual(['a', 'b']);
+  });
+
+  it('partitions every member exactly once', () => {
+    const roster = [R('a', 1, 2), R('b', 1), R('c'), R('d', 3, 4)];
+    const t = receiptTiers(roster, ['a', 'b', 'c', 'd'], true);
+    const all = [...t.seen, ...t.delivered, ...t.notDelivered].map((r) => r.contactId).sort();
+    expect(all).toEqual(['a', 'b', 'c', 'd']);
   });
 });

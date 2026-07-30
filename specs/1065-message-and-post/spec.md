@@ -433,6 +433,13 @@ that re-tapping removes your own reaction.
   wake anyone who is not already entitled to see the post, MUST be limited to
   the people the notification rules actually name, and MUST NOT be stored
   beyond what routing the push requires.
+- **FR-031e**: The notification's wording MUST be composed and sealed by the
+  device that sends the reply, not assembled by the recipient's device at wake
+  time. The server forwards it as an opaque blob alongside the wake hint. This
+  keeps the server a pure relay for the content as well as the routing, and it
+  means the recipient's service worker decrypts one small preview rather than
+  fetching a post's engagement and opening comment payloads inside its wake
+  deadline. It reuses the sealed-preview mechanism already built for chat.
 - **FR-031c**: The wake hint has two derived disclosures that MUST be stated
   rather than glossed over. Because a top-level comment names only the post
   owner while a reply names someone else, the server can tell that a comment is

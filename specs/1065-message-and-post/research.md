@@ -261,6 +261,11 @@ gains a "this reply answers my comment" input. Keeping the decision in that pure
 function preserves its testability and keeps the closed-app classifier
 (`sw-inbox.ts:1774-1802`) and the live path (`queries.ts:3808-3852`) agreeing.
 
+**Revised after review**: the sending device seals the notification wording and
+hands it over with the wake (FR-031e), so the recipient's worker decrypts one
+small preview instead of doing the classification work below. The paragraph
+that follows records why that matters — it is the cost the revision removes.
+
 **Note**: the closed-app classifier never decrypts comment payloads today
 (`buildPostActivityNotes` uses the static string "commented on your post",
 `sw-inbox.ts:1897-1912`). Deciding "did this reply answer *my* comment" requires

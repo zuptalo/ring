@@ -47,7 +47,8 @@ a new forward-only migration. The keyset predicate is
 **New request field**:
 
 ```json
-{ "id": "uuid", "kind": "comment", "payload": "…", "notify": ["uuid"] }
+{ "id": "uuid", "kind": "comment", "payload": "…",
+  "notify": ["uuid"], "preview": "…sealed…" }
 ```
 
 `notify` is the FR-031b wake hint: the users the server should push, because it
@@ -68,8 +69,17 @@ cannot read the sealed parent that determines who ought to be woken.
 `NotifyPostActivity`, so `AllowPush("activity", …)` still honours the
 recipient's "Activity on your posts" opt-out.
 
-**Not persisted.** `notify` is read to route the push and then discarded. It
-never reaches `post_engagement`, and no column is added for it.
+**`preview`** is the sealed notification wording, composed by the sending
+device (FR-031e). The server treats it as opaque bytes, forwards it with the
+wake, and never stores it. It is capped at the existing preview payload budget
+and padded to a constant size by the same mechanism chat previews use, so its
+length says nothing. Without it, the recipient's service worker would have to
+fetch the post's engagement and decrypt comment payloads inside its wake
+deadline just to work out whether the reply answered them.
+
+**Not persisted.** Neither `notify` nor `preview` reaches `post_engagement`,
+and no column is added for either. Both are read to deliver the push and then
+discarded.
 
 **Why this is the only new cleartext**: the server routes push and can only
 route to someone it can name. It learns who a reply is addressed to. It does not
