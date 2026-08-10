@@ -19,12 +19,13 @@ type fakeConnNotifier struct {
 	conn []string
 }
 
-func (f *fakeConnNotifier) Notify(context.Context, string)                     {}
-func (f *fakeConnNotifier) NotifyFrame(context.Context, string, string, string) {}
+func (f *fakeConnNotifier) Notify(context.Context, string)                                     {}
+func (f *fakeConnNotifier) NotifyFrame(context.Context, string, string, string)                {}
 func (f *fakeConnNotifier) NotifyFramePreview(context.Context, string, string, string, []byte) {}
-func (f *fakeConnNotifier) NotifyCall(context.Context, string)                 {}
-func (f *fakeConnNotifier) NotifyPost(context.Context, string, string)         {}
-func (f *fakeConnNotifier) NotifyPostActivity(context.Context, string, string) {}
+func (f *fakeConnNotifier) NotifyCall(context.Context, string)                                 {}
+func (f *fakeConnNotifier) NotifyPost(context.Context, string, string)                         {}
+func (f *fakeConnNotifier) NotifyPostActivity(context.Context, string, string)                 {}
+func (f *fakeConnNotifier) NotifyPostActivityPreview(context.Context, string, string, []byte)  {}
 func (f *fakeConnNotifier) NotifyConn(_ context.Context, userID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -48,10 +49,10 @@ func (f *fakeConnNotifier) wokeCount(userID string) int {
 // fakeConn is a minimal in-memory ConnectionsStore for handler tests. It records
 // the last withdraw so the test can assert the handler called the store correctly.
 type fakeConn struct {
-	withdrawn map[[2]string]bool // (requester,target) -> true
-	rejected  map[[2]string]bool // (requester,target) declined → suppressed (FR-007)
+	withdrawn map[[2]string]bool    // (requester,target) -> true
+	rejected  map[[2]string]bool    // (requester,target) declined → suppressed (FR-007)
 	outgoing  []store.ConnectionReq // what OutgoingRequests returns (spec 1040)
-	friends []string // spec 2040: AcceptedPeers result
+	friends   []string              // spec 2040: AcceptedPeers result
 }
 
 func newFakeConn() *fakeConn {

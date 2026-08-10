@@ -507,12 +507,57 @@ func (s *Store) ListViews(ctx context.Context, postID string) ([]PostView, error
 	return out, rows.Err()
 }
 
-// ListEngagement returns all engagement on a post, oldest-first (the caller must
-// already be authorized via CanSeePost).
-func (s *Store) ListEngagement(ctx context.Context, postID string) ([]PostEngagementRow, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, actor::text, kind, payload, (extract(epoch from created_at)*1000)::bigint
-		   FROM post_engagement WHERE post_id = $1 ORDER BY created_at ASC`, postID)
+// Engagement page bounds (spec 1065). MaxEngagementLimit keeps one request from
+// asking for a post's whole history under a different name.
+const (
+	DefaultEngagementLimit = 200
+	MaxEngagementLimit     = 200
+)
+
+// EngagementPage bounds a read of a post's engagement (spec 1065).
+//
+// Limit caps the rows returned. BeforeMs/BeforeID form a keyset cursor: rows
+// strictly older than that (created_at, id) pair. The pair is needed because
+// created_at is not unique — a burst of reactions shares a millisecond — and a
+// cursor on the timestamp alone would either skip or repeat rows at the seam.
+type EngagementPage struct {
+	Limit    int
+	BeforeMs int64
+	BeforeID string
+}
+
+// ListEngagement returns a bounded page of engagement on a post, NEWEST first
+// (the caller must already be authorized via CanSeePost).
+//
+// Newest-first is what the UI wants — a thread opens at its most recent end —
+// and it is also what makes the cursor walk backwards naturally. The client
+// reconciles by id and by sealed timestamp, so applying pages out of order is
+// safe.
+func (s *Store) ListEngagement(ctx context.Context, postID string, page EngagementPage) ([]PostEngagementRow, error) {
+	limit := page.Limit
+	if limit <= 0 {
+		limit = DefaultEngagementLimit
+	}
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if page.BeforeID != "" {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id, actor::text, kind, payload, (extract(epoch from created_at)*1000)::bigint
+			   FROM post_engagement
+			  WHERE post_id = $1
+			    AND (created_at, id) < (to_timestamp($2::bigint / 1000.0), $3)
+			  ORDER BY created_at DESC, id DESC
+			  LIMIT $4`, postID, page.BeforeMs, page.BeforeID, limit)
+	} else {
+		rows, err = s.pool.Query(ctx,
+			`SELECT id, actor::text, kind, payload, (extract(epoch from created_at)*1000)::bigint
+			   FROM post_engagement
+			  WHERE post_id = $1
+			  ORDER BY created_at DESC, id DESC
+			  LIMIT $2`, postID, limit)
+	}
 	if err != nil {
 		return nil, err
 	}

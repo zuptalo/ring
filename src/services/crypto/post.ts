@@ -75,6 +75,88 @@ export function openEngagement<T>(kPost: Uint8Array, env: Envelope): T {
   return openJson<T>(kPost, env);
 }
 
+/* ---- reactions: constant-size, so the server cannot tell what they target ---- */
+
+/** A reaction, on a post or on one of its comments (spec 1065). */
+export interface ReactionValue {
+  emoji: string;
+  at: number;
+  remove?: boolean;
+  /** Engagement id of the comment this reacts to. Absent = the post itself.
+   *  Sealed, so the server cannot reconstruct which comment anything targets. */
+  parent?: string;
+}
+
+/**
+ * Why reactions are padded.
+ *
+ * A comment reaction and a post reaction are the same `kind` on the wire, by
+ * design: introducing a new kind would tell the server that a reaction targets a
+ * comment, which is exactly what sealing the parent is meant to prevent. But the
+ * sealed payloads are tiny and uniform, so a `parent` field would make comment
+ * reactions roughly forty bytes longer, and length is visible even when content
+ * is not. Padding every reaction to one constant plaintext length closes that
+ * channel. Ring already does the same thing for push previews.
+ *
+ * The budget is generous enough that no legitimate reaction can reach it, and
+ * `MAX_REACTION_EMOJI_LEN` keeps the emoji itself bounded so the guarantee does
+ * not depend on the caller being reasonable.
+ */
+export const REACTION_PLAINTEXT_BYTES = 320;
+
+/** A grapheme cluster can be long (a family emoji is 11 code points), but not
+ *  unbounded. Well clear of anything a picker produces. */
+export const MAX_REACTION_EMOJI_LEN = 64;
+
+/** Seal a reaction at a constant plaintext size. Throws rather than emit an
+ *  unpadded or truncated payload — either would defeat the point. */
+export function sealReaction(kPost: Uint8Array, value: ReactionValue): Envelope {
+  if (value.emoji.length > MAX_REACTION_EMOJI_LEN) {
+    throw new Error(`reaction emoji too large: ${value.emoji.length} > ${MAX_REACTION_EMOJI_LEN}`);
+  }
+  const body = JSON.stringify(value);
+  const used = utf8ToBytes(body).length;
+  const emptyPadded = JSON.stringify({ ...value, p: '' });
+  const wrapperBytes = utf8ToBytes(emptyPadded).length - used;
+  if (used + wrapperBytes > REACTION_PLAINTEXT_BYTES) {
+    throw new Error(`reaction payload too large: ${used} > ${REACTION_PLAINTEXT_BYTES}`);
+  }
+  const padded = { ...value, p: ' '.repeat(REACTION_PLAINTEXT_BYTES - used - wrapperBytes) };
+  return sealJson(kPost, padded, 'posteng');
+}
+
+/** Open a reaction sealed by {@link sealReaction}. The padding field is ignored. */
+export function openReaction(kPost: Uint8Array, env: Envelope): ReactionValue {
+  const { p: _pad, ...rest } = openJson<ReactionValue & { p?: string }>(kPost, env);
+  return rest;
+}
+
+export interface ActivityPreviewValue {
+  id: string;
+  actor: string;
+  title: string;
+  body: string;
+}
+
+const ACTIVITY_PREVIEW_PLAINTEXT_BYTES = 512;
+
+/** Sender-composed Wall notification wording, sealed under K_post and padded so
+ *  the push service and server learn neither its text nor whether it contains an
+ *  emoji. The addressed recipient already holds K_post as a post audience member. */
+export function sealActivityPreview(kPost: Uint8Array, value: ActivityPreviewValue): Envelope {
+  const body = JSON.stringify(value);
+  const emptyPadded = JSON.stringify({ ...value, p: '' });
+  const used = utf8ToBytes(body).length;
+  const wrapper = utf8ToBytes(emptyPadded).length - used;
+  if (used + wrapper > ACTIVITY_PREVIEW_PLAINTEXT_BYTES) throw new Error('activity preview too large');
+  return sealJson(kPost, { ...value, p: ' '.repeat(ACTIVITY_PREVIEW_PLAINTEXT_BYTES - used - wrapper) }, 'postact');
+}
+
+export function openActivityPreview(kPost: Uint8Array, env: Envelope): ActivityPreviewValue {
+  const { p: _pad, ...value } = openJson<ActivityPreviewValue & { p?: string }>(kPost, env);
+  return value;
+}
+
 /** A per-recipient wrapped K_post: the ephemeral X25519 public key + the sealed key. */
 export interface WrappedPostKey {
   eph: string; // b64url ephemeral X25519 public key

@@ -100,7 +100,13 @@
 
       <!-- Each post is a sliding item: swipe LEFT to delete your own post (or hide
            someone else's), swipe RIGHT to mute/unmute their Wall notifications. -->
-      <ion-item v-for="p in filteredWall" :key="p.id" lines="none" class="postitem">
+      <ion-item
+        v-for="p in filteredWall"
+        :key="p.id"
+        v-seen-in-feed="p.id"
+        lines="none"
+        class="postitem"
+      >
           <div class="post" :class="{ own: p.isOwn }">
             <!-- Header: avatar + name + a subtle "disappears in …" countdown. -->
             <div class="phead">
@@ -244,6 +250,18 @@
             </template>
             <p v-else-if="p.body" class="body"><EmojiText :text="p.body" /></p>
 
+            <!-- Author-only: how many people have seen this post (spec 1065 US2).
+                 Rendered only once the count is known, so the feed never fires a
+                 request per own-post on render (FR-036). -->
+            <button
+              v-if="p.isOwn && seenCounts[p.id] !== undefined"
+              class="seenchip"
+              @click="openViewers(p.id)"
+            >
+              <ion-icon :icon="eyeOutline" />
+              <span>{{ seenCounts[p.id] }}</span>
+            </button>
+
             <!-- Reactions: pills + a quick-react button opening the shared picker. -->
             <div class="rrow">
               <button
@@ -303,6 +321,15 @@
             </div>
           </div>
       </ion-item>
+    
+      <audience-sheet
+        :is-open="viewersFor !== null"
+        title="Seen by"
+        :rows="viewerRows"
+        subtitle="Counts the people who share their seen receipts with you."
+        empty-text="No one yet"
+        @dismiss="viewersFor = null"
+      />
     </ion-content>
 
     <!-- Tap any post photo/video → full-screen viewer: pinch-zoom, pan, swipe between an
@@ -334,12 +361,15 @@ import {
   createOutline, sparklesOutline, micOutline, playCircleOutline, happyOutline, timeOutline,
   notificationsOutline, notificationsOffOutline, copyOutline,
   ellipsisHorizontal, expandOutline,
+  eyeOutline,
 } from 'ionicons/icons';
 import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
 import MediaViewer, { type ViewerItem } from '@/components/MediaViewer.vue';
 import { vEnterSend } from '@/directives/enter-send';
+import { vSeenInFeed } from '@/directives/seen-in-feed';
+import AudienceSheet from '@/components/AudienceSheet.vue';
 import { suspendAutoplay } from '@/directives/autoplay-visible';
 import WallVideo from '@/components/WallVideo.vue';
 import VoicePlayer from '@/components/VoicePlayer.vue';
@@ -358,6 +388,10 @@ import {
   challengeFallbackBody,
 } from '@/db/queries';
 import { timeLeft, ago } from '@/utils/post-time';
+import { listPostViews, listAllContacts } from '@/db/queries';
+import type { PostViewer, Contact } from '@/db/types';
+import { useLiveQuery } from '@/composables/useLiveQuery';
+import { initialsAvatar } from '@/db/avatars';
 
 const router = useRouter();
 const { wall, now, loaded, synced } = useWall();
@@ -690,9 +724,75 @@ async function confirmDeletePost(post: WallPost): Promise<void> {
   });
   await a.present();
 }
+
+/* ---- author-only "Seen by" on your own posts (spec 1065 US2) ---- */
+
+// Counts are fetched lazily and cached per post id, so the feed issues at most
+// one request per own-post ever, and none at all on first render (FR-036). Only
+// the most recent own posts are fetched: older ones are rarely the reason you
+// opened the Wall, and the endpoint is one call per post with no batch form.
+const OWN_POST_FETCH_CAP = 10;
+const seenCounts = reactive<Record<string, number>>({});
+const seenRows = reactive<Record<string, PostViewer[]>>({});
+const viewersFor = ref<string | null>(null);
+
+watch(
+  () => filteredWall.value.filter((p) => p.isOwn).slice(0, OWN_POST_FETCH_CAP).map((p) => p.id).join(','),
+  async (key) => {
+    if (!key) return;
+    for (const id of key.split(',')) {
+      if (seenCounts[id] !== undefined) continue;
+      try {
+        const views = await listPostViews(id);
+        seenRows[id] = views;
+        seenCounts[id] = views.length;
+      } catch {
+        /* offline or not ours — leave the chip hidden rather than show a wrong number */
+      }
+    }
+  },
+  { immediate: true },
+);
+
+// listAllContacts, not listContacts: a viewer is someone in your audience, and
+// audience members you have never messaged are filtered out of the address book.
+const viewerContacts = useLiveQuery(() => listAllContacts(), ['contacts'], [] as Contact[]);
+const viewerById = computed(() => new Map(viewerContacts.value.map((c) => [c.id, c])));
+const nameOf = (id: string): string => viewerById.value.get(id)?.name ?? id.slice(0, 8);
+const avatarOf = (id: string): string => viewerById.value.get(id)?.avatar || initialsAvatar(nameOf(id));
+
+function openViewers(postId: string): void {
+  viewersFor.value = postId;
+}
+
+const viewerRows = computed(() => {
+  const id = viewersFor.value;
+  if (!id) return [];
+  return (seenRows[id] ?? []).map((v) => ({
+    id: v.viewer,
+    name: nameOf(v.viewer),
+    avatar: avatarOf(v.viewer),
+    at: v.viewedAt,
+    when: ago(v.viewedAt, now.value),
+  }));
+});
 </script>
 
 <style scoped>
+.seenchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 2px 0 6px;
+  padding: 3px 9px;
+  border: none;
+  border-radius: 999px;
+  background: var(--app-surface, rgba(120, 120, 128, 0.12));
+  color: var(--app-text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
 .empty {
   display: flex;
   flex-direction: column;

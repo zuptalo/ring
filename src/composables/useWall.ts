@@ -9,7 +9,7 @@
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { useSelfProfile } from '@/composables/useSelfProfile';
-import { listWallPosts, listContacts, listAllPostEngagement, getMedia, getWallMutedUsers, syncPosts } from '@/db/queries';
+import { listWallPosts, listContacts, listWallFeedEngagement, getMedia, getWallMutedUsers, syncPosts } from '@/db/queries';
 import { wallSyncedOnce } from '@/services/wall-load';
 import { stopIfPlaying } from '@/composables/useAudioPlayer';
 import { getSelfUserId } from '@/services/auth';
@@ -47,7 +47,11 @@ export function useWall() {
   // Depends on settings too: listWallPosts excludes hidden users (a settings ledger).
   const posts = useLiveQuery(() => listWallPosts(), ['posts', 'settings'], [] as Post[]);
   const contacts = useLiveQuery(() => listContacts(), ['contacts'], [] as Contact[]);
-  const engagement = useLiveQuery(() => listAllPostEngagement(), ['postEngagement'], [] as PostEngagement[]);
+  const engagement = useLiveQuery(
+    () => listWallFeedEngagement(),
+    ['posts', 'postEngagement', 'settings'],
+    [] as PostEngagement[],
+  );
   const mutedUsers = useLiveQuery(() => getWallMutedUsers(), ['settings'], {} as Record<string, boolean>);
   const self = useSelfProfile();
   const selfId = getSelfUserId();
@@ -182,7 +186,7 @@ export function useWall() {
       const c = byId.get(p.author);
       const es = byPost.get(p.id) ?? [];
 
-      const reactionRows = es.filter((e) => e.type === 'reaction' && !e.deleted && e.emoji);
+      const reactionRows = es.filter((e) => e.type === 'reaction' && !e.parent && !e.deleted && e.emoji);
       const rmap = new Map<string, { count: number; mine: boolean }>();
       for (const r of reactionRows) {
         const g = rmap.get(r.emoji!) ?? { count: 0, mine: false };

@@ -71,8 +71,11 @@ LABEL org.opencontainers.image.source="https://github.com/zuptalo/ring" \
       org.opencontainers.image.title="Ring" \
       org.opencontainers.image.description="Private, end-to-end encrypted messenger and calling PWA with a Go backend, served as a single all-in-one image." \
       org.opencontainers.image.vendor="Zuptalo"
-# ca-certificates: outbound TLS (Web Push, the emoji proxy). wget: healthcheck.
-RUN apk add --no-cache ca-certificates wget tzdata \
+# ca-certificates: outbound TLS (Web Push, the emoji proxy).
+# No GNU wget: busybox already ships a wget applet that handles the healthcheck
+# below, and the standalone package was the image's only HIGH CVE
+# (CVE-2025-69194, still unfixed upstream). One fewer package, one fewer CVE.
+RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S ring && adduser -S -G ring -h /app ring
 WORKDIR /app
 COPY --from=server /out/ringd /app/ringd

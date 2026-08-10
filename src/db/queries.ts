@@ -17,7 +17,7 @@ import { callLogPreview } from './calllog';
 import { uid } from '@/utils/uid';
 import { sliceOlder, sliceNewer, compareByTimeId } from '@/utils/chat-pagination';
 import { initialsAvatar, groupAvatar, ghostAvatar } from '@/db/avatars';
-import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost } from '@/services/api';
+import { fetchUserStatuses, blockUser, unblockUser, fetchBlocks, fetchDirectoryUser, cancelInvitation, connectLink, fetchPeerBundle, createPost as apiCreatePost, listPosts as apiListPosts, deletePost as apiDeletePost, keepAlivePost as apiKeepAlivePost, addPostEnvelopes as apiAddPostEnvelopes, removePostRecipient as apiRemovePostRecipient, submitEngagement as apiSubmitEngagement, listEngagement as apiListEngagement, recordPostView as apiRecordPostView, listPostViews as apiListPostViews, type ServerPost, type ServerEngagement } from '@/services/api';
 import { recordStaleDrain, recordMissedWakeDrain, STALE_MSG_MS } from '@/services/push';
 import { sealForChat, openPacket } from '@/services/messaging';
 import { lastMessageTick } from '@/services/message-status';
@@ -26,7 +26,9 @@ import { withInboundLock } from '@/services/cross-lock';
 import { mediaPreview, previewKind, chatListPreview } from '@/services/message-preview';
 import { prepareOutgoingMedia, receiveIncomingMedia, getMaxBlobBytes, BlobUploadError, deleteBlob, uploadBlob, downloadBlob } from '@/services/media-transfer';
 import { wallSyncedOnce } from '@/services/wall-load';
-import { buildPost, wrapForNewAudience, openReceivedPost, sealPostEngagement, openPostEngagement, type AudienceMember, type PostPayload } from '@/services/posts';
+import { mayReportView } from '@/utils/feed-impression';
+import { resolveReplyTarget } from '@/utils/comment-thread';
+import { buildPost, wrapForNewAudience, openReceivedPost, sealPostEngagement, openPostEngagement, sealPostReaction, openPostReaction, sealPostActivityPreview, type AudienceMember, type PostPayload } from '@/services/posts';
 import { b64urlToBytes } from '@/services/crypto/envelope';
 import { getSecret, setSecret } from '@/db/secrets';
 import { isUnlockedNow, getIdentityKeys } from '@/services/crypto/identity';
@@ -78,7 +80,7 @@ import { mostUrgentFirst, overlayGameEntry, type OngoingOverlayGame } from '@/ga
 import { gameCueFor, playGameCue } from '@/services/game-sounds';
 import type {
   Alert, Call, CallLog, Chat, ChatList, Contact, FriendRequest, Media, Message, MessageKind, Reaction, ReplyRef,
-  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, OutboxPost, OutboxItem, ChatDraft,
+  GeoLocation, Poll, PollVote, SharedContact, AudioMeta, Setting, Post, PostEngagement, PostViewer, OutboxPost, OutboxItem, ChatDraft,
   DraftMedia, DraftMediaItem,
 } from './types';
 
@@ -3819,8 +3821,11 @@ export async function notifyPostActivity(postId: string, fresh: FreshEngagement[
   if (gameItems.length) await notifyWallGameActivity(post, gameItems);
   for (const item of fresh) {
     if (item.type === 'game') continue;
+    const target = item.parent ? await get<PostEngagement>('postEngagement', item.parent) : undefined;
+    const answersMe = item.replyToActor === self || target?.actor === self;
     const decision = wallActivityAlert({
       isOwnPost: !!post.outgoing,
+      answersMe,
       actor: item.actor,
       self,
       type: item.type,
@@ -3839,10 +3844,10 @@ export async function notifyPostActivity(postId: string, fresh: FreshEngagement[
       name: c?.name ?? 'Someone',
       body:
         item.type === 'reaction'
-          ? item.emoji
-            ? `reacted ${item.emoji} to your post`
-            : 'reacted to your post'
-          : 'commented on your post',
+          ? answersMe
+            ? item.emoji ? `reacted ${item.emoji} to your comment` : 'reacted to your comment'
+            : item.emoji ? `reacted ${item.emoji} to your post` : 'reacted to your post'
+          : answersMe ? 'replied to you' : 'commented on your post',
       avatar: c?.avatar,
       url: `/wall/post/${postId}`,
     });
@@ -4130,6 +4135,7 @@ export async function sweepExpiredPosts(): Promise<void> {
       }
     }
   }
+  await pruneReportedViews();
 }
 
 /* ---- engagement: reactions (spec 0003, US4) ---- */
@@ -4138,6 +4144,8 @@ interface ReactionData {
   emoji: string;
   at: number;
   remove?: boolean;
+  /** The comment this reacts to; absent = the post itself (spec 1065). Sealed. */
+  parent?: string;
 }
 
 // Keep-alive (rolling 72h of inactivity): any interaction extends the post's life to
@@ -4160,12 +4168,15 @@ async function bumpPostActivity(postId: string, atMs: number): Promise<void> {
 export async function reactToPost(
   postId: string,
   emoji: string,
+  parent?: string,
 ): Promise<'added' | 'removed' | 'limit' | 'limit-emojis' | 'noop'> {
   const self = getSelfUserId();
   const post = await get<Post>('posts', postId);
   if (!self || !post?.postKey) return 'noop';
+  // Caps are per TARGET: reacting to three comments is not the same as piling
+  // three reactions onto the post itself.
   const rows = (await getByIndex<PostEngagement>('postEngagement', 'postId', postId)).filter(
-    (e) => e.type === 'reaction' && !e.deleted,
+    (e) => e.type === 'reaction' && !e.deleted && e.parent === parent,
   );
   const mine = rows.filter((r) => r.actor === self);
   const has = mine.some((r) => r.emoji === emoji);
@@ -4176,22 +4187,58 @@ export async function reactToPost(
   }
   const remove = has;
   const at = now();
+  const serverEngagementId = uid();
+  // The local id carries the emoji (and the target) so the row is addressable
+  // without a scan. It never leaves the device: the SERVER id is a fresh uid,
+  // so the emoji is not published in a row key (spec 1065 research R7).
   await put<PostEngagement>('postEngagement', {
-    id: `${postId}:reaction:${self}:${emoji}`, postId, type: 'reaction', actor: self, emoji, at,
+    id: reactionRowId(postId, self, emoji, parent),
+    postId, type: 'reaction', actor: self, emoji, at, parent,
     deleted: remove || undefined, updatedAt: at,
   });
   if (!remove) void recordEmojiUse(emoji); // most-used drives the quick-react order
   await bumpPostActivity(postId, at);
   try {
     await apiSubmitEngagement(postId, {
-      id: uid(),
-      kind: 'reaction',
-      payload: sealPostEngagement(post.postKey, { emoji, at, remove } satisfies ReactionData),
+      id: serverEngagementId,
+      kind: 'reaction', // NOT a new kind: a new one would tell the server this
+      // reaction targets a comment, which sealing the parent exists to prevent.
+      payload: sealPostReaction(post.postKey, { emoji, at, remove, parent }),
+      ...(parent && !remove ? await commentReactionWake(post, parent, self, serverEngagementId, emoji) : {}),
     });
   } catch {
     /* offline — the optimistic local row stands; a later sync reconciles */
   }
   return remove ? 'removed' : 'added';
+}
+
+async function commentReactionWake(
+  post: Post,
+  commentId: string,
+  self: string,
+  engagementId: string,
+  emoji: string,
+): Promise<{ notify?: string[]; preview?: string }> {
+  const target = await get<PostEngagement>('postEngagement', commentId);
+  if (!target?.actor || target.actor === self || !post.postKey) return {};
+  const name = (await getSecret('profileName', '')).trim() || 'Someone';
+  return {
+    notify: [target.actor],
+    preview: sealPostActivityPreview(post.postKey, {
+      id: engagementId,
+      actor: self,
+      title: name,
+      body: `reacted ${emoji} to your comment`,
+    }),
+  };
+}
+
+/** Local-only row key for a reaction. Includes the target so a post reaction and
+ *  a comment reaction by the same person with the same emoji cannot collide. */
+function reactionRowId(postId: string, actor: string, emoji: string, parent?: string): string {
+  return parent
+    ? `${postId}:reaction:${actor}:${parent}:${emoji}`
+    : `${postId}:reaction:${actor}:${emoji}`;
 }
 
 interface CommentData {
@@ -4203,6 +4250,13 @@ interface CommentData {
    *  — without this they render as "Someone". Contacts override at render. */
   name?: string;
   avatar?: string;
+  /** The top-level comment this replies to (spec 1065). Sealed, so the server
+   *  cannot tell a reply from a plain comment by looking at the row. */
+  parent?: string;
+  /** The exact person answered. Sealed alongside the body; `parent` remains the
+   *  top-level thread id even when this reply answered another reply. */
+  replyToActor?: string;
+  replyToName?: string;
 }
 
 /** One engagement item syncEngagement newly applied — enough for the caller to
@@ -4216,37 +4270,81 @@ export interface FreshEngagement {
   emoji?: string;
   at: number;
   deleted?: boolean;
+  parent?: string;
+  replyToActor?: string;
 }
 
 /** Pull + decrypt a post's engagement and apply it: reactions (LWW per actor),
  *  comments (append, keyed by engagement id), and tombstones (mark target removed).
  *  Returns the items it NEWLY applied so the caller can alert the post owner about
  *  fresh reactions/comments (spec 1031); existing callers may ignore the return. */
-export async function syncEngagement(postId: string): Promise<FreshEngagement[]> {
+export async function syncEngagement(
+  postId: string,
+  opts: { pages?: number; resolveParents?: boolean } = {},
+): Promise<FreshEngagement[]> {
   if (!isUnlockedNow()) return [];
   const post = await get<Post>('posts', postId);
   if (!post?.postKey) return [];
   const applied: FreshEngagement[] = [];
   try {
-    const { items } = await apiListEngagement(postId);
+    // Bounded fetch (spec 1065 FR-035). This used to pull a post's entire
+    // engagement history on every change notification, which a busy post makes
+    // expensive. One page of newest-first rows covers the ordinary case; a
+    // caller that needs to reach further back (a reply whose parent is older
+    // than the window) asks for more pages explicitly.
+    const maxPages = Math.max(1, opts.pages ?? (opts.resolveParents ? 10 : 1));
+    const items: ServerEngagement[] = [];
+    let before: string | undefined;
+    for (let i = 0; i < maxPages; i++) {
+      const page = await apiListEngagement(postId, { before });
+      items.push(...page.items);
+      if (!page.hasMore || !page.cursor) break;
+      if (opts.resolveParents) {
+        const fetchedIds = new Set(items.map((item) => item.id));
+        const parents = new Set<string>();
+        for (const candidate of items) {
+          try {
+            if (candidate.kind === 'comment') {
+              const data = openPostEngagement<CommentData>(post.postKey, candidate.payload);
+              if (data.parent) parents.add(data.parent);
+            } else if (candidate.kind === 'reaction') {
+              const data = openPostReaction(post.postKey, candidate.payload);
+              if (data.parent) parents.add(data.parent);
+            }
+          } catch {
+            // An unopenable row cannot contribute a trustworthy parent request.
+          }
+        }
+        let missing = false;
+        for (const parent of parents) {
+          if (!fetchedIds.has(parent) && !(await get<PostEngagement>('postEngagement', parent))) {
+            missing = true;
+            break;
+          }
+        }
+        if (!missing) break;
+      }
+      before = page.cursor;
+    }
     let latestActivity = 0; // newest reaction/comment time seen → keep-alive
     for (const it of items) {
       if (it.kind === 'reaction') {
         let data: ReactionData;
         try {
-          data = openPostEngagement<ReactionData>(post.postKey, it.payload);
+          data = openPostReaction(post.postKey, it.payload);
         } catch {
           continue;
         }
         latestActivity = Math.max(latestActivity, data.at);
-        const id = `${postId}:reaction:${it.actor}:${data.emoji}`;
+        const id = reactionRowId(postId, it.actor, data.emoji, data.parent);
         const existing = await get<PostEngagement>('postEngagement', id);
-        if (existing && existing.at >= data.at) continue; // LWW per (actor, emoji)
+        if (existing && existing.at >= data.at) continue; // LWW per (actor, emoji, target)
         await put<PostEngagement>('postEngagement', {
           id, postId, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at,
-          deleted: data.remove || undefined, updatedAt: now(),
+          parent: data.parent, deleted: data.remove || undefined, updatedAt: now(),
         });
-        applied.push({ id: it.id, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at, deleted: data.remove || undefined });
+        applied.push({ id: it.id, type: 'reaction', actor: it.actor, emoji: data.emoji, at: data.at,
+          parent: data.parent, deleted: data.remove || undefined });
       } else if (it.kind === 'comment') {
         if (await get<PostEngagement>('postEngagement', it.id)) continue; // already have it
         let data: CommentData;
@@ -4258,9 +4356,11 @@ export async function syncEngagement(postId: string): Promise<FreshEngagement[]>
         latestActivity = Math.max(latestActivity, data.at);
         await put<PostEngagement>('postEngagement', {
           id: it.id, postId, type: 'comment', actor: it.actor, text: data.text, at: data.at,
+          parent: data.parent, replyToActor: data.replyToActor, replyToName: data.replyToName,
           actorName: data.name, actorAvatar: data.avatar, updatedAt: now(),
         });
-        applied.push({ id: it.id, type: 'comment', actor: it.actor, at: data.at });
+        applied.push({ id: it.id, type: 'comment', actor: it.actor, at: data.at,
+          parent: data.parent, replyToActor: data.replyToActor });
       } else if (it.kind === 'game') {
         // A game accept/move on a challenge post (spec 0009). Rows are immutable
         // and keyed by the SERVER engagement id — the replay's dedupe key; the
@@ -4295,7 +4395,39 @@ export async function syncEngagement(postId: string): Promise<FreshEngagement[]>
 /** Live reactions on a post (non-removed), oldest-first. */
 export async function listPostReactions(postId: string): Promise<PostEngagement[]> {
   const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
-  return rows.filter((e) => e.type === 'reaction' && !e.deleted).sort((a, b) => a.at - b.at);
+  return liveReactions(rows).filter((e) => !e.parent).sort((a, b) => a.at - b.at);
+}
+
+/** Reactions on ONE comment (spec 1065 US5). */
+export async function listCommentReactions(postId: string, commentId: string): Promise<PostEngagement[]> {
+  const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
+  return liveReactions(rows).filter((e) => e.parent === commentId).sort((a, b) => a.at - b.at);
+}
+
+/** Every live comment-targeted reaction for one post. The thread component groups
+ *  this bounded local set by sealed parent without loading unrelated posts. */
+export async function listPostCommentReactions(postId: string): Promise<PostEngagement[]> {
+  const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
+  return liveReactions(rows).filter((e) => !!e.parent).sort((a, b) => a.at - b.at);
+}
+
+/**
+ * Live reactions, with a deleted comment's reactions dropped (spec 1065 FR-029c).
+ *
+ * Deleting a comment must NOT emit a deletion marker per reaction: those markers
+ * name their target in the clear, so one per reaction would publish exactly the
+ * reaction-to-comment mapping that sealing the parent exists to hide, and at
+ * comment granularity — worse than the one metadata exception we accepted. So the
+ * comment gets its single marker, and every device works out locally that its
+ * reactions went with it, by reading the sealed parent it already holds.
+ */
+function liveReactions(rows: readonly PostEngagement[]): PostEngagement[] {
+  const goneComments = new Set(
+    rows.filter((e) => e.type === 'comment' && e.deleted).map((e) => e.id),
+  );
+  return rows.filter(
+    (e) => e.type === 'reaction' && !e.deleted && !(e.parent && goneComments.has(e.parent)),
+  );
 }
 
 /** All engagement rows (for the feed, which groups them by post in one live query). */
@@ -4303,11 +4435,27 @@ export async function listAllPostEngagement(): Promise<PostEngagement[]> {
   return getAll<PostEngagement>('postEngagement');
 }
 
-/** Live comments on a post (non-deleted), oldest-first (timestamp then id tiebreak). */
+/** Bounded engagement projection for feed cards. Detail pages query their one
+ *  post separately; the feed must never retain every historical row for every
+ *  post just to draw current tallies (FR-036). */
+export async function listWallFeedEngagement(limitPerPost = 200): Promise<PostEngagement[]> {
+  const posts = await listWallPosts();
+  const out: PostEngagement[] = [];
+  for (const post of posts) {
+    const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', post.id);
+    out.push(...rows.sort((a, b) => b.at - a.at || b.id.localeCompare(a.id)).slice(0, limitPerPost));
+  }
+  return out;
+}
+
+/** Comments on a post, including deleted parents while the renderer decides
+ *  whether they still anchor readable replies (spec 1065 FR-027). */
 export async function listPostComments(postId: string): Promise<PostEngagement[]> {
   const rows = await getByIndex<PostEngagement>('postEngagement', 'postId', postId);
-  return rows
-    .filter((e) => e.type === 'comment' && !e.deleted)
+  const comments = rows.filter((e) => e.type === 'comment');
+  const parentsWithReplies = new Set(comments.flatMap((e) => e.parent ? [e.parent] : []));
+  return comments
+    .filter((e) => !e.deleted || parentsWithReplies.has(e.id))
     .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
 }
 
@@ -4469,14 +4617,35 @@ export async function resignWallGame(postId: string): Promise<void> {
 
 /** Add an audience-visible comment to a post (sealed under K_post; fanned out). */
 export async function commentOnPost(postId: string, text: string): Promise<void> {
+  return addComment(postId, text);
+}
+
+/** Reply to a specific comment (spec 1065 US4). The stored `parent` is always the
+ *  TOP-LEVEL ancestor, so answering an answer joins the same thread rather than
+ *  indenting deeper (FR-025). */
+export async function replyToComment(postId: string, parentId: string, text: string): Promise<void> {
+  const rows = (await getByIndex<PostEngagement>('postEngagement', 'postId', postId)).filter(
+    (e) => e.type === 'comment',
+  );
+  const target = resolveReplyTarget(parentId, rows);
+  return addComment(postId, text, target);
+}
+
+async function addComment(
+  postId: string,
+  text: string,
+  reply?: { parent: string; replyToActor?: string; replyToName?: string },
+): Promise<void> {
   const self = getSelfUserId();
   const post = await get<Post>('posts', postId);
   const body = text.trim();
   if (!self || !post?.postKey || !body) return;
   const at = now();
   const engId = uid(); // local id == server engagement id, so tombstones can target it
+  const parent = reply?.parent;
   await put<PostEngagement>('postEngagement', {
-    id: engId, postId, type: 'comment', actor: self, text: body, at, updatedAt: at,
+    id: engId, postId, type: 'comment', actor: self, text: body, at, parent,
+    replyToActor: reply?.replyToActor, replyToName: reply?.replyToName, updatedAt: at,
   });
   await bumpPostActivity(postId, at);
   // Ride our display info sealed with the comment (see CommentData) so audience
@@ -4486,8 +4655,26 @@ export async function commentOnPost(postId: string, text: string): Promise<void>
   try {
     await apiSubmitEngagement(postId, {
       id: engId,
-      kind: 'comment',
-      payload: sealPostEngagement(post.postKey, { text: body, at, name, avatar } satisfies CommentData),
+      kind: 'comment', // NOT a new kind: the server must not be able to tell a
+      // reply from a plain comment by the row alone (spec 1065 FR-031).
+      payload: sealPostEngagement(post.postKey, {
+        text: body, at, name, avatar, parent,
+        replyToActor: reply?.replyToActor,
+        replyToName: reply?.replyToName,
+      } satisfies CommentData),
+      // The wake hint (FR-031b): the server routes push and can only route to
+      // someone it can name, so a reply says who to wake. It learns the
+      // recipient, never which comment was answered. Validated server-side
+      // against the post's audience and capped, so it cannot wake a stranger.
+      notify: reply?.replyToActor && reply.replyToActor !== self ? [reply.replyToActor] : [],
+      preview: reply?.replyToActor && reply.replyToActor !== self
+        ? sealPostActivityPreview(post.postKey, {
+            id: engId,
+            actor: self,
+            title: name ?? 'Someone',
+            body: 'replied to you',
+          })
+        : undefined,
     });
   } catch {
     /* offline — local stands; a later sync reconciles */
@@ -4508,26 +4695,63 @@ export async function deleteComment(postId: string, commentId: string): Promise<
 
 /* ---- view receipts (spec 0003, US7) ---- */
 
+/** Posts this device has already reported a view for, so a post costs one request
+ *  for all time (spec 1065 FR-017a). The server is already first-write-wins, so a
+ *  repeat POST is harmless — this exists to stop the feed making one per scroll.
+ *  Bounded and pruned alongside expired posts, like the SW's shown-ledger. */
+const VIEWS_REPORTED_KEY = 'wall.viewsReported';
+const VIEWS_REPORTED_CAP = 500;
+
+async function reportedViews(): Promise<string[]> {
+  return await getSetting<string[]>(VIEWS_REPORTED_KEY, []);
+}
+
 /** Record that we viewed a post — only if our seen-receipts setting is on (reciprocal
- *  with the chat setting) and it isn't our own post. */
+ *  with the chat setting) and it isn't our own post.
+ *
+ *  Spec 1065: the feed now calls this too, once a post has been meaningfully on
+ *  screen, not just when its detail page opens. Every caller MUST come through
+ *  here rather than reaching for the API directly, because the reciprocity gate
+ *  below is the only thing enforcing FR-015 — it is client-side on both sides and
+ *  the server knows nothing about it. */
 export async function recordPostView(postId: string): Promise<void> {
   const post = await get<Post>('posts', postId);
-  if (!post || post.outgoing) return;
-  if (!(await getSetting<boolean>('privacy.seenReceipts', true))) return;
+  if (!post) return;
+  const seen = await reportedViews();
+  const allowed = mayReportView({
+    outgoing: !!post.outgoing,
+    seenReceiptsOn: await getSetting<boolean>('privacy.seenReceipts', true),
+    alreadyReported: seen.includes(postId),
+  });
+  if (!allowed) return;
   try {
     await apiRecordPostView(postId);
+    // Record only after the server took it, so a failed report retries later.
+    await setSetting(VIEWS_REPORTED_KEY, [...seen, postId].slice(-VIEWS_REPORTED_CAP));
   } catch {
-    /* best effort */
+    /* best effort — offline, the next sighting reports it */
   }
 }
 
+/** Drop reported-view entries for posts we no longer hold, so the ledger cannot
+ *  grow without bound. Called from the post sweep. */
+export async function pruneReportedViews(): Promise<void> {
+  const seen = await reportedViews();
+  if (!seen.length) return;
+  const live = new Set((await getAll<Post>('posts')).map((p) => p.id));
+  const kept = seen.filter((id) => live.has(id));
+  if (kept.length !== seen.length) await setSetting(VIEWS_REPORTED_KEY, kept);
+}
+
 /** Author-only view list for our own post, gated by our own seen-receipts setting
- *  (reciprocity). Returns viewer ids (resolve names in the UI). */
-export async function listPostViews(postId: string): Promise<string[]> {
+ *  (reciprocity). Carries each viewer's FIRST sighting — the server's primary key
+ *  is (post, viewer) and the insert is do-nothing-on-conflict, so `viewedAt` is
+ *  the first time they saw it, across every device they own (FR-013). */
+export async function listPostViews(postId: string): Promise<PostViewer[]> {
   if (!(await getSetting<boolean>('privacy.seenReceipts', true))) return [];
   try {
     const { views } = await apiListPostViews(postId);
-    return views.map((v) => v.viewer);
+    return views;
   } catch {
     return [];
   }
