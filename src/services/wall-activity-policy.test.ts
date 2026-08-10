@@ -32,6 +32,11 @@ describe('wallActivityAlert', () => {
     expect(wallActivityAlert({ ...base, isOwnPost: false, type: 'reaction' })).toBe('skip');
   });
 
+  it("alerts when engagement addresses my comment on someone else's post", () => {
+    expect(wallActivityAlert({ ...base, isOwnPost: false, answersMe: true })).toBe('alert');
+    expect(wallActivityAlert({ ...base, isOwnPost: false, answersMe: true, type: 'reaction' })).toBe('alert');
+  });
+
   it('never alerts for my own actions on my own post (FR-004)', () => {
     expect(wallActivityAlert({ ...base, actor: 'me' })).toBe('skip');
     expect(wallActivityAlert({ ...base, actor: 'me', type: 'reaction' })).toBe('skip');

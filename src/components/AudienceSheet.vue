@@ -25,7 +25,7 @@
         <div v-for="g in groups" :key="g.key" class="group">
           <div class="group-head">
             <span class="group-emoji"><emoji :emoji="g.key" /></span>
-            <span class="group-count">{{ g.rows.length }}</span>
+            <span class="group-count">{{ g.count }}</span>
           </div>
           <ion-list :inset="true">
             <audience-row v-for="r in g.rows" :key="r.id" :row="r" />
@@ -92,7 +92,7 @@ watch(
 );
 
 const canLoadMore = computed(
-  () => !props.byEmoji && hasMore(visible.value, ordered.value.length),
+  () => hasMore(visible.value, ordered.value.length),
 );
 
 function loadMore(ev: InfiniteScrollCustomEvent): void {
@@ -100,9 +100,9 @@ function loadMore(ev: InfiniteScrollCustomEvent): void {
   void ev.target.complete();
 }
 
-/** Emoji groups, most-used first, each already in most-recent-first order.
- *  Grouped lists are short by nature (a post carries a handful of distinct
- *  emoji), so they render whole rather than paging. */
+/** Emoji groups, most-used first, each already in most-recent-first order. The
+ *  same bounded visible window applies in grouped mode: distinct emoji may be
+ *  few, but a popular post can still have hundreds of people under one emoji. */
 const groups = computed(() => {
   if (!props.byEmoji) return [];
   const by = new Map<string, DisplayRow[]>();
@@ -112,9 +112,16 @@ const groups = computed(() => {
     if (list) list.push(r);
     else by.set(r.emoji, [r]);
   }
+  let remaining = visible.value;
   return [...by.entries()]
-    .map(([key, rows]) => ({ key, rows }))
-    .sort((a, b) => b.rows.length - a.rows.length || a.key.localeCompare(b.key));
+    .map(([key, rows]) => ({ key, rows, count: rows.length }))
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+    .map((group) => {
+      const rows = group.rows.slice(0, remaining);
+      remaining -= rows.length;
+      return { ...group, rows };
+    })
+    .filter((group) => group.rows.length > 0);
 });
 </script>
 

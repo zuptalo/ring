@@ -163,7 +163,19 @@ export async function removePostRecipient(postId: string, userId: string): Promi
  *  out to the post's audience. Only audience members (or the author) may engage. */
 export async function submitEngagement(
   postId: string,
-  req: { id: string; kind: string; payload?: string; target?: string },
+  req: {
+    id: string;
+    kind: string;
+    payload?: string;
+    target?: string;
+    /** Spec 1065 FR-031b: who to wake. The server routes push and can only route
+     *  to someone it can name, so a reply names the person it answers. Validated
+     *  server-side against the post's audience and capped; never persisted. */
+    notify?: string[];
+    /** Sender-sealed, constant-size notification wording for the named target.
+     *  Opaque to the server and discarded after push routing. */
+    preview?: string;
+  },
 ): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement`, {
     method: 'POST',

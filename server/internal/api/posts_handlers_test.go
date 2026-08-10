@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ type recordingNotifier struct {
 	mu       sync.Mutex
 	posts    []string
 	activity []string // "<userID>:<postID>" per NotifyPostActivity call
+	previews []string // "<userID>:<postID>:<opaque>"
 }
 
 func (n *recordingNotifier) Notify(context.Context, string)                                     {}
@@ -40,6 +42,24 @@ func (n *recordingNotifier) NotifyPostActivity(_ context.Context, userID, postID
 	defer n.mu.Unlock()
 	n.activity = append(n.activity, userID+":"+postID)
 }
+func (n *recordingNotifier) NotifyPostActivityPreview(_ context.Context, userID, postID string, preview []byte) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.activity = append(n.activity, userID+":"+postID)
+	n.previews = append(n.previews, userID+":"+postID+":"+string(preview))
+}
+
+// wokenSet is the set of users woken by NotifyPostActivity.
+func (n *recordingNotifier) wokenSet() map[string]bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := map[string]bool{}
+	for _, a := range n.activity {
+		out[a[:strings.IndexByte(a, ':')]] = true
+	}
+	return out
+}
+
 func (n *recordingNotifier) postPushCount() int {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -75,6 +95,7 @@ func (n *recordingNotifier) reset() {
 	defer n.mu.Unlock()
 	n.posts = nil
 	n.activity = nil
+	n.previews = nil
 }
 
 // fakePostConn is a ConnectionStore whose Connected() answers from an explicit
@@ -1182,6 +1203,18 @@ func TestListEngagementLimitCapsThePage(t *testing.T) {
 	}
 }
 
+func TestListEngagementExactFinalPageDoesNotClaimMore(t *testing.T) {
+	srv, _, tokA, _ := engagementFixture(t, 8)
+	_, first := getEngagement(t, srv, tokA, "limit=4")
+	if !first.HasMore || first.Cursor == "" {
+		t.Fatal("first page must continue")
+	}
+	_, last := getEngagement(t, srv, tokA, "limit=4&before="+first.Cursor)
+	if len(last.Items) != 4 || last.HasMore || last.Cursor != "" {
+		t.Fatalf("exact final page = %d items, hasMore=%v cursor=%q", len(last.Items), last.HasMore, last.Cursor)
+	}
+}
+
 // The regression this whole keyset design exists for: walking the cursor must
 // visit every row exactly once, including across created_at ties.
 func TestListEngagementCursorWalksBackWithoutGapsOrRepeats(t *testing.T) {
@@ -1237,5 +1270,148 @@ func TestListEngagementStillRefusesOutsiders(t *testing.T) {
 
 	if code, _ := getEngagement(t, srv, tokC, "limit=2"); code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", code)
+	}
+}
+
+/* ---- spec 1065 FR-031b: the wake hint ---- */
+
+// notifyFixture: Alice's post with Bob and Carol in the audience, Dave outside it.
+func notifyFixture(t *testing.T) (http.Handler, *recordingNotifier, string, string, string, string, string, string) {
+	t.Helper()
+	conn := newFakePostConn()
+	fp := newFakePostStore()
+	notif := &recordingNotifier{}
+	srv := newPostTestServerN(conn, fp, notif)
+	tokA, aliceID, _ := registerNamed(t, srv, "alice")
+	tokB, bobID, _ := registerNamed(t, srv, "bob")
+	_, carolID, _ := registerNamed(t, srv, "carol")
+	tokD, daveID, _ := registerNamed(t, srv, "dave")
+	conn.befriend(aliceID, bobID)
+	conn.befriend(aliceID, carolID)
+
+	body := `{"id":"` + postID + `","blobId":"cap1","envelopes":[` +
+		`{"recipient":"` + bobID + `","wrappedKey":"WK"},` +
+		`{"recipient":"` + carolID + `","wrappedKey":"WK"}]}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts", tokA, body); rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	notif.reset()
+	return srv, notif, tokB, tokD, aliceID, bobID, carolID, daveID
+}
+
+func comment(id, notify string) string {
+	n := ""
+	if notify != "" {
+		n = `,"notify":[` + notify + `]`
+	}
+	return `{"id":"` + id + `","kind":"comment","payload":"SEALED"` + n + `}`
+}
+
+// A reply wakes the post owner AND the person it answers, and nobody else.
+func TestNotifyWakesOwnerAndTheAnswered(t *testing.T) {
+	srv, notif, tokB, _, aliceID, _, carolID, _ := notifyFixture(t)
+	const engID = "33333333-3333-3333-3333-333333333333"
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, comment(engID, `"`+carolID+`"`)); rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body=%s", rr.Code, rr.Body.String())
+	}
+	got := notif.wokenSet()
+	want := map[string]bool{aliceID: true, carolID: true}
+	if len(got) != len(want) {
+		t.Fatalf("woke %v, want exactly %v", got, want)
+	}
+	for u := range want {
+		if !got[u] {
+			t.Errorf("%s was not woken", u)
+		}
+	}
+}
+
+// Naming someone outside the audience is refused, and wakes nobody.
+func TestNotifyRefusesOutsiders(t *testing.T) {
+	srv, notif, tokB, _, _, _, _, daveID := notifyFixture(t)
+	const engID = "44444444-4444-4444-4444-444444444444"
+	rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, comment(engID, `"`+daveID+`"`))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+	if len(notif.wokenSet()) != 0 {
+		t.Errorf("a rejected hint still woke %v", notif.wokenSet())
+	}
+}
+
+// The hint cannot become a broadcast primitive.
+func TestNotifyIsCapped(t *testing.T) {
+	srv, _, tokB, _, aliceID, _, carolID, _ := notifyFixture(t)
+	const engID = "55555555-5555-5555-5555-555555555555"
+	three := `"` + aliceID + `","` + carolID + `","` + aliceID + `"`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, comment(engID, three)); rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for %d targets", rr.Code, 3)
+	}
+}
+
+func TestNotifyRejectsMalformedIDs(t *testing.T) {
+	srv, _, tokB, _, _, _, _, _ := notifyFixture(t)
+	const engID = "66666666-6666-6666-6666-666666666666"
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, comment(engID, `"not-a-uuid"`)); rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+// You never wake yourself, and doing so is not an error.
+func TestNotifySelfIsDroppedNotRejected(t *testing.T) {
+	srv, notif, tokB, _, aliceID, bobID, _, _ := notifyFixture(t)
+	const engID = "77777777-7777-7777-7777-777777777777"
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, comment(engID, `"`+bobID+`"`)); rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rr.Code)
+	}
+	got := notif.wokenSet()
+	if got[bobID] {
+		t.Errorf("bob woke himself")
+	}
+	if !got[aliceID] || len(got) != 1 {
+		t.Errorf("woke %v, want only the owner", got)
+	}
+}
+
+// The hint is for routing only: it must never reach the stored row.
+func TestNotifyIsNeverPersisted(t *testing.T) {
+	srv, _, tokB, _, _, _, carolID, _ := notifyFixture(t)
+	const engID = "88888888-8888-8888-8888-888888888888"
+	do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, comment(engID, `"`+carolID+`"`))
+
+	rr := do(t, srv, http.MethodGet, "/v1/posts/"+postID+"/engagement", tokB, "")
+	if body := rr.Body.String(); strings.Contains(body, carolID) || strings.Contains(body, "notify") {
+		t.Errorf("the stored engagement leaked the wake hint: %s", body)
+	}
+}
+
+func TestNotifyCannotBeUsedAsAudienceOracleByOutsider(t *testing.T) {
+	srv, notif, _, tokD, _, _, carolID, _ := notifyFixture(t)
+	const engID = "99999999-9999-9999-9999-999999999999"
+	rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokD, comment(engID, `"`+carolID+`"`))
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want caller authorization 403 before target validation", rr.Code)
+	}
+	if len(notif.wokenSet()) != 0 {
+		t.Fatalf("unauthorized hint woke %v", notif.wokenSet())
+	}
+}
+
+func TestSenderSealedPreviewRoutesOnlyToNamedTarget(t *testing.T) {
+	srv, notif, tokB, _, aliceID, _, carolID, _ := notifyFixture(t)
+	const engID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	body := `{"id":"` + engID + `","kind":"comment","payload":"SEALED","notify":["` + carolID + `"],"preview":"SEALED-PREVIEW"}`
+	if rr := do(t, srv, http.MethodPost, "/v1/posts/"+postID+"/engagement", tokB, body); rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if len(notif.previews) != 1 || !strings.HasPrefix(notif.previews[0], carolID+":"+postID+":") {
+		t.Fatalf("preview routes = %v, want only answered commenter", notif.previews)
+	}
+	if !notif.wokenSet()[aliceID] || !notif.wokenSet()[carolID] {
+		t.Fatalf("woken = %v, want owner and commenter", notif.wokenSet())
+	}
+	rr := do(t, srv, http.MethodGet, "/v1/posts/"+postID+"/engagement", tokB, "")
+	if strings.Contains(rr.Body.String(), "SEALED-PREVIEW") {
+		t.Fatalf("preview persisted in engagement: %s", rr.Body.String())
 	}
 }

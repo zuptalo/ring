@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -224,11 +225,28 @@ func (h *Handlers) removePostRecipient(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maxNotifyTargets caps the wake hint. The notification rules never name more
+// than two people (the post owner and the person answered), so a longer list is
+// an attempt to use the field as a broadcast primitive, not a legitimate call.
+const maxNotifyTargets = 2
+const maxActivityPreviewBytes = 2048
+
 type engagementReq struct {
 	ID      string `json:"id"`
 	Kind    string `json:"kind"`             // reaction | comment | game | tombstone
 	Payload string `json:"payload"`          // opaque, sealed under K_post
 	Target  string `json:"target,omitempty"` // tombstone: the engagement id being removed
+	// Notify (spec 1065 FR-031b) names who to wake. The server routes push and can
+	// only route to someone it can name, and it cannot read the sealed parent that
+	// says who a reply answers — so the sending device says.
+	//
+	// What the server learns: who a reply is addressed to. What it still cannot
+	// learn: which comment was answered, any text or emoji, or the size of any
+	// thread. It is validated against the audience so it cannot wake a stranger,
+	// capped so it cannot become a broadcast primitive, used only for routing,
+	// and NEVER persisted or logged.
+	Notify  []string `json:"notify,omitempty"`
+	Preview string   `json:"preview,omitempty"` // opaque sender-sealed wording; routed, never stored
 }
 
 // "follow" (spec 1036): a content-free opt-in to a challenge post's outcome —
@@ -274,6 +292,10 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid engagement")
 		return
 	}
+	// Authorize the ACTOR before inspecting any named target. Otherwise an outsider
+	// who knows a post id could distinguish "target is in the audience" from "target
+	// is not" by comparing validation errors, turning this convenience field into an
+	// audience-membership oracle.
 	canSee, err := h.Posts.CanSeePost(r.Context(), postID, uid)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not authorize")
@@ -283,6 +305,40 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, "not in this post's audience")
 		return
 	}
+
+	// Validate the wake hint before anything else touches it (spec 1065 FR-031b).
+	// Every entry must be a real user in this post's audience, so the field cannot
+	// be used to wake someone who is not entitled to see the post in the first
+	// place, and it is capped so it cannot fan out.
+	if len(req.Notify) > maxNotifyTargets {
+		httpx.Error(w, http.StatusBadRequest, "notify too long")
+		return
+	}
+	if len(req.Preview) > maxActivityPreviewBytes || (req.Preview != "" && len(req.Notify) == 0) {
+		httpx.Error(w, http.StatusBadRequest, "invalid preview")
+		return
+	}
+	notify := make([]string, 0, len(req.Notify))
+	for _, target := range req.Notify {
+		if !uuidRE.MatchString(target) {
+			httpx.Error(w, http.StatusBadRequest, "bad notify")
+			return
+		}
+		if target == uid {
+			continue // you never wake yourself
+		}
+		ok, err := h.Posts.CanSeePost(r.Context(), postID, target)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "could not authorize")
+			return
+		}
+		if !ok {
+			httpx.Error(w, http.StatusBadRequest, "notify outside audience")
+			return
+		}
+		notify = append(notify, target)
+	}
+
 	// FR-008 anti-flood volume limits (skip tombstones — removing your own item is not
 	// flooding). Per-actor engagement rate guards a viewer against being spammed; the
 	// per-post comment rate guards a single Wall thread. Counts only, never content.
@@ -387,8 +443,22 @@ func (h *Handlers) submitEngagement(w http.ResponseWriter, r *http.Request) {
 		case "follow":
 			// An opt-in is bookkeeping, not activity — nobody is woken for it.
 		default:
+			// The post owner as always, plus anyone the sender named (a reply
+			// names the person it answers). Deduplicated, so an owner replied to
+			// on their own post is woken once, not twice.
+			targets := map[string]bool{}
 			if author, err := h.Posts.PostAuthor(r.Context(), postID); err == nil && author != "" && author != uid {
-				h.Notifier.NotifyPostActivity(r.Context(), author, postID)
+				targets[author] = true
+			}
+			for _, t := range notify {
+				targets[t] = true
+			}
+			for t := range targets {
+				if req.Preview != "" && slices.Contains(notify, t) {
+					h.Notifier.NotifyPostActivityPreview(r.Context(), t, postID, []byte(req.Preview))
+				} else {
+					h.Notifier.NotifyPostActivity(r.Context(), t, postID)
+				}
 			}
 		}
 	}
@@ -470,18 +540,26 @@ func (h *Handlers) listEngagement(w http.ResponseWriter, r *http.Request) {
 		}
 		page.BeforeMs, page.BeforeID = ms, id
 	}
+	// Ask the store for one look-ahead row. A page containing exactly `limit`
+	// items is not proof that another page exists; limit+1 makes hasMore truthful
+	// without a count query and the extra row is never returned.
+	requestedLimit := page.Limit
+	page.Limit++
 	rows, err := h.Posts.ListEngagement(r.Context(), postID, page)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "could not list engagement")
 		return
+	}
+	hasMore := len(rows) > requestedLimit
+	if hasMore {
+		rows = rows[:requestedLimit]
 	}
 	items := make([]engagementOut, 0, len(rows))
 	for _, e := range rows {
 		items = append(items, engagementOut{ID: e.ID, Actor: e.Actor, Kind: e.Kind, Payload: e.Payload, CreatedAt: e.CreatedMs})
 	}
 	out := map[string]any{"items": items}
-	// A full page means there may be more; a short one is definitively the end.
-	if len(rows) == page.Limit && len(rows) > 0 {
+	if hasMore && len(rows) > 0 {
 		last := rows[len(rows)-1]
 		out["cursor"] = formatEngagementCursor(last.CreatedMs, last.ID)
 		out["hasMore"] = true

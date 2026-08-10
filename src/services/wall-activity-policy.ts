@@ -22,6 +22,8 @@ export const WALL_ACTIVITY_FRESH_MS = 5 * 60_000;
 export interface WallActivityInput {
   /** The engaged post is OURS (post.outgoing) — the owner-only heart of spec 1031. */
   isOwnPost: boolean;
+  /** The sealed reply/reaction target is one of our comments. */
+  answersMe?: boolean;
   /** Who performed the engagement. */
   actor: string;
   /** Our own user id (self-actions never alert, FR-004). */
@@ -46,7 +48,7 @@ export type WallActivityDecision = 'alert' | 'skip';
 
 /** Decide whether one freshly-synced engagement item earns a user-visible alert. */
 export function wallActivityAlert(i: WallActivityInput): WallActivityDecision {
-  if (!i.isOwnPost) return 'skip'; // owner-only (FR-003): never alert about others' posts
+  if (!i.isOwnPost && !i.answersMe) return 'skip';
   if (i.actor === i.self) return 'skip'; // self-actions are silent (FR-004)
   if (i.type !== 'reaction' && i.type !== 'comment') return 'skip'; // views never alert (FR-011)
   if (i.deleted) return 'skip'; // removals/tombstones never alert (FR-002/FR-011)

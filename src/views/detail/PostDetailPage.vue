@@ -81,18 +81,14 @@
              The AUTHOR can additionally open the pills to see who reacted, with what
              and when (spec 1065 US3); everyone else keeps tap-to-toggle. -->
         <div class="reactions">
-          <button
-            v-if="post.outgoing && grouped.length"
-            class="whoreacted"
-            @click="reactorsOpen = true"
-          >See who reacted</button>
           <div class="rrow">
             <button
               v-for="g in grouped"
               :key="g.emoji"
               class="rpill"
               :class="{ mine: g.mine }"
-              @click="react(g.emoji)"
+              :aria-label="post.outgoing ? `${g.count} ${g.emoji} reactions, show people` : `${g.count} ${g.emoji} reactions`"
+              @click="post.outgoing ? reactorsOpen = true : react(g.emoji)"
             ><Emoji :emoji="g.emoji" /><span class="rc">{{ g.count }}</span></button>
             <button class="raddbtn" aria-label="React" @click="openPicker($event)">
               <ion-icon :icon="happyOutline" />
@@ -110,33 +106,28 @@
              left to delete it (with confirmation). -->
         <div class="comments">
           <h3>Comments</h3>
-          <ion-list v-if="comments.length" class="clist">
-            <ion-item-sliding v-for="c in comments" :key="c.id">
-              <ion-item lines="none" class="citem">
-                <ion-avatar slot="start" class="cavatar">
-                  <user-avatar v-if="avatarOf(c.actor)" :src="avatarOf(c.actor)" :alt="nameOf(c.actor)" />
-                  <div v-else class="ph">{{ initial(nameOf(c.actor)) }}</div>
-                </ion-avatar>
-                <ion-label class="cwrap">
-                  <div class="cmeta">
-                    <span class="cname">{{ nameOf(c.actor) }}</span>
-                    <span class="ctime">{{ ago(c.at) }}</span>
-                  </div>
-                  <p class="ctext"><EmojiText :text="c.text || ''" /></p>
-                </ion-label>
-              </ion-item>
-              <ion-item-options v-if="canModerate(c)" side="end">
-                <ion-item-option color="danger" @click="confirmDeleteComment(c)">Delete</ion-item-option>
-              </ion-item-options>
-            </ion-item-sliding>
-          </ion-list>
-          <p v-else class="empty">No comments yet.</p>
+          <comment-thread
+            :post-id="postId"
+            :comments="comments"
+            :reactions="commentReactions"
+            :self-id="selfId || ''"
+            :post-owner-id="post.author"
+            :name-of="nameOf"
+            :avatar-of="avatarOf"
+            :can-moderate="canModerate"
+            @reply="beginReply"
+            @delete="confirmDeleteComment"
+          />
           <div class="cinput">
+            <ion-item v-if="replyingTo" lines="none" class="replying-banner">
+              <ion-label>Replying to {{ nameOf(replyingTo.actor) }}</ion-label>
+              <ion-button fill="clear" size="small" @click="replyingTo = null">Cancel</ion-button>
+            </ion-item>
             <ion-textarea
               v-enter-send="sendComment"
               :auto-grow="true"
               :rows="1"
-              placeholder="Add a comment…"
+              :placeholder="replyingTo ? `Reply to ${nameOf(replyingTo.actor)}…` : 'Add a comment…'"
               autocapitalize="sentences"
               :spellcheck="true"
               dir="auto"
@@ -214,6 +205,7 @@ import MediaViewer, { type ViewerItem } from '@/components/MediaViewer.vue';
 // page's old local copy kept counting days forever ("400d").
 import { timeLeft, formatPostDateTime, ago } from '@/utils/post-time';
 import AudienceSheet from '@/components/AudienceSheet.vue';
+import CommentThread from '@/components/CommentThread.vue';
 import { attributedReactions } from '@/utils/reaction-groups';
 import { initialsAvatar } from '@/db/avatars';
 import { appToast } from '@/services/toast';
@@ -225,7 +217,8 @@ import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
   getPost, getContact, getMedia, deletePost, challengeFallbackBody,
   listPostReactions, reactToPost, syncEngagement, listContacts,
-  listPostComments, commentOnPost, deleteComment, recordPostView, listPostViews,
+  listPostComments, listPostCommentReactions, commentOnPost, replyToComment,
+  deleteComment, recordPostView, listPostViews,
   MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
@@ -358,7 +351,13 @@ const avatarOf = (actorId: string): string => {
 
 // Comments thread.
 const comments = useLiveQuery(() => listPostComments(postId), ['postEngagement'], [] as PostEngagement[]);
+const commentReactions = useLiveQuery(
+  () => listPostCommentReactions(postId),
+  ['postEngagement'],
+  [] as PostEngagement[],
+);
 const commentText = ref('');
+const replyingTo = ref<PostEngagement | null>(null);
 function onComment(e: CustomEvent): void {
   commentText.value = (e.detail as { value?: string | null }).value ?? '';
 }
@@ -366,7 +365,13 @@ async function sendComment(): Promise<void> {
   const t = commentText.value.trim();
   if (!t) return;
   commentText.value = '';
-  await commentOnPost(postId, t);
+  const target = replyingTo.value;
+  replyingTo.value = null;
+  if (target) await replyToComment(postId, target.id, t);
+  else await commentOnPost(postId, t);
+}
+function beginReply(comment: PostEngagement): void {
+  replyingTo.value = comment;
 }
 function canModerate(c: PostEngagement): boolean {
   return c.actor === selfId || !!post.value?.outgoing;
@@ -420,7 +425,7 @@ const viewerRows = computed(() =>
 );
 
 onIonViewWillEnter(async () => {
-  void syncEngagement(postId); // refresh reactions from the server
+  void syncEngagement(postId, { resolveParents: true });
   post.value = await getPost(postId);
   if (!post.value) return;
   const ids = post.value.mediaIds?.length ? post.value.mediaIds : post.value.mediaId ? [post.value.mediaId] : [];
@@ -515,17 +520,6 @@ async function confirmDelete(): Promise<void> {
 </script>
 
 <style scoped>
-.whoreacted {
-  display: block;
-  margin: 0 0 6px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--ion-color-primary);
-  font-size: 13px;
-  cursor: pointer;
-}
-
 .wrap {
   padding: 16px 20px;
 }
@@ -793,8 +787,13 @@ async function confirmDelete(): Promise<void> {
 }
 .comments .cinput {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
+}
+.comments .replying-banner {
+  flex: 0 0 100%;
+  --min-height: 34px;
 }
 .comments .cinput ion-textarea {
   flex: 1;

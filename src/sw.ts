@@ -21,7 +21,8 @@ import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { CacheFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 import {
-  previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts, previewPostActivity, markConnShown,
+  previewPending, isNothingNew, markShown, unreadCount, ackCall, previewConnections, previewPosts,
+  previewPostActivity, previewPostActivityInline, markConnShown,
   coalesceForShow, loadShownSummary, setting, shouldReassert, loadShownSigs, saveShownSig,
   mayEndWakeSilently, platformTrustsSilence, quietNote, stampPushWake, countAccepted,
   runGuardedWake, recordWake, type WakeCtx,
@@ -32,6 +33,7 @@ import {
   type SwNote, type ConnNote, type InlinePreview,
 } from '@/services/sw-inbox';
 import type { CallEventSignal } from '@/services/crypto/message';
+import type { Envelope } from '@/services/crypto/envelope';
 import { readSessionToken } from '@/services/session';
 import { hasFreshRing, ringReassert, ringAlreadyNamed } from '@/services/call-events';
 import { drainPersistPending, ackFrames } from '@/services/sw-drain';
@@ -511,15 +513,18 @@ function pushKind(event: PushEvent): {
   kind: 'call' | 'msg' | 'msgx' | 'conn' | 'post' | 'post-activity' | 'version';
   post?: string;
   inline?: InlinePreview;
+  postPreview?: Envelope;
 } {
   try {
     const data = event.data?.json() as
-      | { t?: string; post?: string; id?: string; from?: string; pv?: { h: unknown; p: unknown } }
+      | { t?: string; post?: string; id?: string; from?: string; pv?: Envelope | { h: unknown; p: unknown } }
       | undefined;
     if (data?.t === 'call') return { kind: 'call' };
     if (data?.t === 'conn') return { kind: 'conn' };
     if (data?.t === 'post') return { kind: 'post' };
-    if (data?.t === 'post-activity') return { kind: 'post-activity', post: data.post };
+    if (data?.t === 'post-activity') {
+      return { kind: 'post-activity', post: data.post, postPreview: data.pv as Envelope | undefined };
+    }
     if (data?.t === 'version') return { kind: 'version' };
     // (spec 1055) Inline preview: a rich notification is decryptable from the push
     // body itself — no fetch. Malformed → fall through to the plain message tickle.
@@ -1047,7 +1052,7 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
       // background if the DB later frees up).
       await Promise.race([stampPushWake(), new Promise((r) => setTimeout(r, 1500))]);
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const { kind, post, inline } = pushKind(event);
+      const { kind, post, inline, postPreview } = pushKind(event);
       // (spec 2044) Legacy iOS (<= 16) takes the LITE wake: show first, decrypt never.
       // On that tier the SW's network layer works (delivered receipts prove the queue
       // fetch succeeds) but IndexedDB transactions and the decrypt/present pipeline
@@ -1252,7 +1257,9 @@ async function dispatchPush(event: PushEvent, ctx: WakeCtx): Promise<void> {
         for (const client of clients) client.postMessage({ type: 'ring:posts' });
         let shownActivity = false;
         if (!clients.length && (await setting('notifications.wall.activity', true))) {
-          const notes = await previewPostActivity(post ?? '');
+          const notes = postPreview
+            ? await previewPostActivityInline(post ?? '', postPreview)
+            : await previewPostActivity(post ?? '');
           if (notes.length) {
             // (spec 2023 FR-007) only ACCEPTED shows end the wake visibly.
             shownActivity = (await showConnNotes(notes)) > 0;
