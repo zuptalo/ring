@@ -27,7 +27,7 @@
  */
 import { attemptDeviceUnlock, getIdentityKeys } from './crypto/identity';
 import { ready as sodiumReady } from './crypto/primitives';
-import { openPostEngagement, openReceivedPost } from './posts';
+import { openPostActivityPreview, openPostEngagement, openReceivedPost } from './posts';
 import { previewPacket } from './messaging';
 import { openPushPreview } from './crypto/push-preview';
 import type { Header } from './crypto/ratchet';
@@ -1761,6 +1761,38 @@ export interface PostActivityItem {
   id: string;
   actor: string;
   kind: 'reaction' | 'comment';
+}
+
+/** Open the sender-sealed direct-comment notification without fetching the
+ *  engagement page. This is deliberately useful for an incoming post too: the
+ *  addressed commenter is not the post owner, but does hold K_post. */
+export async function previewPostActivityInline(postId: string, preview: Envelope): Promise<ConnNote[]> {
+  if (!postId) return [];
+  const post = await get<{ postKey?: string }>('posts', postId);
+  if (!post?.postKey) return [];
+  if ((await setting<number>('wall.muteUntil', 0)) > Date.now()) return [];
+  let opened: ReturnType<typeof openPostActivityPreview>;
+  try {
+    opened = openPostActivityPreview(post.postKey, preview);
+  } catch {
+    return [];
+  }
+  if (!opened.id || !opened.actor || !opened.body) return [];
+  const entries = await loadWallActShownEntries();
+  if (entries.some((entry) => entry.id === opened.id)) return [];
+  entries.push({ id: opened.id, ts: Date.now() });
+  await put<Setting<ShownEntry[]>>('settings', {
+    key: WALL_ACT_SHOWN_KEY,
+    value: entries.slice(-WALL_ACT_SHOWN_MAX),
+  });
+  const showPreview = await setting<boolean>('notifications.showPreview', true);
+  return [{
+    keys: [opened.id],
+    title: showPreview ? opened.title || 'Someone' : 'Ring',
+    body: showPreview ? opened.body : 'New activity',
+    url: `/wall/post/${postId}`,
+    tag: `ring:post:act:${postId}`,
+  }];
 }
 
 /**

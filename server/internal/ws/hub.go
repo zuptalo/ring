@@ -112,6 +112,10 @@ type Notifier interface {
 	// inside the encrypted Web Push envelope) — so the SW can pull that post's
 	// engagement and decide locally what, if anything, to show.
 	NotifyPostActivity(ctx context.Context, userID, postID string)
+	// NotifyPostActivityPreview carries sender-sealed wording to the specifically
+	// addressed commenter. The bytes are opaque here and in push; the recipient
+	// opens them under K_post without fetching a thread during the wake deadline.
+	NotifyPostActivityPreview(ctx context.Context, userID, postID string, preview []byte)
 }
 
 // frame is the wire shape. The relay only reads t/id/to/from/refId/messageId;
@@ -132,9 +136,9 @@ type frame struct {
 	// Push so the recipient SW shows a rich notification without a fetch. Never persisted
 	// (the durable/queued `delivered` frame stays content-free); E2EE to the recipient.
 	PushPreview json.RawMessage `json:"pushPreview,omitempty"`
-	Status     string          `json:"status,omitempty"`
-	At         int64           `json:"at,omitempty"`
-	RefID      string          `json:"refId,omitempty"`
+	Status      string          `json:"status,omitempty"`
+	At          int64           `json:"at,omitempty"`
+	RefID       string          `json:"refId,omitempty"`
 	// (spec 2056) t:"msg" only — epoch ms at which the relay accepted this frame. The
 	// recipient compares it with the sender's own claimed timestamp to spot a skewed sender
 	// clock; see the stamping site in the "msg" case for why this is the neutral reference.
@@ -153,7 +157,7 @@ type frame struct {
 	LastSeenTier string            `json:"lastSeenTier,omitempty"`
 	Overrides    map[string]string `json:"overrides,omitempty"`
 	Active       bool              `json:"active,omitempty"`
-	IDs          []string `json:"ids,omitempty"`
+	IDs          []string          `json:"ids,omitempty"`
 	// Call signalling (live-only; never durably queued). For 1:1, SDP/ICE travel
 	// E2EE'd in Ciphertext (the server can't read them). RoomID/Members/SDP are
 	// used by group calls (SFU). Kind is "audio"|"video"; Reason annotates
@@ -284,10 +288,10 @@ const maxBufferedCallFrames = 64
 
 func NewHub() *Hub {
 	return &Hub{
-		conns:    make(map[string]map[*Client]struct{}),
-		watchers: make(map[string]map[*Client]struct{}),
-		rooms:    call.NewRegistry(),
-		callBuf:   make(map[string][]bufferedCall),
+		conns:       make(map[string]map[*Client]struct{}),
+		watchers:    make(map[string]map[*Client]struct{}),
+		rooms:       call.NewRegistry(),
+		callBuf:     make(map[string][]bufferedCall),
 		ringHist:    make(map[string][]time.Time),
 		callRings:   make(map[string]*callRing),
 		groupRings:  make(map[string]map[string]context.CancelFunc),

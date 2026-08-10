@@ -77,7 +77,9 @@
           <ion-icon :icon="timeOutline" /> Disappears in {{ leftLabel }}
         </p>
 
-        <!-- Reactions (audience-visible): pills + the shared quick-react picker. -->
+        <!-- Reactions (audience-visible): pills + the shared quick-react picker.
+             The AUTHOR can additionally open the pills to see who reacted, with what
+             and when (spec 1065 US3); everyone else keeps tap-to-toggle. -->
         <div class="reactions">
           <div class="rrow">
             <button
@@ -85,13 +87,14 @@
               :key="g.emoji"
               class="rpill"
               :class="{ mine: g.mine }"
-              @click="react(g.emoji)"
+              :aria-label="post.outgoing ? `${g.count} ${g.emoji} reactions, show people` : `${g.count} ${g.emoji} reactions`"
+              @click="post.outgoing ? reactorsOpen = true : react(g.emoji)"
             ><Emoji :emoji="g.emoji" /><span class="rc">{{ g.count }}</span></button>
             <button class="raddbtn" aria-label="React" @click="openPicker($event)">
               <ion-icon :icon="happyOutline" />
             </button>
           </div>
-          <ul v-if="grouped.length" class="rlist">
+          <ul v-if="grouped.length && !post.outgoing" class="rlist">
             <li v-for="g in grouped" :key="g.emoji">
               <Emoji class="e" :emoji="g.emoji" />
               <span class="who">{{ g.who }}</span>
@@ -103,33 +106,28 @@
              left to delete it (with confirmation). -->
         <div class="comments">
           <h3>Comments</h3>
-          <ion-list v-if="comments.length" class="clist">
-            <ion-item-sliding v-for="c in comments" :key="c.id">
-              <ion-item lines="none" class="citem">
-                <ion-avatar slot="start" class="cavatar">
-                  <user-avatar v-if="avatarOf(c.actor)" :src="avatarOf(c.actor)" :alt="nameOf(c.actor)" />
-                  <div v-else class="ph">{{ initial(nameOf(c.actor)) }}</div>
-                </ion-avatar>
-                <ion-label class="cwrap">
-                  <div class="cmeta">
-                    <span class="cname">{{ nameOf(c.actor) }}</span>
-                    <span class="ctime">{{ ago(c.at) }}</span>
-                  </div>
-                  <p class="ctext"><EmojiText :text="c.text || ''" /></p>
-                </ion-label>
-              </ion-item>
-              <ion-item-options v-if="canModerate(c)" side="end">
-                <ion-item-option color="danger" @click="confirmDeleteComment(c)">Delete</ion-item-option>
-              </ion-item-options>
-            </ion-item-sliding>
-          </ion-list>
-          <p v-else class="empty">No comments yet.</p>
+          <comment-thread
+            :post-id="postId"
+            :comments="comments"
+            :reactions="commentReactions"
+            :self-id="selfId || ''"
+            :post-owner-id="post.author"
+            :name-of="nameOf"
+            :avatar-of="avatarOf"
+            :can-moderate="canModerate"
+            @reply="beginReply"
+            @delete="confirmDeleteComment"
+          />
           <div class="cinput">
+            <ion-item v-if="replyingTo" lines="none" class="replying-banner">
+              <ion-label>Replying to {{ nameOf(replyingTo.actor) }}</ion-label>
+              <ion-button fill="clear" size="small" @click="replyingTo = null">Cancel</ion-button>
+            </ion-item>
             <ion-textarea
               v-enter-send="sendComment"
               :auto-grow="true"
               :rows="1"
-              placeholder="Add a comment…"
+              :placeholder="replyingTo ? `Reply to ${nameOf(replyingTo.actor)}…` : 'Add a comment…'"
               autocapitalize="sentences"
               :spellcheck="true"
               dir="auto"
@@ -140,11 +138,39 @@
           </div>
         </div>
 
-        <!-- Author-only: who viewed this post (seen-receipts gated). -->
-        <div v-if="post.outgoing && viewers.length" class="viewers">
-          <h3>Viewed by</h3>
-          <p>{{ viewers.map(nameOf).join(', ') }}</p>
+        <!-- Author-only: how many people have seen this post, and who (spec 1065
+             US2). Nobody but the author sees this row, or any hint that it exists.
+             It used to be a run-on line of names with no count and no times. -->
+        <div v-if="post.outgoing" class="viewers">
+          <ion-item
+            class="seen-row"
+            :button="viewers.length > 0"
+            :detail="viewers.length > 0"
+            lines="none"
+            @click="viewers.length && (viewersOpen = true)"
+          >
+            <ion-icon slot="start" :icon="eyeOutline" />
+            <ion-label>{{ seenLine }}</ion-label>
+          </ion-item>
         </div>
+
+        <audience-sheet
+          :is-open="reactorsOpen"
+          title="Reactions"
+          :rows="reactorRows"
+          :by-emoji="true"
+          empty-text="No reactions yet"
+          @dismiss="reactorsOpen = false"
+        />
+
+        <audience-sheet
+          :is-open="viewersOpen"
+          title="Seen by"
+          :rows="viewerRows"
+          subtitle="Counts the people who share their seen receipts with you."
+          empty-text="No one yet"
+          @dismiss="viewersOpen = false"
+        />
       </div>
       <div v-else class="missing">This post is no longer available.</div>
     </ion-content>
@@ -173,9 +199,15 @@ import {
   onIonViewWillEnter, onIonViewWillLeave, alertController,
 } from '@ionic/vue';
 import { useRoute, useRouter } from 'vue-router';
-import { trashOutline, happyOutline, timeOutline, playCircleOutline } from 'ionicons/icons';
+import { trashOutline, happyOutline, timeOutline, playCircleOutline, eyeOutline } from 'ionicons/icons';
 import MediaViewer, { type ViewerItem } from '@/components/MediaViewer.vue';
-import { timeLeft, formatPostDateTime } from '@/utils/post-time';
+// `ago` is the shared one: it falls back to a date past a week, where this
+// page's old local copy kept counting days forever ("400d").
+import { timeLeft, formatPostDateTime, ago } from '@/utils/post-time';
+import AudienceSheet from '@/components/AudienceSheet.vue';
+import CommentThread from '@/components/CommentThread.vue';
+import { attributedReactions } from '@/utils/reaction-groups';
+import { initialsAvatar } from '@/db/avatars';
 import { appToast } from '@/services/toast';
 import Emoji from '@/components/Emoji.vue';
 import EmojiText from '@/components/EmojiText.vue';
@@ -185,12 +217,13 @@ import { useReactionPicker } from '@/composables/useReactionPicker';
 import {
   getPost, getContact, getMedia, deletePost, challengeFallbackBody,
   listPostReactions, reactToPost, syncEngagement, listContacts,
-  listPostComments, commentOnPost, deleteComment, recordPostView, listPostViews,
+  listPostComments, listPostCommentReactions, commentOnPost, replyToComment,
+  deleteComment, recordPostView, listPostViews,
   MAX_REACTIONS_PER_USER, MAX_DISTINCT_REACTIONS,
 } from '@/db/queries';
 import { getSelfUserId } from '@/services/auth';
 import { useSelfProfile } from '@/composables/useSelfProfile';
-import type { Post, PostEngagement, Contact } from '@/db/types';
+import type { Post, PostEngagement, PostViewer, Contact } from '@/db/types';
 
 const route = useRoute();
 const router = useRouter();
@@ -318,7 +351,13 @@ const avatarOf = (actorId: string): string => {
 
 // Comments thread.
 const comments = useLiveQuery(() => listPostComments(postId), ['postEngagement'], [] as PostEngagement[]);
+const commentReactions = useLiveQuery(
+  () => listPostCommentReactions(postId),
+  ['postEngagement'],
+  [] as PostEngagement[],
+);
 const commentText = ref('');
+const replyingTo = ref<PostEngagement | null>(null);
 function onComment(e: CustomEvent): void {
   commentText.value = (e.detail as { value?: string | null }).value ?? '';
 }
@@ -326,7 +365,13 @@ async function sendComment(): Promise<void> {
   const t = commentText.value.trim();
   if (!t) return;
   commentText.value = '';
-  await commentOnPost(postId, t);
+  const target = replyingTo.value;
+  replyingTo.value = null;
+  if (target) await replyToComment(postId, target.id, t);
+  else await commentOnPost(postId, t);
+}
+function beginReply(comment: PostEngagement): void {
+  replyingTo.value = comment;
 }
 function canModerate(c: PostEngagement): boolean {
   return c.actor === selfId || !!post.value?.outgoing;
@@ -344,10 +389,43 @@ async function confirmDeleteComment(c: PostEngagement): Promise<void> {
 }
 
 // Author-only view list.
-const viewers = ref<string[]>([]);
+const viewers = ref<PostViewer[]>([]);
+const viewersOpen = ref(false);
+const reactorsOpen = ref(false);
+
+// Who reacted, with what and when. Author-only by where it is rendered, not by
+// where the data lives: reactions are sealed under a key every audience member
+// holds, so this is a presentation rule, not a protection the server provides
+// (FR-033a). The viewer list above IS server-enforced; this one is not, and
+// saying so plainly beats implying a guarantee we cannot make.
+const reactorRows = computed(() =>
+  attributedReactions(
+    reactions.value.map((r) => ({ actor: r.actor, emoji: r.emoji, at: r.at, deleted: r.deleted })),
+    (id) => nameOf(id),
+    (id) => avatarOf(id) || initialsAvatar(nameOf(id)),
+  ).map((r) => ({ ...r, when: ago(r.at) })),
+);
+/** Offline the list is simply unavailable — it is author-only server-held data we
+ *  deliberately never cache, so there is nothing honest to show (FR-037a). */
+const viewersOffline = ref(false);
+
+const seenLine = computed(() => {
+  if (viewersOffline.value) return 'Seen by: not available offline';
+  return viewers.value.length ? `Seen by ${viewers.value.length}` : 'No one has seen this yet';
+});
+
+const viewerRows = computed(() =>
+  viewers.value.map((v) => ({
+    id: v.viewer,
+    name: nameOf(v.viewer),
+    avatar: avatarOf(v.viewer),
+    at: v.viewedAt,
+    when: ago(v.viewedAt),
+  })),
+);
 
 onIonViewWillEnter(async () => {
-  void syncEngagement(postId); // refresh reactions from the server
+  void syncEngagement(postId, { resolveParents: true });
   post.value = await getPost(postId);
   if (!post.value) return;
   const ids = post.value.mediaIds?.length ? post.value.mediaIds : post.value.mediaId ? [post.value.mediaId] : [];
@@ -385,7 +463,12 @@ onIonViewWillEnter(async () => {
   }
   // Views: record ours on someone else's post; load the list on our own.
   if (post.value.outgoing) {
-    viewers.value = await listPostViews(postId);
+    try {
+      viewers.value = await listPostViews(postId);
+      viewersOffline.value = false;
+    } catch {
+      viewersOffline.value = true;
+    }
   } else {
     void recordPostView(postId);
   }
@@ -412,13 +495,6 @@ function initial(name: string): string {
 }
 function when(ts: number): string {
   return formatPostDateTime(ts);
-}
-function ago(ts: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (s < 60) return 'now';
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
 }
 
 async function confirmDelete(): Promise<void> {
@@ -711,8 +787,13 @@ async function confirmDelete(): Promise<void> {
 }
 .comments .cinput {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
+}
+.comments .replying-banner {
+  flex: 0 0 100%;
+  --min-height: 34px;
 }
 .comments .cinput ion-textarea {
   flex: 1;

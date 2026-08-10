@@ -119,8 +119,10 @@ import {
   reactToPost as dbReactToPost,
   syncEngagement as dbSyncEngagement,
   listPostReactions as dbListPostReactions,
+  listPostCommentReactions as dbListPostCommentReactions,
   listPostComments as dbListPostComments,
   commentOnPost as dbCommentOnPost,
+  replyToComment as dbReplyToComment,
   deleteComment as dbDeleteComment,
   recordPostView as dbRecordPostView,
   listPostViews as dbListPostViews,
@@ -1698,22 +1700,35 @@ export function installTestHook(): void {
     /** React to a post; returns the action ('added' | 'removed' | 'limit' | ...). */
     reactToPost: (postId: string, emoji: string) => dbReactToPost(postId, emoji),
     /** Pull a post's engagement (reactions/comments/views) from the server. */
-    syncEngagement: (postId: string) => dbSyncEngagement(postId),
+    syncEngagement: (postId: string, resolveParents = false) => dbSyncEngagement(postId, { resolveParents }),
     /** A post's reactions as { actor, emoji } pairs. */
     postReactions: async (postId: string): Promise<{ actor: string; emoji: string }[]> =>
       (await dbListPostReactions(postId)).map((r) => ({ actor: r.actor, emoji: r.emoji ?? '' })),
     /** Add a comment to a post. */
     commentOnPost: (postId: string, text: string) => dbCommentOnPost(postId, text),
+    /** Reply to a comment. Replies to replies are flattened under the top-level parent. */
+    replyToComment: (postId: string, parentId: string, text: string) => dbReplyToComment(postId, parentId, text),
+    /** React to one comment rather than the post itself. */
+    reactToComment: (postId: string, commentId: string, emoji: string) => dbReactToPost(postId, emoji, commentId),
+    /** Reactions attached to comments, including the sealed parent after decryption. */
+    commentReactions: async (postId: string): Promise<Array<{ actor: string; emoji: string; parent: string }>> =>
+      (await dbListPostCommentReactions(postId)).map((r) => ({ actor: r.actor, emoji: r.emoji ?? '', parent: r.parent ?? '' })),
     /** A post's comments as { id, actor, text, deleted } (excludes nothing, so a
      *  tombstoned comment shows deleted=true). */
-    postComments: async (postId: string): Promise<{ id: string; actor: string; text: string; deleted: boolean }[]> =>
-      (await dbListPostComments(postId)).map((c) => ({ id: c.id, actor: c.actor, text: c.text ?? '', deleted: !!c.deleted })),
+    postComments: async (postId: string): Promise<Array<{
+      id: string; actor: string; text: string; parent?: string; replyToActor?: string;
+      replyToName?: string; deleted: boolean;
+    }>> => (await dbListPostComments(postId)).map((c) => ({
+      id: c.id, actor: c.actor, text: c.text ?? '', parent: c.parent,
+      replyToActor: c.replyToActor, replyToName: c.replyToName, deleted: !!c.deleted,
+    })),
     /** Delete one of our own comments (or any comment if we authored the post). */
     deletePostComment: (postId: string, commentId: string) => dbDeleteComment(postId, commentId),
     /** Record that we viewed a post (gated by the seen-receipts setting). */
     recordPostView: (postId: string) => dbRecordPostView(postId),
-    /** A post's viewer ids (author-only server-side). */
-    postViews: (postId: string): Promise<string[]> => dbListPostViews(postId),
+    /** A post's viewers with each one's FIRST sighting (author-only server-side). */
+    postViews: (postId: string): Promise<Array<{ viewer: string; viewedAt: number }>> =>
+      dbListPostViews(postId),
     /** Toggle a contact's close-friend flag (demoting revokes close-only posts). */
     setCloseFriend: (id: string, value: boolean) => dbSetCloseFriend(id, value),
     /** Ids of the current close friends. */

@@ -434,14 +434,15 @@ func TestRelayHoldsBlockedSenderUntilUnblock(t *testing.T) {
 type fakeNotifier struct{ ch chan string }
 
 func (f *fakeNotifier) Notify(_ context.Context, userID string)            { f.ch <- userID }
-func (f *fakeNotifier) NotifyFrame(_ context.Context, userID, _, _ string)  { f.ch <- userID }
+func (f *fakeNotifier) NotifyFrame(_ context.Context, userID, _, _ string) { f.ch <- userID }
 func (f *fakeNotifier) NotifyFramePreview(_ context.Context, userID, _, _ string, _ []byte) {
 	f.ch <- userID
 }
-func (f *fakeNotifier) NotifyCall(_ context.Context, userID string)        { f.ch <- userID }
-func (f *fakeNotifier) NotifyConn(_ context.Context, userID string)        { f.ch <- userID }
-func (f *fakeNotifier) NotifyPost(_ context.Context, userID, _ string)     { f.ch <- userID }
-func (f *fakeNotifier) NotifyPostActivity(context.Context, string, string) {}
+func (f *fakeNotifier) NotifyCall(_ context.Context, userID string)                       { f.ch <- userID }
+func (f *fakeNotifier) NotifyConn(_ context.Context, userID string)                       { f.ch <- userID }
+func (f *fakeNotifier) NotifyPost(_ context.Context, userID, _ string)                    { f.ch <- userID }
+func (f *fakeNotifier) NotifyPostActivity(context.Context, string, string)                {}
+func (f *fakeNotifier) NotifyPostActivityPreview(context.Context, string, string, []byte) {}
 
 func TestRelayPushesWhenRecipientOffline(t *testing.T) {
 	relay := newMemRelay()

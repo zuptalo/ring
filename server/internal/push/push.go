@@ -426,6 +426,30 @@ func (n *Notifier) NotifyPostActivity(ctx context.Context, userID, postID string
 	})
 }
 
+// NotifyPostActivityPreview is the direct-commenter variant of the activity
+// wake. `preview` is already E2EE under K_post; nesting it as raw JSON avoids an
+// accidental string encoding while the constant Web Push record size hides its
+// length from the push service. No Topic is used: two distinct replies must not
+// collapse into one before the recipient can ledger them by sealed id.
+func (n *Notifier) NotifyPostActivityPreview(ctx context.Context, userID, postID string, preview []byte) {
+	if !AllowPush("activity", "", "", n.prefsFor(ctx, userID)) {
+		return
+	}
+	if len(preview) == 0 || len(preview) > previewMaxPayload {
+		n.NotifyPostActivity(ctx, userID, postID)
+		return
+	}
+	payload, err := json.Marshal(struct {
+		T    string          `json:"t"`
+		Post string          `json:"post"`
+		PV   json.RawMessage `json:"pv"`
+	}{T: "post-activity", Post: postID, PV: json.RawMessage(preview)})
+	if err != nil {
+		return
+	}
+	n.notify(ctx, userID, previewParams(payload))
+}
+
 // SendVersion delivers the content-free version-announcement tickle to ONE subscription
 // (a device that is behind, at its local 09:00 — spec 1016). The SW renders the
 // user-friendly "what's new" from the public /v1/config; only the {"t":"version"} marker

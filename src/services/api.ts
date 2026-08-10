@@ -163,7 +163,19 @@ export async function removePostRecipient(postId: string, userId: string): Promi
  *  out to the post's audience. Only audience members (or the author) may engage. */
 export async function submitEngagement(
   postId: string,
-  req: { id: string; kind: string; payload?: string; target?: string },
+  req: {
+    id: string;
+    kind: string;
+    payload?: string;
+    target?: string;
+    /** Spec 1065 FR-031b: who to wake. The server routes push and can only route
+     *  to someone it can name, so a reply names the person it answers. Validated
+     *  server-side against the post's audience and capped; never persisted. */
+    notify?: string[];
+    /** Sender-sealed, constant-size notification wording for the named target.
+     *  Opaque to the server and discarded after push routing. */
+    preview?: string;
+  },
 ): Promise<void> {
   const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement`, {
     method: 'POST',
@@ -201,13 +213,25 @@ export interface ServerEngagement {
   createdAt: number;
 }
 
-/** Fetch the engagement on a post the caller can see. */
-export async function listEngagement(postId: string): Promise<{ items: ServerEngagement[] }> {
-  const res = await fetch(`${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement`, {
-    headers: authHeaders(),
-  });
+/** Fetch a bounded page of the engagement on a post the caller can see.
+ *
+ *  Spec 1065: this used to return a post's entire history on every call, and
+ *  syncEngagement calls it on every change notification. `cursor` is opaque —
+ *  it encodes the server's keyset pair and is only ever echoed back as `before`. */
+export async function listEngagement(
+  postId: string,
+  opts: { limit?: number; before?: string } = {},
+): Promise<{ items: ServerEngagement[]; cursor?: string; hasMore: boolean }> {
+  const q = new URLSearchParams();
+  if (opts.limit) q.set('limit', String(opts.limit));
+  if (opts.before) q.set('before', opts.before);
+  const qs = q.toString();
+  const res = await fetch(
+    `${apiBaseUrl()}/v1/posts/${encodeURIComponent(postId)}/engagement${qs ? `?${qs}` : ''}`,
+    { headers: authHeaders() },
+  );
   if (!res.ok) throw new Error(`list engagement failed: ${res.status}`);
-  return (await res.json()) as { items: ServerEngagement[] };
+  return (await res.json()) as { items: ServerEngagement[]; cursor?: string; hasMore: boolean };
 }
 
 /** Delete (terminate) the current account. The server wipes all per-user data

@@ -128,9 +128,12 @@
         </ion-item>
       </ion-list>
 
-      <!-- Group: per-member Seen by / Delivered / Not yet delivered, covering every
-           member of the roster (spec 1010 FR-006). Each tier shows a capped avatar
-           stack (5 + "+N") plus the members' names. -->
+      <!-- Group: Seen by / Delivered / Not yet delivered, covering every member of
+           the SEND-TIME roster (spec 1010 FR-006, spec 1065 FR-011). Each tier is a
+           summary row — count plus a capped avatar stack — that opens the shared
+           audience sheet, where every member carries the moment it happened. The
+           names used to be crammed onto this row as one run-on line, which had no
+           room for a time and read badly past a handful of members. -->
       <template v-if="isGroup && isOutgoingMsg">
         <!-- Seen by — suppressed entirely when "Seen receipts" is off (reciprocity:
              you don't get to see others' seen on your own messages). -->
@@ -139,7 +142,13 @@
             <ion-icon :icon="checkmarkDone" color="primary" />
             <ion-label>Seen by</ion-label>
           </ion-list-header>
-          <ion-item lines="none">
+          <ion-item
+            class="tier-row"
+            :button="seenByIds.length > 0"
+            :detail="seenByIds.length > 0"
+            lines="none"
+            @click="seenByIds.length && openTier('seen')"
+          >
             <div class="tier" v-if="seenByIds.length">
               <div class="avatar-stack">
                 <ion-avatar v-for="id in stackIds(seenByIds)" :key="id">
@@ -147,7 +156,7 @@
                 </ion-avatar>
                 <span v-if="overflowCount(seenByIds)" class="stack-more">+{{ overflowCount(seenByIds) }}</span>
               </div>
-              <ion-label class="ion-text-wrap names">{{ namesLine(seenByIds) }}</ion-label>
+              <ion-label class="count">{{ seenByIds.length }}</ion-label>
             </div>
             <ion-note v-else>No one yet</ion-note>
           </ion-item>
@@ -158,7 +167,13 @@
             <ion-icon :icon="checkmarkDone" />
             <ion-label>Delivered</ion-label>
           </ion-list-header>
-          <ion-item lines="none">
+          <ion-item
+            class="tier-row"
+            :button="deliveredIds.length > 0"
+            :detail="deliveredIds.length > 0"
+            lines="none"
+            @click="deliveredIds.length && openTier('delivered')"
+          >
             <div class="tier" v-if="deliveredIds.length">
               <div class="avatar-stack">
                 <ion-avatar v-for="id in stackIds(deliveredIds)" :key="id">
@@ -166,7 +181,7 @@
                 </ion-avatar>
                 <span v-if="overflowCount(deliveredIds)" class="stack-more">+{{ overflowCount(deliveredIds) }}</span>
               </div>
-              <ion-label class="ion-text-wrap names">{{ namesLine(deliveredIds) }}</ion-label>
+              <ion-label class="count">{{ deliveredIds.length }}</ion-label>
             </div>
             <ion-note v-else>No one yet</ion-note>
           </ion-item>
@@ -177,7 +192,13 @@
             <ion-icon :icon="checkmark" />
             <ion-label>Not yet delivered</ion-label>
           </ion-list-header>
-          <ion-item lines="none">
+          <ion-item
+            class="tier-row"
+            :button="notDeliveredIds.length > 0"
+            :detail="notDeliveredIds.length > 0"
+            lines="none"
+            @click="notDeliveredIds.length && openTier('notDelivered')"
+          >
             <div class="tier" v-if="notDeliveredIds.length">
               <div class="avatar-stack">
                 <ion-avatar v-for="id in stackIds(notDeliveredIds)" :key="id">
@@ -185,11 +206,19 @@
                 </ion-avatar>
                 <span v-if="overflowCount(notDeliveredIds)" class="stack-more">+{{ overflowCount(notDeliveredIds) }}</span>
               </div>
-              <ion-label class="ion-text-wrap names">{{ namesLine(notDeliveredIds) }}</ion-label>
+              <ion-label class="count">{{ notDeliveredIds.length }}</ion-label>
             </div>
             <ion-note v-else>Everyone has it</ion-note>
           </ion-item>
         </ion-list>
+
+        <audience-sheet
+          :is-open="sheetTier !== null"
+          :title="sheetTitle"
+          :rows="sheetRows"
+          :empty-text="sheetEmpty"
+          @dismiss="sheetTier = null"
+        />
       </template>
 
       <!-- 1:1: simple status timeline (outgoing only — receipts don't apply to received). -->
@@ -216,6 +245,7 @@
 
 <script setup lang="ts">
 import UserAvatar from '@/components/UserAvatar.vue';
+import AudienceSheet from '@/components/AudienceSheet.vue';
 import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import {
@@ -230,8 +260,9 @@ import { initialsAvatar } from '@/db/avatars';
 import type { Chat, Contact, Media, Message, MessageStatus } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
 import { isPreservedImageMime, qualityLabel } from '@/services/media-encode';
+import { clampedSeen, receiptTiers } from '@/services/message-status';
 import { fileSizeLabel } from '@/utils/media-meta';
-import { formatTime } from '@/utils/time';
+import { formatTime, formatStamp } from '@/utils/time';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
 import GameMark from '@/components/GameMark.vue';
 import { GAMES } from '@/games/registry';
@@ -396,42 +427,66 @@ const avatarFor = (id: string) => contactMap.value.get(id)?.avatar || initialsAv
 const receipts = computed(() => message.value?.receipts ?? []);
 const participantIds = computed(() => chat.value?.participantIds ?? []);
 
-// Seen by — only when seen receipts are on (otherwise the tier is suppressed and
-// these members show as merely Delivered). Sorted by when they saw it.
-const seenByIds = computed(() =>
-  seenReceiptsOn.value
-    ? receipts.value
-        .filter((r) => r.seenAt)
-        .sort((a, b) => (a.seenAt ?? 0) - (b.seenAt ?? 0))
-        .map((r) => r.contactId)
-    : [],
+// The three tiers, derived from the SEND-TIME roster (spec 1065 FR-011). See
+// receiptTiers for why `participantIds` is only consulted to spot members who
+// have since left, never to decide who is missing a delivery.
+const tiers = computed(() =>
+  receiptTiers(receipts.value, participantIds.value, seenReceiptsOn.value),
 );
-// Delivered but not (shown as) seen. With seen receipts off, every delivered
-// member lands here (the seen tier is hidden).
-const deliveredIds = computed(() =>
-  receipts.value
-    .filter((r) => r.deliveredAt && !(seenReceiptsOn.value && r.seenAt))
-    .sort((a, b) => (a.deliveredAt ?? 0) - (b.deliveredAt ?? 0))
-    .map((r) => r.contactId),
-);
-// Not yet delivered = every roster member with no delivered receipt (FR-011), so
-// the three tiers together account for every member.
-const notDeliveredIds = computed(() =>
-  participantIds.value.filter(
-    (id) => !receipts.value.some((r) => r.contactId === id && r.deliveredAt),
-  ),
-);
+const seenByIds = computed(() => tiers.value.seen.map((r) => r.contactId));
+const deliveredIds = computed(() => tiers.value.delivered.map((r) => r.contactId));
+const notDeliveredIds = computed(() => tiers.value.notDelivered.map((r) => r.contactId));
 
-// Capped avatar stack (FR-006 / large-group edge case): show up to 5 avatars then
-// a "+N" overflow, with the names listed alongside.
+// Capped avatar stack on the summary row: up to 5 avatars then a "+N" overflow.
+// The names themselves moved into the sheet, where each one carries its time.
 const STACK_CAP = 5;
 const stackIds = (ids: string[]): string[] => ids.slice(0, STACK_CAP);
 const overflowCount = (ids: string[]): number => Math.max(0, ids.length - STACK_CAP);
-const namesLine = (ids: string[]): string => {
-  const shown = ids.slice(0, STACK_CAP).map(nameFor);
-  const extra = ids.length - shown.length;
-  return extra > 0 ? `${shown.join(', ')} +${extra} more` : shown.join(', ');
+
+/* ---- the audience sheet (spec 1065 US1) ---- */
+
+type Tier = 'seen' | 'delivered' | 'notDelivered';
+const sheetTier = ref<Tier | null>(null);
+const TIER_TITLE: Record<Tier, string> = {
+  seen: 'Seen by',
+  delivered: 'Delivered',
+  notDelivered: 'Not yet delivered',
 };
+const TIER_EMPTY: Record<Tier, string> = {
+  seen: 'No one yet',
+  delivered: 'No one yet',
+  notDelivered: 'Everyone has it',
+};
+
+const openTier = (t: Tier): void => {
+  sheetTier.value = t;
+};
+
+const sheetTitle = computed(() => (sheetTier.value ? TIER_TITLE[sheetTier.value] : ''));
+const sheetEmpty = computed(() => (sheetTier.value ? TIER_EMPTY[sheetTier.value] : ''));
+
+// One row per member, carrying the moment that tier is about. `clampedSeen`
+// guards against a member's own clock being wrong (FR-034); deliveredAt needs no
+// guard because it is always a server clock.
+const sheetRows = computed(() => {
+  const t = sheetTier.value;
+  if (!t) return [];
+  const msg = message.value;
+  const source = t === 'seen' ? tiers.value.seen : t === 'delivered' ? tiers.value.delivered : tiers.value.notDelivered;
+  return source.map((r) => {
+    const at =
+      t === 'seen' ? (msg ? clampedSeen(r, msg) : undefined) : t === 'delivered' ? r.deliveredAt : undefined;
+    const name = nameFor(r.contactId);
+    return {
+      id: r.contactId,
+      name,
+      avatar: avatarFor(r.contactId),
+      at,
+      when: at ? formatStamp(at) : 'Not yet',
+      note: tiers.value.left.has(r.contactId) ? 'no longer in this group' : undefined,
+    };
+  });
+});
 
 const order: MessageStatus[] = ['pending', 'sent', 'delivered', 'seen'];
 const reached = (s: MessageStatus) =>
@@ -487,8 +542,11 @@ function mediaLabel(kind: Message['kind']) {
   font-size: 13px;
   opacity: 0.7;
 }
-.names {
-  font-size: 14px;
+.count {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--app-text-muted);
+  flex: none;
 }
 /* Game rows: marks/emoji sit inline with their note text. */
 .gi-vs {

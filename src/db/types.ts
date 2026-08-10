@@ -547,6 +547,15 @@ export interface OutboxItem {
  *  comments are append-only with a uuid id. `deleted` tombstones a comment (removed
  *  by its author or the post author) — content cannot be cryptographically recalled,
  *  so this is best-effort propagation. */
+/** One person's first sighting of a post. Author-only, server-held, never cached
+ *  on disk: a list of who read what is not something to leave lying around for no
+ *  benefit (spec 1065 FR-037a). */
+export interface PostViewer {
+  viewer: string;
+  /** The FIRST time they saw it. Never overwritten by a later view (FR-013). */
+  viewedAt: number;
+}
+
 export interface PostEngagement {
   id: string;
   postId: string;
@@ -560,6 +569,18 @@ export interface PostEngagement {
   actorName?: string;
   actorAvatar?: string;
   at: number; // actor timestamp; LWW for reaction/view, ordering for comment
+  // Spec 1065. For a REPLY: the engagement id of the top-level comment it
+  // answers. For a COMMENT REACTION: the comment it targets. Absent means the
+  // engagement is about the post itself. SEALED on the wire (FR-031), so the
+  // server can never reconstruct a thread. Always points at a TOP-LEVEL comment:
+  // a reply to a reply resolves to the shared ancestor, so the stored tree is one
+  // level deep by construction rather than by how it happens to be rendered.
+  parent?: string;
+  /** Directly answered engagement/person. A reply-to-reply still stores the
+   *  top-level `parent`, so these sealed fields preserve conversational context
+   *  and the exact notification recipient without deepening the tree. */
+  replyToActor?: string;
+  replyToName?: string;
   deleted?: boolean; // comment tombstone
   // A game accept/move on a challenge post (spec 0009), the OPENED sealed payload.
   // `id` is the server engagement id — the replay's dedupe key (contracts/

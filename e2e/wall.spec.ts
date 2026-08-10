@@ -31,7 +31,8 @@ const comments = (c: RingClient, id: string): Promise<{ id: string; actor: strin
 const delComment = (c: RingClient, id: string, cid: string): Promise<void> =>
   c.page.evaluate(([i, x]) => (window as any).__ringTest.deletePostComment(i, x), [id, cid]);
 const recordView = (c: RingClient, id: string): Promise<void> => c.page.evaluate((i) => (window as any).__ringTest.recordPostView(i), id);
-const views = (c: RingClient, id: string): Promise<string[]> => c.page.evaluate((i) => (window as any).__ringTest.postViews(i), id);
+const views = async (c: RingClient, id: string): Promise<string[]> =>
+  ((await c.page.evaluate((i) => (window as any).__ringTest.postViews(i), id)) as Array<{ viewer: string }>).map((row) => row.viewer);
 const setClose = (c: RingClient, id: string, v: boolean): Promise<void> =>
   c.page.evaluate(([i, val]) => (window as any).__ringTest.setCloseFriend(i, val), [id, v as any]);
 const closeIds = (c: RingClient): Promise<string[]> => c.page.evaluate(() => (window as any).__ringTest.closeFriendIds());

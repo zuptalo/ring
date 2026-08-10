@@ -16,6 +16,7 @@
 // job (it stamps it only when a write actually happens).
 
 import type { LastTick, Message, Receipt } from '@/db/types';
+import { CLOCK_SKEW_TOLERANCE_MS } from '@/utils/message-time';
 
 /** Monotonic rank of each displayed status. Pre-send states (compressing/pending/
  *  failed) sit below `sent` so a server ack advances them; status never regresses
@@ -232,4 +233,82 @@ export function groupProgress(
   if (seen === 0) return { tier: 'delivered', label: null };
   if (seen < n) return { tier: 'seen', label: `${seen}/${n}` };
   return { tier: 'seen', label: null };
+}
+
+/* ---- spec 1065: display-time derivations ---- */
+
+/**
+ * The `seenAt` to SHOW for one member, sanity-checked (spec 1065 FR-034).
+ *
+ * Why this is needed at all: the two receipt timestamps have different
+ * provenance. `deliveredAt` is always a server clock (the hub stamps it on the
+ * recipient's ack). `seenAt` on the LIVE path is the viewer's own `Date.now()`,
+ * forwarded verbatim through the hub — so a member whose phone has a wrong
+ * clock, or stale tzdata, hands us a time that can sit hours away from reality.
+ * Spec 2056 taught this the hard way when a skewed sender clock reordered whole
+ * conversations; the fix there was to prefer a neutral reference, and this is
+ * the same move applied to display.
+ *
+ * The neutral references we already hold, in order of tightness:
+ *   1. that member's own `deliveredAt` — you cannot see a message before it
+ *      reached your device;
+ *   2. the message's `sentAt` — you cannot see it before it was sent;
+ *   3. now — you cannot see it in the future.
+ *
+ * Storage is left alone. This is a display clamp only, so a later reconcile
+ * (which carries the server's `seen_at`) still overwrites the stored value
+ * normally.
+ */
+export function clampedSeen(
+  receipt: Receipt,
+  msg: Pick<Message, 'sentAt'>,
+  now: number = Date.now(),
+): number | undefined {
+  const seen = receipt.seenAt;
+  if (!seen) return undefined;
+  const floor = Math.max(receipt.deliveredAt ?? 0, msg.sentAt ?? 0);
+  if (floor && seen < floor - CLOCK_SKEW_TOLERANCE_MS) return floor;
+  if (seen > now + CLOCK_SKEW_TOLERANCE_MS) return now;
+  return seen;
+}
+
+export interface ReceiptTiers {
+  /** Saw it. Empty when seen receipts are off (reciprocity). */
+  seen: Receipt[];
+  /** Received it but has not (visibly) seen it. */
+  delivered: Receipt[];
+  /** No delivery yet. */
+  notDelivered: Receipt[];
+  /** Members who are on this message's roster but no longer in the group. */
+  left: Set<string>;
+}
+
+/**
+ * Split an outgoing group message's roster into the three tiers (FR-011).
+ *
+ * The roster — `msg.receipts` — is a SNAPSHOT taken when the message was sent,
+ * and that is deliberately the only source here. The previous implementation
+ * derived "not yet delivered" from `chat.participantIds`, which is the LIVE
+ * roster, so anyone who joined the group after a message was sent appeared
+ * under "Not yet delivered" for that message forever, and the tiers summed to
+ * more than the message was ever sent to.
+ *
+ * `participantIds` is still passed in, for exactly one purpose: someone present
+ * on the snapshot but absent from the live roster has left the group. That needs
+ * no stored state — the difference between the two lists is the fact.
+ */
+export function receiptTiers(
+  receipts: readonly Receipt[],
+  participantIds: readonly string[],
+  seenEnabled: boolean,
+): ReceiptTiers {
+  const live = new Set(participantIds);
+  const tiers: ReceiptTiers = { seen: [], delivered: [], notDelivered: [], left: new Set() };
+  for (const r of receipts) {
+    if (!live.has(r.contactId)) tiers.left.add(r.contactId);
+    if (!r.deliveredAt && !r.seenAt) tiers.notDelivered.push(r);
+    else if (seenEnabled && r.seenAt) tiers.seen.push(r);
+    else tiers.delivered.push(r);
+  }
+  return tiers;
 }

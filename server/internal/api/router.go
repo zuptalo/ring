@@ -140,7 +140,7 @@ type PostStore interface {
 	PostAuthor(ctx context.Context, postID string) (string, error)
 	SubmitEngagement(ctx context.Context, postID, id, actor, kind, payload string) error
 	EngagementActor(ctx context.Context, postID, engID string) (string, error)
-	ListEngagement(ctx context.Context, postID string) ([]store.PostEngagementRow, error)
+	ListEngagement(ctx context.Context, postID string, page store.EngagementPage) ([]store.PostEngagementRow, error)
 	RecordView(ctx context.Context, postID, viewer string) error
 	ListViews(ctx context.Context, postID string) ([]store.PostView, error)
 }
@@ -152,15 +152,15 @@ type Handlers struct {
 	Contacts    ContactStore
 	Connections ConnectionStore
 	Blocks      BlockStore
-	Keys      KeysStore
-	Relay     ws.RelayStore
-	Hub       *ws.Hub
-	Blobs     BlobStore
-	Sync      SyncStore
-	Push      PushStore
-	Invites   InviteStore
-	Posts     PostStore
-	Notifier  ws.Notifier // sends push tickles when a relayed message can't be delivered live
+	Keys        KeysStore
+	Relay       ws.RelayStore
+	Hub         *ws.Hub
+	Blobs       BlobStore
+	Sync        SyncStore
+	Push        PushStore
+	Invites     InviteStore
+	Posts       PostStore
+	Notifier    ws.Notifier // sends push tickles when a relayed message can't be delivered live
 	// Public, non-secret config advertised at GET /v1/config.
 	PublicURL      string
 	VapidPublicKey string

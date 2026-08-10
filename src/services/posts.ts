@@ -16,12 +16,17 @@ import {
   unwrapPostKey,
   sealEngagement,
   openEngagement,
+  sealReaction,
+  openReaction,
+  sealActivityPreview,
+  openActivityPreview,
+  type ReactionValue,
   type PostPayload,
   type WrappedPostKey,
 } from './crypto/post';
 import { utf8ToBytes, bytesToUtf8, bytesToB64url, b64urlToBytes, type Envelope } from './crypto/envelope';
 
-export type { PostPayload } from './crypto/post';
+export type { PostPayload, ReactionValue, ActivityPreviewValue } from './crypto/post';
 
 /** An audience member: their id + published X25519 public key (to wrap K_post to). */
 export interface AudienceMember {
@@ -97,6 +102,33 @@ export function openReceivedPost(
  *  opaque wire payload string. */
 export function sealPostEngagement(postKeyB64: string, value: unknown): string {
   return JSON.stringify(sealEngagement(b64urlToBytes(postKeyB64), value));
+}
+
+/** Seal a REACTION at a constant size, so a comment reaction and a post reaction
+ *  are indistinguishable on the wire (spec 1065 FR-031d). Reactions must go
+ *  through here rather than sealPostEngagement. */
+export function sealPostReaction(postKeyB64: string, value: ReactionValue): string {
+  return JSON.stringify(sealReaction(b64urlToBytes(postKeyB64), value));
+}
+
+/** Open a reaction sealed by {@link sealPostReaction}. */
+export function openPostReaction(postKeyB64: string, payload: string): ReactionValue {
+  return openReaction(b64urlToBytes(postKeyB64), JSON.parse(payload) as Envelope);
+}
+
+export function sealPostActivityPreview(
+  postKeyB64: string,
+  value: import('./crypto/post').ActivityPreviewValue,
+): string {
+  return JSON.stringify(sealActivityPreview(b64urlToBytes(postKeyB64), value));
+}
+
+export function openPostActivityPreview(
+  postKeyB64: string,
+  payload: string | Envelope,
+): import('./crypto/post').ActivityPreviewValue {
+  const envelope = typeof payload === 'string' ? JSON.parse(payload) as Envelope : payload;
+  return openActivityPreview(b64urlToBytes(postKeyB64), envelope);
 }
 
 /** Open an engagement wire payload sealed by {@link sealPostEngagement}. */
