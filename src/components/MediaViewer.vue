@@ -725,6 +725,9 @@ onUnmounted(() => {
   // freshly-reopened viewer — e.g. a posTimer clearing `positioning` mid-suppression on the new one.
   clearTimeout(posTimer);
   clearTimeout(tapTimer);
+  // Closing mid-fling would otherwise leave the momentum rAF loop mutating the zoom
+  // state of a viewer nobody can see until friction happens to stop it.
+  cancelMomentum();
 });
 </script>
 
