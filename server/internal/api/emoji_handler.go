@@ -18,18 +18,31 @@ import (
 // once across all users.
 const notoBase = "https://fonts.gstatic.com/s/e/notoemoji/latest/"
 
-// Strictly: hex codepoints joined by '_', then /lottie.json or /512.webp. This
+// Strictly: hex codepoints joined by '_', then one of the four Noto assets. This
 // prevents the proxy from being used to fetch arbitrary URLs (no SSRF).
-var emojiPathRe = regexp.MustCompile(`^[0-9a-f]+(_[0-9a-f]+)*/(lottie\.json|512\.webp)$`)
+//
+// Four assets, because size matters enormously at the sizes we actually draw
+// (spec 1066): the animated 512.webp is ~600 KB for a glyph we render at ~23 px
+// in a reaction pill, and it re-decodes every frame at full 512x512 on the main
+// thread. emoji.svg is the same artwork as vector at ~1/80th the bytes, and it
+// exists for emoji that have NO animated WebP at all (flags, ZWJ sequences), so
+// the static path also widens coverage rather than narrowing it.
+var emojiPathRe = regexp.MustCompile(`^[0-9a-f]+(_[0-9a-f]+)*/(lottie\.json|512\.webp|512\.png|emoji\.svg)$`)
 
 var emojiClient = &http.Client{Timeout: 15 * time.Second}
 
 // contentTypeFor returns the MIME type for a validated emoji path.
 func contentTypeFor(path string) string {
-	if strings.HasSuffix(path, ".webp") {
+	switch {
+	case strings.HasSuffix(path, ".webp"):
 		return "image/webp"
+	case strings.HasSuffix(path, ".png"):
+		return "image/png"
+	case strings.HasSuffix(path, ".svg"):
+		return "image/svg+xml"
+	default:
+		return "application/json"
 	}
-	return "application/json"
 }
 
 func (h *Handlers) emojiProxy(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +108,11 @@ func fetchEmoji(ctx context.Context, path string) (data []byte, ok bool) {
 func serveEmoji(w http.ResponseWriter, contentType string, data []byte) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	// Emoji art is inert data. nosniff keeps a mistyped asset from being reinterpreted,
+	// and the sandbox/none CSP means even a hostile SVG fetched directly as a document
+	// (not via <img>, where script never runs) can neither execute nor phone home.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
 	_, _ = w.Write(data)
 }
 
@@ -119,7 +137,10 @@ func WarmEmojiCache(ctx context.Context, st EmojiStore) {
 	if st == nil {
 		return
 	}
-	formats := []string{"lottie.json", "512.webp"}
+	// emoji.svg first: it is what every pill-sized surface draws (spec 1066), it is
+	// ~1/80th the bytes of the animated WebP, and it exists for emoji the animated
+	// set omits entirely — so warming it is both the cheapest and the widest win.
+	formats := []string{"emoji.svg", "lottie.json", "512.webp"}
 	fetched, present, missing := 0, 0, 0
 	for _, emoji := range CommonEmoji {
 		for _, format := range formats {

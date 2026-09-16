@@ -127,7 +127,7 @@
 
       <template v-for="(item, i) in renderItems" :key="item.key">
         <!-- Day divider sits ABOVE the first message of each day. -->
-        <div v-if="showDay(i)" class="day-sep"><span>{{ dayLabel(itemTime(item)) }}</span></div>
+        <div v-if="item.day" class="day-sep"><span>{{ dayLabel(itemTime(item)) }}</span></div>
         <!-- A single message. The one-element v-for aliases item.message → m so
              the bubble markup is reused unchanged. -->
         <template v-if="item.kind === 'msg'">
@@ -1371,8 +1371,29 @@ const groupPresence = useGroupPresence(() => chat.value);
 
 // A group member's avatar shows the online dot when they're in the visible-online set
 // AND not currently composing — the typing/recording activity takes precedence (FR-024).
+//
+// Resolved ONCE per render into a Set (spec 1066 FR-008). This used to run per rendered
+// row: an `Array.includes` over the online ids plus an `activityFor` that walked the
+// whole activity store, for every message on screen.
+//
+// It also had the wrong key. Activity is stored per CONVERSATION — a group's signals
+// arrive under the chat id (see sendGroupActivity) — but this passed a SENDER id, so the
+// lookup could only ever hit a 1:1 conversation keyed by that user. The FR-024
+// "composing beats present" rule therefore never fired in a group, and when the viewer
+// also had a 1:1 with that person, their typing THERE wrongly cleared their dot HERE.
+const NO_DOTS: ReadonlySet<string> = new Set();
+const onlineDotIds = computed<ReadonlySet<string>>(() => {
+  const c = chat.value;
+  if (!c?.isGroup) return NO_DOTS;
+  const online = groupPresence.value.onlineIds;
+  if (!online.length) return NO_DOTS;
+  const composing = new Set(activityFor(c.id).map((e) => e.senderId));
+  const dots = new Set<string>();
+  for (const id of online) if (!composing.has(id)) dots.add(id);
+  return dots;
+});
 function memberOnline(id: string): boolean {
-  return groupPresence.value.onlineIds.includes(id) && activityFor(id).length === 0;
+  return onlineDotIds.value.has(id);
 }
 
 // While the peer is composing, a transient activity indicator ("typing…",
@@ -1640,15 +1661,6 @@ function prevMsgFor(i: number): Message | null {
   const prev = renderItems.value[i - 1];
   if (!prev) return null;
   return prev.kind === 'msg' ? prev.message : prev.messages[prev.messages.length - 1];
-}
-
-// Whether an item starts a new day (the divider renders above it). True for the
-// oldest loaded item too.
-function showDay(i: number): boolean {
-  const cur = renderItems.value[i];
-  if (!cur) return false;
-  const prev = prevMsgFor(i);
-  return showDayEdge(prev ? { timestamp: prev.timestamp } : null, { timestamp: itemTime(cur) });
 }
 
 /* ---- media viewer (over ALL the chat's media) ---- */
@@ -1973,7 +1985,54 @@ interface BodySeg {
 // becomes a mention chip ONLY when it resolves to a member this message actually mentions
 // (m.mentions by id), and "@everyone" when m.mentionsEveryone was honored — otherwise the
 // "@word" stays plain text. Mentions interleave with the existing link/emoji segmentation.
+// Memoised per message (spec 1066 FR-009). Tokenising a body is not cheap — link
+// extraction, then @mention resolution, then phone/email entity detection, then
+// grapheme-aware emoji segmentation — and this is called from the template. The row's
+// v-memo skips it while nothing about the row changes, but `m.updatedAt` is one of that
+// memo's dependencies, and in an active chat it is bumped by every delivery receipt,
+// seen receipt and reaction. All of those re-render the row with a body that is
+// character-for-character identical, and used to re-tokenise it from scratch.
+//
+// The cache key covers everything bodyParts reads off the MESSAGE; the one thing it reads
+// off the component (the username→member map) is handled by the identity check below.
+interface BodyPartsEntry {
+  key: string;
+  parts: BodySeg[];
+}
+const bodyPartsCache = new Map<string, BodyPartsEntry>();
+// The username→member map as the cache was last filled against. `mentionByUsername`
+// rebuilds a NEW Map whenever it recomputes, so identity IS the generation counter —
+// and comparing it here keeps the read lazy. (A `watch` on that computed would not:
+// watch evaluates its source once at setup to seed the old value, and the computed
+// reads `chat`, which this component declares far below. That threw
+// "Cannot access 'chat' before initialization" and took the whole page down.)
+let cachedMembers: Map<string, { id: string; name: string }> | null = null;
+
 function bodyParts(m: Message): BodySeg[] {
+  const members = mentionByUsername.value;
+  if (members !== cachedMembers) {
+    cachedMembers = members;
+    bodyPartsCache.clear();
+  }
+  // The rendered run is bounded, but the cache is keyed by message id and would grow as
+  // the reader pages through history. Well above the loaded run, drop it wholesale —
+  // O(1), and the next render repopulates only what is actually on screen.
+  if (bodyPartsCache.size > 600) bodyPartsCache.clear();
+  const key = [
+    m.body,
+    m.linkPreview?.url ?? '',
+    m.kind,
+    m.mentions?.join(',') ?? '',
+    m.mentionsEveryone ? 1 : 0,
+  ].join('\u0000');
+  const hit = bodyPartsCache.get(m.id);
+  if (hit && hit.key === key) return hit.parts;
+  const parts = computeBodyParts(m);
+  bodyPartsCache.set(m.id, { key, parts });
+  return parts;
+}
+
+function computeBodyParts(m: Message): BodySeg[] {
   const out: BodySeg[] = [];
   const mentioned = new Set(m.mentions ?? []);
   const members = mentionByUsername.value;
@@ -3661,6 +3720,14 @@ function bubbleTop(id: string | undefined): number | undefined {
     ?.querySelector<HTMLElement>(`.bubble[data-mid="${CSS.escape(id)}"]`)
     ?.getBoundingClientRect().top;
 }
+// The tail row's timestamp as of this watcher's last run. The watcher keys on the tail
+// row's ID, but `loadOlder` TRIMS the newest tail once the loaded run passes MAX_ROWS
+// (useChatHistory), which changes that id without a single message having arrived. Only
+// the timestamp separates the two: an arrival moves the tail FORWARD in time, a trim
+// makes it RECEDE. Before spec 1066 a trim whose new tail row happened to be `outgoing`
+// fell straight into the auto-follow below and threw the reader to the bottom of the run
+// mid-scroll-up — the further back you read, the more certain it was to fire.
+let lastTailTs = -1;
 watch(
   () => rows.value[rows.value.length - 1]?.id,
   async (newestId, prevId) => {
@@ -3669,6 +3736,8 @@ watch(
     // The arrival glide below needs the before/after difference.
     const prevTopBefore = bubbleTop(prevId);
     const hadNewer = history.hasNewer.value;
+    const prevTailTs = lastTailTs;
+    lastTailTs = rows.value[rows.value.length - 1]?.timestamp ?? -1;
     markChatSeenIfVisible();
     if (!didInitialLoad) {
       didInitialLoad = true;
@@ -3697,6 +3766,13 @@ watch(
     if (search.value || !newestId || newestId === prevId) return; // not a new bottom message
     if (seeking) return; // a seek is swapping the window — don't yank back to the newest
     const newest = rows.value[rows.value.length - 1];
+    // spec 1066 FR-002: with newer rows unloaded, the last LOADED row is not the chat's
+    // newest message, so "follow the newest" is meaningless here. useChatHistory only
+    // appends an arrival when the run touches the bottom, so a real arrival never lands
+    // in this state; a send while scrolled up seeks to the true bottom by its own path.
+    if (history.hasNewer.value) return;
+    // spec 1066 FR-001: the tail RECEDED — that's loadOlder's trim, not an arrival.
+    if (prevTailTs >= 0 && newest && newest.timestamp <= prevTailTs) return;
     if (newest?.outgoing || stickBottom) {
       await scrollToNewest();
       // The new bubble pops in from the corner nearest its side; independent of the glide
@@ -3718,9 +3794,13 @@ watch(search, () => void nextTick(reseedTopPad));
 // Collapse consecutive media messages that share an albumId into one album item
 // (rendered as a grid). Everything else stays a single message. The list is
 // oldest-first; album members are kept in send-order for the grid.
+// `day` is precomputed here rather than asked per render (spec 1066): showDay(i) used to
+// be evaluated for every item on every render of this component — and this component
+// re-renders on things as incidental as a peer's 3-second typing keepalive, because the
+// header's status line lives in it too.
 type RenderItem =
-  | { kind: 'msg'; key: string; message: Message }
-  | { kind: 'album'; key: string; messages: Message[] };
+  | { kind: 'msg'; key: string; message: Message; day: boolean }
+  | { kind: 'album'; key: string; messages: Message[]; day: boolean };
 const renderItems = computed<RenderItem[]>(() => {
   const list = visibleMessages.value;
   const out: RenderItem[] = [];
@@ -3730,10 +3810,22 @@ const renderItems = computed<RenderItem[]>(() => {
       const group = [m];
       while (i + 1 < list.length && list[i + 1].albumId === m.albumId) group.push(list[++i]);
       group.sort((a, b) => a.timestamp - b.timestamp); // send order for the grid
-      out.push({ kind: 'album', key: m.albumId, messages: group });
+      out.push({ kind: 'album', key: m.albumId, messages: group, day: false });
     } else {
-      out.push({ kind: 'msg', key: m.id, message: m });
+      out.push({ kind: 'msg', key: m.id, message: m, day: false });
     }
+  }
+  // Second pass: a day divider sits above the first item of each day (the oldest loaded
+  // item always starts one). Identical rule to the showDay(i) this replaces, including
+  // its predecessor choice — an album's predecessor is its LAST message, not its first.
+  for (let i = 0; i < out.length; i++) {
+    const prevItem = i > 0 ? out[i - 1] : null;
+    const prev = !prevItem
+      ? null
+      : prevItem.kind === 'msg'
+        ? prevItem.message
+        : prevItem.messages[prevItem.messages.length - 1];
+    out[i].day = showDayEdge(prev ? { timestamp: prev.timestamp } : null, { timestamp: itemTime(out[i]) });
   }
   return out;
 });
@@ -4265,25 +4357,45 @@ function popNewestIn(id: string, outgoing: boolean): void {
 }
 // Within ~120px of the bottom counts as "pinned to newest". Defaults to true before
 // the scroll element resolves (a fresh chat opens pinned to newest).
+/** Distance from the true bottom, in px, within which we consider the reader "pinned"
+ *  and keep auto-following new messages. */
+const BOTTOM_STICK_PX = 120;
 function nearBottom(): boolean {
   if (!scrollEl) return true;
-  return scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 120;
+  return scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < BOTTOM_STICK_PX;
 }
+// Coalesces the scroll handler's layout reads to one per frame (spec 1066 FR-011).
+let scrollReadQueued = false;
 // Track whether the user is at the bottom (auto-follow) or has scrolled up to read
 // history (so a new message / media load doesn't yank them down). Skip the echo of
 // our own programmatic pin so late-loading media can't flip the pin off mid-settle.
 function onContentScroll(): void {
   if (isSelfEcho(Date.now(), suppressStickUntil)) return; // our own pin/correction echo
+  // Stays synchronous: this is the momentum gate every deferred scroll write consults
+  // (shouldDeferScrollWrite), so it must reflect the event, not a frame later.
   lastScrollAt = Date.now(); // genuine user scroll (the pin echo is suppressed above)
-  const top = scrollEl?.scrollTop ?? 0;
-  if (lastScrollTop >= 0 && top !== lastScrollTop) scrollDir = top < lastScrollTop ? 'up' : 'down';
-  lastScrollTop = top;
-  stickBottom = nearBottom();
-  // Scroll-to-latest control: show/hide with hysteresis off the distance to the bottom. The
-  // not-yet-Seen count is driven by the visibility observer + recomputeUnread, not by the scroll
-  // boundary (spec 1013), so there's nothing to set here.
-  const dist = scrollEl ? scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight : 0;
-  jumpVisible.value = jumpButtonVisible(dist, jumpVisible.value, JUMP_SHOW_PX, JUMP_HIDE_PX);
+
+  // Everything below needs LAYOUT (scrollHeight/clientHeight). Reading those from the
+  // scroll handler forces a synchronous reflow on every scroll event, and this handler
+  // used to do it three times — once via nearBottom(), twice more for `dist` — while
+  // emoji decodes and media growth were dirtying layout anyway (spec 1066 FR-011).
+  // Coalesced into one read per frame, taken inside rAF where layout has settled.
+  if (scrollReadQueued) return;
+  scrollReadQueued = true;
+  requestAnimationFrame(() => {
+    scrollReadQueued = false;
+    const el = scrollEl;
+    if (!el) return;
+    const top = el.scrollTop;
+    const dist = el.scrollHeight - top - el.clientHeight;
+    if (lastScrollTop >= 0 && top !== lastScrollTop) scrollDir = top < lastScrollTop ? 'up' : 'down';
+    lastScrollTop = top;
+    stickBottom = dist < BOTTOM_STICK_PX;
+    // Scroll-to-latest control: show/hide with hysteresis off the distance to the bottom. The
+    // not-yet-Seen count is driven by the visibility observer + recomputeUnread, not by the scroll
+    // boundary (spec 1013), so there's nothing to set here.
+    jumpVisible.value = jumpButtonVisible(dist, jumpVisible.value, JUMP_SHOW_PX, JUMP_HIDE_PX);
+  });
 }
 
 async function send() {

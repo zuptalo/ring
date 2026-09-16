@@ -1,12 +1,13 @@
 <template>
   <img
-    v-if="useImage"
+    v-if="!nativeFallback"
     class="noto-emoji"
     :src="src"
     :alt="emoji"
     draggable="false"
     decoding="async"
-    loading="lazy"
+    :loading="eager ? 'eager' : 'lazy'"
+    :fetchpriority="eager ? 'high' : 'auto'"
     @error="onError"
   />
   <span v-else class="noto-emoji-native">{{ emoji }}</span>
@@ -14,33 +15,43 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
 import { emojiCodepoints, nextEmojiAttempt, EMOJI_ATTEMPT_NATIVE } from '@/utils/emoji';
 
 /**
- * Renders an emoji using the Noto emoji set, served from our own server's cached
- * proxy (/v1/emoji/...), never a third-party CDN, so emoji use and the user's IP
- * don't leak. If the emoji has no Noto asset (or the server can't reach it), it
- * falls back to the platform's native glyph. Animation respects the
- * Appearance, Animations, Emoji preference. The attempt/fallback logic lives as pure
- * helpers in @/utils/emoji so it can be unit-tested without a DOM.
+ * A single emoji at PILL SIZE — reaction chips, the quick-react bar, audience rows —
+ * drawn from the Noto set via our own cached proxy (/v1/emoji/...), never a third-party
+ * CDN, so emoji use and the user's IP don't leak. Falls back to the platform's native
+ * glyph when Noto has no asset. The attempt/fallback logic lives as pure helpers in
+ * @/utils/emoji so it can be unit-tested without a DOM.
+ *
+ * STATIC BY DESIGN (spec 1066). This component renders `emoji.svg`, not the animated
+ * `512.webp` it used to. Every one of its call sites draws at roughly 1.2em (~23 px),
+ * where the animation is imperceptible but its cost is not: the animated WebP is a
+ * 512x512 sheet — 624 KB for a single 😂, 1.78 MB for the default quick-react set —
+ * and it re-decodes every frame at full resolution on the main thread before
+ * downscaling, so a history full of reaction pills decoded continuously while
+ * scrolling. The same upstream serves the identical artwork as vector at ~1/80th the
+ * bytes; it rasterises once at display size, and it EXISTS for emoji the animated set
+ * omits entirely (flags, ZWJ sequences), which used to fall through to the platform
+ * glyph. So this is cheaper and covers more.
+ *
+ * Emoji that are genuinely meant to move — message bodies, emoji-only messages, emoji
+ * avatars — go through <AnimatedEmoji>, which plays the Lottie and honours the
+ * Appearance → Animations → Emoji preference. This component deliberately does NOT
+ * read that preference: it never animates, so the setting has nothing to say about it,
+ * and not reading it avoids four IndexedDB-backed live queries per rendered pill.
  */
-const props = withDefaults(defineProps<{ emoji: string; animated?: boolean }>(), { animated: true });
-
-const { animEmoji } = useAnimationPrefs();
+const props = withDefaults(defineProps<{ emoji: string; eager?: boolean }>(), { eager: false });
 
 // 0 = full codepoint sequence, 1 = retry without the FE0F variation selector,
 // EMOJI_ATTEMPT_NATIVE = give up and render the native glyph (Noto has no asset for it).
 const attempt = ref(0);
 const nativeFallback = computed(() => attempt.value >= EMOJI_ATTEMPT_NATIVE);
-// When emoji animation is off, render the static native glyph instead of the
-// (looping) Noto WebP.
-const useImage = computed(() => animEmoji.value && !nativeFallback.value);
 
 const src = computed(() => {
   const cp = emojiCodepoints(props.emoji, attempt.value === 1);
   // Self-hosted: proxied + cached by our own server (never a third-party CDN).
-  return `/v1/emoji/${cp}/512.webp`;
+  return `/v1/emoji/${cp}/emoji.svg`;
 });
 
 const onError = (): void => {
