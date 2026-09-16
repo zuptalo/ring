@@ -345,21 +345,35 @@ export function pushWakeActive(): boolean {
 // ring:drain's lifetime; notifyIncoming fires it the instant it presents a banner,
 // so the page acks (claims the alert) only when it truly showed something. If no
 // banner renders within the window, no ack → the SW deterministically owns it.
+//
+// The pairing is ONE BANNER PER WAITER, oldest first — deliberately not a
+// broadcast. A `ring:drain` names no message (it only says "a push woke us, go
+// pull"), so a waiter cannot match itself to the banner it caused. Broadcasting
+// meant that when two pushes landed close together and only ONE banner rendered,
+// that single banner acked BOTH drains — and the SW, told the page had it covered,
+// stayed silent for a message nothing ever showed. Consuming one waiter per
+// presentation keeps the count honest: two banners ack two drains, one banner acks
+// one, and the unmatched drain times out into the SW's hands, which is the safe
+// direction to be wrong in (worst case a duplicate alert, never a silent one).
 type BannerPresentedCb = () => void;
-const bannerPresentedCbs = new Set<BannerPresentedCb>();
-/** Register a listener fired whenever notifyIncoming presents a visible in-app
- *  banner for a message. Returns an unsubscribe. */
-export function onBannerPresented(cb: BannerPresentedCb): () => void {
-  bannerPresentedCbs.add(cb);
-  return () => bannerPresentedCbs.delete(cb);
+const bannerWaiters: BannerPresentedCb[] = [];
+/** Register a ONE-SHOT claim on the next in-app banner notifyIncoming presents.
+ *  Each presentation satisfies exactly one waiter, oldest first. Returns a cancel
+ *  function (idempotent, and a no-op once the waiter has fired). */
+export function claimNextBanner(cb: BannerPresentedCb): () => void {
+  bannerWaiters.push(cb);
+  return () => {
+    const i = bannerWaiters.indexOf(cb);
+    if (i !== -1) bannerWaiters.splice(i, 1);
+  };
 }
 function notifyBannerPresented(): void {
-  for (const cb of [...bannerPresentedCbs]) {
-    try {
-      cb();
-    } catch {
-      /* a listener error must never break alert presentation */
-    }
+  const cb = bannerWaiters.shift();
+  if (!cb) return;
+  try {
+    cb();
+  } catch {
+    /* a listener error must never break alert presentation */
   }
 }
 
