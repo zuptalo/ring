@@ -8,7 +8,7 @@
 # Keel auto-updates this Deployment: it polls ghcr.io/zuptalo/ring:latest and,
 # when the tag's digest changes (a new production release moves :latest), forces a
 # rolling redeploy. So this cluster always tracks the newest stable release. To
-# follow the rolling dev build instead, point the image tag below at :develop.
+# pin one instead, point the image tag below at :X.Y.Z (or an :X.Y.Z-rc.N).
 apiVersion: v1
 kind: ConfigMap
 metadata:

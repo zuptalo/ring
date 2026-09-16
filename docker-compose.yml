@@ -9,8 +9,8 @@
 #   export PUBLIC_URL=https://ring.example.com
 #   export POSTGRES_PASSWORD=$(openssl rand -hex 16)
 #   export SECRETS_KEY=$(openssl rand -hex 32)      # keep STABLE + backed up
-# (Image tag: :latest exists after your first release; pin :X.Y.Z or :develop
-#  otherwise - see the README "Image tags" note. `up -d --build` builds locally.)
+# (Image tag: :latest tracks the newest release; pin :X.Y.Z for deliberate
+#  upgrades - see the README "Image tags" note. `up -d --build` builds locally.)
 #
 # Pick ONE scenario. The file ships configured for Scenario A; B and C are the
 # commented blocks - read the matching "Scenario X" comments inside the service.

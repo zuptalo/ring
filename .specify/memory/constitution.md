@@ -1,5 +1,19 @@
 <!--
 Sync Impact Report
+- Version: 1.2.2 → 1.3.0 (MINOR: Development Workflow replaced GitFlow with a
+  trunk-based, main-only model; no principle changed)
+- Modified: "Development Workflow" — `develop` retired. `main` is now the only
+  long-lived branch: feature branches PR straight into it, every merge ships a
+  release, and every PR must therefore carry a version bump. Production bugs are
+  fixed in the next release; release candidates off the feature branch are the
+  pre-production validation path. Principle VIII's issue-closing rule retargeted
+  from `develop` to `main` (the default branch moved with it).
+- Templates / docs updated for sync: CLAUDE.md, CONTRIBUTING.md, README.md,
+  docs/UPGRADING.md, .github/workflows/*, .github/PULL_REQUEST_TEMPLATE.md
+  (release.md template folded in — every PR is a release PR now),
+  scripts/setup-branch-protection.sh, scripts/hooks/pre-push.
+-
+- PREVIOUS REPORT (v1.1.0 → 1.2.0)
 - Version: 1.1.0 → 1.2.0 (MINOR: Principle VII expanded with a new normative rule)
 - Added: Principle VII now mandates that user-facing commit subjects (feat/fix/perf/
   security) be plain-language, benefit-focused, reference-free release-note copy, since
@@ -144,8 +158,8 @@ Every unit of work is visible from roadmap to merge.
 - Each task (or task group) becomes a GitHub issue with a descriptive title, a
   comprehensive body drawn from the spec/plan, and labels for category band, spec
   id, and area.
-- The feature→`develop` PR MUST list `Closes #N` for every issue it implements so
-  they auto-close on merge (`develop` is the default branch; closing keywords only
+- The feature→`main` PR MUST list `Closes #N` for every issue it implements so
+  they auto-close on merge (`main` is the default branch; closing keywords only
   fire on merges into the default branch).
 
 ### IX. Privacy & Data Minimization
@@ -203,19 +217,21 @@ These are project-specific guardrails every relevant spec MUST respect.
 
 ## Development Workflow
 
-- **GitFlow.** `develop` is the integration branch and the GitHub default branch;
-  `main` is production. Feature branches merge into `develop`; releases are a
-  `develop → main` PR carrying a `package.json` version bump (the release guard
-  blocks an un-bumped release PR).
-- **Version is bumped at the START of a release cycle, not automated after one.**
-  After a release ships, `develop` and `main` hold the same `package.json`
-  version, so the next `develop → main` PR would fail the release guard until
-  `develop` is moved forward. The first change of a new cycle MUST bump
-  `develop`'s `package.json` to the next intended version (patch by default;
-  minor/major when the work warrants it). This is a deliberate manual step —
-  GitHub Actions cannot open the bump PR itself (org policy forbids Actions from
-  creating pull requests), and the release guard is the backstop that enforces it
-  at release time.
+- **Trunk-based.** `main` is the ONLY long-lived branch: it is production and the
+  GitHub default branch, and it is where work integrates. Short-lived feature
+  branches merge straight into `main` via pull request. There is no `develop` and
+  no release branch.
+- **Every merge into `main` ships a release.** A bug discovered in production is
+  therefore fixed the same way as any other change — a branch, a PR, the next
+  release — never by patching a long-lived release branch. Work that needs
+  real-device validation before production MUST go out as a release candidate
+  (`vX.Y.Z-rc.N` tag off the feature branch) first; an RC never moves `:latest`.
+- **Every PR into `main` MUST carry a `package.json` version bump.** Because the
+  merge itself is the release, an un-bumped merge would ship nothing and announce
+  nothing; the release guard blocks it. The bump is part of the change (patch by
+  default; minor/major when the work warrants it), not a separate release step.
+  This is a deliberate manual step — GitHub Actions cannot open a bump PR itself
+  (org policy forbids Actions from creating pull requests).
 - **Supply-chain scan at the start of new work.** Before starting a new feature or
   bug fix, review the Docker Scout vulnerability report for the latest published
   image (Docker Hub → `zuptalo/ring` → the current tag). Any flagged vulnerability
@@ -254,4 +270,4 @@ These are project-specific guardrails every relevant spec MUST respect.
 - Runtime engineering guidance that is not constitutional lives in `CLAUDE.md` and
   `CONTRIBUTING.md`; where they conflict with this document, this document wins.
 
-**Version**: 1.2.2 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-07-17
+**Version**: 1.3.0 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-09-16

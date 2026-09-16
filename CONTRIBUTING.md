@@ -34,16 +34,23 @@ The app comes up on http://localhost:5173 and proxies the API to `ringd` on `:80
 In dev the server seeds fixed invite codes (`RINGDEV1`..`RINGDEV9`, `TESTCODE`) so
 you can register test accounts immediately.
 
-## Branching model (GitFlow)
+## Branching model (trunk-based)
 
-- **`develop`** is the integration branch — all work targets it.
-- **`main`** is production — only `develop` is merged in, to cut a release.
-- **Feature branches** branch off `develop` and open a PR back into `develop`.
+- **`main`** is the only long-lived branch. It is production *and* where work
+  integrates — there is no `develop`.
+- **Feature branches** branch off `main` and open a PR straight back into `main`.
   Name them descriptively, e.g. `feat/group-call-roster`, `fix/ios-audio-route`.
+- **Every merge into `main` ships a release.** That is why each PR must carry a
+  version bump (see [Releases](#releases-and-release-candidates)). A bug that
+  reaches production is fixed like anything else — a branch, a PR, the next
+  release — not by patching a long-lived release branch.
+- **Want it on real devices before production?** Cut a
+  [release candidate](#releases-and-release-candidates) off the feature branch and
+  merge only once it checks out. Merging is shipping.
 
-Both `develop` and `main` are protected: changes land **only via pull request with
-all CI checks green** (see [the branch-protection setup](#branch-protection)).
-Direct pushes are rejected.
+`main` is protected: changes land **only via pull request with all CI checks
+green** (see [the branch-protection setup](#branch-protection)). Direct pushes are
+rejected.
 
 ## Spec-driven development (required for new work)
 
@@ -117,9 +124,9 @@ doesn't match `specs/`, so regenerate and commit it alongside your spec changes.
 
 ### Closing issues on merge
 
-The feature → `develop` PR **must reference every issue it implements** with a
+The feature → `main` PR **must reference every issue it implements** with a
 closing keyword (`Closes #123`, one per line) so GitHub auto-closes them on merge.
-This works because `develop` is the repository's default branch — closing keywords
+This works because `main` is the repository's default branch — closing keywords
 only fire on merges into the default branch.
 
 ## Making a change
@@ -129,11 +136,13 @@ only fire on merges into the default branch.
 2. Make your change, matching the surrounding code (see Code style in `CLAUDE.md` —
    we favor explanatory comments on the *why*).
 3. Run the gates locally (below). Add or update tests (tests first, per TDD).
-4. Open a PR into `develop`. Fill in the PR template, including the zero-knowledge
+4. Bump the version — `npm run release:patch` (or `:minor` / `:major`) — and commit
+   it with the change. Merging will ship it.
+5. Open a PR into `main`. Fill in the PR template, including the zero-knowledge
    confirmation for anything touching the wire, and `Closes #N` for each issue.
-5. Once CI is green, the PR can be merged. Your feature branch is deleted
-   automatically on merge (the protected `develop`/`main` are never auto-deleted),
-   and the referenced issues close themselves.
+6. Once CI is green, merge. That tags, publishes the production image, and cuts the
+   GitHub release. Your feature branch is deleted automatically on merge (protected
+   `main` is never auto-deleted), and the referenced issues close themselves.
 
 ### Commit messages
 
@@ -167,55 +176,56 @@ npm run test:e2e              # Playwright e2e (needs `make db-up`; spins its ow
 
 Releases are driven by `package.json` `version`:
 
-> **Bump at the start of a cycle.** After a release ships, `develop` and `main`
-> hold the same version, so the *next* `develop → main` PR fails the release guard
-> until `develop` is moved forward. Bump `develop`'s version (with the script below)
-> as the first change of the new cycle. This is manual by design — GitHub Actions
-> can't open the bump PR (org policy forbids Actions from creating PRs), so there's
-> no bot to do it for you; the release guard is the backstop at release time.
+> **Every merge into `main` is a release**, so **every PR into `main` carries a
+> version bump.** There is no separate "cut a release" step and no release branch:
+> the bump is part of the change. `Release guard (version bump)` fails any PR that
+> doesn't move the version past `main`'s, because merging it would ship nothing and
+> say nothing. This is manual by design — GitHub Actions can't open a bump PR (org
+> policy forbids Actions from creating PRs).
 
-- **Release:** bump the version on `develop`, then open a PR into `main`. Bump with
-  the one-shot script (no manual editing, no local tag/commit — it just edits
-  `package.json` + `package-lock.json` for you to commit):
+- **Release:** bump the version on your feature branch, then open the PR into
+  `main`. Bump with the one-shot script (no manual editing, no local tag/commit —
+  it just edits `package.json` + `package-lock.json` for you to commit):
 
   ```sh
   npm run release:patch    # 0.1.0 -> 0.1.1   (or release:minor / release:major)
   ```
 
-  Open the PR using the **release PR template**
-  ([`.github/PULL_REQUEST_TEMPLATE/release.md`](.github/PULL_REQUEST_TEMPLATE/release.md);
-  add `?template=release.md` to the compose URL, or follow its shape if you open the
-  PR via the API). List each user-facing change as a one-liner under **Changes**.
-
   On merge, the pipeline re-verifies the merge commit and — if green and the
   `vX.Y.Z` tag is new — tags `main`, publishes the production image (`latest`,
-  `X.Y.Z`, `X.Y`), and cuts a GitHub release whose notes are the version plus one
-  bullet per change (drawn from the Conventional-Commit subjects since the last
-  tag — another reason to keep commit subjects clean).
+  `X.Y.Z`, `X.Y`) to GHCR and Docker Hub, and cuts a GitHub release whose notes are
+  the version plus one bullet per change (drawn from the Conventional-Commit
+  subjects since the last tag — another reason to keep commit subjects clean).
 
-  A release PR **without a version bump cannot be merged**: the CI check
-  `Release guard (version bump)` fails it, because merging it would silently no-op
-  the release (the tag already exists). The guard is green on every PR into
-  `develop`, so it only matters for the `develop → main` PR.
+  **Merge one PR at a time.** Required checks are non-strict (a PR needn't be up to
+  date with `main` to merge), so two open PRs can both bump to the *same* version
+  and both pass the guard. The first to merge ships it; the second then fails
+  loudly in `release.yml` — rebase it on `main` and bump again.
 
-  You don't merge the release PR by hand. The `Auto-merge release PRs` workflow
-  turns on GitHub auto-merge for any PR into `main`, so GitHub merges it (as a
-  merge commit) the moment the guard and the full suite are green — and not
-  before. Open it and walk away; to cancel, just disable auto-merge on the PR.
-  (This needs the repo-level "Allow auto-merge" setting, which
+  **Optional auto-merge.** Add the **`auto-merge`** label to a PR and the
+  `Auto-merge labelled PRs` workflow turns on GitHub auto-merge for it, so GitHub
+  merges it (as a merge commit) the moment the guard and the full suite are green —
+  and not before. Useful when you don't want to babysit a ~33-minute suite. Without
+  the label nothing merges itself, which is the default on purpose: every merge
+  ships. To cancel, disable auto-merge on the PR or remove the label. (This needs
+  the repo-level "Allow auto-merge" setting, which
   `scripts/setup-branch-protection.sh` turns on.)
 
-- **Release candidate:** push a `vX.Y.Z-rc.N` tag (off `develop`). It runs the full
-  suite and publishes a single immutable `:X.Y.Z-rc.N` image + a GitHub pre-release.
-  An RC never moves `:latest`/`:X.Y`.
+- **Release candidate:** push a `vX.Y.Z-rc.N` tag, normally off the feature branch
+  before you merge it. It runs the full suite and publishes a single immutable
+  `:X.Y.Z-rc.N` image + a GitHub pre-release. An RC never moves `:latest`/`:X.Y`,
+  and its version comes from the tag, not `package.json`.
+
+- **No rolling pre-release image.** The old `:develop` tag is gone; only releases
+  and RCs are published.
 
 ### Optional: local release-bump reminder
 
 Run `make hooks` once to opt in to the repo's git hooks
 (`git config core.hooksPath scripts/hooks`). The advisory `pre-push` hook warns —
-without ever blocking the push — when you push `develop` at a version that's already
-been released, so you remember to bump before opening the release PR. CI's release
-guard stays the real gate. Disable with `git config --unset core.hooksPath`.
+without ever blocking the push — when you push a branch at a version that's already
+been released, so you remember to bump before opening the PR. CI's release guard
+stays the real gate. Disable with `git config --unset core.hooksPath`.
 
 Operator upgrade/rollback guidance lives in [`docs/UPGRADING.md`](docs/UPGRADING.md).
 

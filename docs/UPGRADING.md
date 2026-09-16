@@ -52,7 +52,10 @@ how upgrades reach you:
 | `:X.Y.Z`        | One specific stable release (immutable).    | You want **deliberate**, pinned upgrades and easy rollback. |
 | `:X.Y`          | Newest patch within a minor line.           | You want patch updates but not minor/major jumps.    |
 | `:X.Y.Z-rc.N`   | A **release candidate** (pre-release).      | You're helping test an upcoming release (see below). |
-| `:develop`      | Rolling build of the `develop` branch.      | You track bleeding edge and accept breakage.         |
+
+There is no rolling pre-release tag: `main` is the only long-lived branch and every
+merge into it cuts a real release, so `:latest` *is* the tip. To run something
+ahead of a release, pin the release candidate for it.
 
 Pinning a specific `:X.Y.Z` is the safest posture for production: redeploys are
 reproducible and a rollback is just re-pinning the previous number. Leaving
@@ -109,5 +112,5 @@ may contain unfinished work - don't run them for real users. See
 ## Kubernetes / Keel
 
 If you run on k3s with Keel auto-deploy, upgrades are driven by which tag the
-deployment tracks (`:develop` for rolling, `:latest`/`:X.Y.Z` for stable) rather
+deployment tracks (`:latest` to follow every release, `:X.Y.Z` to pin) rather
 than by `docker compose pull`. See [`deploy/k8s/README.md`](../deploy/k8s/README.md).

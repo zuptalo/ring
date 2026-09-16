@@ -1,17 +1,22 @@
 # Release candidate: hand testers a pinned pre-release build without shipping it as
-# "latest". Triggered by pushing a vX.Y.Z-rc.N tag (typically off develop) - it
-# re-runs the full build + test suite on the tagged commit and, only if that is
-# green, publishes a single immutable image (ghcr.io/zuptalo/ring:X.Y.Z-rc.N) and
-# cuts a GitHub *pre-release*.
+# "latest". Triggered by pushing a vX.Y.Z-rc.N tag - typically off the FEATURE
+# BRANCH you want testers on, before its PR merges into main. It re-runs the full
+# build + test suite on the tagged commit and, only if that is green, publishes a
+# single immutable image (ghcr.io/zuptalo/ring:X.Y.Z-rc.N) and cuts a GitHub
+# *pre-release*.
+#
+# This is the pressure valve for a main-only flow: merging into main ships to
+# production immediately, so anything you want on real devices FIRST goes out as an
+# RC from its branch, and only then merges.
 #
 # Deliberately separate from release.yml (which fires on merge to main and owns the
 # moving latest/X.Y tags): an RC must NEVER move :latest or :X.Y, so production
 # deploys tracking those tags can't pick it up. The version is read from the tag
-# name, not package.json - on develop package.json still carries the in-progress
-# version (e.g. 0.1.0), while the tag is the real RC identity (e.g. v0.2.0-rc.1),
-# and that is what gets stamped into the image so the About page shows the truth.
+# name, not package.json - the branch's package.json may still carry the previous
+# version, while the tag is the real RC identity (e.g. v1.1.0-rc.1), and that is
+# what gets stamped into the image so the About page shows the truth.
 #
-# To cut one: git tag v0.2.0-rc.1 && git push origin v0.2.0-rc.1
+# To cut one: git tag v1.1.0-rc.1 && git push origin v1.1.0-rc.1
 name: Release candidate
 
 on:
@@ -43,7 +48,7 @@ jobs:
 
       - name: Resolve version from tag
         id: ver
-        # The tag IS the version of record for an RC (package.json lags on develop).
+        # The tag IS the version of record for an RC (the branch's package.json lags).
         run: |
           tag="${GITHUB_REF_NAME}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"

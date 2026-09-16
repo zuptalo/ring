@@ -1,21 +1,27 @@
-# Release: fires when develop is merged into main. It re-runs the full build +
-# test suite on the merge commit and, only if that is green, tags main with the
-# package.json version, publishes the production image, and cuts a GitHub release
-# whose notes are the version plus one bullet per change since the last tag.
+# Release: fires when a feature branch is merged into main. It re-runs the full
+# build + test suite on the merge commit and, only if that is green, tags main with
+# the package.json version, publishes the production image, and cuts a GitHub
+# release whose notes are the version plus one bullet per change since the last tag.
 #
-# Versioning is driven by package.json: to ship a release, bump the "version"
-# there on develop and open a PR into main. If the tag for the current version
-# already exists, the release steps no-op (a merge without a version bump won't
-# overwrite a published release).
+# `main` is the only long-lived branch, so EVERY merge into it ships. Versioning is
+# driven by package.json: bump the "version" on your feature branch and open a PR
+# into main — ci.yml's release guard refuses the PR without a bump, and merging it
+# releases. There is no separate "cut a release" step.
+#
+# If the tag for the current version somehow already exists on a push (two PRs that
+# bumped to the same version, say), this FAILS rather than skipping quietly: a merge
+# to main that ships nothing is exactly the signal-less outcome the release guard
+# exists to prevent. A manual workflow_dispatch re-run of an already-shipped version
+# still no-ops harmlessly, so re-running by hand is always safe.
 name: Release
 
 on:
   push:
     branches: [main]
-  # A GITHUB_TOKEN-authored push (e.g. auto-merge-release.yml's auto-merge) doesn't
+  # A GITHUB_TOKEN-authored push (auto-merge-release.yml's opt-in auto-merge) doesn't
   # trigger the push event above (anti-infinite-loop safeguard) — workflow_dispatch
-  # is exempt from that, so auto-merge-release.yml calls this explicitly once a
-  # release PR actually merges. Also handy for a manual re-run.
+  # is exempt from that, so auto-merge-release.yml calls this explicitly once an
+  # auto-merged PR lands. Also handy for a manual re-run.
   workflow_dispatch:
 
 concurrency:
@@ -50,10 +56,19 @@ jobs:
 
       - name: Has this version already shipped?
         id: check
+        env:
+          # A push to main is a merge that was SUPPOSED to ship (the release guard
+          # made the PR carry a bump). Finding the tag already there means it won't —
+          # fail so it can't pass unnoticed. A hand-run dispatch just no-ops.
+          EVENT: ${{ github.event_name }}
         run: |
           if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            if [ "$EVENT" = "push" ]; then
+              echo "::error::Tag ${{ steps.ver.outputs.tag }} already exists, so this merge into main shipped NOTHING. Two PRs most likely bumped to the same version. Open a follow-up PR that bumps package.json again ('npm run release:patch') to release these changes."
+              exit 1
+            fi
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Tag ${{ steps.ver.outputs.tag }} already exists. Bump the version in package.json to cut a new release. Skipping release steps."
+            echo "::notice::Tag ${{ steps.ver.outputs.tag }} already exists and this is a manual re-run — skipping the release steps."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
@@ -140,3 +155,20 @@ jobs:
             --title "Ring ${{ steps.ver.outputs.version }}" \
             --target "${{ github.sha }}" \
             --notes-file release-notes.md
+
+      # Keep the Docker Hub repo's Overview (README + short description) in sync with
+      # docs/DOCKERHUB.md on every release, so the public listing never drifts. This
+      # used to ride the rolling develop publish, which no longer exists.
+      # Best-effort: editing the Hub Overview needs a token scope an image-push PAT lacks
+      # (returns 403 Forbidden), so DON'T fail a shipped release on a cosmetic README
+      # sync — the image and the GitHub release are already out. Fix the token to re-enable.
+      - name: Sync Docker Hub Overview
+        if: steps.check.outputs.exists == 'false'
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: zuptalo/ring
+          short-description: 'Private, end-to-end-encrypted messenger & calling app — self-hostable PWA + Go backend (AGPL).'
+          readme-filepath: ./docs/DOCKERHUB.md

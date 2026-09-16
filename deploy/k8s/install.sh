@@ -82,6 +82,6 @@ Done. Next:
   3. First-run invite code:   kubectl -n ring logs deploy/ringd | grep FIRST-RUN
   4. Open https://${APP_HOST}, install the PWA, register with that code.
 
-New production releases (:latest) now auto-deploy within ~2 minutes (Keel). To track
-the rolling dev build instead, edit 20-ringd.yaml: image tag -> :develop, keep policy force.
+New production releases (:latest) now auto-deploy within ~2 minutes (Keel). To pin a
+specific release instead, edit 20-ringd.yaml: image tag -> :X.Y.Z, keep policy force.
 EOF

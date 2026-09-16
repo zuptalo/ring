@@ -4,26 +4,30 @@
 #
 # It never blocks a push (always exits 0). CI's "Release guard (version bump)"
 # job + branch protection are the authoritative gate; this hook just gives you a
-# heads-up locally so you don't open a release PR that the guard will reject.
+# heads-up locally so you don't open a PR that the guard will reject.
 #
-# What it warns about: when you push `develop`, if the current package.json
-# version already has a published tag (v<version>), then a develop -> main PR
-# opened now would no-op the release. The fix is to bump on develop first:
+# What it warns about: `main` is the only long-lived branch and every merge into it
+# ships, so EVERY PR must bump package.json to a new, unreleased version. If the
+# version you're pushing already has a published tag (v<version>), the PR will be
+# blocked. The fix is to bump first:
 #   npm run release:patch   # or :minor / :major
 #
-# A pre-push hook can't know the eventual PR base, so it can't (and shouldn't)
-# block — it only nudges. Disable with: git config --unset core.hooksPath
+# Skipped when pushing `main` itself (nothing to open a PR for) and when pushing a
+# tag (RC tags carry their own version, which deliberately isn't package.json's).
+# Disable with: git config --unset core.hooksPath
 set -euo pipefail
 
-# Only nudge when this push includes the develop branch.
-pushing_develop=false
-while read -r local_ref _local_sha _remote_ref _remote_sha; do
-  if [ "$local_ref" = "refs/heads/develop" ]; then
-    pushing_develop=true
-  fi
+# Only nudge for a branch push that isn't main; ignore tag pushes and deletions.
+nudge=false
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+  case "$local_ref" in
+    refs/heads/main) continue ;;                        # main itself: nothing to PR
+    refs/heads/*) [ "$local_sha" = "0000000000000000000000000000000000000000" ] || nudge=true ;;
+    *) continue ;;                                      # tags and everything else
+  esac
 done
 
-[ "$pushing_develop" = true ] || exit 0
+[ "$nudge" = true ] || exit 0
 
 # Read the version without requiring node (the hook runs on every push).
 version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n1)
@@ -34,8 +38,8 @@ if git rev-parse "refs/tags/v$version" >/dev/null 2>&1; then
 
   ⚠ Ring release reminder
   package.json is at v$version, which is already tagged/shipped.
-  A develop → main PR opened now would no-op the release (CI's release guard
-  will block it). Bump before opening the release PR:
+  Every PR into main must ship a NEW version, so CI's release guard will block
+  this one. Bump before opening the PR:
 
       npm run release:patch   # or :minor / :major
 

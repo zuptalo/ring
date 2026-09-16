@@ -2,8 +2,9 @@ name: GHCR cleanup
 
 # Weekly retention for ghcr.io/zuptalo/ring (GitHub has no built-in retention
 # setting for container packages, so this enforces it):
-#   - releases (latest + semver tags) are NEVER deleted,
-#   - of the develop builds, keep the newest 3,
+#   - releases (latest + semver tags) and published release candidates are NEVER
+#     deleted,
+#   - of anything else still tagged, keep the newest 5,
 #   - remove orphaned untagged manifests (manifest-aware: children of kept
 #     images are preserved).
 #
@@ -41,14 +42,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Never delete a release: latest, vX.Y.Z, X.Y.Z, X.Y, X, or a published
           # release candidate (X.Y.Z-rc.N - a tester may be pinned to it, so it must
-          # not be GC'd out from under them). The develop builds (develop,
-          # develop-<sha>, X.Y.Z-dev.N) do NOT match this, so they remain subject to
-          # keep-n-tagged below.
+          # not be GC'd out from under them). Since the rolling develop channel was
+          # retired this pattern covers essentially everything published, and
+          # keep-n-tagged below is just a backstop for any stray tag.
           exclude-tags: '/^(latest|v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?|[0-9]+\.[0-9]+|[0-9]+)$/'
-          # Keep the newest 5 of the remaining tagged images (the develop builds) —
-          # a roomier rollback window for the continuously-deployed develop channel,
-          # while doc-only develop pushes no longer mint images at all (path-filtered
-          # CI), so this stays small.
+          # Keep the newest 5 of any remaining tagged images that somehow fall
+          # outside the exclude pattern above. Nothing routinely lands here now.
           keep-n-tagged: 5
           # Remove orphaned untagged manifests.
           delete-untagged: true

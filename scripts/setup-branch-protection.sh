@@ -1,25 +1,32 @@
 #!/usr/bin/env bash
 #
-# Apply (and re-apply) Ring's protected-branch ruleset to develop and main.
+# Apply (and re-apply) Ring's protected-branch ruleset to main.
+#
+# `main` is the ONLY long-lived branch: short-lived feature branches PR straight
+# into it and every merge ships (see CONTRIBUTING.md). There is nothing else to
+# protect.
 #
 # WHAT IT ENFORCES on each branch:
 #   - Pull request required before merging (0 required approvals — we're a solo
 #     maintainer and GitHub won't let you approve your own PR; raise this once there
 #     are other maintainers).
 #   - Required status checks (non-strict): the aggregate "CI gate" plus the always-on
-#     roadmap + release guards (see REQUIRED_CHECKS). NON-strict on purpose: with an
-#     active develop, requiring "up to date before merge" makes every merge invalidate
-#     other in-flight PRs and forces a full re-run for an unrelated change. The CI gate
-#     + test coverage make that tax not worth it; a PR merges on its own green checks.
+#     roadmap + release guards (see REQUIRED_CHECKS). NON-strict on purpose: requiring
+#     "up to date before merge" makes every merge invalidate other in-flight PRs and
+#     forces a ~33-minute re-run for an unrelated change. The trade-off is that two
+#     open PRs can both bump to the same version and both pass the release guard; the
+#     second to merge then fails LOUDLY in release.yml rather than shipping nothing.
+#     Merging one PR at a time avoids it; see the note in ci.yml's release-guard.
 #   - Conversation resolution required.
 #   - Force-pushes and branch deletion blocked.
 #   - enforce_admins: rules apply to admins too (no bypass).
-#   - Linear history NOT required (so develop -> main keeps its merge commit).
+#   - Linear history NOT required (so each PR keeps its merge commit, which
+#     release.yml verifies and tags).
 #
 # It also flips three REPO-LEVEL settings: allow_auto_merge (so the Auto-merge
-# workflow can schedule the release PR), allow_merge_commit, and
-# delete_branch_on_merge (auto-delete merged feature branches; protected develop/
-# main are exempt via allow_deletions:false, so they're never auto-deleted).
+# workflow can schedule a PR you labelled `auto-merge`), allow_merge_commit, and
+# delete_branch_on_merge (auto-delete merged feature branches; protected main is
+# exempt via allow_deletions:false, so it is never auto-deleted).
 #
 # PREREQUISITES:
 #   - An authenticated GitHub CLI: `gh auth status` must succeed, with a token that
@@ -39,7 +46,7 @@
 set -euo pipefail
 
 REPO="${REPO:-zuptalo/ring}"
-BRANCHES=(develop main)
+BRANCHES=(main)
 
 # Required status check contexts.
 #
@@ -52,8 +59,9 @@ BRANCHES=(develop main)
 # unblocked while still enforcing the full suite whenever code changes.
 #
 # "Roadmap up to date" and "Release guard (version bump)" are top-level ci.yml jobs
-# that always run (cheap), so they are required directly too. The release guard is
-# green on PRs into develop and only enforces a version bump on PRs into main.
+# that always run (cheap), so they are required directly too. Every PR targets main
+# and every merge ships, so the release guard now enforces a version bump on all of
+# them.
 #
 # IMPORTANT: run this script only AFTER the ci.yml that defines "CI gate" has merged,
 # or PRs will require a check that doesn't exist yet.
@@ -106,14 +114,13 @@ for branch in "${BRANCHES[@]}"; do
 done
 
 # Repo-level merge settings the release flow + housekeeping depend on:
-#   - allow_auto_merge: lets the Auto-merge workflow schedule the develop -> main
-#     PR to merge itself once required checks pass.
-#   - allow_merge_commit: the release PR must land as a MERGE COMMIT (release.yml
-#     verifies it; develop's history stays joined into main).
+#   - allow_auto_merge: lets the Auto-merge workflow schedule a PR you labelled
+#     `auto-merge` to merge itself once required checks pass.
+#   - allow_merge_commit: a PR must land as a MERGE COMMIT (release.yml verifies it).
 #   - delete_branch_on_merge: auto-delete a PR's head branch once it merges, so
-#     stale feature branches don't pile up. SAFE here: develop and main are
-#     protected with allow_deletions:false, so a develop -> main merge can never
-#     delete develop — only unprotected feature -> develop branches get cleaned up.
+#     stale feature branches don't pile up. SAFE here: main is protected with
+#     allow_deletions:false, so it is never auto-deleted — only the unprotected
+#     feature branches get cleaned up.
 echo "==> ${REPO} repo settings (auto-merge, merge commits, branch cleanup)"
 if [[ "${DRY_RUN:-}" == "1" ]]; then
   echo '  { "allow_auto_merge": true, "allow_merge_commit": true, "delete_branch_on_merge": true }'
@@ -128,4 +135,4 @@ else
 fi
 
 echo "Done. Verify in Settings -> Branches, or:"
-echo "  gh api repos/${REPO}/branches/develop/protection | jq ."
+echo "  gh api repos/${REPO}/branches/main/protection | jq ."
