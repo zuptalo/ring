@@ -3563,6 +3563,23 @@ onUnmounted(() => {
   windowObs?.disconnect();
   bubbleVisObs?.disconnect();
   clearTimeout(markSeenTimer);
+  // Everything else this page schedules. onIonViewWillLeave covers the ordinary
+  // "navigated away" path, but it does NOT fire when the component is destroyed
+  // some other way (the chat deleted under us, a hidden-chat re-lock, a logout
+  // tearing the router outlet down), and each of these outlives the page:
+  //  - abandonRecording releases the MICROPHONE. Without it, leaving mid-recording
+  //    left the capture stream live — the OS mic indicator stayed on, the
+  //    AudioContext stayed open, and the elapsed/waveform intervals kept ticking.
+  //  - the activity keepalive keeps sealing and sending "still typing" frames to
+  //    the peer every few seconds, so their indicator never clears.
+  clearTimeout(recoverTimer);
+  clearTimeout(draftSaveTimer);
+  clearTimeout(composerPreviewTimer);
+  clearTimeout(shareHintTimer);
+  if (camTimer) clearTimeout(camTimer);
+  stopActivity();
+  abandonRecording();
+  releaseAudioReviewCover();
 });
 // Report Seen ONLY when the user is genuinely looking at this chat: its view is the active one AND
 // the app is foregrounded (document visible). Spec 1013: this no longer bulk-marks the whole chat —
@@ -3646,6 +3663,7 @@ onIonViewWillLeave(() => {
   setActiveChat(null);
   void persistDraft(); // navigating away within the app → save the unsent message …
   void persistDraftMedia(); // … and its staged attachments (fires before unmount clears them)
+  abandonRecording(); // … and give the MIC back before the page goes (see abandonRecording)
   stopActivity(); // leaving the chat ends any outgoing activity indicator (spec 1009)
   clearTimeout(shareHintTimer);
   dismissShareHintToast(); // don't let the hint linger on other pages
@@ -4804,8 +4822,18 @@ const audioReview = ref<{
 }>({ open: false, title: '', artist: '' });
 let audioCurrent: PendingAudio | null = null;
 
+/** The review sheet's cover art is an object URL minted from the file's embedded
+ *  artwork. Nothing else owns it, and every assignment to audioReview below
+ *  replaces the whole object — so revoke the outgoing one first or each audio file
+ *  you share leaks its cover bitmap for the life of the tab. */
+function releaseAudioReviewCover(): void {
+  const url = audioReview.value.coverUrl;
+  if (url) URL.revokeObjectURL(url);
+}
+
 async function processNextAudio(): Promise<void> {
   const next = audioQueue.value.shift();
+  releaseAudioReviewCover(); // the previous file's cover is done with either way
   if (!next) {
     audioReview.value = { open: false, title: '', artist: '' };
     return;
@@ -5043,6 +5071,18 @@ async function stopAndSendRecording() {
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
   await sendMediaMessage(chatId, 'voice', blob, 'voice-message', durationSec, { replyTo: reply, ttlOverrideMs: msgTtl.value });
+}
+
+/** Drop an in-progress recording because the CHAT is going away, not because the
+ *  user cancelled it. Same teardown as cancelRecording — the important part is
+ *  releasing the microphone: the capture stream, the AudioContext tapping it and
+ *  the elapsed/waveform intervals all live at module scope, so without this,
+ *  swiping back mid-recording left the mic open (OS indicator on) and both
+ *  intervals running for the rest of the session, once per chat you did it in.
+ *  A no-op when nothing is recording, so it's safe on every leave. */
+function abandonRecording(): void {
+  if (!recorder && !recording.value) return;
+  cancelRecording();
 }
 
 function cancelRecording() {
