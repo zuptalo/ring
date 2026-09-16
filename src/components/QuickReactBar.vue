@@ -12,7 +12,7 @@
       :aria-label="`React ${e}`"
       @click="pick(e)"
     >
-      <emoji :emoji="e" />
+      <emoji :emoji="e" eager />
     </button>
     <button v-if="!atEmojiCap" type="button" class="qr-emoji qr-more" aria-label="More emoji" @click="choose('more')">
       <ion-icon :icon="addCircleOutline" />
