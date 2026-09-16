@@ -146,6 +146,12 @@ export const vAutoplayVisible: Directive<HTMLVideoElement> = {
     io?.unobserve(el);
     registered.delete(el);
     ratios.delete(el);
+    // Clear the reflected attribute as well as the pointer. setActive() normally
+    // does both, but it is skipped here (we drop `current` directly), and Vue may
+    // reuse the element — an <video> that came back still carrying
+    // data-autoplaying="true" would hide its own play affordance while paused, and
+    // would lie to the tests that assert visibility through this attribute.
+    el.removeAttribute('data-autoplaying');
     if (current === el) current = null;
     try {
       el.pause();

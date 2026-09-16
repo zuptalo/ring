@@ -191,7 +191,7 @@
 import UserAvatar from '@/components/UserAvatar.vue';
 import WallGameCard from '@/components/WallGameCard.vue';
 import WallGameStats from '@/components/WallGameStats.vue';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonBackButton, IonButton,
   IonContent, IonAvatar, IonIcon, IonTextarea, IonList, IonItem, IonLabel,
@@ -474,7 +474,9 @@ onIonViewWillEnter(async () => {
   }
 });
 
-onIonViewWillLeave(() => {
+/** Release every object URL this page minted for the post's media. Idempotent: each
+ *  ref is cleared as it is revoked, so running it twice is harmless. */
+function releaseMediaUrls(): void {
   if (mediaUrl.value) {
     URL.revokeObjectURL(mediaUrl.value);
     mediaUrl.value = undefined;
@@ -488,7 +490,14 @@ onIonViewWillLeave(() => {
     if (m.poster) URL.revokeObjectURL(m.poster);
   }
   albumMedia.value = [];
-});
+}
+
+onIonViewWillLeave(releaseMediaUrls);
+// Belt and braces: onIonViewWillLeave covers navigating away, but not a destroy
+// with no view transition — the post deleted or revoked under us, the router
+// outlet torn down on logout. A full-size photo or video blob held by a leaked
+// object URL is the most expensive thing this page can strand.
+onUnmounted(releaseMediaUrls);
 
 function initial(name: string): string {
   return (name.trim()[0] ?? '?').toUpperCase();
