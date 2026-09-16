@@ -44,6 +44,13 @@ let loading = false;
 let visible = false;
 let loopsDone = 0;
 let finished = false; // plays cap reached → rest on the native glyph
+// ensureLoaded awaits a network fetch AND a dynamic import, so the component can
+// be long gone by the time it resolves — a fast scroll through a chat full of
+// emoji unmounts them mid-flight. Without this flag it would still call
+// loadAnimation into a detached node, and lottie-web drives every loaded
+// animation from its own rAF loop, so each orphan would keep running forever with
+// no one left to destroy it.
+let disposed = false;
 
 function codepoints(): string {
   return [...props.emoji].map((c) => (c.codePointAt(0) ?? 0).toString(16)).join('_');
@@ -52,7 +59,7 @@ function codepoints(): string {
 // Lazily load the Lottie on first visibility, then loop it. Subsequent visibility
 // changes just resume/pause the already-loaded animation.
 async function ensureLoaded(): Promise<void> {
-  if (anim || loading || finished || !props.animate || !anchor.value) return;
+  if (anim || loading || finished || disposed || !props.animate || !anchor.value) return;
   loading = true;
   try {
     // Self-hosted proxy, cached in-memory per session (spec 1017) + persistently by the service
@@ -61,6 +68,7 @@ async function ensureLoaded(): Promise<void> {
     if (!data) return; // no Noto animation (or fetch failed) → keep the native glyph
     // lottie_light has no expression engine (no eval, smaller), fine for Noto.
     const lottie = (await import('lottie-web/build/player/lottie_light')).default;
+    if (disposed || !anchor.value) return; // unmounted while we were fetching
     anim = lottie.loadAnimation({
       container: anchor.value,
       renderer: 'svg',
@@ -137,8 +145,10 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   observer?.disconnect();
   anim?.destroy?.();
+  anim = null;
 });
 </script>
 

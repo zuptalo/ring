@@ -9,7 +9,7 @@
        cell ANIMATES to draw the eye, FR-023) or the classic color-coded SVG. -->
   <ion-grid
     class="ttt"
-    :class="{ frozen: !canMove }"
+    :data-frozen="!canMove || undefined"
     :style="accent ? { '--game-accent': accent, '--game-accent-a': '0.12' } : undefined"
   >
     <ion-row v-for="r in 3" :key="r">
@@ -91,7 +91,7 @@ const cellLabel = (r: number, c: number): string => {
 .ttt-cell:disabled {
   cursor: default;
 }
-.frozen .ttt-cell:not(.x):not(.o) {
+[data-frozen] .ttt-cell:not(.x):not(.o) {
   opacity: 0.6;
 }
 </style>

@@ -7,8 +7,10 @@ import { createAccount, pair } from './helpers';
  * Spec 1013: the scroll-to-latest control becomes an EXPANDING PILL (circle when caught up →
  * stadium with the count inline when behind), and "Seen" receipts become visibility-driven.
  * This file grows by user story: US1 (the pill) first; US2/US3 (visibility Seen + catch-up)
- * append later. The control is always in the DOM; `.jump-hidden` is the fade, `.jump-btn-pill`
- * is the expanded (count ≥ 1) shape, and the inline count is `.jump-count`.
+ * append later. The control is always in the DOM; `[data-jump-hidden]` is the fade,
+ * `[data-jump-pill]` is the expanded (count ≥ 1) shape, and the inline count is `.jump-count`.
+ * Those two are data ATTRIBUTES, not classes: a dynamic :class on an Ionic host wipes the
+ * Stencil-managed host classes (spec 2024), so conditional styling is bound this way.
  */
 
 const chatWith = (p: any, peerId: string) =>
@@ -83,16 +85,16 @@ test('the control is a circle when caught up and an inline-count pill when behin
   const bChat = (await chatWith(b, a.id)) as string;
 
   // Resting at the newest → the control is hidden (spec 1012 behavior, preserved).
-  await expect(fab(a)).toHaveClass(/jump-hidden/);
+  await expect(fab(a)).toHaveAttribute('data-jump-hidden', 'true');
 
   // Scrolled up, nothing new → the control is shown but is a plain circle (no pill, no count).
   await scrollUp(a, 2500);
-  await expect(fab(a)).not.toHaveClass(/jump-hidden/, { timeout: 5000 });
-  await expect(btn(a)).not.toHaveClass(/jump-btn-pill/);
+  await expect(fab(a)).not.toHaveAttribute('data-jump-hidden', /.*/, { timeout: 5000 });
+  await expect(btn(a)).not.toHaveAttribute('data-jump-pill', /.*/);
 
   // Peer sends 3 → the control becomes a pill showing the inline count "3".
   for (const t of ['pill one', 'pill two', 'pill three']) await send(b, bChat, t);
-  await expect(btn(a)).toHaveClass(/jump-btn-pill/, { timeout: 10_000 });
+  await expect(btn(a)).toHaveAttribute('data-jump-pill', 'true', { timeout: 10_000 });
   await expect(a.page.locator('.jump-count')).toHaveText('3', { timeout: 10_000 });
 
   // Tapping jumps to the first message to catch up on (1012 behavior) and the count clears, so
@@ -100,7 +102,7 @@ test('the control is a circle when caught up and an inline-count pill when behin
   const firstUnread = a.page.locator('.bubble[data-mid]', { hasText: 'pill one' });
   await btn(a).click();
   await expect(firstUnread).toBeVisible({ timeout: 5000 });
-  await expect(btn(a)).not.toHaveClass(/jump-btn-pill/, { timeout: 5000 });
+  await expect(btn(a)).not.toHaveAttribute('data-jump-pill', /.*/, { timeout: 5000 });
 
   await ctxA.close();
   await ctxB.close();
@@ -124,7 +126,7 @@ test('Seen is sent only for messages actually viewed; off-screen and toggle-off 
 
   // B sends 3 → they land at A's (off-screen) bottom. They must NOT be reported Seen.
   for (const t of ['off one', 'off two', 'off three']) await send(b, bChat, t);
-  await expect(btn(a)).toHaveClass(/jump-btn-pill/, { timeout: 10_000 }); // pill counts them
+  await expect(btn(a)).toHaveAttribute('data-jump-pill', 'true', { timeout: 10_000 }); // pill counts them
   await a.page.waitForTimeout(1500); // allow delivery (but they're off-screen → not seen)
   expect(await statusOf(b, bChat, 'off one')).not.toBe('seen');
   expect(await statusOf(b, bChat, 'off three')).not.toBe('seen');
@@ -166,13 +168,13 @@ test('opens at the first unseen, catches up as you read, and persists across rel
   await a.page.waitForTimeout(600);
 
   // Open-at-first-unseen (FR-017): it does NOT land at the bottom, and the pill shows a count.
-  await expect(btn(a)).toHaveClass(/jump-btn-pill/, { timeout: 10_000 });
+  await expect(btn(a)).toHaveAttribute('data-jump-pill', 'true', { timeout: 10_000 });
   expect((await scrollMetrics(a)).dist).toBeGreaterThan(300);
 
   // Read down to the bottom → uniform catch-up reports the whole backlog Seen → pill shrinks to a
   // circle (count 0).
   await scrollToBottom(a);
-  await expect(btn(a)).not.toHaveClass(/jump-btn-pill/, { timeout: 10_000 });
+  await expect(btn(a)).not.toHaveAttribute('data-jump-pill', /.*/, { timeout: 10_000 });
 
   // Persistence (FR-018): reload the app and reopen → the backlog stays Seen (pill is a circle,
   // not re-inflated to the whole history).
@@ -180,7 +182,7 @@ test('opens at the first unseen, catches up as you read, and persists across rel
   await a.page.goto(`/chat/${aChat}`);
   await expect(a.page.locator('.bubble[data-mid]').first()).toBeVisible({ timeout: 30_000 });
   await a.page.waitForTimeout(600);
-  await expect(btn(a)).not.toHaveClass(/jump-btn-pill/);
+  await expect(btn(a)).not.toHaveAttribute('data-jump-pill', /.*/);
 
   await ctxA.close();
   await ctxB.close();

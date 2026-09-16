@@ -279,7 +279,15 @@ function ensureThumb(mediaId: string): void {
 let cellObserver: IntersectionObserver | undefined;
 function observeCells(): void {
   if (!cellObserver) return;
-  document.querySelectorAll<HTMLElement>('.media-cell[data-media-id]').forEach((el) => cellObserver!.observe(el));
+  // Scoped to THIS page's content, not the document. Ionic keeps previous pages
+  // mounted in the router outlet while they animate out (and a tab root stays
+  // mounted indefinitely), so a document-wide query here also picked up the
+  // .media-cell nodes of another All Media page — which then had thumbnails
+  // generated for it, off-screen, competing with this page's scroll for the very
+  // decode budget the viewport gating exists to protect.
+  const root = (contentEl.value?.$el ?? null) as HTMLElement | null;
+  if (!root) return;
+  root.querySelectorAll<HTMLElement>('.media-cell[data-media-id]').forEach((el) => cellObserver!.observe(el));
 }
 onMounted(() => {
   cellObserver = new IntersectionObserver(

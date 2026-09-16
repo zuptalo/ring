@@ -123,11 +123,11 @@ Traefik config: **[`server/docs/CALLING.md`](server/docs/CALLING.md)**.
 
 ### Image tags
 
-`:latest` (and `:X.Y.Z`) is published when you cut a release (merge `develop` ->
-`main`). Before your first release, or to deploy a specific build, pin a tag:
-`:1.2.3` for a release, `:1.2.3-rc.1` for a release candidate, or `:develop` /
-`:develop-<sha>` for the rolling dev build. Leaving `:latest` floating means a
-redeploy picks up whatever is newest; pin if you want redeploys to be deliberate.
+`:latest` (and `:X.Y.Z` / `:X.Y`) is published on every merge into `main`. To
+deploy a specific build, pin a tag: `:1.2.3` for a release or `:1.2.3-rc.1` for a
+release candidate. There is no rolling pre-release tag - only releases and RCs are
+published. Leaving `:latest` floating means a redeploy picks up whatever is newest;
+pin if you want redeploys to be deliberate.
 For the full upgrade/rollback runbook, see
 [`docs/UPGRADING.md`](docs/UPGRADING.md).
 
@@ -176,26 +176,24 @@ spec-driven workflow, the spec-number bands, and the test gates.
 
 ## Branching and releases
 
-The repo follows a simple GitFlow:
+The repo is trunk-based, with one long-lived branch:
 
-- **`develop`** is the integration branch. Every push runs the full build + test
-  suite and publishes the `ghcr.io/zuptalo/ring` image under three tags: the
-  rolling `develop`, the immutable `develop-<sha>`, and a `X.Y.Z-dev.<run>`
-  prerelease tag (the `package.json` version plus the CI run number).
-- **`main`** is production. Open a pull request from `develop` into `main`; CI
-  runs the same build + test suite on it. Merging only happens once it is green.
-- On merge to `main`, the release pipeline re-verifies the merge commit, then
-  tags `main` with the `package.json` version (`vX.Y.Z`), publishes the
-  production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub release with
+- **`main`** is production *and* the integration branch. Short-lived feature
+  branches open a pull request straight into it; CI runs the full build + test
+  suite on the PR, and merging only happens once it is green.
+- **Every merge into `main` ships a release**, so every PR must bump `"version"`
+  in `package.json` - a CI guard blocks a PR that doesn't. On merge, the release
+  pipeline re-verifies the merge commit, then tags `main` (`vX.Y.Z`), publishes
+  the production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub release with
   auto-generated notes.
-- **Release candidates** are cut out-of-band by pushing a `vX.Y.Z-rc.N` tag
-  (typically off `develop`). That runs the full build + test suite and, if green,
-  publishes a single immutable `:X.Y.Z-rc.N` image plus a GitHub pre-release. An
-  RC **never** moves `:latest` or `:X.Y`, so production deploys tracking those
-  tags are unaffected - testers opt in by pinning the RC tag.
-
-To ship a release, bump `"version"` in `package.json` on `develop` and open a PR
-into `main`. A merge without a version bump re-runs CI but does not re-release.
+- A bug that reaches production is fixed the same way as anything else: a branch,
+  a PR, the next release. There is no long-lived release branch to patch.
+- **Release candidates** are cut by pushing a `vX.Y.Z-rc.N` tag, normally off the
+  feature branch before it merges. That runs the full build + test suite and, if
+  green, publishes a single immutable `:X.Y.Z-rc.N` image plus a GitHub
+  pre-release. An RC **never** moves `:latest` or `:X.Y`, so production deploys
+  tracking those tags are unaffected - testers opt in by pinning the RC tag. This
+  is how a change gets real-device testing before it reaches production.
 
 Operators upgrading an existing instance: see **[`docs/UPGRADING.md`](docs/UPGRADING.md)**.
 

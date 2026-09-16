@@ -74,12 +74,11 @@ keel.sh/pollSchedule: "@every 2m"
 
 Keel polls `ghcr.io/zuptalo/ring:latest` every ~2 min; when a new production
 release moves `:latest`, Keel forces a rolling redeploy that pulls the new
-digest and re‑runs migrations on boot. Nothing else to do. (To track the rolling
-dev build instead, point the image tag at `:develop`.)
+digest and re‑runs migrations on boot. Nothing else to do.
 
-**Track stable releases instead of develop:** in `20-ringd.yaml` change the image
-tag to `:latest` (published on each version release) and re‑apply. Keel `force`
-works the same for `:latest`.
+**Pin a specific release instead:** in `20-ringd.yaml` change the image tag to
+`:X.Y.Z` (or `:X.Y.Z-rc.N` to help test a release candidate) and re‑apply. Keel
+`force` works the same for a pinned tag; you just re‑apply to move it.
 
 **Private GHCR package?** If the image isn't public, create a pull secret and
 reference it, and give Keel registry creds:

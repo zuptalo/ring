@@ -46,7 +46,7 @@ import { IonApp, IonRouterOutlet } from '@ionic/vue';
 import { alertCircleOutline } from 'ionicons/icons';
 import { inviteNeedsProfile } from '@/services/invites';
 import { appToast } from '@/services/toast';
-import { showActionBanner, dismissActionBanner, markPushWake, onBannerPresented } from '@/services/notify';
+import { showActionBanner, dismissActionBanner, markPushWake, claimNextBanner } from '@/services/notify';
 import { useViewportHeight } from '@/composables/useViewportHeight';
 import { useTheme } from '@/composables/useTheme';
 import { useAppBadge } from '@/composables/useAppBadge';
@@ -302,11 +302,13 @@ async function routeRelevant(url?: string, coldStart = false): Promise<void> {
 // won't (hidden / suppressed / locked) simply never acks → the SW shows it.
 const DRAIN_ACK_WINDOW_MS = 2000;
 function waitForBannerThenAck(reqId: string): void {
-  let unsub = (): void => {};
-  const timer = setTimeout(() => unsub(), DRAIN_ACK_WINDOW_MS);
-  unsub = onBannerPresented(() => {
+  // One banner satisfies one waiter (see claimNextBanner): two pushes arriving
+  // together need two rendered banners to ack both drains, so a message the page
+  // never showed can't be acked on the back of some other message's banner.
+  let cancel = (): void => {};
+  const timer = setTimeout(() => cancel(), DRAIN_ACK_WINDOW_MS);
+  cancel = claimNextBanner(() => {
     clearTimeout(timer);
-    unsub();
     // The page presented an in-app banner for this drain → claim it so the SW
     // suppresses its own OS notification (no duplicate).
     navigator.serviceWorker.controller?.postMessage({ type: 'ring:handled', reqId });

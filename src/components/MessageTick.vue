@@ -43,7 +43,7 @@ const seen = computed(() => props.tier === 'seen');
   <ion-icon
     v-if="icon"
     class="tick"
-    :class="{ seen }"
+    :data-seen="seen || undefined"
     :icon="icon"
     :style="size ? { fontSize: size } : undefined"
     aria-hidden="true"
@@ -58,7 +58,7 @@ const seen = computed(() => props.tier === 'seen');
   color: currentColor;
 }
 /* WhatsApp-style blue "seen" double-check — identical to the in-conversation tick. */
-.tick.seen {
+.tick[data-seen] {
   color: #34b7f1;
 }
 </style>

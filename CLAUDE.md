@@ -202,24 +202,30 @@ contributor walkthrough is in `CONTRIBUTING.md`.
   (`planned → in-progress → in-review → shipped`); CI's `Roadmap up to date` guard
   fails if it's stale.
 - **Auto-close issues**: `taskstoissues` opens one GitHub issue per task; the
-  feature → `develop` PR must list `Closes #N` for each so they close on merge
-  (works because `develop` is the default branch).
+  feature → `main` PR must list `Closes #N` for each so they close on merge
+  (`main` is the default branch).
 
 ## Git, branching, and releases
 
-GitFlow. **`develop`** is the integration branch; **`main`** is production.
+**Trunk-based. `main` is the only long-lived branch** — it is production, and it
+is also where work integrates. Short-lived feature branches PR **straight into
+`main`**, and **every merge ships a release.** There is no `develop`. A bug found
+in production is fixed the same way anything else is: a branch, a PR, the next
+release.
 
 - Every PR runs the full build+test suite (path-filtered: doc/spec/tooling-only
-  changes skip the heavy jobs). A push to `develop` does NOT re-run the suite —
-  the merged PR already tested the identical tree — it only rebuilds and publishes
-  the rolling `ghcr.io/zuptalo/ring:develop` image.
-- **Bump the version at the start of each release cycle.** After a release ships,
-  `develop` and `main` sit at the same `package.json` version, so the next
-  `develop → main` PR fails the release guard until `develop` moves forward. The
-  first change of a new cycle bumps `develop`'s `version` to the next intended
-  value (patch by default). This is manual on purpose — GitHub Actions can't open
-  the bump PR (org policy blocks Actions from creating PRs), and the release guard
-  enforces it at release time. See constitution "Development Workflow."
+  changes skip the heavy jobs). A push to `main` does NOT re-run CI — `release.yml`
+  re-runs the entire suite on the merge commit before it tags or publishes anything.
+- **Every PR into `main` must bump `package.json` `version`** — the release guard
+  refuses it otherwise, because a merge without a bump would ship nothing and say
+  nothing. Patch by default (`npm run release:patch`); `:minor` / `:major` when the
+  change earns it. Bump it as part of the change, not as a separate release step.
+- **Merge one PR at a time.** Required checks are non-strict, so two open PRs can
+  both bump to the same version and both go green. The first to merge ships it; the
+  second then fails loudly in `release.yml` and needs a rebase + re-bump.
+- **Want real-device testing before production?** Cut a release candidate off the
+  feature branch (`git tag vX.Y.Z-rc.N && git push origin vX.Y.Z-rc.N`) and merge
+  only once it checks out. Merging is shipping.
 - **Scan the latest image at the start of new work.** Check the Docker Scout report
   for the current `zuptalo/ring` tag (Docker Hub) and apply any vulnerability that
   has a fix version: bump the Go module (`go get pkg@fixed && go mod tidy`) or the
@@ -227,17 +233,20 @@ GitFlow. **`develop`** is the integration branch; **`main`** is production.
   available" ones are noted and left. A CVE-patch bump is `fix`/`security`-typed
   (so it reaches "What's new") and gets released, not parked. Constitution mandates
   this ("Supply-chain scan at the start of new work").
-- Releases are driven by `package.json` `version`: bump it on `develop`, open a
-  PR into `main`. That PR **auto-merges** once green (`auto-merge-release.yml`),
-  which then dispatches `release.yml` (a workflow-token push can't trigger it
-  directly). If green and the `vX.Y.Z` tag doesn't already exist, it tags `main`,
-  publishes the production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub
-  release. A merge without a version bump re-runs CI but does not re-release.
-- Release candidates are cut by pushing a `vX.Y.Z-rc.N` tag (off `develop`):
-  `release-candidate.yml` runs the full suite and, if green, publishes a single
-  immutable `:X.Y.Z-rc.N` image + a GitHub pre-release. RCs never move `:latest`
-  or `:X.Y`; the RC version comes from the tag, not `package.json`. Operator
-  upgrade/rollback runbook: `docs/UPGRADING.md`.
+- Merging a PR into `main` triggers `release.yml`: it re-runs the full suite on the
+  merge commit and, if green, tags `vX.Y.Z`, publishes the production image
+  (`latest`, `X.Y.Z`, `X.Y`) to GHCR + Docker Hub, and cuts a GitHub release.
+  Labelling a PR **`auto-merge`** hands it to `auto-merge-release.yml`, which
+  enables GitHub auto-merge and then dispatches `release.yml` by hand (a
+  workflow-token push can't trigger it directly). Unlabelled PRs you merge yourself.
+- There is **no rolling pre-release image**. Only released tags and RCs are
+  published; the dev deployment builds from source (`npm run build` for client
+  changes — see `docs/UPGRADING.md`).
+- Release candidates are cut by pushing a `vX.Y.Z-rc.N` tag, normally off the
+  feature branch: `release-candidate.yml` runs the full suite and, if green,
+  publishes a single immutable `:X.Y.Z-rc.N` image + a GitHub pre-release. RCs
+  never move `:latest` or `:X.Y`; the RC version comes from the tag, not
+  `package.json`. Operator upgrade/rollback runbook: `docs/UPGRADING.md`.
 
 **Commit messages** follow Conventional Commits with a scope, e.g.
 `feat(call): ...`, `fix(media): ...`, `feat(server): ...`, `test(e2e): ...`,

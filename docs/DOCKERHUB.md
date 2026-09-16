@@ -45,9 +45,9 @@ Images are multi-arch (`linux/amd64`, `linux/arm64`). The canonical registry is
 ## Screenshots
 
 <p>
-  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/docs/screenshots/chats.png" width="240" alt="Chats" />
-  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/docs/screenshots/conversation.png" width="240" alt="Conversation" />
-  <img src="https://raw.githubusercontent.com/zuptalo/ring/develop/docs/screenshots/group-dark.png" width="240" alt="Group chat (dark)" />
+  <img src="https://raw.githubusercontent.com/zuptalo/ring/main/docs/screenshots/chats.png" width="240" alt="Chats" />
+  <img src="https://raw.githubusercontent.com/zuptalo/ring/main/docs/screenshots/conversation.png" width="240" alt="Conversation" />
+  <img src="https://raw.githubusercontent.com/zuptalo/ring/main/docs/screenshots/group-dark.png" width="240" alt="Group chat (dark)" />
 </p>
 
 ## Support
@@ -59,4 +59,4 @@ whatever you think it's worth: **[Ko-fi](https://ko-fi.com/zuptalo)** ·
 
 ## License
 
-[AGPL-3.0-only](https://github.com/zuptalo/ring/blob/develop/LICENSE). © 2026 Zuptalo.
+[AGPL-3.0-only](https://github.com/zuptalo/ring/blob/main/LICENSE). © 2026 Zuptalo.

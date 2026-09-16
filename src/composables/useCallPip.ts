@@ -79,14 +79,28 @@ function onVisibility(): void {
   if (document.hidden && inVideoCall()) void enter();
 }
 
-let wired = false;
-/** Wire the persistent source video + auto-PiP triggers. Called once by CallMediaSink. */
+// Two separate latches on purpose. The document/mediaSession wiring belongs to the
+// app and is done once; the enter/leave listeners belong to the ELEMENT and can only
+// be attached once there is one. A single `wired` flag conflated them: called with a
+// null video (a ref not yet populated, a remount ordering change) it latched anyway,
+// and no later call could ever attach the element listeners — PiP would still open
+// but `pipActive` would never flip, so the UI would show the wrong state forever.
+let appWired = false;
+let wiredVideo: HTMLVideoElement | null = null;
+
+/** Wire the persistent source video + auto-PiP triggers. Called by CallMediaSink. */
 export function initCallPip(video: HTMLVideoElement | null): void {
   sourceVideo = video;
-  if (wired || typeof document === 'undefined') return;
-  wired = true;
-  video?.addEventListener('enterpictureinpicture', () => (pipActive.value = true));
-  video?.addEventListener('leavepictureinpicture', () => (pipActive.value = false));
+  if (typeof document === 'undefined') return;
+
+  if (video && video !== wiredVideo) {
+    wiredVideo = video;
+    video.addEventListener('enterpictureinpicture', () => (pipActive.value = true));
+    video.addEventListener('leavepictureinpicture', () => (pipActive.value = false));
+  }
+
+  if (appWired) return;
+  appWired = true;
   document.addEventListener('visibilitychange', onVisibility);
   try {
     navigator.mediaSession?.setActionHandler(

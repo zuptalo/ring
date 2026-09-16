@@ -37,9 +37,15 @@ const SETTLE_MS = 200;
 
 function ensure(): ImpressionTracker | null {
   if (typeof window === 'undefined' || !('IntersectionObserver' in window)) return null;
-  if (tracker) return tracker;
+  // Keyed on `io`, NOT on `tracker`. The tracker deliberately OUTLIVES teardown
+  // (it remembers what this session already reported), so an early return on
+  // `tracker` would leave io/timer null forever after the first teardown — every
+  // later mount would silently observe nothing and the feed would stop reporting
+  // views for the rest of the session. Emptying the feed is easy to do by
+  // accident: any search with no matches renders zero rows.
+  if (io) return tracker;
 
-  tracker = new ImpressionTracker((postId) => {
+  tracker ??= new ImpressionTracker((postId) => {
     void recordPostView(postId);
   });
 

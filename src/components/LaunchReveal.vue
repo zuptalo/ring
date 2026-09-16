@@ -12,7 +12,7 @@
        flubber for path morphing:  npm i flubber
        and an ambient declaration (flubber ships no types) — add to
        src/vite-env.d.ts:  declare module 'flubber'; -->
-  <ion-page v-if="visible" class="launch-reveal" :class="{ leaving }">
+  <ion-page v-if="visible" class="launch-reveal" :data-leaving="leaving || undefined">
     <ion-content :fullscreen="true">
       <!-- Discreet escape hatch: a returning user who's seen the reveal can dismiss it.
            Kept low-key (muted, corner, fades in after a beat) so it never competes with
@@ -342,7 +342,7 @@ onUnmounted(() => {
   opacity: 1;
   transition: opacity 350ms ease;
 }
-.launch-reveal.leaving {
+.launch-reveal[data-leaving] {
   opacity: 0;
   pointer-events: none;
 }

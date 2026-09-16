@@ -1418,15 +1418,28 @@ function presentIncoming(): void {
   // else: actively in the app → the banner handles it (less intrusive), unchanged.
 }
 
+// The listener armed below, held so a second backgrounded call doesn't stack another
+// one on top of it. `pendingIncomingForeground` is a single flag, so one listener is
+// all this ever needs — and a run of missed calls while the phone is in a pocket
+// would otherwise add one apiece, every one of them firing on the next foreground.
+let incomingForegroundNav: (() => void) | null = null;
+
+function disarmIncomingForegroundNav(): void {
+  if (!incomingForegroundNav || typeof document === 'undefined') return;
+  document.removeEventListener('visibilitychange', incomingForegroundNav);
+  incomingForegroundNav = null;
+}
+
 function armIncomingForegroundNav(): void {
-  if (typeof document === 'undefined') return;
+  if (typeof document === 'undefined' || incomingForegroundNav) return;
   const onVisible = (): void => {
     if (document.visibilityState !== 'visible') return;
-    document.removeEventListener('visibilitychange', onVisible);
+    disarmIncomingForegroundNav();
     // Only if still ringing for the same call (the caller may have given up while we were away).
     if (pendingIncomingForeground && callState.value === 'incoming') navigateToCall();
     pendingIncomingForeground = false;
   };
+  incomingForegroundNav = onVisible;
   document.addEventListener('visibilitychange', onVisible);
 }
 
@@ -1509,6 +1522,7 @@ export async function teardown(reason: EndReason, opts?: { silent?: boolean }): 
   inPrevFramesDropped = 0;
   inPrevFramesReceived = 0;
   pendingIncomingForeground = false;
+  disarmIncomingForegroundNav(); // the call is over; nothing left for a foreground to navigate to
   upgradePending.value = false;
   upgradeRequest.value = false;
   activeScreenTrack?.stop();

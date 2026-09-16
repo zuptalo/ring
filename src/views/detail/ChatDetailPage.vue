@@ -136,7 +136,7 @@
         <div v-if="m.kind === 'call'" class="call-row" role="button" @click="onCallRow(m)">
           <ion-icon
             :icon="m.callLog?.video ? videocamOutline : callOutline"
-            :class="{ 'call-missed': m.callLog?.missed }"
+            :data-call-missed="m.callLog?.missed || undefined"
           />
           <span class="call-row-text">{{ m.body }}</span>
           <span v-if="m.callLog?.participants?.length" class="call-row-parts">
@@ -593,7 +593,7 @@
                   <ion-icon
                     v-if="m.outgoing && m.status !== 'failed'"
                     class="tick"
-                    :class="{ seen: tickInfo(m).seen }"
+                    :data-seen="tickInfo(m).seen || undefined"
                     :icon="tickInfo(m).icon"
                   />
                 </span>
@@ -740,7 +740,7 @@
                   <ion-icon
                     v-if="item.messages[0].outgoing && item.messages[item.messages.length - 1].status !== 'failed'"
                     class="tick"
-                    :class="{ seen: tickInfo(item.messages[item.messages.length - 1]).seen }"
+                    :data-seen="tickInfo(item.messages[item.messages.length - 1]).seen || undefined"
                     :icon="tickInfo(item.messages[item.messages.length - 1]).icon"
                   />
                 </span>
@@ -798,20 +798,20 @@
         vertical="bottom"
         horizontal="end"
         class="jump-fab"
-        :class="{ 'jump-hidden': !jumpVisible }"
+        :data-jump-hidden="!jumpVisible || undefined"
         :aria-hidden="!jumpVisible"
       >
         <ion-fab-button
           size="small"
           class="jump-btn"
-          :class="{ 'jump-btn-pill': unreadCount > 0 }"
+          :data-jump-pill="unreadCount > 0 || undefined"
           :style="{ width: pillWidth + 'px' }"
           :aria-label="jumpLabel"
           :tabindex="jumpVisible ? 0 : -1"
           @click="onJumpToLatest"
         >
           <!-- Chevron + inline count. The count span is ALWAYS in the DOM (no v-if) so it can
-               animate both ways; the `.jump-btn-pill` class expands/collapses it via max-width +
+               animate both ways; the `[data-jump-pill]` marker expands/collapses it via max-width +
                opacity, and the auto-width button tracks it for a smooth grow/shrink. -->
           <span class="jump-inner">
             <ion-icon :icon="chevronDownOutline" class="jump-chevron" />
@@ -1076,7 +1076,7 @@
               :aria-label="`Disappearing timer: ${msgTtlLabel}`"
               :color="effectiveTtlMs ? 'primary' : 'medium'"
               class="ttl-btn"
-              :class="{ 'has-badge': !!effectiveTtlMs }"
+              :data-has-badge="!!effectiveTtlMs || undefined"
               @click="openMsgTtl"
             >
               <!-- Icon + duration stacked vertically so the badge sits cleanly under the clock. -->
@@ -1113,8 +1113,13 @@
               @click="composerHasContent ? send() : startRecording()"
               @mousedown.prevent
             >
-              <ion-icon class="wa-glyph" :class="{ on: !composerHasContent }" :icon="micFilled" aria-hidden="true" />
-              <ion-icon class="wa-glyph wa-glyph-send" :class="{ on: composerHasContent }" :icon="sendFilled" aria-hidden="true" />
+              <ion-icon class="wa-glyph" :data-on="!composerHasContent || undefined" :icon="micFilled" aria-hidden="true" />
+              <ion-icon
+                class="wa-glyph wa-glyph-send"
+                :data-on="composerHasContent || undefined"
+                :icon="sendFilled"
+                aria-hidden="true"
+              />
             </button>
           </ion-buttons>
         </template>
@@ -1245,7 +1250,7 @@
 
 <script setup lang="ts">
 import UserAvatar from '@/components/UserAvatar.vue';
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, toRaw, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   IonPage, IonHeader, IonToolbar, IonTitle, IonButtons, IonButton,
@@ -1276,7 +1281,7 @@ import {
   sendGameChallenge, acceptGameChallenge, cancelGameChallenge,
   unblockContact, detectTerminated, firstMessageOnOrAfter, countUnread,
   CAPTION_MAX, getSetting, listChatMediaAll, getMessage, listMessagesOlder,
-  backfillThumbTiers, getDraft, saveDraft, clearDraft, getDraftMedia, saveDraftMedia, clearDraftMedia,
+  getDraft, saveDraft, clearDraft, getDraftMedia, saveDraftMedia, clearDraftMedia,
   shouldAutoDownloadMedia,
 } from '@/db/queries';
 import { shouldAutoRetry } from '@/utils/media-retry'; // spec 2058: bound the automatic refetch
@@ -1312,7 +1317,9 @@ import AudioCard from '@/components/AudioCard.vue';
 import CloudFill from '@/components/CloudFill.vue';
 import SpeedPill from '@/components/SpeedPill.vue';
 import { rateFor } from '@/composables/usePlaybackRates'; // spec 2059: speed is per message
-import { nextRate, playWhenReady } from '@/utils/playback';
+import { useVoiceRecorder } from '@/composables/useVoiceRecorder';
+import { useChatMedia } from '@/composables/useChatMedia';
+import { useComposerLinkPreview } from '@/composables/useComposerLinkPreview';
 import AudioReview from '@/components/AudioReview.vue';
 import Emoji from '@/components/Emoji.vue';
 import AnimatedEmoji from '@/components/AnimatedEmoji.vue';
@@ -1320,20 +1327,16 @@ import { segmentEmoji, emojiOnlyCount } from '@/utils/emoji';
 import { userColorBright } from '@/utils/user-color';
 import { useAnimationPrefs } from '@/composables/useAnimationPrefs';
 import { jobProgress } from '@/services/media-jobs';
-import { generateVideoPoster, generateImageThumb, isAnimatedImage } from '@/utils/media-meta';
+import { generateVideoPoster } from '@/utils/media-meta';
 import { type Quality } from '@/services/media-encode';
 import { openExternal } from '@/utils/external';
 import { segmentContacts, telHref, mailtoHref } from '@/utils/linkify';
 import { findMentions, mentionQueryAt, replaceMentionQuery } from '@/utils/mention';
-import { firstLink, buildLinkPreview } from '@/services/link-preview';
-import type { LinkPreview } from '@/services/crypto/message';
 import { presentEntityActions, type ContactEntity } from '@/services/entity-actions';
-import { selectEvictions } from '@/utils/lru';
 import { normalizeOutgoing } from '@/utils/text';
 import { vEnterSend } from '@/directives/enter-send';
 import { formatBytes } from '@/utils/bytes';
 import { readAudioTags, readAudioDuration } from '@/utils/id3';
-import { get, put } from '@/db/idb';
 import { initialsAvatar } from '@/db/avatars';
 import type { Chat, Contact, Media, Message, MessageKind, MessageStatus, Reaction, ReplyRef, SharedContact, DraftMediaItem } from '@/db/types';
 import { useLiveQuery } from '@/composables/useLiveQuery';
@@ -2401,12 +2404,7 @@ async function persistDraftMedia(): Promise<void> {
 // Sent → the draft is spent; drop the pending saves and the stored copies (text + attachments).
 function clearComposerDraft(): void {
   clearTimeout(draftSaveTimer);
-  clearTimeout(composerPreviewTimer);
-  composerPreviewToken++; // discard any in-flight build, it was for the message that just sent
-  composerPreviewUrl.value = '';
-  composerPreview.value = null;
-  composerPreviewLoading.value = false;
-  composerPreviewDismissed.value = false;
+  resetComposerPreview();
   draftMediaBytes.clear();
   void clearDraft(chatId);
   void clearDraftMedia(chatId);
@@ -2873,53 +2871,19 @@ const draft = ref('');
 
 // ---- composer link preview: build it BEFORE send so the sender sees what a
 // recipient will see, instead of only finding out after (the bubble previously
-// only got a preview via the deferred post-send attach). Debounced off the same
-// input path as the draft-save (scheduleDraftSave); a stale in-flight build is
-// discarded via composerPreviewToken if the URL changes again before it resolves.
-const linkPreviewsDisabled = useLiveQuery(
-  () => getSetting<boolean>('privacy.disableLinkPreviews', false),
-  ['settings'],
-  false,
-);
-const composerPreviewUrl = ref(''); // the link this preview state is FOR (empty = none)
-const composerPreview = ref<LinkPreview | null>(null); // resolved result (null = tried, nothing found)
-const composerPreviewLoading = ref(false);
-const composerPreviewDismissed = ref(false); // sender explicitly removed it via the × button
-let composerPreviewTimer: ReturnType<typeof setTimeout> | undefined;
-let composerPreviewToken = 0;
-
-function scheduleLinkPreviewCheck(): void {
-  clearTimeout(composerPreviewTimer);
-  composerPreviewTimer = setTimeout(() => void checkLinkPreview(), 500);
-}
-
-async function checkLinkPreview(): Promise<void> {
-  const link = firstLink(draft.value);
-  if (!link) {
-    composerPreviewUrl.value = '';
-    composerPreview.value = null;
-    composerPreviewLoading.value = false;
-    composerPreviewDismissed.value = false;
-    return;
-  }
-  if (link === composerPreviewUrl.value) return; // same link already resolved/resolving
-  composerPreviewUrl.value = link;
-  composerPreview.value = null;
-  composerPreviewDismissed.value = false;
-  if (linkPreviewsDisabled.value) return; // respect the privacy toggle; leave it unresolved
-  composerPreviewLoading.value = true;
-  const mine = ++composerPreviewToken;
-  const preview = await buildLinkPreview(link);
-  if (mine !== composerPreviewToken || link !== composerPreviewUrl.value) return; // superseded
-  composerPreview.value = preview;
-  composerPreviewLoading.value = false;
-}
-
-function dismissComposerPreview(): void {
-  composerPreviewToken++; // discard any in-flight build for this url
-  composerPreviewDismissed.value = true;
-  composerPreviewLoading.value = false;
-}
+// only got a preview via the deferred post-send attach). The debounce, the
+// supersede token and the privacy toggle live in useComposerLinkPreview; it is
+// driven from the same input path as the draft-save (scheduleDraftSave).
+const {
+  composerPreviewUrl,
+  composerPreview,
+  composerPreviewLoading,
+  composerPreviewDismissed,
+  scheduleLinkPreviewCheck,
+  dismissComposerPreview,
+  resetComposerPreview,
+  previewForSend,
+} = useComposerLinkPreview(draft);
 
 // ---- per-message disappearing timer (composer) ----
 // Sticky override applied to messages you send from now on, on top of the chat/group default:
@@ -3563,6 +3527,22 @@ onUnmounted(() => {
   windowObs?.disconnect();
   bubbleVisObs?.disconnect();
   clearTimeout(markSeenTimer);
+  // Everything else this page schedules. onIonViewWillLeave covers the ordinary
+  // "navigated away" path, but it does NOT fire when the component is destroyed
+  // some other way (the chat deleted under us, a hidden-chat re-lock, a logout
+  // tearing the router outlet down), and each of these outlives the page:
+  //  - abandonRecording releases the MICROPHONE. Without it, leaving mid-recording
+  //    left the capture stream live — the OS mic indicator stayed on, the
+  //    AudioContext stayed open, and the elapsed/waveform intervals kept ticking.
+  //  - the activity keepalive keeps sealing and sending "still typing" frames to
+  //    the peer every few seconds, so their indicator never clears.
+  clearTimeout(recoverTimer);
+  clearTimeout(draftSaveTimer);
+  clearTimeout(shareHintTimer);
+  if (camTimer) clearTimeout(camTimer);
+  stopActivity();
+  abandonRecording();
+  releaseAudioReviewCover();
 });
 // Report Seen ONLY when the user is genuinely looking at this chat: its view is the active one AND
 // the app is foregrounded (document visible). Spec 1013: this no longer bulk-marks the whole chat —
@@ -3646,6 +3626,7 @@ onIonViewWillLeave(() => {
   setActiveChat(null);
   void persistDraft(); // navigating away within the app → save the unsent message …
   void persistDraftMedia(); // … and its staged attachments (fires before unmount clears them)
+  abandonRecording(); // … and give the MIC back before the page goes (see abandonRecording)
   stopActivity(); // leaving the chat ends any outgoing activity indicator (spec 1009)
   clearTimeout(shareHintTimer);
   dismissShareHintToast(); // don't let the hint linger on other pages
@@ -3920,218 +3901,15 @@ async function loadNewer(): Promise<void> {
   }
 }
 
-// Resolve on-device media (Blobs) to object URLs for rendering.
-interface MediaInfo {
-  url?: string; // full-resolution original; undefined once freed to save space (spec 1014 FR-018)
-  posterUrl?: string; // bubble tier (≤512) — chat bubble + viewer main fallback
-  gridUrl?: string; // grid tier (≤320) — album grid cells (spec 1014)
-  stripUrl?: string; // strip tier (≤128) — viewer bottom thumbnail strip (spec 1014)
-  animated?: boolean; // GIF / animated WebP → bubble plays the moving original while visible
-  mime: string;
-  name: string;
-}
-
-const mediaInfo = ref<Record<string, MediaInfo>>({});
-// Resolved object URLs are bounded so a very long, media-heavy chat doesn't keep
-// every poster/cover decoded and every blob URL alive at once. We keep at most
-// MAX_MEDIA live, evicting the least-recently-used items that are neither on screen
-// nor pinned by an open viewer, and revoking their URLs. Far-scrolled media is
-// re-resolved lazily when it scrolls back (spec 1005 FR-003/004/005).
-const MAX_MEDIA = 60;
-const mediaLru: string[] = []; // mediaIds, least-recently-used first
-function touchMedia(id: string): void {
-  const i = mediaLru.indexOf(id);
-  if (i !== -1) mediaLru.splice(i, 1);
-  mediaLru.push(id);
-}
-// Media ids the full-screen viewer is currently showing — never evict these while
-// it's open (it can swipe across all of the chat's media).
-const viewerPins = ref<Set<string>>(new Set());
-
-// The on-screen window (plus viewer pins) that eviction must never touch.
-function currentMediaKeep(): Set<string> {
-  const keep = new Set<string>(viewerPins.value);
-  for (const m of visibleMessages.value) if (m.mediaId) keep.add(m.mediaId);
-  return keep;
-}
-
-// Resolve on-device media (Blobs) → object URLs for the GIVEN messages only — the
-// rendered window, or all chat media when the viewer opens — so opening a long
-// media chat doesn't eagerly decode every poster/cover up front. Already-resolved
-// items are just marked recently-used (reused, never recreated per render).
-async function resolveMediaFor(list: Message[]): Promise<void> {
-  for (const m of list) {
-    if (!m.mediaId) continue;
-    if (mediaInfo.value[m.mediaId]) {
-      touchMedia(m.mediaId);
-      continue;
-    }
-    const media = await get<Media>('media', m.mediaId);
-    if (!media) continue;
-    const info: MediaInfo = {
-      // undefined when the original was freed to save space (spec 1014 FR-018) — the bubble/grid
-      // still render from the tiers below, and the viewer falls back to the thumb / placeholder.
-      url: media.blob ? URL.createObjectURL(media.blob) : undefined,
-      // Poster precedence: a persisted posterBlob, else the sender-embedded
-      // posterData (a stable data URL). Feeding posterData into posterUrl means the
-      // viewer, bottom slider and Media grid (which read posterUrl, not the message)
-      // show a video's thumbnail too — not just the chat bubble (spec 1007 FR-001).
-      posterUrl: media.posterBlob
-        ? URL.createObjectURL(media.posterBlob)
-        : m.kind === 'video'
-          ? m.posterData
-          : undefined,
-      // Right-sized tiers for the grid (320) and strip (128); fall back to the bubble
-      // tier (then resolved below for legacy media that predates the tiers). Spec 1014.
-      gridUrl: media.posterGrid ? URL.createObjectURL(media.posterGrid) : undefined,
-      stripUrl: media.posterStrip ? URL.createObjectURL(media.posterStrip) : undefined,
-      mime: media.mime,
-      name: media.name,
-    };
-    mediaInfo.value[m.mediaId] = info;
-    touchMedia(m.mediaId);
-    // Videos: prefer the sent thumbnail (m.posterData, a stable data URL).
-    // Otherwise derive one from the first frame and PERSIST it (posterBlob) so it
-    // isn't regenerated/lost on every remount.
-    if (m.kind === 'video' && !info.posterUrl && !m.posterData && media.blob) {
-      const blob = media.blob;
-      const mid = m.mediaId;
-      void generateVideoPoster(blob).then(async (poster) => {
-        if (!poster || !mediaInfo.value[mid]) return; // evicted before it resolved
-        mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: poster };
-        try {
-          const md = await get<Media>('media', mid);
-          if (md && !md.posterBlob) {
-            md.posterBlob = await (await fetch(poster)).blob();
-            md.updatedAt = Date.now();
-            await put('media', md);
-          }
-        } catch {
-          /* best-effort cache */
-        }
-      });
-    }
-    // Images: derive a small thumbnail (stored as posterBlob) the bubble/grid/strip
-    // render instead of the full image, so scroll-back doesn't re-decode full-res
-    // photos. The full image is still used in the viewer. Persist so it's one-time.
-    if (m.kind === 'image' && !info.posterUrl && media.blob) {
-      const blob = media.blob;
-      const mid = m.mediaId;
-      void generateImageThumb(blob).then(async (thumb) => {
-        const info2 = mediaInfo.value[mid];
-        if (!info2) return; // evicted before it resolved
-        if (!thumb) {
-          // Small image (or decode failed): the original IS the thumbnail — so the
-          // bubble (which renders posterUrl) still has something light to show.
-          mediaInfo.value[mid] = { ...info2, posterUrl: info2.url };
-          return;
-        }
-        mediaInfo.value[mid] = { ...info2, posterUrl: URL.createObjectURL(thumb) };
-        try {
-          const md = await get<Media>('media', mid);
-          if (md && !md.posterBlob) {
-            md.posterBlob = thumb;
-            md.updatedAt = Date.now();
-            await put('media', md);
-          }
-        } catch {
-          /* best-effort cache */
-        }
-      });
-    }
-    // Images: flag animated GIF / animated WebP so the bubble renders the moving
-    // original (autoplaying while visible) instead of a static poster (spec: GIFs
-    // autoplay in chat). Static images/photos keep the lightweight poster path.
-    if (m.kind === 'image' && media.blob) {
-      const blob = media.blob;
-      const mid = m.mediaId;
-      const mime = media.mime;
-      void isAnimatedImage(mime, blob).then((animated) => {
-        if (animated && mediaInfo.value[mid]) mediaInfo.value[mid] = { ...mediaInfo.value[mid], animated: true };
-      });
-    }
-    // Audio (shared music): pull embedded cover art for the track card.
-    if (m.kind === 'audio' && !info.posterUrl && media.blob) {
-      const blob = media.blob;
-      const mid = m.mediaId;
-      void readAudioTags(blob).then((tags) => {
-        if (tags.cover && mediaInfo.value[mid]) {
-          mediaInfo.value[mid] = { ...mediaInfo.value[mid], posterUrl: URL.createObjectURL(tags.cover) };
-        }
-      });
-    }
-  }
-}
-
-// Spec 1014: idle, bounded backfill of this chat's media to the grid/strip tiers. Each slice
-// upgrades a handful of records and reschedules until the chat's media is fully tiered or we leave
-// the view, so it never competes with scroll/decoding on the hot path. Idempotent (already-tiered
-// records are skipped), so re-entering the chat just resumes where it left off.
-let thumbBackfillRunning = false;
-function scheduleThumbBackfill(): void {
-  if (thumbBackfillRunning) return;
-  thumbBackfillRunning = true;
-  const idle = (cb: () => void): void => {
-    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
-    if (ric) ric(cb);
-    else window.setTimeout(cb, 400);
-  };
-  const tick = (): void => {
-    if (!viewActive.value) {
-      thumbBackfillRunning = false;
-      return;
-    }
-    const ids = chatMediaMsgs.value.map((m) => m.mediaId).filter((id): id is string => !!id);
-    void backfillThumbTiers(ids, 8).then((n) => {
-      if (n > 0 && viewActive.value) idle(tick); // upgraded a batch — more may remain, keep nibbling
-      else thumbBackfillRunning = false;
-    });
-  };
-  idle(tick);
-}
-
-// Release least-recently-used media that's neither on screen nor pinned, revoking
-// its URLs so memory stays bounded in very long chats.
-function evictMedia(): void {
-  if (mediaLru.length <= MAX_MEDIA) return; // nothing over the cap — skip the Set + scan
-  const keep = currentMediaKeep();
-  for (const id of selectEvictions(mediaLru, keep, MAX_MEDIA)) {
-    const mi = mediaInfo.value[id];
-    if (mi) {
-      if (mi.url) URL.revokeObjectURL(mi.url);
-      if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
-      if (mi.gridUrl) URL.revokeObjectURL(mi.gridUrl);
-      if (mi.stripUrl) URL.revokeObjectURL(mi.stripUrl);
-      delete mediaInfo.value[id];
-    }
-    const i = mediaLru.indexOf(id);
-    if (i !== -1) mediaLru.splice(i, 1);
-  }
-}
-
-// Resolve media for the rendered window as it grows/changes (look-ahead paging
-// extends `visibleMessages` before the user reaches the top), then evict far LRU.
-// Keyed on the visible MEDIA SET (mediaIds), not the array identity — so a status
-// tick or reaction (which patches a row in place via useChatHistory) does NOT re-run
-// IndexedDB reads + URL allocation + eviction on the scroll hot path.
-watch(
-  () => visibleMessages.value.map((m) => m.mediaId ?? '').join('|'),
-  async () => {
-    await resolveMediaFor(visibleMessages.value);
-    evictMedia();
-  },
-  { immediate: true },
-);
-
-// Revoke every resolved object URL when leaving the chat so they don't leak across
-// chat opens (the cache only lives for this view).
-onUnmounted(() => {
-  for (const mi of Object.values(mediaInfo.value)) {
-    if (mi.url) URL.revokeObjectURL(mi.url);
-    if (mi.posterUrl) URL.revokeObjectURL(mi.posterUrl);
-    if (mi.gridUrl) URL.revokeObjectURL(mi.gridUrl);
-    if (mi.stripUrl) URL.revokeObjectURL(mi.stripUrl);
-  }
+// ---- media resolution (spec 1005/1007/1014) ----
+// Blobs → object URLs, the bounded LRU that keeps a long media chat from holding
+// every decoded poster at once, and the idle tier backfill all live in useChatMedia.
+// It owns its own revoke-on-teardown, so the URLs this page renders are released
+// whether the page leaves, is destroyed, or the media is evicted under it.
+const { mediaInfo, viewerPins, resolveMediaFor, evictMedia, scheduleThumbBackfill } = useChatMedia({
+  visibleMessages: () => visibleMessages.value,
+  chatMediaMsgs: () => chatMediaMsgs.value,
+  viewActive: () => viewActive.value,
 });
 
 // Keep the open viewer consistent when its item set changes under it — a message
@@ -4471,21 +4249,11 @@ async function send() {
     return;
   }
 
-  // Capture whatever the composer already resolved for this exact link before
+  // Capture whatever the composer already resolved for this exact link BEFORE
   // clearComposerDraft() below resets that state — undefined (still loading / never
   // attempted) falls back to sendMessage's own deferred post-send build; null means
   // the sender saw "no preview" (or dismissed it) and we shouldn't retry.
-  const linkNow = firstLink(text);
-  const preloadedPreview: LinkPreview | null | undefined =
-    !linkNow || linkNow !== composerPreviewUrl.value
-      ? undefined
-      : composerPreviewDismissed.value
-        ? null
-        : composerPreviewLoading.value
-          ? undefined
-          // toRaw: composerPreview.value is a reactive Proxy (it's a ref<object>) —
-          // IndexedDB's structured clone can't clone a Proxy (DataCloneError).
-          : composerPreview.value && toRaw(composerPreview.value);
+  const preloadedPreview = previewForSend(text);
 
   draft.value = '';
   clearComposerDraft();
@@ -4804,8 +4572,18 @@ const audioReview = ref<{
 }>({ open: false, title: '', artist: '' });
 let audioCurrent: PendingAudio | null = null;
 
+/** The review sheet's cover art is an object URL minted from the file's embedded
+ *  artwork. Nothing else owns it, and every assignment to audioReview below
+ *  replaces the whole object — so revoke the outgoing one first or each audio file
+ *  you share leaks its cover bitmap for the life of the tab. */
+function releaseAudioReviewCover(): void {
+  const url = audioReview.value.coverUrl;
+  if (url) URL.revokeObjectURL(url);
+}
+
 async function processNextAudio(): Promise<void> {
   const next = audioQueue.value.shift();
+  releaseAudioReviewCover(); // the previous file's cover is done with either way
   if (!next) {
     audioReview.value = { open: false, title: '', artist: '' };
     return;
@@ -4839,225 +4617,48 @@ function onAudioReviewClose(): void {
   void processNextAudio(); // skip this one, continue the queue
 }
 
-/* ---- audio recording (live waveform + pause/resume) ---- */
+/* ---- audio recording (live waveform + pause/resume) ----
+   Capture, waveform, preview and teardown live in useVoiceRecorder; this page only
+   says what a finished recording MEANS (send it to this chat) and keeps the peer's
+   "recording…" indicator in step with it (spec 1009). The composable releases the
+   microphone on its own unmount, and `abandon()` below covers Ionic's leave-without-
+   unmount — the page no longer has to remember either. */
+const {
+  recording,
+  recPaused,
+  recElapsed,
+  recBars,
+  recPlaying,
+  recRate,
+  barH,
+  start: startRecording,
+  togglePause,
+  togglePreview,
+  cycleRate: cycleRecRate,
+  finish: finishRecording,
+  cancel: cancelRecording,
+  abandon: abandonRecording,
+} = useVoiceRecorder({
+  onStart: () => startActivity('recording-audio'), // tell the peer we're recording a voice message
+  onStop: () => stopActivity('recording-audio'), // sent, cancelled or abandoned → clear their indicator
+  onError: (err) =>
+    // Say WHY (permission blocked vs. no mic vs. in use) instead of a dead-end
+    // "unavailable", and give it long enough to read the fix — the usual cause on
+    // Android is the app's mic permission being off at the OS level, which only the
+    // user can turn back on.
+    void appToast({ message: describeMediaError(err, 'microphone'), duration: 4000 }),
+});
 
-const REC_BARS = 42;
-const recording = ref(false);
-const recPaused = ref(false); // paused = preview mode (hear it back before sending)
-const recElapsed = ref('0:00');
-const recBars = ref<number[]>([]); // live amplitude history, scrolling
-const recPlaying = ref(false); // preview playback state (while paused)
-const recRate = ref(1); // preview playback speed
-let recorder: MediaRecorder | null = null;
-let recChunks: BlobPart[] = [];
-let recTimer: number | undefined; // elapsed display
-let recSampler: number | undefined; // waveform sampler
-let recAudioCtx: AudioContext | null = null;
-let recAnalyser: AnalyserNode | null = null;
-let recAccumMs = 0; // active recording time across pauses
-let recSegStart = 0; // current segment start
-let recPreviewEl: HTMLAudioElement | null = null; // plays the recorded-so-far on pause
-let recPreviewUrl: string | null = null;
-let recWantPreview = false; // a requestData() flush is pending → (re)build the preview
-
-const fmtMs = (ms: number) => {
-  const s = Math.floor(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-};
-const barH = (h: number) => `${Math.round(3 + h * 18)}px`;
-const recActiveMs = () => recAccumMs + (recPaused.value ? 0 : Date.now() - recSegStart);
-
-function tickElapsed(): void {
-  recElapsed.value = fmtMs(recActiveMs());
-}
-
-function sampleWave(): void {
-  if (!recAnalyser) return;
-  const buf = new Uint8Array(recAnalyser.fftSize);
-  recAnalyser.getByteTimeDomainData(buf);
-  let sum = 0;
-  for (let i = 0; i < buf.length; i++) {
-    const v = (buf[i] - 128) / 128;
-    sum += v * v;
-  }
-  const rms = Math.sqrt(sum / buf.length);
-  const next = [...recBars.value, Math.min(1, rms * 3.2)];
-  if (next.length > REC_BARS) next.shift();
-  recBars.value = next;
-}
-
-function startSampler(): void {
-  recSampler = window.setInterval(sampleWave, 90);
-}
-function stopSampler(): void {
-  if (recSampler) clearInterval(recSampler);
-  recSampler = undefined;
-}
-
-// Build (or rebuild) the preview player from the audio captured so far, so the user
-// can hear what they've recorded while paused. A partial webm/fragmented-mp4 stream
-// (the chunks emitted by the timeslice + requestData flush) is itself playable.
-function buildPreview(): void {
-  stopPreview();
-  const mime = recorder?.mimeType || 'audio/webm';
-  recPreviewUrl = URL.createObjectURL(new Blob(recChunks, { type: mime }));
-  if (!recPreviewEl) {
-    recPreviewEl = new Audio();
-    recPreviewEl.preload = 'auto';
-    recPreviewEl.addEventListener('play', () => (recPlaying.value = true));
-    recPreviewEl.addEventListener('pause', () => (recPlaying.value = false));
-    recPreviewEl.addEventListener('ended', () => (recPlaying.value = false));
-  }
-  recPreviewEl.src = recPreviewUrl;
-  recPreviewEl.playbackRate = recRate.value;
-}
-function stopPreview(): void {
-  recPreviewEl?.pause();
-  recPlaying.value = false;
-  if (recPreviewUrl) {
-    URL.revokeObjectURL(recPreviewUrl);
-    recPreviewUrl = null;
-  }
-}
-function togglePreview(): void {
-  if (!recPreviewEl) return;
-  if (recPlaying.value) recPreviewEl.pause();
-  else void playWhenReady(recPreviewEl);
-}
-function cycleRecRate(): void {
-  recRate.value = nextRate(recRate.value);
-  if (recPreviewEl) recPreviewEl.playbackRate = recRate.value;
-}
-
-function teardownRec(): void {
-  if (recTimer) clearInterval(recTimer);
-  recTimer = undefined;
-  stopSampler();
-  stopPreview();
-  recPreviewEl = null;
-  recWantPreview = false;
-  recorder?.stream.getTracks().forEach((t) => t.stop());
-  void recAudioCtx?.close().catch(() => {});
-  recAudioCtx = null;
-  recAnalyser = null;
-}
-
-async function startRecording() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const types = ['audio/webm', 'audio/mp4', 'audio/ogg'];
-    const mimeType = types.find((t) => MediaRecorder.isTypeSupported?.(t));
-    recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    recChunks = [];
-    recorder.ondataavailable = (ev) => {
-      if (ev.data.size) recChunks.push(ev.data);
-      // A pause requested a flush so we could preview the recording-so-far.
-      if (recWantPreview) {
-        recWantPreview = false;
-        buildPreview();
-      }
-    };
-    // Timeslice so chunks land continuously — that's what lets us assemble a playable
-    // preview blob mid-recording (and keeps "continue from the end" one stream).
-    recorder.start(500);
-    // Tap the mic stream for a live waveform.
-    const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    recAudioCtx = new AC();
-    // A freshly created AudioContext often starts SUSPENDED (autoplay policy), and a
-    // suspended context feeds the analyser nothing → getByteTimeDomainData stays at the
-    // 128 midline → the waveform reads flat even while you speak. We start recording from
-    // a tap, so resuming here is allowed and reliable.
-    void recAudioCtx.resume().catch(() => {});
-    recAnalyser = recAudioCtx.createAnalyser();
-    recAnalyser.fftSize = 512;
-    recAudioCtx.createMediaStreamSource(stream).connect(recAnalyser);
-    recBars.value = [];
-    recPaused.value = false;
-    recPlaying.value = false;
-    recRate.value = 1;
-    recWantPreview = false;
-    recAccumMs = 0;
-    recSegStart = Date.now();
-    recording.value = true;
-    recElapsed.value = '0:00';
-    recTimer = window.setInterval(tickElapsed, 200);
-    startSampler();
-    startActivity('recording-audio'); // tell the peer we're recording a voice message (spec 1009)
-  } catch (err) {
-    // Say WHY (permission blocked vs. no mic vs. in use) instead of a dead-end "unavailable",
-    // and give it long enough to read the fix — the usual cause on Android is the app's mic
-    // permission being off at the OS level, which only the user can turn back on.
-    await appToast({ message: describeMediaError(err, 'microphone'), duration: 4000 });
-  }
-}
-
-function togglePause(): void {
-  if (!recorder) return;
-  if (recPaused.value) {
-    // Resume = continue the SAME recording from where it left off (mic button).
-    stopPreview();
-    recorder.resume();
-    recPaused.value = false;
-    recSegStart = Date.now();
-    startSampler();
-  } else {
-    // Pause = stop capturing and offer a preview (play button + speed). Flush the
-    // recorder first so the preview includes audio right up to the pause point.
-    recAccumMs += Date.now() - recSegStart;
-    recPaused.value = true;
-    stopSampler();
-    recWantPreview = true;
-    try {
-      recorder.requestData(); // → ondataavailable → buildPreview()
-    } catch {
-      recWantPreview = false;
-    }
-    recorder.pause();
-    // Fallback if requestData didn't deliver a chunk (older browsers): build anyway.
-    setTimeout(() => {
-      if (recWantPreview) {
-        recWantPreview = false;
-        buildPreview();
-      }
-    }, 150);
-  }
-}
-
-async function stopAndSendRecording() {
-  if (!recorder) return;
-  stopActivity('recording-audio'); // recording done → clear the peer's indicator (spec 1009)
-  const durationSec = Math.max(1, Math.round(recActiveMs() / 1000));
-  const rec = recorder;
-  const mime = rec.mimeType || 'audio/webm';
-  stopPreview();
-  const blob: Blob = await new Promise((resolve) => {
-    rec.onstop = () => resolve(new Blob(recChunks, { type: mime }));
-    if (recPaused.value) rec.resume(); // some browsers won't finalize while paused
-    rec.stop();
-  });
-  teardownRec();
-  recording.value = false;
-  recPaused.value = false;
-  recorder = null;
+async function stopAndSendRecording(): Promise<void> {
+  const rec = await finishRecording();
+  if (!rec) return;
   // Plain copy, replyingTo.value is a reactive Proxy, which IndexedDB can't clone.
   const reply = replyingTo.value ? { ...replyingTo.value } : undefined;
   replyingTo.value = null;
-  await sendMediaMessage(chatId, 'voice', blob, 'voice-message', durationSec, { replyTo: reply, ttlOverrideMs: msgTtl.value });
-}
-
-function cancelRecording() {
-  stopActivity('recording-audio'); // cancelled → clear the peer's indicator (spec 1009)
-  if (recorder) {
-    recorder.onstop = null;
-    if (recPaused.value) recorder.resume();
-    recorder.stop();
-  }
-  teardownRec();
-  recChunks = [];
-  recBars.value = [];
-  recording.value = false;
-  recPaused.value = false;
-  recorder = null;
+  await sendMediaMessage(chatId, 'voice', rec.blob, 'voice-message', rec.durationSec, {
+    replyTo: reply,
+    ttlOverrideMs: msgTtl.value,
+  });
 }
 </script>
 
@@ -6528,7 +6129,7 @@ function cancelRecording() {
   margin: 0;
   transition: opacity 0.2s ease;
 }
-.jump-fab.jump-hidden {
+.jump-fab[data-jump-hidden] {
   opacity: 0;
   pointer-events: none;
 }
@@ -6583,7 +6184,7 @@ function cancelRecording() {
   white-space: nowrap;
   transition: opacity 0.2s ease, margin-inline-start 0.2s ease;
 }
-.jump-btn.jump-btn-pill .jump-count {
+.jump-btn[data-jump-pill] .jump-count {
   opacity: 1;
   margin-inline-start: 5px;
 }
@@ -6627,7 +6228,7 @@ function cancelRecording() {
 .call-row ion-icon {
   font-size: 17px;
 }
-.call-row .call-missed {
+.call-row [data-call-missed] {
   color: var(--ion-color-danger, #eb445a);
 }
 .call-row-text {
@@ -6652,7 +6253,7 @@ function cancelRecording() {
   font-size: 16px;
 }
 /* WhatsApp-style blue "seen" double-check. */
-.tick.seen {
+.tick[data-seen] {
   color: #34b7f1;
 }
 /* Compact group progress count ("3/5") (spec 1010). Rendered just to the inline-start
@@ -6819,7 +6420,7 @@ function cancelRecording() {
   transform: scale(0.5);
   transition: opacity 0.18s ease, transform 0.18s ease;
 }
-.wa-glyph.on {
+.wa-glyph[data-on] {
   opacity: 1;
   transform: scale(1);
 }
@@ -6869,7 +6470,7 @@ function cancelRecording() {
 .ttl-stack ion-icon {
   font-size: 21px;
 }
-.ttl-btn.has-badge .ttl-stack ion-icon {
+.ttl-btn[data-has-badge] .ttl-stack ion-icon {
   font-size: 19px;
 }
 .ttl-badge {

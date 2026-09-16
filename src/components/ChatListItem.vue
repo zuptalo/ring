@@ -15,7 +15,7 @@
         {{ unread ? 'Read' : 'Unread' }}
       </ion-item-option>
       <ion-item-option color="medium" @click="togglePin">
-        <ion-icon slot="top" :icon="pinOutline" :class="{ 'pin-off': chat.pinned }" />
+        <ion-icon slot="top" :icon="pinOutline" :data-pin-off="chat.pinned || undefined" />
         {{ chat.pinned ? 'Unpin' : 'Pin' }}
       </ion-item-option>
     </ion-item-options>
@@ -26,7 +26,8 @@
     <ion-item
       button
       :detail="false"
-      :class="{ 'hidden-row': isHidden, 'lifted-row': lifted }"
+      :data-hidden-row="isHidden || undefined"
+      :data-lifted-row="lifted || undefined"
       @click="$emit('open', chat.id)"
       @pointerdown="$emit('press', chat, $event)"
     >
@@ -66,7 +67,7 @@
         </p>
       </ion-label>
       <div class="meta" slot="end">
-        <ion-note :class="{ unread: unread }">{{ formatTime(chat.lastMessageTime) }}</ion-note>
+        <ion-note :data-unread="unread || undefined">{{ formatTime(chat.lastMessageTime) }}</ion-note>
         <div class="meta-icons">
           <!-- spec 1062: compact honest online count for group rows ("3 online" /
                "3 online contacts"); nothing when no visible member is online. -->
@@ -240,7 +241,7 @@ function more(): void {
 /* Revealed hidden chat: a faint tint on the whole row + an eye-off marker, so it's
    easy to tell apart from normal chats during a reveal session. Only renders while
    revealed (the row isn't in the list otherwise), so it leaks nothing when locked. */
-.hidden-row {
+[data-hidden-row] {
   /* Spec 1025 US3: composite the subtle hidden tint over an OPAQUE item base. A translucent
      --background let the swipe action buttons bleed through the sliding row (the row content looked
      like it floated on top of them); an opaque background makes the buttons visible only in the
@@ -257,7 +258,7 @@ function more(): void {
 }
 /* The row whose avatar is riding the drag proxy (spec 1045): stays in place but
    clearly "picked up" — it either returns (cancel) or leaves for the grid (pin). */
-.lifted-row {
+[data-lifted-row] {
   opacity: 0.35;
 }
 /* The press-and-hold gesture owns the long press (spec 1045). Without this, iOS
@@ -275,7 +276,7 @@ ion-item {
   border-radius: 50%;
   background: var(--ion-color-primary, #10b981);
 }
-ion-note.unread {
+ion-note[data-unread] {
   color: var(--ion-color-primary, #10b981);
 }
 /* Uniform-width swipe action buttons with a slightly larger icon. */
@@ -290,7 +291,7 @@ ion-item-option ion-icon {
   margin-bottom: 3px;
 }
 /* The Pin/Unpin swipe icon: same pin glyph, struck-through look when already pinned. */
-.pin-off {
+[data-pin-off] {
   opacity: 0.6;
 }
 .preview-row {
@@ -306,7 +307,7 @@ ion-item-option ion-icon {
   color: var(--app-text-muted);
 }
 /* spec 1062: leading delivery tick on the preview row. Muted like the kind icon for
-   pending/sent/delivered; the seen tier tints itself blue (MessageTick .tick.seen). */
+   pending/sent/delivered; the seen tier tints itself blue (MessageTick .tick[data-seen]). */
 .preview-tick {
   flex: none;
   margin-top: 3px;

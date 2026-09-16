@@ -1,21 +1,19 @@
-# CI: runs the full build + test suite on every develop push and PR that touches
-# code (path-filtered — doc/spec/tooling-only changes skip it), including PRs into
-# main so the merge that cuts a release is already proven green. A develop push that
-# changed code also publishes the rolling develop image; a docs-only develop push
-# skips both the suite and the image rebuild (the app is byte-identical).
+# CI: runs the full build + test suite on every PR into main that touches code
+# (path-filtered — doc/spec/tooling-only changes skip it). `main` is the ONLY
+# long-lived branch: work happens on short-lived feature branches that PR straight
+# into it, and every such merge cuts a release (see the release guard below), so
+# this suite is the gate that stands between a feature branch and production.
+#
+# There is deliberately NO push trigger. Merging a PR produces a tree the PR just
+# tested, and release.yml re-runs the entire suite on the merge commit before it
+# tags or publishes anything — a third run here would gate nothing.
 name: CI
 
 on:
-  push:
-    branches: [develop]
   pull_request:
-    branches: [main, develop]
-  workflow_dispatch: # allow manual runs (also re-publishes the develop image)
+    branches: [main]
+  workflow_dispatch: # manual re-run of the suite against any ref
 
-# Only cancel superseded PR runs. A push to develop must NOT be cancellable: a rapid
-# follow-up merge would otherwise kill an in-flight develop image build, leaving
-# :develop stale (this happened — a code merge's image build was cancelled by the
-# doc merges right after it). Pushes + workflow_dispatch always run to completion.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -37,15 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0 # paths-filter needs history to diff a push event
+          fetch-depth: 0 # paths-filter needs history to diff against the base
       - uses: dorny/paths-filter@v4
         id: filter
         with:
           # Empty token forces local git-based diffing instead of the GitHub REST
           # API's listFiles endpoint. The API path 404s on a PR with a very large
-          # diff (seen on the first-ever develop -> main release PR, 1000+ files
-          # since main starts nearly empty) — git diff has no such limit and we
-          # already have full history via fetch-depth: 0 above.
+          # diff (seen on the first-ever release PR, 1000+ files since main started
+          # nearly empty) — git diff has no such limit and we already have full
+          # history via fetch-depth: 0 above.
           token: ''
           # `code` is true when ANY path the heavy jobs cover changed. If nothing
           # here matched, the change is docs/specs/tooling-only and verify is skipped.
@@ -66,28 +64,23 @@ jobs:
               - '.dockerignore'
               - '.github/workflows/**'
 
-  # The full build + test suite. It runs where its result actually GATES something:
-  # on PRs (it must pass before the PR can merge) and on manual workflow_dispatch.
-  # It deliberately does NOT run on a push to develop: `develop` requires "branches
-  # up to date" + a PR to merge, so the PR just tested `latest-develop + changes`,
-  # and the post-merge develop tip is the identical tree — re-running the ~33-min
-  # e2e suite there would produce a known result and gate nothing. (The develop
-  # image still publishes on that push; see develop-image below, which now builds
-  # from source directly rather than waiting on this re-run.) Path-filtering still
-  # skips even the PR run for doc/spec/tooling-only changes.
+  # The full build + test suite, on PRs (where it must pass before the PR can
+  # merge) and on manual workflow_dispatch. Path-filtering skips it for
+  # doc/spec/tooling-only changes.
   verify:
     needs: changes
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.code == 'true') }}
     uses: ./.github/workflows/build-test.yml
 
-  # Gate the one merge that actually ships: a PR into main must carry a version
-  # bump. Without this, a develop -> main merge that forgot to bump silently
-  # no-ops in release.yml (the tag already exists) — green CI, no image, no
-  # release, no signal. This makes that mistake un-mergeable instead.
+  # Every merge into main ships, so every PR into main must carry a version bump.
+  # Without this a merge silently no-ops in release.yml (the tag already exists) —
+  # green CI, no image, no release, no signal. This makes that mistake un-mergeable.
   #
-  # Runs on every PR but is a no-op (green) unless the base is main, so it's safe
-  # to require uniformly on both protected branches: feature -> develop PRs always
-  # pass it; only develop -> main PRs are held to a bump.
+  # NOTE on concurrent PRs: the required checks are non-strict (a PR does not have
+  # to be up to date with main to merge), so two open PRs can both bump to the SAME
+  # version and both pass this guard. The first to merge ships it; the second then
+  # FAILS loudly in release.yml ("already shipped") rather than skipping in silence.
+  # Rebase and re-bump that one. Merging one PR at a time avoids it entirely.
   release-guard:
     name: Release guard (version bump)
     if: github.event_name == 'pull_request'
@@ -96,38 +89,34 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # need main's history + tags to compare against
-      - name: Require a version bump for release PRs
+      - name: Require a version bump
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
 
+          # main is the only PR target, but stay defensive: a PR aimed anywhere else
+          # (a stacked branch, say) isn't shipping, so it isn't held to a bump.
           if [ "$BASE_REF" != "main" ]; then
-            echo "Base is '$BASE_REF', not a release PR — no version bump required."
+            echo "Base is '$BASE_REF', not main — this PR doesn't ship, so no version bump required."
             exit 0
           fi
 
           head_ver=$(node -p "require('./package.json').version")
           git fetch --quiet origin main
-          # main won't have a package.json at all before the very first release —
-          # treat that as version 0.0.0 rather than letting `git show` fail the job.
-          if git cat-file -e origin/main:package.json 2>/dev/null; then
-            base_ver=$(git show origin/main:package.json | node -p "JSON.parse(require('fs').readFileSync(0)).version")
-          else
-            base_ver="0.0.0"
-          fi
+          base_ver=$(git show origin/main:package.json | node -p "JSON.parse(require('fs').readFileSync(0)).version")
           echo "head (this PR) version: $head_ver"
           echo "base (main) version:    $base_ver"
 
           fail() { echo "::error::$1"; exit 1; }
 
           if [ "$head_ver" = "$base_ver" ]; then
-            fail "package.json version is still $base_ver — merging this PR would no-op the release. Bump it on develop with 'npm run release:patch' (or :minor / :major) and push."
+            fail "package.json version is still $base_ver — merging this PR would no-op the release. Bump it with 'npm run release:patch' (or :minor / :major) and push."
           fi
 
           # Strictly greater than main (catches an accidental downgrade too).
           greater=$(printf '%s\n%s\n' "$base_ver" "$head_ver" | sort -V | tail -n1)
-          if [ "$greater" != "$head_ver" ] || [ "$head_ver" = "$base_ver" ]; then
+          if [ "$greater" != "$head_ver" ]; then
             fail "package.json version $head_ver is not greater than main's $base_ver. Bump it forward with 'npm run release:patch' (or :minor / :major)."
           fi
 
@@ -137,12 +126,12 @@ jobs:
             fail "Tag v$head_ver already exists — version $head_ver has already shipped. Bump to a new version with 'npm run release:patch' (or :minor / :major)."
           fi
 
-          echo "✓ Version bumped $base_ver → $head_ver and v$head_ver is unreleased. Release PR is good to merge."
+          echo "✓ Version bumped $base_ver → $head_ver and v$head_ver is unreleased. Good to merge."
 
   # Keep ROADMAP.md honest: it is generated from specs/<NNNN-slug>/spec.md, so a
   # spec added or a Status bumped without regenerating would let the roadmap drift
   # from what's actually checked in. This fails the build until `make roadmap` is
-  # run and the result committed. Cheap, and runs on every push + PR.
+  # run and the result committed. Cheap, and runs on every PR.
   roadmap-guard:
     name: Roadmap up to date
     runs-on: ubuntu-latest
@@ -183,82 +172,3 @@ jobs:
             echo "::error::a required CI job did not pass"; exit 1
           fi
           echo "All required CI jobs passed or were intentionally skipped."
-
-  develop-image:
-    name: Publish develop image
-    needs: changes
-    # On a real push to develop, or a manual dispatch, never on PRs (no image from
-    # untrusted forks, and PRs only need the green checks above). Depends on `changes`
-    # (not `verify`) so publishing the develop image no longer waits on a redundant
-    # e2e re-run — the merged code already passed the suite on its PR. The docker
-    # build below still compiles client + server, so a broken tree can't publish.
-    # A docs-only push (code == false) skips this: the built app is byte-identical.
-    # A manual dispatch always republishes (even docs-only), the escape hatch for a
-    # stale :develop tag.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/develop' && needs.changes.outputs.code == 'true')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0 # release-notes.sh needs tags + history to diff from the last release
-      - name: Resolve version
-        id: ver
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Compose release notes (base64 JSON)
-        id: notes
-        run: echo "b64=$(scripts/release-notes.sh | base64 -w0)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@v4 # arm64 emulation for the final stage
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # Mirror to Docker Hub for discoverability (that's where people `docker pull`).
-      # ghcr.io stays the canonical/CI registry; both get the same tags.
-      - uses: docker/login-action@v4
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/metadata-action@v6
-        id: meta
-        with:
-          images: |
-            ghcr.io/zuptalo/ring
-            docker.io/zuptalo/ring
-          tags: |
-            type=raw,value=develop
-            type=sha,format=short,prefix=develop-
-            type=raw,value=${{ steps.ver.outputs.version }}-dev.${{ github.run_number }}
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.ver.outputs.version }}-dev.${{ github.run_number }}+${{ github.sha }}
-            RELEASE_NOTES_B64=${{ steps.notes.outputs.b64 }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      # Keep the Docker Hub repo's Overview (README + short description) in sync with
-      # docs/DOCKERHUB.md on every develop publish, so the listing never drifts.
-      # Best-effort: editing the Hub Overview needs a token scope an image-push PAT lacks
-      # (returns 403 Forbidden), so DON'T fail the whole develop publish on a cosmetic README
-      # sync — the image itself (the step above) is already pushed. Fix the token to re-enable.
-      - name: Sync Docker Hub Overview
-        continue-on-error: true
-        uses: peter-evans/dockerhub-description@v5
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: zuptalo/ring
-          short-description: 'Private, end-to-end-encrypted messenger & calling app — self-hostable PWA + Go backend (AGPL).'
-          readme-filepath: ./docs/DOCKERHUB.md
