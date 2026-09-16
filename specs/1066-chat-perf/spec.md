@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-16
 
-**Status**: in-progress
+**Status**: in-review
 
 **Input**: User description: "Chat history scroll feels laggy on phone; cached animated emoji take long to appear when reacting; scrolling far up in a long chat jumps back to the end; sluggishness is worse when both parties are typing."
 
