@@ -79,7 +79,8 @@ jobs:
   # NOTE on concurrent PRs: the required checks are non-strict (a PR does not have
   # to be up to date with main to merge), so two open PRs can both bump to the SAME
   # version and both pass this guard. The first to merge ships it; the second then
-  # FAILS loudly in release.yml ("already shipped") rather than skipping in silence.
+  # FAILS loudly in release.yml ("already shipped") rather than skipping in silence —
+  # from its preflight job, in seconds, before the suite gets a chance to run.
   # Rebase and re-bump that one. Merging one PR at a time avoids it entirely.
   release-guard:
     name: Release guard (version bump)

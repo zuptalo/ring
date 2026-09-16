@@ -191,25 +191,37 @@ Releases are driven by `package.json` `version`:
   npm run release:patch    # 0.1.0 -> 0.1.1   (or release:minor / release:major)
   ```
 
-  On merge, the pipeline re-verifies the merge commit and — if green and the
-  `vX.Y.Z` tag is new — tags `main`, publishes the production image (`latest`,
-  `X.Y.Z`, `X.Y`) to GHCR and Docker Hub, and cuts a GitHub release whose notes are
-  the version plus one bullet per change (drawn from the Conventional-Commit
-  subjects since the last tag — another reason to keep commit subjects clean).
+  On merge, the pipeline runs a seconds-long preflight — is the version still
+  unreleased, and is this tree already proven? — and then tags `main`, publishes the
+  production image (`latest`, `X.Y.Z`, `X.Y`) to GHCR and Docker Hub, and cuts a
+  GitHub release whose notes are the version plus one bullet per change (drawn from
+  the Conventional-Commit subjects since the last tag — another reason to keep commit
+  subjects clean).
+
+  **The suite runs once per shipped change, not twice.** A merge commit whose tree is
+  identical to the merged branch's tree contains exactly the bytes your PR's required
+  checks passed on, so re-running them proves nothing and is skipped — the release
+  goes straight out. If `main` moved under your PR, the merge produces a tree nothing
+  has ever tested, and the full suite runs before anything is tagged. Either way every
+  shipped tree is covered by a full run; the difference is only whether that run
+  already happened.
+
+  **You don't merge it — green does.** The `Auto-merge green PRs` workflow turns on
+  GitHub auto-merge for every non-draft PR into `main`, so GitHub merges it (as a
+  merge commit) the moment the release guard and the full suite are green, and not a
+  second before. Nothing is weakened: branch protection still holds the merge until
+  every required check passes. What's removed is the wait between "proven" and
+  "shipped".
+
+  To hold a PR back, open it as a **draft** (skipped by the workflow) or turn
+  auto-merge off on that PR. (Auto-merge needs the repo-level "Allow auto-merge"
+  setting, which `scripts/setup-branch-protection.sh` turns on.)
 
   **Merge one PR at a time.** Required checks are non-strict (a PR needn't be up to
   date with `main` to merge), so two open PRs can both bump to the *same* version
-  and both pass the guard. The first to merge ships it; the second then fails
-  loudly in `release.yml` — rebase it on `main` and bump again.
-
-  **Optional auto-merge.** Add the **`auto-merge`** label to a PR and the
-  `Auto-merge labelled PRs` workflow turns on GitHub auto-merge for it, so GitHub
-  merges it (as a merge commit) the moment the guard and the full suite are green —
-  and not before. Useful when you don't want to babysit a ~33-minute suite. Without
-  the label nothing merges itself, which is the default on purpose: every merge
-  ships. To cancel, disable auto-merge on the PR or remove the label. (This needs
-  the repo-level "Allow auto-merge" setting, which
-  `scripts/setup-branch-protection.sh` turns on.)
+  and both pass the guard. The first to merge ships it; the second fails in
+  `release.yml` — in seconds, from the preflight, not after a full suite. Rebase it
+  on `main` and bump again.
 
 - **Release candidate:** push a `vX.Y.Z-rc.N` tag, normally off the feature branch
   before you merge it. It runs the full suite and publishes a single immutable

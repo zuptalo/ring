@@ -2,11 +2,14 @@
 Thanks for contributing to Ring! Keep the summary focused on user-facing behavior.
 See CONTRIBUTING.md for the full workflow.
 
-`main` is the only long-lived branch, so MERGING THIS PR SHIPS A RELEASE: CI
-re-verifies the merge commit, then tags main, publishes the production image
-(latest, X.Y.Z, X.Y) and cuts a GitHub release. That is why the version bump below
-is required — the "Release guard (version bump)" check fails any PR without one,
-because merging it would ship nothing and say nothing.
+`main` is the only long-lived branch, so THIS PR SHIPS A RELEASE THE MOMENT IT IS
+GREEN: auto-merge lands it, then CI tags main, publishes the production image
+(latest, X.Y.Z, X.Y) and cuts a GitHub release. It does NOT re-run the suite on a
+tree the checks already passed. That is why the version bump below is required —
+the "Release guard (version bump)" check fails any PR without one, because merging
+it would ship nothing and say nothing.
+
+Not ready for that? Open this as a DRAFT, or turn auto-merge off on the PR.
 
 The GitHub release notes are generated from the Conventional-Commit subjects
 between the last tag and this merge, so clean commit subjects keep them clean.

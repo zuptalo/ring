@@ -8,6 +8,15 @@
 # into main — ci.yml's release guard refuses the PR without a bump, and merging it
 # releases. There is no separate "cut a release" step.
 #
+# It does NOT re-run the suite on a tree that has already passed it. A merge commit
+# whose tree is byte-identical to the merged branch's tree contains exactly what the
+# PR's required checks went green on, so a second full run would spend ~33 minutes
+# re-deriving a known answer while the fix waits to reach users. The `proven` job
+# below establishes that identity; when it cannot (main moved under the PR, so the
+# merge genuinely COMBINED work into a tree nothing has ever tested), the full suite
+# runs before anything is tagged or published. Every tree that reaches production is
+# covered by a full run — exactly one.
+#
 # If the tag for the current version somehow already exists on a push (two PRs that
 # bumped to the same version, say), this FAILS rather than skipping quietly: a merge
 # to main that ships nothing is exactly the signal-less outcome the release guard
@@ -32,20 +41,30 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    uses: ./.github/workflows/build-test.yml
-
-  release:
-    name: Tag, image, and GitHub release
-    needs: verify
+  # Two instant questions, asked before anything expensive: can this even ship, and
+  # has this exact tree already passed the full suite?
+  #
+  # Branch protection will not merge a PR whose required checks are not green on its
+  # HEAD commit, and pushing to the branch after they pass makes them stale and blocks
+  # the merge again. So for a merge commit M with parents (previous main, PR head):
+  # if tree(M) == tree(M^2), the bytes being shipped ARE the bytes the suite passed on,
+  # and re-running proves nothing. If main moved under the PR, tree(M) is a combination
+  # no run has ever seen, and it must be verified like anything else.
+  #
+  # Anything that is not a merge commit (a direct push, a hand-run dispatch on an
+  # arbitrary ref) is never assumed proven.
+  preflight:
+    name: Preflight (version + proven tree)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # create the tag + the GitHub release
-      packages: write # push the production image to GHCR
+    outputs:
+      proven: ${{ steps.tree.outputs.proven }}
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+      shipped: ${{ steps.shipped.outputs.exists }}
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0 # full history so release notes can diff from the last tag
+          fetch-depth: 0 # need both parents of the merge commit, and the tags
 
       - name: Resolve version
         id: ver
@@ -54,8 +73,10 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
 
+      # FIRST, because it is instant and it can make everything below pointless. A
+      # merge that cannot ship must say so in seconds, not after a ~33-minute suite.
       - name: Has this version already shipped?
-        id: check
+        id: shipped
         env:
           # A push to main is a merge that was SUPPOSED to ship (the release guard
           # made the PR carry a bump). Finding the tag already there means it won't —
@@ -73,44 +94,90 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Is this tree already proven?
+        id: tree
+        run: |
+          set -euo pipefail
+          parents=$(git rev-list --parents -n1 HEAD | wc -w)
+          if [ "$parents" -lt 3 ]; then
+            echo "HEAD is not a merge commit — nothing to compare against, so verify."
+            echo "proven=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          head_tree=$(git rev-parse 'HEAD^{tree}')
+          branch_tree=$(git rev-parse 'HEAD^2^{tree}')
+          echo "merge commit tree:  $head_tree"
+          echo "merged branch tree: $branch_tree"
+          if [ "$head_tree" = "$branch_tree" ]; then
+            echo "::notice::Identical to the tree whose required checks passed on the PR — shipping it without a second run."
+            echo "proven=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::The merge combined work (main moved under the PR), so this tree is new. Running the full suite."
+            echo "proven=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  verify:
+    needs: preflight
+    if: needs.preflight.outputs.proven != 'true' && needs.preflight.outputs.shipped != 'true'
+    uses: ./.github/workflows/build-test.yml
+
+  release:
+    name: Tag, image, and GitHub release
+    needs: [preflight, verify]
+    # `verify` is skipped on the fast path, and a skipped dependency would skip this
+    # job too — so gate explicitly: proceed when verify passed OR was deliberately
+    # skipped, never when it failed or was cancelled.
+    if: >-
+      always() &&
+      needs.preflight.result == 'success' &&
+      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag + the GitHub release
+      packages: write # push the production image to GHCR
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history so release notes can diff from the last tag
+
       # Compose the build's release notes BEFORE creating the new tag, so the script's
       # "since the last release tag" range is this release's changes (the previous tag
       # is still the highest one). Baked into the image for the PWA's "what's new".
       - name: Compose release notes (base64 JSON)
         id: notes_b64
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         run: echo "b64=$(scripts/release-notes.sh | base64 -w0)" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         run: |
           # An annotated tag needs a committer identity; the runner has none by
           # default (fatal: empty ident name). Set the standard github-actions bot.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.ver.outputs.tag }}" -m "Release ${{ steps.ver.outputs.tag }}"
-          git push origin "${{ steps.ver.outputs.tag }}"
+          git tag -a "${{ needs.preflight.outputs.tag }}" -m "Release ${{ needs.preflight.outputs.tag }}"
+          git push origin "${{ needs.preflight.outputs.tag }}"
 
       - uses: docker/setup-qemu-action@v4 # arm64 emulation for the final stage
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
       - uses: docker/setup-buildx-action@v4
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
       - uses: docker/login-action@v4
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Mirror the production image to Docker Hub (canonical registry stays ghcr.io).
       - uses: docker/login-action@v4
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         with:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: docker/metadata-action@v6
         id: meta
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         with:
           images: |
             ghcr.io/zuptalo/ring
@@ -118,10 +185,10 @@ jobs:
           # latest + full semver + major.minor, all pointing at this release.
           tags: |
             type=raw,value=latest
-            type=semver,pattern={{version}},value=${{ steps.ver.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.ver.outputs.version }}
+            type=semver,pattern={{version}},value=${{ needs.preflight.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.preflight.outputs.version }}
       - uses: docker/build-push-action@v7
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         with:
           context: .
           push: true
@@ -129,7 +196,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ steps.ver.outputs.version }}
+            VERSION=${{ needs.preflight.outputs.version }}
             RELEASE_NOTES_B64=${{ steps.notes_b64.outputs.b64 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -140,19 +207,19 @@ jobs:
       # noise is dropped; a spec/PR ref is stripped. Basing on the last stable tag (not
       # the RC) means a GA release shows the whole product delta, not just the RC gap.
       - name: Compose release notes
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         run: |
-          node scripts/release-notes-md.mjs --tag "${{ steps.ver.outputs.tag }}" \
+          node scripts/release-notes-md.mjs --tag "${{ needs.preflight.outputs.tag }}" \
             --repo "${{ github.repository }}" > release-notes.md
           echo "Generated release notes:"; cat release-notes.md
 
       - name: Create GitHub release
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.ver.outputs.tag }}" \
-            --title "Ring ${{ steps.ver.outputs.version }}" \
+          gh release create "${{ needs.preflight.outputs.tag }}" \
+            --title "Ring ${{ needs.preflight.outputs.version }}" \
             --target "${{ github.sha }}" \
             --notes-file release-notes.md
 
@@ -163,7 +230,7 @@ jobs:
       # (returns 403 Forbidden), so DON'T fail a shipped release on a cosmetic README
       # sync — the image and the GitHub release are already out. Fix the token to re-enable.
       - name: Sync Docker Hub Overview
-        if: steps.check.outputs.exists == 'false'
+        if: needs.preflight.outputs.shipped == 'false'
         continue-on-error: true
         uses: peter-evans/dockerhub-description@v5
         with:

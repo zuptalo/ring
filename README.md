@@ -182,10 +182,14 @@ The repo is trunk-based, with one long-lived branch:
   branches open a pull request straight into it; CI runs the full build + test
   suite on the PR, and merging only happens once it is green.
 - **Every merge into `main` ships a release**, so every PR must bump `"version"`
-  in `package.json` - a CI guard blocks a PR that doesn't. On merge, the release
-  pipeline re-verifies the merge commit, then tags `main` (`vX.Y.Z`), publishes
-  the production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub release with
-  auto-generated notes.
+  in `package.json` - a CI guard blocks a PR that doesn't. A PR whose checks are
+  green merges itself; on merge the release pipeline tags `main` (`vX.Y.Z`),
+  publishes the production image (`latest`, `X.Y.Z`, `X.Y`), and cuts a GitHub
+  release with auto-generated notes.
+- **The test suite runs once per shipped change.** When the merge commit's tree is
+  identical to the branch the checks passed on, the release ships those exact bytes
+  without re-running them; when the merge combines work into a tree nothing has
+  tested, the full suite runs first. Every shipped tree is covered either way.
 - A bug that reaches production is fixed the same way as anything else: a branch,
   a PR, the next release. There is no long-lived release branch to patch.
 - **Release candidates** are cut by pushing a `vX.Y.Z-rc.N` tag, normally off the

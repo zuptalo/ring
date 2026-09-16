@@ -114,8 +114,9 @@ for branch in "${BRANCHES[@]}"; do
 done
 
 # Repo-level merge settings the release flow + housekeeping depend on:
-#   - allow_auto_merge: lets the Auto-merge workflow schedule a PR you labelled
-#     `auto-merge` to merge itself once required checks pass.
+#   - allow_auto_merge: lets the Auto-merge workflow schedule every non-draft PR to
+#     merge itself the moment the required checks pass, so a proven change is not
+#     sitting behind a click. Protection still gates the merge.
 #   - allow_merge_commit: a PR must land as a MERGE COMMIT (release.yml verifies it).
 #   - delete_branch_on_merge: auto-delete a PR's head branch once it merges, so
 #     stale feature branches don't pile up. SAFE here: main is protected with

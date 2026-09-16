@@ -214,15 +214,22 @@ in production is fixed the same way anything else is: a branch, a PR, the next
 release.
 
 - Every PR runs the full build+test suite (path-filtered: doc/spec/tooling-only
-  changes skip the heavy jobs). A push to `main` does NOT re-run CI — `release.yml`
-  re-runs the entire suite on the merge commit before it tags or publishes anything.
+  changes skip the heavy jobs). **That run is the only one.** `release.yml` compares
+  the merge commit's tree to the merged branch's; when they're identical it ships the
+  bytes the PR already proved, without a second ~33-minute run. When the merge
+  combined work (main moved under the PR) the tree is new, so the suite runs before
+  anything is tagged. Every shipped tree is covered by a full run, exactly once.
 - **Every PR into `main` must bump `package.json` `version`** — the release guard
   refuses it otherwise, because a merge without a bump would ship nothing and say
   nothing. Patch by default (`npm run release:patch`); `:minor` / `:major` when the
   change earns it. Bump it as part of the change, not as a separate release step.
+- **A green PR merges itself.** Auto-merge is on for every PR into `main`, so a
+  proven change isn't waiting on a click. Hold work back with a **draft** PR (skipped)
+  or by turning auto-merge off on that PR — never by sitting on a green one.
 - **Merge one PR at a time.** Required checks are non-strict, so two open PRs can
   both bump to the same version and both go green. The first to merge ships it; the
-  second then fails loudly in `release.yml` and needs a rebase + re-bump.
+  second fails in `release.yml` — in seconds, from the preflight check, not after a
+  full suite — and needs a rebase + re-bump.
 - **Want real-device testing before production?** Cut a release candidate off the
   feature branch (`git tag vX.Y.Z-rc.N && git push origin vX.Y.Z-rc.N`) and merge
   only once it checks out. Merging is shipping.
@@ -233,12 +240,12 @@ release.
   available" ones are noted and left. A CVE-patch bump is `fix`/`security`-typed
   (so it reaches "What's new") and gets released, not parked. Constitution mandates
   this ("Supply-chain scan at the start of new work").
-- Merging a PR into `main` triggers `release.yml`: it re-runs the full suite on the
-  merge commit and, if green, tags `vX.Y.Z`, publishes the production image
-  (`latest`, `X.Y.Z`, `X.Y`) to GHCR + Docker Hub, and cuts a GitHub release.
-  Labelling a PR **`auto-merge`** hands it to `auto-merge-release.yml`, which
-  enables GitHub auto-merge and then dispatches `release.yml` by hand (a
-  workflow-token push can't trigger it directly). Unlabelled PRs you merge yourself.
+- Merging a PR into `main` triggers `release.yml`: a seconds-long preflight (version
+  bump still unreleased? is this tree already proven?), then — verifying first only if
+  the tree is new — it tags `vX.Y.Z`, publishes the production image (`latest`,
+  `X.Y.Z`, `X.Y`) to GHCR + Docker Hub, and cuts a GitHub release.
+  `auto-merge-release.yml` enables GitHub auto-merge on every non-draft PR and then
+  dispatches `release.yml` by hand (a workflow-token push can't trigger it directly).
 - There is **no rolling pre-release image**. Only released tags and RCs are
   published; the dev deployment builds from source (`npm run build` for client
   changes — see `docs/UPGRADING.md`).
