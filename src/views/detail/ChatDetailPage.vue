@@ -136,7 +136,7 @@
         <div v-if="m.kind === 'call'" class="call-row" role="button" @click="onCallRow(m)">
           <ion-icon
             :icon="m.callLog?.video ? videocamOutline : callOutline"
-            :class="{ 'call-missed': m.callLog?.missed }"
+            :data-call-missed="m.callLog?.missed || undefined"
           />
           <span class="call-row-text">{{ m.body }}</span>
           <span v-if="m.callLog?.participants?.length" class="call-row-parts">
@@ -593,7 +593,7 @@
                   <ion-icon
                     v-if="m.outgoing && m.status !== 'failed'"
                     class="tick"
-                    :class="{ seen: tickInfo(m).seen }"
+                    :data-seen="tickInfo(m).seen || undefined"
                     :icon="tickInfo(m).icon"
                   />
                 </span>
@@ -740,7 +740,7 @@
                   <ion-icon
                     v-if="item.messages[0].outgoing && item.messages[item.messages.length - 1].status !== 'failed'"
                     class="tick"
-                    :class="{ seen: tickInfo(item.messages[item.messages.length - 1]).seen }"
+                    :data-seen="tickInfo(item.messages[item.messages.length - 1]).seen || undefined"
                     :icon="tickInfo(item.messages[item.messages.length - 1]).icon"
                   />
                 </span>
@@ -798,20 +798,20 @@
         vertical="bottom"
         horizontal="end"
         class="jump-fab"
-        :class="{ 'jump-hidden': !jumpVisible }"
+        :data-jump-hidden="!jumpVisible || undefined"
         :aria-hidden="!jumpVisible"
       >
         <ion-fab-button
           size="small"
           class="jump-btn"
-          :class="{ 'jump-btn-pill': unreadCount > 0 }"
+          :data-jump-pill="unreadCount > 0 || undefined"
           :style="{ width: pillWidth + 'px' }"
           :aria-label="jumpLabel"
           :tabindex="jumpVisible ? 0 : -1"
           @click="onJumpToLatest"
         >
           <!-- Chevron + inline count. The count span is ALWAYS in the DOM (no v-if) so it can
-               animate both ways; the `.jump-btn-pill` class expands/collapses it via max-width +
+               animate both ways; the `[data-jump-pill]` marker expands/collapses it via max-width +
                opacity, and the auto-width button tracks it for a smooth grow/shrink. -->
           <span class="jump-inner">
             <ion-icon :icon="chevronDownOutline" class="jump-chevron" />
@@ -1076,7 +1076,7 @@
               :aria-label="`Disappearing timer: ${msgTtlLabel}`"
               :color="effectiveTtlMs ? 'primary' : 'medium'"
               class="ttl-btn"
-              :class="{ 'has-badge': !!effectiveTtlMs }"
+              :data-has-badge="!!effectiveTtlMs || undefined"
               @click="openMsgTtl"
             >
               <!-- Icon + duration stacked vertically so the badge sits cleanly under the clock. -->
@@ -1113,8 +1113,13 @@
               @click="composerHasContent ? send() : startRecording()"
               @mousedown.prevent
             >
-              <ion-icon class="wa-glyph" :class="{ on: !composerHasContent }" :icon="micFilled" aria-hidden="true" />
-              <ion-icon class="wa-glyph wa-glyph-send" :class="{ on: composerHasContent }" :icon="sendFilled" aria-hidden="true" />
+              <ion-icon class="wa-glyph" :data-on="!composerHasContent || undefined" :icon="micFilled" aria-hidden="true" />
+              <ion-icon
+                class="wa-glyph wa-glyph-send"
+                :data-on="composerHasContent || undefined"
+                :icon="sendFilled"
+                aria-hidden="true"
+              />
             </button>
           </ion-buttons>
         </template>
@@ -6568,7 +6573,7 @@ function cancelRecording() {
   margin: 0;
   transition: opacity 0.2s ease;
 }
-.jump-fab.jump-hidden {
+.jump-fab[data-jump-hidden] {
   opacity: 0;
   pointer-events: none;
 }
@@ -6623,7 +6628,7 @@ function cancelRecording() {
   white-space: nowrap;
   transition: opacity 0.2s ease, margin-inline-start 0.2s ease;
 }
-.jump-btn.jump-btn-pill .jump-count {
+.jump-btn[data-jump-pill] .jump-count {
   opacity: 1;
   margin-inline-start: 5px;
 }
@@ -6667,7 +6672,7 @@ function cancelRecording() {
 .call-row ion-icon {
   font-size: 17px;
 }
-.call-row .call-missed {
+.call-row [data-call-missed] {
   color: var(--ion-color-danger, #eb445a);
 }
 .call-row-text {
@@ -6692,7 +6697,7 @@ function cancelRecording() {
   font-size: 16px;
 }
 /* WhatsApp-style blue "seen" double-check. */
-.tick.seen {
+.tick[data-seen] {
   color: #34b7f1;
 }
 /* Compact group progress count ("3/5") (spec 1010). Rendered just to the inline-start
@@ -6859,7 +6864,7 @@ function cancelRecording() {
   transform: scale(0.5);
   transition: opacity 0.18s ease, transform 0.18s ease;
 }
-.wa-glyph.on {
+.wa-glyph[data-on] {
   opacity: 1;
   transform: scale(1);
 }
@@ -6909,7 +6914,7 @@ function cancelRecording() {
 .ttl-stack ion-icon {
   font-size: 21px;
 }
-.ttl-btn.has-badge .ttl-stack ion-icon {
+.ttl-btn[data-has-badge] .ttl-stack ion-icon {
   font-size: 19px;
 }
 .ttl-badge {

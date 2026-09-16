@@ -17,7 +17,7 @@
       </div>
 
       <div class="ps-avatar ion-text-center">
-        <ion-avatar class="ps-img" :class="{ missing: !photo }" @click="editPhoto">
+        <ion-avatar class="ps-img" :data-missing="!photo || undefined" @click="editPhoto">
           <user-avatar v-if="avatar" :src="avatar" alt="Your photo" />
         </ion-avatar>
         <div>
@@ -217,7 +217,7 @@ function cancel(): void {
   cursor: pointer;
   background: rgba(120, 120, 128, 0.16);
 }
-.ps-img.missing {
+.ps-img[data-missing] {
   border: 2px dashed var(--ion-color-medium, #92949c);
 }
 .ps-required {

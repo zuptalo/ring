@@ -12,7 +12,7 @@ await bob.page.evaluate((id) => window.__ringTest.hiddenAdd(id), hiddenId);
 
 await bob.page.goto('/tabs/chats');
 await bob.page.waitForTimeout(800);
-const locked = await bob.page.evaluate(() => document.querySelectorAll('.hidden-row, .hidden-ico').length);
+const locked = await bob.page.evaluate(() => document.querySelectorAll('[data-hidden-row], .hidden-ico').length);
 console.log('[locked] hidden markers on screen =', locked, '(expected 0)');
 await shot(bob, 'hidden-marker-locked', {});
 
@@ -21,7 +21,7 @@ const input = bob.page.locator('ion-searchbar input').first();
 await input.click(); await input.pressSequentially('4321', { delay: 70 });
 await bob.page.waitForTimeout(900);
 const revealed = await bob.page.evaluate(() => {
-  const rows = Array.from(document.querySelectorAll('ion-item.hidden-row'));
+  const rows = Array.from(document.querySelectorAll('ion-item[data-hidden-row]'));
   const names = rows.map(r => r.querySelector('h2')?.textContent?.trim());
   return { tinted: rows.length, eyeIcons: document.querySelectorAll('.hidden-ico').length, names };
 });

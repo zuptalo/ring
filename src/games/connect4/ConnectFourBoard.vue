@@ -7,7 +7,7 @@
        slots, exactly as the pure state lays them out. -->
   <ion-grid
     class="c4"
-    :class="{ frozen: !canMove }"
+    :data-frozen="!canMove || undefined"
     :style="accent ? { '--game-accent': accent, '--game-accent-a': '0.14' } : undefined"
   >
     <ion-row v-for="r in ROWS" :key="r">
@@ -99,7 +99,7 @@ const slotLabel = (r: number, c: number): string => {
 .c4-slot:disabled {
   cursor: default;
 }
-.frozen .c4-slot {
+[data-frozen] .c4-slot {
   opacity: 0.85;
 }
 .c4-disc {
