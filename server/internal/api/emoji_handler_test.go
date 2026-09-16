@@ -42,7 +42,8 @@ func (f *fakeEmojiStore) PutEmoji(_ context.Context, path, ct string, bytes []by
 func TestEmojiProxyRejectsBadPaths(t *testing.T) {
 	bad := []string{
 		"../secret", "1f600/evil.txt", "http://evil.com/x", "1f600/../../etc/passwd",
-		"ZZZ/lottie.json", "1f600/512.png", "/lottie.json", "1f600",
+		"ZZZ/lottie.json", "1f600/512.jpg", "/lottie.json", "1f600",
+		"1f600/emoji.svg/../x", "1f600/EMOJI.SVG", "1f600/lottie.json?x=1",
 	}
 	h := &Handlers{} // no store → never reaches the network for these
 	for _, p := range bad {
@@ -79,5 +80,55 @@ func TestEmojiProxyServesFromCache(t *testing.T) {
 	}
 	if rec.Body.String() != string(want) {
 		t.Errorf("body = %q, want %q", rec.Body.String(), want)
+	}
+}
+
+// The static assets added in spec 1066 are accepted and typed correctly. They are
+// what reaction pills and the quick-react bar draw, so a regression here silently
+// sends the 600 KB animated WebP back down to a 23 px slot.
+func TestEmojiProxyAcceptsStaticAssets(t *testing.T) {
+	cases := []struct{ path, wantCT string }{
+		{"1f602/emoji.svg", "image/svg+xml"},
+		{"1f602/512.png", "image/png"},
+		{"1f602/512.webp", "image/webp"},
+		{"1f602/lottie.json", "application/json"},
+		{"1f1f8_1f1ea/emoji.svg", "image/svg+xml"},
+	}
+	for _, c := range cases {
+		if got := contentTypeFor(c.path); got != c.wantCT {
+			t.Errorf("contentTypeFor(%q) = %q, want %q", c.path, got, c.wantCT)
+		}
+		if !emojiPathRe.MatchString(c.path) {
+			t.Errorf("path %q should be accepted by emojiPathRe", c.path)
+		}
+	}
+}
+
+// Emoji responses are inert: long-lived, non-sniffable, and unable to execute.
+func TestEmojiProxySetsHardeningHeaders(t *testing.T) {
+	st := newFakeEmojiStore()
+	if err := st.PutEmoji(context.Background(), "1f602/emoji.svg", "image/svg+xml", []byte("<svg/>")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	h := &Handlers{Emoji: st}
+	req := httptest.NewRequest(http.MethodGet, "/v1/emoji/1f602/emoji.svg", nil)
+	req.SetPathValue("path", "1f602/emoji.svg")
+	rec := httptest.NewRecorder()
+	h.emojiProxy(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/svg+xml" {
+		t.Errorf("Content-Type = %q, want image/svg+xml", got)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); got == "" {
+		t.Error("Content-Security-Policy must be set on emoji responses")
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("Cache-Control = %q", got)
 	}
 }
