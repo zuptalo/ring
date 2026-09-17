@@ -1,5 +1,22 @@
 <!--
 Sync Impact Report
+- Version: 1.3.0 → 1.4.0 (MINOR: Development Workflow gained four delivery rules;
+  no principle changed)
+- Added: "Time to production is a constraint, not an afterthought"; "Green merges
+  itself" (auto-merge on green, hold work back with a draft, not by withholding a
+  click); "Every tree that reaches production is covered by a full suite run —
+  exactly once" (never publish an unproven tree, never re-run a proven one); "Fail
+  fast before you fail slow".
+- Rationale: the pipeline was running the full ~33-minute suite twice for one
+  change — once on the PR, once on a merge commit with a byte-identical tree —
+  and then waited on a human to merge. Both cost time to production and bought no
+  confidence. Coverage is unchanged and is now stated in terms of the bytes shipped.
+- Templates / docs updated for sync: CLAUDE.md, CONTRIBUTING.md, README.md,
+  .github/workflows/release.yml (preflight + proven-tree fast path),
+  .github/workflows/auto-merge-release.yml (green PRs merge themselves),
+  .github/workflows/ci.yml, scripts/setup-branch-protection.sh.
+-
+- PREVIOUS REPORT (v1.2.2 → 1.3.0)
 - Version: 1.2.2 → 1.3.0 (MINOR: Development Workflow replaced GitFlow with a
   trunk-based, main-only model; no principle changed)
 - Modified: "Development Workflow" — `develop` retired. `main` is now the only
@@ -232,6 +249,26 @@ These are project-specific guardrails every relevant spec MUST respect.
   default; minor/major when the work warrants it), not a separate release step.
   This is a deliberate manual step — GitHub Actions cannot open a bump PR itself
   (org policy forbids Actions from creating pull requests).
+- **Time to production is a constraint, not an afterthought.** Once a change is
+  proven, nothing between it and users may be waiting for its own sake: not a human
+  clicking merge, not a pipeline re-deriving an answer it already has. Latency that
+  buys no confidence MUST be removed.
+- **Green merges itself.** A PR whose required checks all pass is merged
+  automatically, and merging releases. To hold work back, open it as a DRAFT or
+  disable auto-merge on that PR — never by withholding a merge that CI has already
+  cleared. Automation here removes waiting, never a gate: branch protection still
+  holds every merge until the full suite, the roadmap guard and the release guard
+  are green.
+- **Every tree that reaches production is covered by a full suite run — exactly
+  once.** Never zero: a tree nothing has tested MUST NOT be published, so when a
+  merge combines work into a tree no run has seen (main moved under the PR), the
+  suite runs before anything is tagged. Never twice: when the merge commit's tree is
+  identical to the tree whose required checks passed, re-running it proves nothing
+  and MUST be skipped. Coverage is defined by what has been proven about the exact
+  bytes being shipped, not by how many times a pipeline was invoked.
+- **Fail fast before you fail slow.** A check that can invalidate everything after
+  it MUST run first. Nothing may spend the full suite to discover something a
+  seconds-long check already knew.
 - **Supply-chain scan at the start of new work.** Before starting a new feature or
   bug fix, review the Docker Scout vulnerability report for the latest published
   image (Docker Hub → `zuptalo/ring` → the current tag). Any flagged vulnerability
@@ -270,4 +307,4 @@ These are project-specific guardrails every relevant spec MUST respect.
 - Runtime engineering guidance that is not constitutional lives in `CLAUDE.md` and
   `CONTRIBUTING.md`; where they conflict with this document, this document wins.
 
-**Version**: 1.3.0 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-09-16
+**Version**: 1.4.0 | **Ratified**: 2026-06-15 | **Last Amended**: 2026-09-17
