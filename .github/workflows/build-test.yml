@@ -6,6 +6,15 @@ name: build-test
 
 on:
   workflow_call:
+    inputs:
+      sha:
+        # WHICH COMMIT TO TEST. A called workflow otherwise checks out the CALLER's
+        # github.sha — for release.yml that is main's tip at dispatch time, not the
+        # merge commit it was dispatched to release. Without this the suite could
+        # certify one tree while the release published another.
+        description: 'Commit to check out. Defaults to the calling workflow ref.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -34,6 +45,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -51,6 +64,8 @@ jobs:
         working-directory: server
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
@@ -79,6 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v5
         with:
           node-version: 22
