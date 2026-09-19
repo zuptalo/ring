@@ -4,9 +4,12 @@
 # into it, and every such merge cuts a release (see the release guard below), so
 # this suite is the gate that stands between a feature branch and production.
 #
-# There is deliberately NO push trigger. Merging a PR produces a tree the PR just
-# tested, and release.yml re-runs the entire suite on the merge commit before it
-# tags or publishes anything — a third run here would gate nothing.
+# There is deliberately NO push trigger. Merging a PR produces a tree this suite has
+# already passed on, and release.yml proves that identity (same tree as the merged
+# branch) before it ships — so a run here would re-test the very bytes that just went
+# green. When a merge DOES combine work into a new tree, release.yml runs the full
+# suite itself rather than leaving it to a push trigger that fires on some merges and
+# not others (a GITHUB_TOKEN auto-merge never fires it at all).
 name: CI
 
 on:
