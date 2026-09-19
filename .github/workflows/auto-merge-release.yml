@@ -20,18 +20,27 @@ name: Auto-merge green PRs
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    # `closed` is the belt to the poller's braces: a PR held past the poll budget
+    # (an unresolved conversation can hold a green PR indefinitely, and resolving one
+    # emits none of the events below) would otherwise merge with no runner left alive
+    # to dispatch its release — and the merge itself cannot trigger release.yml,
+    # because a GITHUB_TOKEN merge never fires `push`. Both paths dispatch the same
+    # pinned commit, and release.yml treats a second dispatch of an already-released
+    # commit as a no-op, so the overlap is harmless.
+    types: [opened, reopened, ready_for_review, synchronize, closed]
     branches: [main] # base branch == main
 
 # One live poller per PR. Every `synchronize` (any push to the branch) starts a run,
-# and each run holds a poller for up to an hour — without this, five pushes mean five
+# and each run holds a poller for up to 90 minutes — without this, five pushes mean five
 # pollers all dispatching release.yml when the PR finally merges. The extra dispatches
 # would each find the tag already there and, now that a no-op FAILS, turn into red
 # "Release" runs that shipped nothing. Superseding is safe: the newest run polls the
 # same PR, and a PR that has already merged emits no further events to cancel.
 concurrency:
-  group: automerge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Keyed on the ACTION too: cancelling a poller is right when a new push supersedes
+  # it, but the merged-PR dispatch below must never be cancelled by anything.
+  group: automerge-${{ github.event.pull_request.number }}-${{ github.event.action == 'closed' && 'closed' || 'open' }}
+  cancel-in-progress: ${{ github.event.action != 'closed' }}
 
 permissions:
   contents: write # github-actions[bot] performs the eventual merge
@@ -44,6 +53,7 @@ jobs:
     # Same-repo PRs only (a fork's token is read-only and couldn't enable it anyway),
     # and never on drafts — a draft is the way to say "not yet".
     if: >-
+      github.event.action != 'closed' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -63,8 +73,18 @@ jobs:
           if err=$(gh pr merge "$PR" --repo "${{ github.repository }}" --auto --merge 2>&1); then
             echo "auto-merge enabled"
           elif printf '%s' "$err" | grep -qi "clean status"; then
-            echo "PR is already green and mergeable — merging it directly instead."
-            gh pr merge "$PR" --repo "${{ github.repository }}" --merge
+            # Merge directly ONLY once we have confirmed for ourselves that the head
+            # is green. GitHub's mergeStateStatus is computed asynchronously and can
+            # read stale right after a push, and this branch also runs on `opened` and
+            # `synchronize` — trusting the refusal message alone could merge unverified
+            # code into main, which then auto-releases to production.
+            if gh pr checks "$PR" --repo "${{ github.repository }}" --required >/dev/null 2>&1; then
+              echo "PR is already green and mergeable — merging it directly instead."
+              gh pr merge "$PR" --repo "${{ github.repository }}" --merge
+            else
+              echo "::error::GitHub says the PR is in clean status, but its required checks are not green. Refusing to merge directly."
+              exit 1
+            fi
           else
             printf '%s\n' "$err" >&2
             exit 1
@@ -90,9 +110,18 @@ jobs:
             info=$(gh pr view "$PR" --repo "${{ github.repository }}" --json state,mergeCommit)
             state=$(printf '%s' "$info" | jq -r .state)
             if [ "$state" = "MERGED" ]; then
+              # GitHub's PR fields are eventually consistent: the poll that first
+              # sees MERGED can legitimately return a null mergeCommit for a beat.
+              # Treating that as fatal would strand the release with no second poller
+              # left to recover it, so give it a few seconds to appear.
               sha=$(printf '%s' "$info" | jq -r '.mergeCommit.oid // empty')
+              for _ in 1 2 3 4 5; do
+                [ -n "$sha" ] && break
+                sleep 5
+                sha=$(gh api "repos/${{ github.repository }}/pulls/$PR" --jq '.merge_commit_sha // empty' || true)
+              done
               if [ -z "$sha" ]; then
-                echo "::error::PR #$PR merged but GitHub reported no merge commit, so the release cannot be pinned to it. Dispatch by hand: gh workflow run release.yml --ref main -f sha=<merge sha>"
+                echo "::error::PR #$PR merged but GitHub never reported a merge commit, so the release cannot be pinned to it. Dispatch by hand: gh workflow run release.yml --ref main -f sha=<merge sha>"
                 exit 1
               fi
               echo "PR #$PR merged as $sha — dispatching release.yml pinned to that commit"
@@ -111,3 +140,35 @@ jobs:
           # silently until a human happens to notice the missing release.
           echo "::error::Timed out waiting for PR #$PR to merge; release.yml was NOT dispatched. If it merges later, nothing will release it — dispatch by hand: gh workflow run release.yml --ref main -f sha=<merge sha>"
           exit 1
+
+  # The merge actually happened — release it, without depending on a poller having
+  # survived. Runs for every merged PR into main, including one merged by hand.
+  dispatch-on-merge:
+    name: Dispatch the release for a merged PR
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch release.yml pinned to the merge commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          sha="$SHA"
+          for _ in 1 2 3 4 5; do
+            [ -n "$sha" ] && break
+            sleep 5
+            sha=$(gh api "repos/${{ github.repository }}/pulls/$PR" --jq '.merge_commit_sha // empty' || true)
+          done
+          if [ -z "$sha" ]; then
+            echo "::error::PR #$PR is merged but GitHub never reported a merge commit. Dispatch by hand: gh workflow run release.yml --ref main -f sha=<merge sha>"
+            exit 1
+          fi
+          echo "PR #$PR merged as $sha — dispatching release.yml pinned to that commit"
+          # Safe to overlap with the poller's dispatch: release.yml treats a repeat
+          # dispatch of an already-released commit as a no-op rather than a failure.
+          gh workflow run release.yml --repo "${{ github.repository }}" --ref main -f sha="$sha"

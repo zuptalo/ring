@@ -46,8 +46,14 @@ on:
         default: false
         type: boolean
 
+# One run per released COMMIT, not one for the whole branch. Each dispatch is pinned
+# to its own merge commit now, so releases do not need to serialize against each
+# other — and they must not: with a single shared group, GitHub keeps one running
+# plus one pending run and CANCELS the older pending one, so three merges inside a
+# release window would drop the middle release with no error anywhere. Keyed per sha,
+# the only thing this collapses is a genuine duplicate dispatch of the same commit.
 concurrency:
-  group: release-main
+  group: release-${{ inputs.sha || github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -106,15 +112,25 @@ jobs:
           # re-running a shipped version passes allow_noop=true and says so out loud.
           ALLOW_NOOP: ${{ inputs.allow_noop }}
         run: |
-          if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
-            if [ "$ALLOW_NOOP" != "true" ]; then
-              echo "::error::Tag ${{ steps.ver.outputs.tag }} already exists, so this release would ship NOTHING. Two PRs most likely bumped to the same version. Open a follow-up PR that bumps package.json again ('npm run release:patch') to release these changes. If this is a deliberate re-run, dispatch again with allow_noop=true."
-              exit 1
-            fi
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Tag ${{ steps.ver.outputs.tag }} already exists and allow_noop was set — skipping the release steps."
-          else
+          tag="${{ steps.ver.outputs.tag }}"
+          if ! git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tagged=$(git rev-list -n1 "refs/tags/$tag")
+          here=$(git rev-parse HEAD)
+          if [ "$tagged" = "$here" ]; then
+            # We already released THIS commit. Two dispatch paths racing (the poller
+            # and the merged-PR trigger), or a re-run — nothing is missing, so this is
+            # not the silent-no-op case and must not go red.
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$tag already points at $here — this commit is already released. Nothing to do."
+          elif [ "$ALLOW_NOOP" = "true" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$tag exists (on $tagged) and allow_noop was set — skipping the release steps."
+          else
+            echo "::error::Tag $tag already exists on a DIFFERENT commit ($tagged), so releasing $here would ship NOTHING. Two PRs most likely bumped to the same version. Open a follow-up PR that bumps package.json again ('npm run release:patch') to release these changes. If this is a deliberate re-run, dispatch again with allow_noop=true."
+            exit 1
           fi
 
       - name: Is this tree already proven?
@@ -143,6 +159,11 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.proven != 'true' && needs.preflight.outputs.shipped != 'true'
     uses: ./.github/workflows/build-test.yml
+    # The same commit preflight examined and release will publish. A called workflow
+    # defaults to the CALLER's github.sha, which for a dispatch is main's tip — so
+    # without this the suite could certify one tree while we shipped another.
+    with:
+      sha: ${{ inputs.sha || github.sha }}
 
   release:
     name: Tag, image, and GitHub release
