@@ -23,6 +23,16 @@ on:
     types: [opened, reopened, ready_for_review, synchronize]
     branches: [main] # base branch == main
 
+# One live poller per PR. Every `synchronize` (any push to the branch) starts a run,
+# and each run holds a poller for up to an hour — without this, five pushes mean five
+# pollers all dispatching release.yml when the PR finally merges. The extra dispatches
+# would each find the tag already there and, now that a no-op FAILS, turn into red
+# "Release" runs that shipped nothing. Superseding is safe: the newest run polls the
+# same PR, and a PR that has already merged emits no further events to cancel.
+concurrency:
+  group: automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: write # github-actions[bot] performs the eventual merge
   pull-requests: write # enable auto-merge on the PR
@@ -41,10 +51,24 @@ jobs:
       - name: Enable auto-merge (merge commit)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          gh pr merge "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" \
-            --auto --merge
+          set -euo pipefail
+          # GitHub REFUSES to "enable auto-merge" on a PR that is already mergeable
+          # with every check green ("Pull request is in clean status") — which is
+          # exactly what a draft looks like the moment it is marked ready, since its
+          # checks ran while it was still a draft. Treat that as what it plainly
+          # means: merge it now. Without this the step fails, the dispatch step below
+          # never runs, and the PR neither merges nor releases.
+          if err=$(gh pr merge "$PR" --repo "${{ github.repository }}" --auto --merge 2>&1); then
+            echo "auto-merge enabled"
+          elif printf '%s' "$err" | grep -qi "clean status"; then
+            echo "PR is already green and mergeable — merging it directly instead."
+            gh pr merge "$PR" --repo "${{ github.repository }}" --merge
+          else
+            printf '%s\n' "$err" >&2
+            exit 1
+          fi
 
       # GitHub deliberately does not let a push made with the run's own GITHUB_TOKEN
       # trigger other workflows (anti-infinite-loop safeguard) — so once GitHub's
@@ -55,14 +79,26 @@ jobs:
       - name: Wait for the merge, then dispatch the release workflow
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          # ~60 minutes at 20s/poll — comfortably past the slowest observed e2e run.
-          for i in $(seq 1 180); do
-            state=$(gh pr view "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --json state -q .state)
+          # ~90 minutes at 20s/poll. The budget is now spent from the moment the PR is
+          # OPENED (auto-merge is automatic), not from a label added just before merge,
+          # and `required_conversation_resolution` can hold a green PR indefinitely —
+          # so this is deliberately longer than the slowest observed e2e run.
+          for i in $(seq 1 270); do
+            info=$(gh pr view "$PR" --repo "${{ github.repository }}" --json state,mergeCommit)
+            state=$(printf '%s' "$info" | jq -r .state)
             if [ "$state" = "MERGED" ]; then
-              echo "PR merged — dispatching release.yml on main"
-              gh workflow run release.yml --repo "${{ github.repository }}" --ref main
+              sha=$(printf '%s' "$info" | jq -r '.mergeCommit.oid // empty')
+              if [ -z "$sha" ]; then
+                echo "::error::PR #$PR merged but GitHub reported no merge commit, so the release cannot be pinned to it. Dispatch by hand: gh workflow run release.yml --ref main -f sha=<merge sha>"
+                exit 1
+              fi
+              echo "PR #$PR merged as $sha — dispatching release.yml pinned to that commit"
+              # Pinned via the `sha` input: --ref only selects which copy of the
+              # workflow file to run, and main may already have moved past this merge.
+              gh workflow run release.yml --repo "${{ github.repository }}" --ref main -f sha="$sha"
               exit 0
             fi
             if [ "$state" = "CLOSED" ]; then
@@ -71,4 +107,7 @@ jobs:
             fi
             sleep 20
           done
-          echo "::warning::Timed out waiting for the PR to merge; release.yml was not dispatched. Run it manually: gh workflow run release.yml --ref main"
+          # NOT a warning. A merge that never dispatches never ships, and stays unshipped
+          # silently until a human happens to notice the missing release.
+          echo "::error::Timed out waiting for PR #$PR to merge; release.yml was NOT dispatched. If it merges later, nothing will release it — dispatch by hand: gh workflow run release.yml --ref main -f sha=<merge sha>"
+          exit 1

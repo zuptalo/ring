@@ -17,21 +17,34 @@
 # runs before anything is tagged or published. Every tree that reaches production is
 # covered by a full run — exactly one.
 #
-# If the tag for the current version somehow already exists on a push (two PRs that
-# bumped to the same version, say), this FAILS rather than skipping quietly: a merge
-# to main that ships nothing is exactly the signal-less outcome the release guard
-# exists to prevent. A manual workflow_dispatch re-run of an already-shipped version
-# still no-ops harmlessly, so re-running by hand is always safe.
+# If the tag for the current version already exists (two PRs that bumped to the same
+# version, say), this FAILS rather than skipping quietly — whatever triggered it. A
+# release that ships nothing is exactly the signal-less outcome the release guard
+# exists to prevent, and it must not be able to hide behind a green run. Re-running a
+# shipped version by hand is still possible, but you have to say so: dispatch with
+# allow_noop=true.
 name: Release
 
 on:
   push:
     branches: [main]
-  # A GITHUB_TOKEN-authored push (auto-merge-release.yml's opt-in auto-merge) doesn't
+  # A GITHUB_TOKEN-authored push (auto-merge-release.yml's auto-merge) doesn't
   # trigger the push event above (anti-infinite-loop safeguard) — workflow_dispatch
   # is exempt from that, so auto-merge-release.yml calls this explicitly once an
-  # auto-merged PR lands. Also handy for a manual re-run.
+  # auto-merged PR lands. In practice that makes workflow_dispatch the NORMAL path
+  # and push the exception, which is why neither the release commit nor the no-op
+  # guard below may be inferred from the event type.
   workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Exact commit to release (the merge commit). Defaults to the ref this runs on.'
+        required: false
+        type: string
+      allow_noop:
+        description: "Proceed quietly if this version already shipped. Only for a deliberate re-run — leave false so a merge that ships nothing FAILS."
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-main
@@ -65,6 +78,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # need both parents of the merge commit, and the tags
+          # Pin to the commit that was actually proven. `--ref main` would resolve to
+          # main's tip AT DISPATCH TIME, and auto-merge means a second PR can land in
+          # the poll window — releasing its version and silently skipping the one this
+          # dispatch was for, which would then never be tagged at all.
+          ref: ${{ inputs.sha || github.sha }}
 
       - name: Resolve version
         id: ver
@@ -78,18 +96,23 @@ jobs:
       - name: Has this version already shipped?
         id: shipped
         env:
-          # A push to main is a merge that was SUPPOSED to ship (the release guard
-          # made the PR carry a bump). Finding the tag already there means it won't —
-          # fail so it can't pass unnoticed. A hand-run dispatch just no-ops.
-          EVENT: ${{ github.event_name }}
+          # Every release reaching a user came from a merge that was SUPPOSED to ship
+          # (the release guard made its PR carry a bump). Finding the tag already there
+          # means it won't — fail, so it cannot pass unnoticed.
+          #
+          # This deliberately does NOT key on github.event_name. An auto-merged PR
+          # reaches us as workflow_dispatch, not push, so an event-based guard would be
+          # dead on the one path that matters. Silence is opt-in instead: a human
+          # re-running a shipped version passes allow_noop=true and says so out loud.
+          ALLOW_NOOP: ${{ inputs.allow_noop }}
         run: |
           if git rev-parse "refs/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
-            if [ "$EVENT" = "push" ]; then
-              echo "::error::Tag ${{ steps.ver.outputs.tag }} already exists, so this merge into main shipped NOTHING. Two PRs most likely bumped to the same version. Open a follow-up PR that bumps package.json again ('npm run release:patch') to release these changes."
+            if [ "$ALLOW_NOOP" != "true" ]; then
+              echo "::error::Tag ${{ steps.ver.outputs.tag }} already exists, so this release would ship NOTHING. Two PRs most likely bumped to the same version. Open a follow-up PR that bumps package.json again ('npm run release:patch') to release these changes. If this is a deliberate re-run, dispatch again with allow_noop=true."
               exit 1
             fi
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Tag ${{ steps.ver.outputs.tag }} already exists and this is a manual re-run — skipping the release steps."
+            echo "::notice::Tag ${{ steps.ver.outputs.tag }} already exists and allow_noop was set — skipping the release steps."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
@@ -139,6 +162,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # full history so release notes can diff from the last tag
+          ref: ${{ inputs.sha || github.sha }} # the proven commit, as in preflight
 
       # Compose the build's release notes BEFORE creating the new tag, so the script's
       # "since the last release tag" range is this release's changes (the previous tag
@@ -220,7 +244,7 @@ jobs:
         run: |
           gh release create "${{ needs.preflight.outputs.tag }}" \
             --title "Ring ${{ needs.preflight.outputs.version }}" \
-            --target "${{ github.sha }}" \
+            --target "${{ inputs.sha || github.sha }}" \
             --notes-file release-notes.md
 
       # Keep the Docker Hub repo's Overview (README + short description) in sync with

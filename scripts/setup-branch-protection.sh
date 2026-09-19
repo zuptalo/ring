@@ -15,8 +15,9 @@
 #     "up to date before merge" makes every merge invalidate other in-flight PRs and
 #     forces a ~33-minute re-run for an unrelated change. The trade-off is that two
 #     open PRs can both bump to the same version and both pass the release guard; the
-#     second to merge then fails LOUDLY in release.yml rather than shipping nothing.
-#     Merging one PR at a time avoids it; see the note in ci.yml's release-guard.
+#     second to merge then fails LOUDLY in release.yml's preflight (which refuses to
+#     "release" an already-shipped tag unless explicitly told to) rather than shipping
+#     nothing quietly. Merging one PR at a time avoids it; see ci.yml's release-guard.
 #   - Conversation resolution required.
 #   - Force-pushes and branch deletion blocked.
 #   - enforce_admins: rules apply to admins too (no bypass).
@@ -24,7 +25,7 @@
 #     release.yml verifies and tags).
 #
 # It also flips three REPO-LEVEL settings: allow_auto_merge (so the Auto-merge
-# workflow can schedule a PR you labelled `auto-merge`), allow_merge_commit, and
+# workflow can schedule any green PR to merge itself), allow_merge_commit, and
 # delete_branch_on_merge (auto-delete merged feature branches; protected main is
 # exempt via allow_deletions:false, so it is never auto-deleted).
 #
