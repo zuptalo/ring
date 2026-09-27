@@ -26,3 +26,7 @@ require (
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 )
+
+// Patched fork fixing a retry-exhaustion bug in verifyRFC (acme/autocert) that breaks TLS-ALPN-01
+// cert issuance when only one challenge type is configured (our case). See /patches/x-crypto/PATCH.md.
+replace golang.org/x/crypto => ../patches/x-crypto
