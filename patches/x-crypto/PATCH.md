@@ -2,8 +2,9 @@
 
 See `README.md` in this directory for the original upstream module README.
 
-Full copy of `golang.org/x/crypto@v0.53.0` (the version pinned in `server/go.mod`), with one
-targeted fix in `acme/autocert/autocert.go`, wired in via a `replace` directive:
+Full copy of `golang.org/x/crypto@v0.57.0` (rebased 2026-09-28, spec 1067 Track C4 — was
+`v0.53.0`), with one targeted fix in `acme/autocert/autocert.go`, wired in via a `replace`
+directive:
 
 ```
 replace golang.org/x/crypto => ../patches/x-crypto
@@ -42,3 +43,10 @@ When bumping `golang.org/x/crypto` in `server/go.mod`, re-diff this fork against
 version's `acme/autocert/autocert.go` (`verifyRFC`) and re-apply the same one-hunk change, or drop
 this patch entirely if upstream has fixed the underlying issue by then (checked 2026-09-28 up to
 v0.57.0: still present).
+
+**2026-09-28 rebase (spec 1067 Track C4)**: rebased from `v0.53.0` to `v0.57.0`. The whole tree
+was replaced with a pristine `v0.57.0` checkout and the single `nextTyp` hunk re-applied by hand;
+`diff -rq` against the pristine `v0.57.0` module cache confirms the only remaining differences are
+this file and the one intended hunk in `autocert.go`. The bug is still present in `v0.57.0`
+(confirmed by re-reading `verifyRFC` before re-patching) — not yet fixed upstream. Submitting the
+fix upstream (`go-review.googlesource.com`) remains an optional stretch goal, not done here.
