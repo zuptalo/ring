@@ -46,6 +46,7 @@ permissions:
   contents: write # github-actions[bot] performs the eventual merge
   pull-requests: write # enable auto-merge on the PR
   actions: write # dispatch release.yml after the merge (see below)
+  issues: write # let "Closes #N" in the PR body actually close issues on merge
 
 jobs:
   enable-auto-merge:
