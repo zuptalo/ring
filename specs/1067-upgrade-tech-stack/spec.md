@@ -4,7 +4,7 @@
 
 **Created**: 2026-09-28
 
-**Status**: planned
+**Status**: in-progress
 <!-- Ring spec lifecycle: planned → in-progress → in-review → shipped.
      This line is the source of truth for the spec's row in ROADMAP.md;
      bump it as the work moves through the pipeline. The spec id and category
@@ -314,7 +314,11 @@ metadata is exposed to the TURN relay beyond what it already handles today).
   (not just the JS wrapper's own version number) may differ between 0.7.16 and
   0.8.4; T026/T027 (tasks.md) MUST check this delta and note it, since it's the
   more direct source of any real cryptographic behavior change than the wrapper
-  version alone.
+  version alone. **Checked 2026-09-28**: native libsodium moves 1.0.20 → 1.0.22.
+  A standalone cross-version test (AEAD with both a raw key and an Argon2id-derived
+  key, X25519 scalarmult, Ed25519 sign/verify) passed on all cases — see
+  research.md. This is corroborating evidence, not a substitute for FR-005's full
+  gate (regression suite + real-device check + security review).
 - No build-time or CI-run-time performance budget gates any phase's merge; a change
   in build or test-run duration from the Vite or vitest major bumps is acceptable as
   long as the existing functional test suites stay green (see Clarifications).

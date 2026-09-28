@@ -81,7 +81,7 @@ jobs:
       tag: ${{ steps.ver.outputs.tag }}
       shipped: ${{ steps.shipped.outputs.exists }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # need both parents of the merge commit, and the tags
           # Pin to the commit that was actually proven. `--ref main` would resolve to
@@ -180,7 +180,7 @@ jobs:
       contents: write # create the tag + the GitHub release
       packages: write # push the production image to GHCR
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history so release notes can diff from the last tag
           ref: ${{ inputs.sha || github.sha }} # the proven commit, as in preflight

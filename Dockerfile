@@ -42,7 +42,7 @@ RUN RING_VERSION="$VERSION" \
 # Also pinned to $BUILDPLATFORM and cross-compiled to the target arch via
 # GOOS/GOARCH (CGO disabled), so the Go toolchain runs natively rather than under
 # emulation. TARGETOS/TARGETARCH are provided automatically by buildx per target.
-FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS server
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS server
 WORKDIR /src
 # go.mod's `replace golang.org/x/crypto => ../patches/x-crypto` (see patches/x-crypto/PATCH.md)
 # resolves against /src, so the replacement module has to land at /patches/x-crypto
