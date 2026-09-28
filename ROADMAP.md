@@ -86,6 +86,7 @@ Specs are grouped by category band; status moves
 | [1064](specs/1064-mention-names/spec.md) | Mentions show the name you know someone by, and stay readable | 🟢 shipped |
 | [1065](specs/1065-message-and-post/spec.md) | Message and Post Audience Insight | 🟢 shipped |
 | [1066](specs/1066-chat-perf/spec.md) | Chat scroll and emoji rendering performance | 🔵 in-review |
+| [1067](specs/1067-upgrade-tech-stack/spec.md) | Tech Stack Uplift | ⚪ planned |
 
 ## 🐛 Hotfixes & Bug Fixes (2001+)
 
