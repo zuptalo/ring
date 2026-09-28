@@ -62,7 +62,7 @@ API to a local `ringd`.
 
 ## Local development
 
-Requires **Go 1.27, Node 22, Docker** (for dev PostgreSQL).
+Requires **Go 1.27, Node 24, Docker** (for dev PostgreSQL).
 
 ```sh
 make start      # PostgreSQL + ringd (air hot-reload) + Vite, all at once

@@ -20,7 +20,7 @@
 # --- Stage 1: build the PWA -------------------------------------------------
 # Pinned to the build host's native arch ($BUILDPLATFORM): the Vite output is
 # arch-independent, so we build it once instead of emulating it per target.
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS web
 WORKDIR /web
 # Install deps from the lockfile first so this layer caches across source edits.
 COPY package.json package-lock.json ./
