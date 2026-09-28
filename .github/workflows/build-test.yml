@@ -29,7 +29,7 @@ jobs:
           ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       # `npm run build` is `vue-tsc --noEmit && vite build`: typecheck then bundle.
@@ -49,7 +49,7 @@ jobs:
           ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       # Vitest unit tests for the crypto core + pure logic, with the coverage floor
@@ -98,7 +98,7 @@ jobs:
           ref: ${{ inputs.sha || github.sha }}
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - uses: actions/setup-go@v7
         with:
