@@ -44,6 +44,10 @@ RUN RING_VERSION="$VERSION" \
 # emulation. TARGETOS/TARGETARCH are provided automatically by buildx per target.
 FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS server
 WORKDIR /src
+# go.mod's `replace golang.org/x/crypto => ../patches/x-crypto` (see patches/x-crypto/PATCH.md)
+# resolves against /src, so the replacement module has to land at /patches/x-crypto
+# BEFORE `go mod download` runs, not after.
+COPY patches/x-crypto /patches/x-crypto
 COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
