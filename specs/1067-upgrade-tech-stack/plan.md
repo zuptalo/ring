@@ -196,10 +196,15 @@ code changes expected beyond manifests/lockfiles.
    `pion/transport` v5, `pion/stun` v4); rebase `patches/x-crypto`; run
    `go test ./...`; place the two real-device calls per `server/docs/CALLING.md`.
 
-Order within Phase C is flexible (these four are independent of each other) —
-sequencing across A → B → C is not, since B relies on A's Node/tooling baseline
-and C's Ionic/Vite work is easiest to reason about once B's `vue-tsc`/`vitest`
-baseline is settled.
+**Correction found during implementation**: Vite and Ionic+Vue Router are not
+independent of each other as originally assumed — `vue-router@5.3.1` carries an
+optional peer on `vite@"^7.3.0 || ^8.0.0"` (via `@ionic/vue`'s
+`@stencil/vue-output-target` dependency), so installing Ionic 9 + Vue Router 5
+before Vite fails with an ERESOLVE conflict. **Vite runs before Ionic +
+Vue Router.** libsodium and Pion/TURN remain independent of both and of each
+other. Sequencing across A → B → C is still not flexible, since B relies on
+A's Node/tooling baseline and C's Ionic/Vite work is easiest to reason about
+once B's `vue-tsc`/`vitest` baseline is settled.
 
 ## Definition of done
 
