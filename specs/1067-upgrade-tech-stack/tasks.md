@@ -111,8 +111,11 @@ and the Pion/TURN ecosystem group each land with a verification step beyond
 and independently mergeable (SC-005); a failure in one track does not block
 the others (spec Edge Cases).
 
-**Depends on**: Phase 4 (US2) merged. The four tracks below (C1–C4) have no
-dependencies on each other and may proceed in any order or in parallel.
+**Depends on**: Phase 4 (US2) merged. **Correction found during implementation**:
+Track C2 (Vite) MUST land before Track C1 (Ionic + Vue Router) — `vue-router@5.3.1`
+carries an optional peer on `vite@"^7.3.0 || ^8.0.0"`, so installing Ionic 9 +
+Vue Router 5 while still on Vite 6 fails with an ERESOLVE conflict. Tracks C3
+(libsodium) and C4 (Pion/TURN) remain independent of both and of each other.
 
 ### Track C1 — Ionic 9 + Vue Router 5
 
@@ -173,14 +176,14 @@ dependencies on each other and may proceed in any order or in parallel.
 - **Foundational (Phase 2)**: Depends on Setup — BLOCKS all three user stories (a stale target matrix would misdirect every phase).
 - **US1 / Phase A (Phase 3)**: Depends on Foundational.
 - **US2 / Phase B (Phase 4)**: Depends on US1 merged (Node/tooling baseline).
-- **US3 / Phase C (Phase 5)**: Depends on US2 merged; its four tracks (C1–C4) are then independent of each other.
+- **US3 / Phase C (Phase 5)**: Depends on US2 merged; **C2 (Vite) must land before C1 (Ionic + Vue Router)** — see the correction note above. C3 (libsodium) and C4 (Pion/TURN) are independent of both and of each other.
 - **Polish (Phase 6)**: Depends on all of US1–US3 merged.
 
 ### Within Each User Story
 
 - US1: T003/T004/T005/T006/T007 touch disjoint files and can proceed in parallel; T008 (gate) waits on all of them; T009 (PR) waits on T008.
 - US2: T010 and T011 touch disjoint files (package.json vs. CI/Dockerfile) and can proceed in parallel; T012 (gate) waits on both; T013 (PR) waits on T012.
-- US3: tracks C1–C4 are independent; within each track, tasks are sequential except where marked [P] (T017 alongside T014's dependents; T032/T033 alongside each other).
+- US3: C2 (Vite) before C1 (Ionic + Vue Router); C3 (libsodium) and C4 (Pion/TURN) are independent of both. Within each track, tasks are sequential except where marked [P] (T017 alongside T014's dependents; T032/T033 alongside each other).
 
 ### Parallel Opportunities
 
