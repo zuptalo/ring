@@ -64,6 +64,19 @@ describe('sender keys', () => {
     expect(() => dec(bobForAlice, forged)).toThrow();
   });
 
+  it('replaying an already-delivered message fails to open (key consumed)', () => {
+    const alice = createSenderKey();
+    const bob = receivingFromDistribution(distributionFrom(alice));
+    const m1 = enc(alice, 'one');
+    const m2 = enc(alice, 'two');
+    const m3 = enc(alice, 'three');
+    expect(dec(bob, m3)).toBe('three'); // out-of-order: skips m1/m2 into the cache
+    expect(dec(bob, m1)).toBe('one'); // consumes m1 from the skipped cache
+    expect(() => dec(bob, m1)).toThrow(); // replay: m1's key was deleted after first use
+    expect(() => dec(bob, m3)).toThrow(); // replay: m3's key was never cached (direct chain advance), also gone
+    expect(dec(bob, m2)).toBe('two'); // m2 is still legitimately available (never delivered yet)
+  });
+
   it('invalidates the old key after rotation', () => {
     const alice1 = createSenderKey();
     const bobOld = receivingFromDistribution(distributionFrom(alice1));
