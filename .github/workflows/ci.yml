@@ -36,7 +36,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # paths-filter needs history to diff against the base
       - uses: dorny/paths-filter@v4
@@ -90,7 +90,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # need main's history + tags to compare against
       - name: Require a version bump
@@ -140,7 +140,7 @@ jobs:
     name: Roadmap up to date
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Verify ROADMAP.md matches specs/
         run: python3 scripts/roadmap-gen.py --check
 

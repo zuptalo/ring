@@ -39,7 +39,7 @@ One repo, two parts, shipped as a single container.
     structure (see "Settings" below).
   - `src/sw.ts` — custom service worker (Web Push + app-shell precaching).
   - `src/router/index.ts` — routes + the auth gate.
-- **Server** (`server/`) — `ringd`, a Go 1.26 service on stdlib `net/http`
+- **Server** (`server/`) — `ringd`, a Go 1.27 service on stdlib `net/http`
   (no web framework), PostgreSQL via `pgx` v5, embedded SQL migrations, an
   embedded TURN relay for calls (media goes peer-to-peer direct when networks
   allow, relayed otherwise — no SFU), and VAPID Web Push.
@@ -62,7 +62,7 @@ API to a local `ringd`.
 
 ## Local development
 
-Requires **Go 1.26, Node 22, Docker** (for dev PostgreSQL).
+Requires **Go 1.27, Node 22, Docker** (for dev PostgreSQL).
 
 ```sh
 make start      # PostgreSQL + ringd (air hot-reload) + Vite, all at once
