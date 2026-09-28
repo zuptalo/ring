@@ -129,6 +129,14 @@ jobs:
               # Pinned via the `sha` input: --ref only selects which copy of the
               # workflow file to run, and main may already have moved past this merge.
               gh workflow run release.yml --repo "${{ github.repository }}" --ref main -f sha="$sha"
+              # GitHub's own "Closes #N" keyword auto-close does not reliably fire for
+              # a merge performed by this GITHUB_TOKEN (the same anti-loop suppression
+              # that blocks `push`, above) — close them ourselves instead of trusting it.
+              body=$(gh pr view "$PR" --repo "${{ github.repository }}" --json body -q .body)
+              for n in $(printf '%s\n' "$body" | grep -ioE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+'); do
+                gh issue close "$n" --repo "${{ github.repository }}" --reason completed \
+                  --comment "Closed automatically — resolved by #$PR (merged as $sha)." || true
+              done
               exit 0
             fi
             if [ "$state" = "CLOSED" ]; then
@@ -173,3 +181,10 @@ jobs:
           # Safe to overlap with the poller's dispatch: release.yml treats a repeat
           # dispatch of an already-released commit as a no-op rather than a failure.
           gh workflow run release.yml --repo "${{ github.repository }}" --ref main -f sha="$sha"
+          # Same explicit close as the poller's step (see its comment) — safe to
+          # overlap, closing an already-closed issue is a no-op.
+          body=$(gh pr view "$PR" --repo "${{ github.repository }}" --json body -q .body)
+          for n in $(printf '%s\n' "$body" | grep -ioE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+'); do
+            gh issue close "$n" --repo "${{ github.repository }}" --reason completed \
+              --comment "Closed automatically — resolved by #$PR (merged as $sha)." || true
+          done
