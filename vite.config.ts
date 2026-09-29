@@ -139,11 +139,16 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      // libsodium-wrappers-sumo's published ESM entry is broken (it imports a
-      // missing ./libsodium-sumo.mjs), so Vite's optimizer can't build it.
-      // Point the bare import at the self-contained CJS build instead; Vite
-      // pre-bundles that into a valid ESM module for the browser. (TypeScript
-      // still resolves types via the package name + @types, unaffected.)
+      // Historically libsodium-wrappers-sumo's published ESM entry was broken
+      // (it imported a missing ./libsodium-sumo.mjs), so Vite's optimizer
+      // couldn't build it. As of 0.8.4 the ESM entry imports a properly
+      // declared `libsodium-sumo` dependency instead and may no longer need
+      // this workaround (unverified — kept as-is since it still works; worth
+      // trying to drop in a future cleanup). Point the bare import at the
+      // self-contained CJS build; Vite pre-bundles that into a valid ESM
+      // module for the browser. (TypeScript resolves types from the
+      // package's own bundled .d.ts as of 0.8.x — no separate @types
+      // package needed anymore.)
       'libsodium-wrappers-sumo': path.resolve(
         __dirname,
         'node_modules/libsodium-wrappers-sumo/dist/modules-sumo/libsodium-wrappers.js',
