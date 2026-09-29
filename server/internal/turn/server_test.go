@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/turn/v4"
+	"github.com/pion/turn/v5"
 )
 
 // The HTTP endpoint mints credentials with MintCredentials; the relay validates
@@ -34,7 +34,9 @@ func TestEphemeralCredentialRoundTrip(t *testing.T) {
 	handler := turn.LongTermTURNRESTAuthHandler(secret, nil)
 	addr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234}
 
-	key, ok := handler(username, realm, addr)
+	// pion/turn v5 changed AuthHandler's signature to take a single
+	// *RequestAttributes and additionally return the resolved userID.
+	_, key, ok := handler(&turn.RequestAttributes{Username: username, Realm: realm, SrcAddr: addr})
 	if !ok {
 		t.Fatalf("handler rejected a freshly-minted credential (username=%q)", username)
 	}
@@ -138,7 +140,7 @@ func TestExpiredCredentialRejected(t *testing.T) {
 	handler := turn.LongTermTURNRESTAuthHandler(secret, nil)
 	addr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1234}
 
-	if _, ok := handler(username, realm, addr); ok {
+	if _, _, ok := handler(&turn.RequestAttributes{Username: username, Realm: realm, SrcAddr: addr}); ok {
 		t.Fatal("handler accepted an expired credential")
 	}
 }
