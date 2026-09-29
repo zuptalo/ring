@@ -86,8 +86,8 @@ fixed at `/speckit-specify`/`/speckit-clarify` time.*
 | VII. Quality Gates | PASS | Gates listed under Definition of done below; each phase must clear them before its PR merges. |
 | VIII. Traceable Delivery | PASS | `taskstoissues` opens one issue per task/phase-group; each phase's PR lists `Closes #N`. |
 | IX. Privacy & Data Minimization | PASS | No telemetry, no new data collected — dependency versions only. |
-| X. Accessibility & i18n | PASS | Ionic 9's bidi/RTL and a11y behavior is expected to carry forward; the codebase audit (Principle XI below) covers the concrete breaking change (legacy `ion-radio`/`ion-range` props), and the manual UI pass checks for regressions in labeling/focus while there. |
-| XI. Ionic-First UI | **PASS with a required audit** | Ionic 9 removes the legacy `ion-radio`/`ion-range` prop syntax — per the clarify session, this MUST be caught by an explicit codebase grep-audit (FR-007) with every hit fixed, not left to manual QA alone. No new bespoke widgets introduced by this spec. |
+| X. Accessibility & i18n | PASS | Ionic 9's bidi/RTL and a11y behavior carries forward; `ion-modal`'s `handleBehavior` default change (`"none"` → `"cycle"`) is an a11y *improvement* for keyboard users, not a regression, and Ring doesn't set it explicitly anyway. |
+| XI. Ionic-First UI | **PASS with a required audit** | FR-007 requires an explicit codebase audit against Ionic's real `BREAKING.md` for v9 (the clarify session's original premise about `ion-radio`/`ion-range` was itself wrong — corrected during implementation, see `research.md`). The real audit found and fixed a genuine `autocorrect` boolean-coercion regression on `ion-input` (10 occurrences, 5 files) and confirmed clean on every other v9 breaking change (`ion-picker-legacy`, `ion-nav`, `swipeBackEnabled`, `ion-select`, floating labels, custom DOM-class CSS). No new bespoke widgets introduced by this spec. |
 
 ### Domain Constraints
 
@@ -153,8 +153,8 @@ package.json, package-lock.json        @ionic/vue, @ionic/vue-router, vue-router
                                         @types/libsodium-wrappers-sumo
 vite.config.ts                          re-verify the libsodium-wrappers-sumo CJS aliasing
                                         workaround still applies post-bump
-src/**/*.vue                            fix sites found by the ion-radio/ion-range legacy-prop
-                                        audit (files not known ahead of the audit)
+src/**/*.vue                            fix sites found by the BREAKING.md audit (autocorrect
+                                        boolean-coercion on ion-input; files not known ahead)
 server/go.mod, server/go.sum            pion/turn, pion/dtls, pion/stun, pion/transport (coordinated)
 patches/x-crypto                        rebase onto the new golang.org/x/crypto base version
 ```
@@ -184,7 +184,7 @@ code changes expected beyond manifests/lockfiles.
 
 **Phase C — coordinated/high-risk bumps**, each its own PR:
 1. Ionic 9 + Vue Router 5 together (they're coupled): run `npx @ionic/migrate`,
-   run the legacy `ion-radio`/`ion-range` prop audit and fix every hit, build,
+   audit against Ionic's real `BREAKING.md` for v9 and fix every hit, build,
    run e2e, manually click through all four tabs.
 2. Vite: land on 7.3.x; attempt 8.3.x only after confirming the
    `vite-plugin-pwa` Babel-7-vs-8 conflict has cleared upstream; build + e2e

@@ -19,7 +19,7 @@
             label-placement="stacked"
             placeholder="Ask something…"
             autocapitalize="sentences"
-            autocorrect="on"
+            :autocorrect="true"
             :spellcheck="true"
             :maxlength="200"
           />
@@ -33,7 +33,7 @@
             v-model="options[i]"
             :placeholder="`Option ${i + 1}`"
             autocapitalize="sentences"
-            autocorrect="on"
+            :autocorrect="true"
             :spellcheck="true"
             :maxlength="100"
           />

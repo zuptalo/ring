@@ -41,7 +41,7 @@ research session.
 
 | Item | Decision | Rationale | Alternatives considered |
 |---|---|---|---|
-| `@ionic/vue` + `@ionic/vue-router` | 8.8.8 → 9.0.x | Latest major; ships Vue Router 5 support, which this project needs anyway | Staying on Ionic 8 — rejected, it's the single largest version gap and blocks `vue-router` 5 |
+| `@ionic/vue` + `@ionic/vue-router` | 8.8.8 → **9.0.5** | Latest major; ships Vue Router 5 support, which this project needs anyway. `npx @ionic/migrate` found nothing to auto-apply (Vue's v9 changes are behavioral, not codemod-able). **Real audit findings (2026-09-28, against the actual `BREAKING.md`, not the mistaken ion-radio/ion-range premise)**: `autocorrect` on `ion-input` changed from a `'on'/'off'` string to a `boolean` (default `false`) — Stencil coerces any non-`"false"` attribute value to `true`, so the plain-HTML `autocorrect="off"` instances (used deliberately on login/credential/ID fields) would have silently flipped to `true`. Fixed by converting all 10 occurrences across 5 files to explicit `:autocorrect="true"`/`:autocorrect="false"` bindings. Checked and found clean: `ion-picker-legacy`/`pickerController` (unused), `ion-nav` (unused), `handleBehavior` (unused, and the default-only change is an a11y improvement not a regression for Ring's touch-first sheets), `swipeBackEnabled` (set once at `createApp` time in `main.ts`, never mutated — the "read once at mount" change is a no-op for Ring), `ion-select` (not used at all), floating labels (not used), and no custom CSS targets the reorganized internal DOM classes. Vue Router 5's `next()` deprecation doesn't apply either — `src/router/index.ts`'s three guards already use the modern return-value pattern, no `next` parameter anywhere. | Staying on Ionic 8 — rejected, it's the single largest version gap and blocks `vue-router` 5 |
 | `vue-router` | 4.6.4 → 5.3.x | Required by Ionic 9's Vue output target; upstream describes it as "a boring release" (absorbs `unplugin-vue-router`, no breaking changes to the core API), though Ionic's own migration notes flag `next()` in navigation guards as deprecated | Staying on 4.x — rejected, incompatible with the Ionic 9 target |
 | `ionicons` | 7.4.0 → latest compatible with Ionic 9 | Exact pin to be confirmed against whatever Ionic 9 itself declares as its icon-set peer at implementation time (this narrow detail is time-sensitive and best re-checked then, not frozen months in advance) | N/A |
 | `vite` | 6.4.2 → **8.3.1** (went straight to 8, not staged through 7.3) | **Corrected during implementation (2026-09-28)**: the Babel-7-vs-8 conflict assumed in the original research no longer reproduces. `npm install vite@8.3.1 @vitejs/plugin-vue@6.0.9 --dry-run` resolved cleanly with zero ERESOLVE errors; `vite` itself declares no Babel peer at all, and `@vitejs/plugin-vue@6` doesn't either. `npm run build` succeeds (one pre-existing-pattern deprecation warning traced to `vite-plugin-pwa`'s own internal SW build options, `inlineDynamicImports` → `codeSplitting: false` — not Ring's config, nothing to fix on our side, a watch-item for a future `vite-plugin-pwa` release). Per T023's own instruction ("if no conflict, bump straight to 8.3.x"), landed there directly | Staying on 7.3.x as originally planned — unnecessary once the dry-run showed no real conflict; would have meant a needless extra hop |
@@ -59,5 +59,13 @@ research session.
 - No build/CI-time performance budget gates any phase (functional correctness via
   existing test suites is the bar).
 - Upstreaming the `x/crypto` fix is an optional stretch goal, not required to ship.
-- The Ionic 9 task requires an explicit codebase audit (not just manual QA) for the
-  removed legacy `ion-radio`/`ion-range` prop syntax.
+- The Ionic 9 task requires an explicit codebase audit (not just manual QA) for
+  breaking prop/API changes — **correction found during implementation
+  (2026-09-28)**: the originally-cited premise ("legacy `ion-radio`/`ion-range`
+  prop syntax removed") does not appear anywhere in Ionic's actual `BREAKING.md`
+  for v9 and was inaccurate research from the specify phase — verified directly
+  against `github.com/ionic-team/ionic-framework/blob/main/BREAKING.md` and the
+  official migration guide. The *principle* (require an explicit audit, not just
+  manual QA) held up and paid off anyway: the real audit against the actual
+  BREAKING.md found a genuine regression — see the Ionic 9 row above and
+  `tasks.md` T016.

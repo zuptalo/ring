@@ -24,7 +24,7 @@
             placeholder="Paste the Ring ID"
             :clear-input="true"
             autocapitalize="off"
-            autocorrect="off"
+            :autocorrect="false"
             :spellcheck="false"
             enterkeyhint="send"
             @ion-input="id = $event.detail.value ?? ''"
