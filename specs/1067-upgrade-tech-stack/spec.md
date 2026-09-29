@@ -37,7 +37,7 @@ of testing its risk warrants.
 
 - Q: Vite 8's Rolldown-based dependency optimization and the vitest 3→5 major bump can both change build/CI run times. Should this spec gate merges on a build/CI-time performance budget? → A: No performance gate — functional correctness (existing test suites green) is sufficient; build/CI time changes are noted but don't block a merge.
 - Q: FR-004 says to "consider upstreaming" the `x/crypto` ACME retry-exhaustion fix. Is submitting it upstream required for this spec to ship, or an optional stretch goal? → A: Optional stretch goal — rebase the local patch and re-verify the bug, but an upstream submission is not a merge requirement (external review timelines are outside the maintainer's control).
-- Q: Ionic 9 removes the legacy `ion-radio`/`ion-range` prop syntax. Should this be caught by a codebase audit, or by manual QA of the primary flows? → A: Require an explicit audit — grep the codebase for legacy `ion-radio`/`ion-range` prop usage and fix every hit as part of the Ionic 9 task, before relying on manual UI passes.
+- Q: Ionic 9 removes the legacy `ion-radio`/`ion-range` prop syntax. Should this be caught by a codebase audit, or by manual QA of the primary flows? → A: Require an explicit audit — grep the codebase for legacy `ion-radio`/`ion-range` prop usage and fix every hit as part of the Ionic 9 task, before relying on manual UI passes. **Correction (2026-09-28, during implementation)**: the premise was wrong — Ionic's actual `BREAKING.md` for v9 never mentions `ion-radio`/`ion-range`; that was inaccurate secondhand research from `/speckit-specify`. The decision itself (require an explicit audit against the primary source, not manual QA alone) still stands and is what FR-007 now enforces — the real audit against the actual `BREAKING.md` found a genuine `autocorrect` boolean-coercion regression instead (see `research.md`).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -213,11 +213,15 @@ independently mergeable:
 - **FR-006**: The Pion/TURN dependency group bump MUST be verified by a manual
   real-device WebRTC call covering both direct-P2P and relay-required network paths
   (per `server/docs/CALLING.md`) before merge, in addition to `go test ./...`.
-- **FR-007**: The Ionic 9 + Vue Router 5 bump MUST run `npx @ionic/migrate` (or its
-  documented breaking-change checklist) and address every flagged item before merge.
-  This MUST include an explicit codebase audit for the legacy `ion-radio`/`ion-range`
-  prop syntax Ionic 9 removes, with every hit fixed — not just a manual UI pass over
-  the primary flows.
+- **FR-007**: The Ionic 9 + Vue Router 5 bump MUST run `npx @ionic/migrate` and
+  address every flagged item before merge, AND MUST include an explicit codebase
+  audit against Ionic's actual `BREAKING.md` for v9 — not just a manual UI pass
+  over the primary flows, and not assumed from secondhand research summaries.
+  (The clarify-session's originally-cited premise, "legacy `ion-radio`/`ion-range`
+  prop syntax removed," turned out not to be in `BREAKING.md` at all — the
+  *requirement* to audit against the primary source, not the specific premise,
+  is what FR-007 enforces. The real audit found a genuine `autocorrect`
+  boolean-coercion regression instead; see `research.md`.)
 - **FR-008**: TypeScript MUST stay on its latest 5.9.x release in this spec; the
   upgrade to TypeScript 7 is explicitly out of scope (see Out of Scope) because
   `vue-tsc`/Vue Language Tools do not yet support it.

@@ -38,9 +38,14 @@ All three should agree on the same major (24).
 
 ```sh
 npx @ionic/migrate                              # apply/verify the automated migration steps
-grep -rn 'legacy' src --include="*.vue" -i       # sanity pass; the real check below is more targeted
-grep -rEn '<ion-radio[^>]*\bvalue=' src --include="*.vue"
-grep -rEn '<ion-range[^>]*\b(dualKnobs|pin)\b' src --include="*.vue"
+# Audit against Ionic's REAL v9 BREAKING.md (github.com/ionic-team/ionic-framework/
+# blob/main/BREAKING.md) — don't trust a secondhand summary. Confirmed real items to check:
+grep -rn 'autocorrect="on"\|autocorrect="off"' src --include="*.vue"      # boolean-coercion bug
+grep -rln "ion-picker-legacy\|pickerController\|PickerOptions" src       # removed entirely
+grep -rln "<ion-nav\b\|ion-nav-link" src --include="*.vue"                # no longer router-driven
+grep -rln "swipeBackEnabled\|swipeGesture" src --include="*.vue" --include="*.ts"
+grep -rln "ion-select\b" src --include="*.vue"                            # ionChange semantics changed
+grep -rln "label-placement=\"floating\"" src --include="*.vue"           # floating-label behavior changed
 npm run build && npm run test:e2e
 ```
 

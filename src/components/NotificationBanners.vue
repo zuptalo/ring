@@ -63,7 +63,7 @@
             :auto-grow="true"
             :rows="1"
             autocapitalize="sentences"
-            autocorrect="on"
+            :autocorrect="true"
             :spellcheck="true"
             enterkeyhint="enter"
             @ion-input="onInput"

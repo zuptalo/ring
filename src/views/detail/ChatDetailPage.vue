@@ -1060,7 +1060,7 @@
             :rows="1"
             :maxlength="pendingMedia.length ? CAPTION_MAX : undefined"
             autocapitalize="sentences"
-            autocorrect="on"
+            :autocorrect="true"
             :spellcheck="true"
             enterkeyhint="enter"
             @ion-input="onComposerInput"
@@ -1190,7 +1190,7 @@
             :auto-grow="true"
             :rows="2"
             autocapitalize="sentences"
-            autocorrect="on"
+            :autocorrect="true"
             @ion-input="onCaptionInput"
           />
         </ion-item>
