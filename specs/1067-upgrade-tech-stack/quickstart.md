@@ -66,7 +66,7 @@ at Vite 7.3.x for this spec (see spec Edge Cases) rather than forcing 8.
 **`libsodium-wrappers-sumo`**
 
 ```sh
-npm run test:unit -- --grep crypto               # or however the crypto suite is filtered
+npm run test:unit -- src/services/crypto        # vitest filters by path, not --grep (not a valid flag)
 ```
 
 Forgery, replay, out-of-order, and skipped-key cases must all still pass. Then
