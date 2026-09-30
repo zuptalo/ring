@@ -17,8 +17,14 @@
       name="viewport"
       content="viewport-fit=cover, width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <!-- Matches --ion-toolbar-background in src/theme/variables.css (color-mix of the brand
+         green into white/black), not plain white/black: on Android, Chrome paints the OS status
+         bar from THIS tag, live, so a flat white/black here sat visibly off from the actual
+         (faintly green-tinted) toolbar right below it. iOS doesn't use this tag for the status
+         bar (see apple-mobile-web-app-status-bar-style="black-translucent" above), so it was
+         never affected. If the color-mix percentages there change, update these to match. -->
+    <meta name="theme-color" content="#f3fcf9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#010f0a" media="(prefers-color-scheme: dark)" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
